@@ -115,6 +115,8 @@ static SimpleOidList table_exclude_oids = {NULL, NULL};
 static SimpleStringList tabledata_exclude_patterns = {NULL, NULL};
 static SimpleOidList tabledata_exclude_oids = {NULL, NULL};
 
+static SimpleStringList tablespace_include_patterns = {NULL, NULL};
+static SimpleOidList tablespace_include_oids = {NULL, NULL};
 
 char		g_opaque_type[10];	/* name for the opaque type */
 
@@ -129,6 +131,9 @@ static void setup_connection(Archive *AH, DumpOptions *dopt,
 				const char *dumpencoding, const char *dumpsnapshot,
 				char *use_role);
 static ArchiveFormat parseArchiveFormat(const char *format, ArchiveMode *mode);
+static void expand_tablespace_name_patterns(Archive *fout,
+											SimpleStringList *patterns,
+											SimpelOidList *oids);
 static void expand_schema_name_patterns(Archive *fout,
 							SimpleStringList *patterns,
 							SimpleOidList *oids);
@@ -285,6 +290,7 @@ main(int argc, char **argv)
 	static struct option long_options[] = {
 		{"data-only", no_argument, NULL, 'a'},
 		{"blobs", no_argument, NULL, 'b'},
+		{"tablespace", required_argument, 'B'},
 		{"clean", no_argument, NULL, 'c'},
 		{"create", no_argument, NULL, 'C'},
 		{"dbname", required_argument, NULL, 'd'},
@@ -388,6 +394,10 @@ main(int argc, char **argv)
 
 			case 'b':			/* Dump blobs */
 				dopt.outputBlobs = true;
+				break;
+
+			case 'B':			/* include tablespace(s) */
+				simple_string_list_append(&tablespace_include_patterns, optarg);
 				break;
 
 			case 'c':			/* clean (i.e., drop) schema prior to create */
@@ -683,6 +693,15 @@ main(int argc, char **argv)
 			g_last_builtin_oid = findLastBuiltinOid_V70(fout);
 		if (g_verbose)
 			write_msg(NULL, "last built-in OID is %u\n", g_last_builtin_oid);
+	}
+
+	/* Expand tablespace selection patterns into OID lists */
+	if (tablespace_include_patterns.head != NULL)
+	{
+		expand_tablespace_patterns(fout, &tablespace_include_patterns,
+								   &tablespace_include_oids);
+		if (tablespace_include_oids.head == NULL)
+			exit_horribly(NULL, "No matching tablespaces were found\n");
 	}
 
 	/* Expand schema selection patterns into OID lists */
@@ -1124,6 +1143,49 @@ parseArchiveFormat(const char *format, ArchiveMode *mode)
 	else
 		exit_horribly(NULL, "invalid output format \"%s\" specified\n", format);
 	return archiveFormat;
+}
+
+/*
+ * Find the OIDs of all tablespace matching the given list of patterns,
+ * and append them to the given OID list.
+ */
+static void
+expand_tablespace_name_patterns(Archive *fout,
+								SimpleStringList *patterns,
+								SimpleOidList *oids)
+{
+	PQExpBuffer	query;
+	PGresult	*res;
+	SimpleStringListCell *cell;
+	int i;
+
+	if (patterns->head == NULL)
+		return;					/* nothing to do */
+
+	if (fout->remoteVersion < 70300)
+		exit_horribly(NULL, "server version must be at least 7.3 to use schema selection switches\n");
+
+	query = createPQExpBuffer();
+
+	for (cell = patterns->head; cell; cell = cell->next)
+	{
+		if (cell != patterns->head)
+			appendPQExpBufferStr(query, "UNION ALL\n");
+		appendPQExpBuffer(query,
+						  "SELECT oid FROM pg_class c");
+		processSQLNamePattern(GetConnection(fout), query, cell->val, false,
+							  false, NULL, "c.reltablespace", NULL, NULL);
+	}
+
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+	for (i = 0; i < PQntuples(res); i++)
+	{
+		simple_oid_list_append(oids, atooid(PQgetvalue(res, i , 0)));
+	}
+
+	PQclear(res);
+	destroyPQExpBuffer(query);
 }
 
 /*
