@@ -133,7 +133,7 @@ static void setup_connection(Archive *AH, DumpOptions *dopt,
 static ArchiveFormat parseArchiveFormat(const char *format, ArchiveMode *mode);
 static void expand_tablespace_name_patterns(Archive *fout,
 											SimpleStringList *patterns,
-											SimpelOidList *oids);
+											SimpleOidList *oids);
 static void expand_schema_name_patterns(Archive *fout,
 							SimpleStringList *patterns,
 							SimpleOidList *oids);
@@ -383,7 +383,7 @@ main(int argc, char **argv)
 
 	InitDumpOptions(&dopt);
 
-	while ((c = getopt_long(argc, argv, "abcCd:E:f:F:h:ij:n:N:oOp:RsS:t:T:U:vwWxZ:",
+	while ((c = getopt_long(argc, argv, "abB:cCd:E:f:F:h:ij:n:N:oOp:RsS:t:T:U:vwWxZ:",
 							long_options, &optindex)) != -1)
 	{
 		switch (c)
@@ -698,7 +698,7 @@ main(int argc, char **argv)
 	/* Expand tablespace selection patterns into OID lists */
 	if (tablespace_include_patterns.head != NULL)
 	{
-		expand_tablespace_patterns(fout, &tablespace_include_patterns,
+		expand_tablespace_name_patterns(fout, &tablespace_include_patterns,
 								   &tablespace_include_oids);
 		if (tablespace_include_oids.head == NULL)
 			exit_horribly(NULL, "No matching tablespaces were found\n");
@@ -1172,9 +1172,9 @@ expand_tablespace_name_patterns(Archive *fout,
 		if (cell != patterns->head)
 			appendPQExpBufferStr(query, "UNION ALL\n");
 		appendPQExpBuffer(query,
-						  "SELECT oid FROM pg_class c");
+						  "SELECT oid FROM pg_tablespace t ");
 		processSQLNamePattern(GetConnection(fout), query, cell->val, false,
-							  false, NULL, "c.reltablespace", NULL, NULL);
+							  false, NULL, "t.spcname", NULL, NULL);
 	}
 
 	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
