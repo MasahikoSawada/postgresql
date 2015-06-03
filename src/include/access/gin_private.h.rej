@@ -1,0 +1,165 @@
+--- src/include/access/gin_private.h
++++ src/include/access/gin_private.h
+@@ -220,11 +227,11 @@
+ 
+ #define GinGetPostingOffset(itup)	GinItemPointerGetBlockNumber(&(itup)->t_tid)
+ #define GinSetPostingOffset(itup,n) ItemPointerSetBlockNumber(&(itup)->t_tid,n)
+-#define GinGetPosting(itup)			((ItemPointer) ((char*)(itup) + GinGetPostingOffset(itup)))
++#define GinGetPosting(itup)			((Pointer) ((char*)(itup) + GinGetPostingOffset(itup)))
+ 
+ #define GinMaxItemSize \
+ 	MAXALIGN_DOWN(((BLCKSZ - SizeOfPageHeaderData - \
+-		MAXALIGN(sizeof(GinPageOpaqueData))) / 3 - sizeof(ItemIdData)))
++		MAXALIGN(sizeof(GinPageOpaqueData))) / 6 - sizeof(ItemIdData)))
+ 
+ /*
+  * Access macros for non-leaf entry tuples
+@@ -337,7 +369,8 @@
+ 	FmgrInfo	extractValueFn[INDEX_MAX_KEYS];
+ 	FmgrInfo	extractQueryFn[INDEX_MAX_KEYS];
+ 	FmgrInfo	consistentFn[INDEX_MAX_KEYS];
+-	FmgrInfo	comparePartialFn[INDEX_MAX_KEYS];		/* optional method */
++	FmgrInfo	comparePartialFn[INDEX_MAX_KEYS];	/* optional method */
++	FmgrInfo	configFn[INDEX_MAX_KEYS];			/* optional method */
+ 	/* canPartialMatch[i] is true if comparePartialFn[i] is valid */
+ 	bool		canPartialMatch[INDEX_MAX_KEYS];
+ 	/* Collations to pass to the support functions */
+@@ -355,6 +388,11 @@
+ 	RelFileNode node;
+ 	BlockNumber blkno;
+ 	uint32		nitem;
++	int16		typlen;
++
++	bool		typbyval;
++	char		typalign;
++	char		typstorage;
+ 	/* follows list of heap's ItemPointer */
+ } ginxlogCreatePostingTree;
+ 
+@@ -366,10 +404,15 @@
+ 	BlockNumber blkno;
+ 	BlockNumber updateBlkno;
+ 	OffsetNumber offset;
++	OffsetNumber nitem;
++	int16		typlen;
++
++	bool		typbyval;
++	char		typalign;
++	char		typstorage;
+ 	bool		isDelete;
+ 	bool		isData;
+ 	bool		isLeaf;
+-	OffsetNumber nitem;
+ 
+ 	/*
+ 	 * follows: tuples or ItemPointerData or PostingItem or list of
+@@ -388,7 +431,11 @@
+ 	BlockNumber rrlink;
+ 	OffsetNumber separator;
+ 	OffsetNumber nitem;
++	int16		typlen;
+ 
++	bool		typbyval;
++	char		typalign;
++	char		typstorage;
+ 	bool		isData;
+ 	bool		isLeaf;
+ 	bool		isRootSplit;
+@@ -407,6 +454,11 @@
+ 	RelFileNode node;
+ 	BlockNumber blkno;
+ 	OffsetNumber nitem;
++	int16		typlen;
++
++	bool		typbyval;
++	char		typalign;
++	char		typstorage;
+ 	/* follows content of page */
+ } ginxlogVacuumPage;
+ 
+@@ -557,22 +614,27 @@
+ extern void ginFindParents(GinBtree btree, GinBtreeStack *stack, BlockNumber rootBlkno);
+ 
+ /* ginentrypage.c */
+-extern IndexTuple GinFormTuple(GinState *ginstate,
+-			 OffsetNumber attnum, Datum key, GinNullCategory category,
+-			 ItemPointerData *ipd, uint32 nipd, bool errorTooBig);
+-extern void GinShortenTuple(IndexTuple itup, uint32 nipd);
+ extern void ginPrepareEntryScan(GinBtree btree, OffsetNumber attnum,
+ 					Datum key, GinNullCategory category,
+ 					GinState *ginstate);
+ extern void ginEntryFillRoot(GinBtree btree, Buffer root, Buffer lbuf, Buffer rbuf);
+ extern IndexTuple ginPageGetLinkItup(Buffer buf);
++extern void ginReadTuple(GinState *ginstate, OffsetNumber attnum,
++	IndexTuple itup, ItemPointerData *ipd, Datum *addInfo, bool *addInfoIsNull);
++extern ItemPointerData updateItemIndexes(Page page, OffsetNumber attnum, GinState *ginstate);
+ 
+ /* gindatapage.c */
+-extern int	ginCompareItemPointers(ItemPointer a, ItemPointer b);
+-extern uint32 ginMergeItemPointers(ItemPointerData *dst,
+-					 ItemPointerData *a, uint32 na,
+-					 ItemPointerData *b, uint32 nb);
+-
++extern int ginCompareItemPointers(ItemPointer a, ItemPointer b);
++extern char *ginDataPageLeafWriteItemPointer(char *ptr, ItemPointer iptr, ItemPointer prev, bool addInfoIsNull);
++extern Pointer ginPlaceToDataPageLeaf(Pointer ptr, OffsetNumber attnum,
++	ItemPointer iptr, Datum addInfo, bool addInfoIsNull, ItemPointer prev,
++	GinState *ginstate);
++extern Size ginCheckPlaceToDataPageLeaf(OffsetNumber attnum,
++	ItemPointer iptr, Datum addInfo, bool addInfoIsNull, ItemPointer prev,
++	GinState *ginstate, Size size);
++extern uint32 ginMergeItemPointers(ItemPointerData *dst, Datum *dst2, bool *dst3,
++					 ItemPointerData *a, Datum *a2, bool *a3, uint32 na,
++					 ItemPointerData *b, Datum * b2, bool *b3, uint32 nb);
+ extern void GinDataPageAddItem(Page page, void *data, OffsetNumber offset);
+ extern void GinPageDeletePostingItem(Page page, OffsetNumber offset);
+ 
+@@ -583,13 +645,18 @@
+ } GinPostingTreeScan;
+ 
+ extern GinPostingTreeScan *ginPrepareScanPostingTree(Relation index,
+-						  BlockNumber rootBlkno, bool searchMode);
+-extern void ginInsertItemPointers(GinPostingTreeScan *gdi,
+-					  ItemPointerData *items, uint32 nitem,
++						  BlockNumber rootBlkno, bool searchMode, OffsetNumber attnum, GinState *ginstate);
++extern void ginInsertItemPointers(GinState *ginstate,
++					  OffsetNumber attnum,
++					  GinPostingTreeScan *gdi,
++					  ItemPointerData *items,
++					  Datum *addInfo,
++					  bool *addInfoIsNull,
++					  uint32 nitem,
+ 					  GinStatsData *buildStats);
+ extern Buffer ginScanBeginPostingTree(GinPostingTreeScan *gdi);
+ extern void ginDataFillRoot(GinBtree btree, Buffer root, Buffer lbuf, Buffer rbuf);
+-extern void ginPrepareDataScan(GinBtree btree, Relation index);
++extern void ginPrepareDataScan(GinBtree btree, Relation index, OffsetNumber attnum, GinState *ginstate);
+ 
+ /* ginscan.c */
+ 
+@@ -624,6 +691,8 @@
+ 
+ 	/* array of check flags, reported to consistentFn */
+ 	bool	   *entryRes;
++	Datum	   *addInfo;
++	bool	   *addInfoIsNull;
+ 
+ 	/* other data needed for calling consistentFn */
+ 	Datum		query;
+@@ -674,12 +745,16 @@
+ 
+ 	/* used for Posting list and one page in Posting tree */
+ 	ItemPointerData *list;
++	Datum		*addInfo;
++	bool		*addInfoIsNull;
++	MemoryContext context;
+ 	uint32		nlist;
+ 	OffsetNumber offset;
+ 
+ 	bool		isFinished;
+ 	bool		reduceResult;
+ 	uint32		predictNumberResult;
++	GinBtreeStack *stack;
+ }	GinScanEntryData;
+ 
+ typedef struct GinScanOpaqueData

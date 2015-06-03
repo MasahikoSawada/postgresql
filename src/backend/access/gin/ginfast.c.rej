@@ -1,0 +1,12 @@
+--- src/backend/access/gin/ginfast.c
++++ src/backend/access/gin/ginfast.c
+@@ -579,8 +673,7 @@
+ 	{
+ 		IndexTuple	itup;
+ 
+-		itup = GinFormTuple(ginstate, attnum, entries[i], categories[i],
+-							NULL, 0, true);
++		itup = GinFastFormTuple(ginstate, attnum, entries[i], categories[i], addInfo[i], addInfoIsNull[i]);
+ 		itup->t_tid = *ht_ctid;
+ 		collector->tuples[collector->ntuples++] = itup;
+ 		collector->sumsize += IndexTupleSize(itup);

@@ -1,0 +1,311 @@
+--- src/backend/access/gin/ginget.c
++++ src/backend/access/gin/ginget.c
+@@ -52,7 +51,7 @@
+ 	 */
+ 	key->recheckCurItem = true;
+ 
+-	return DatumGetBool(FunctionCall8Coll(&ginstate->consistentFn[key->attnum - 1],
++	return DatumGetBool(FunctionCall10Coll(&ginstate->consistentFn[key->attnum - 1],
+ 								 ginstate->supportCollation[key->attnum - 1],
+ 										  PointerGetDatum(key->entryRes),
+ 										  UInt16GetDatum(key->strategy),
+@@ -61,29 +60,37 @@
+ 										  PointerGetDatum(key->extra_data),
+ 									   PointerGetDatum(&key->recheckCurItem),
+ 										  PointerGetDatum(key->queryValues),
+-									 PointerGetDatum(key->queryCategories)));
++									 PointerGetDatum(key->queryCategories),
++										  PointerGetDatum(key->addInfo),
++										  PointerGetDatum(key->addInfoIsNull)
++		));
+ }
+ 
+ /*
+  * Tries to refind previously taken ItemPointer on a posting page.
+  */
+ static bool
+-findItemInPostingPage(Page page, ItemPointer item, OffsetNumber *off)
++findItemInPostingPage(Page page, ItemPointer item, OffsetNumber *off,
++	OffsetNumber attnum, GinState *ginstate)
+ {
+ 	OffsetNumber maxoff = GinPageGetOpaque(page)->maxoff;
+ 	int			res;
++	Pointer		ptr;
++	ItemPointerData iptr = {{0, 0}, 0};
+ 
+ 	if (GinPageGetOpaque(page)->flags & GIN_DELETED)
+ 		/* page was deleted by concurrent vacuum */
+ 		return false;
+ 
++	ptr = GinDataPageGetData(page);
+ 	/*
+ 	 * scan page to find equal or first greater value
+ 	 */
+ 	for (*off = FirstOffsetNumber; *off <= maxoff; (*off)++)
+ 	{
+-		res = ginCompareItemPointers(item, (ItemPointer) GinDataPageGetItem(page, *off));
++		ptr = ginDataPageLeafRead(ptr, attnum, &iptr, NULL, NULL, ginstate);
+ 
++		res = ginCompareItemPointers(item, &iptr);
+ 		if (res <= 0)
+ 			return true;
+ 	}
+@@ -121,14 +128,14 @@
+  */
+ static void
+ scanPostingTree(Relation index, GinScanEntry scanEntry,
+-				BlockNumber rootPostingTree)
++				BlockNumber rootPostingTree, OffsetNumber attnum, GinState *ginstate)
+ {
+ 	GinPostingTreeScan *gdi;
+ 	Buffer		buffer;
+ 	Page		page;
+ 
+ 	/* Descend to the leftmost leaf page */
+-	gdi = ginPrepareScanPostingTree(index, rootPostingTree, TRUE);
++	gdi = ginPrepareScanPostingTree(index, rootPostingTree, TRUE, attnum, ginstate);
+ 
+ 	buffer = ginScanBeginPostingTree(gdi);
+ 	IncrBufferRefCount(buffer); /* prevent unpin in freeGinBtreeStack */
+@@ -141,15 +148,26 @@
+ 	 */
+ 	for (;;)
+ 	{
++		OffsetNumber maxoff, i;
++
+ 		page = BufferGetPage(buffer);
++		maxoff = GinPageGetOpaque(page)->maxoff;
+ 
+ 		if ((GinPageGetOpaque(page)->flags & GIN_DELETED) == 0 &&
+-			GinPageGetOpaque(page)->maxoff >= FirstOffsetNumber)
++			maxoff >= FirstOffsetNumber)
+ 		{
+-			tbm_add_tuples(scanEntry->matchBitmap,
+-				   (ItemPointer) GinDataPageGetItem(page, FirstOffsetNumber),
+-						   GinPageGetOpaque(page)->maxoff, false);
+-			scanEntry->predictNumberResult += GinPageGetOpaque(page)->maxoff;
++			ItemPointerData iptr = {{0, 0}, 0};
++			Pointer ptr;
++
++			ptr = GinDataPageGetData(page);
++			for (i = FirstOffsetNumber; i <= maxoff; i++)
++			{
++				ptr = ginDataPageLeafRead(ptr, attnum, &iptr, NULL, NULL,
++																	ginstate);
++				tbm_add_tuples(scanEntry->matchBitmap, &iptr, 1, false);
++			}
++
++			scanEntry->predictNumberResult += maxoff;
+ 		}
+ 
+ 		if (GinPageRightMost(page))
+@@ -334,8 +352,13 @@
+ 		}
+ 		else
+ 		{
++			ItemPointerData *ipd = (ItemPointerData *)palloc(
++								sizeof(ItemPointerData) * GinGetNPosting(itup));
++			ginReadTuple(btree->ginstate, scanEntry->attnum,
++				itup, ipd, NULL, NULL);
++
+ 			tbm_add_tuples(scanEntry->matchBitmap,
+-						   GinGetPosting(itup), GinGetNPosting(itup), false);
++						   ipd, GinGetNPosting(itup), false);
+ 			scanEntry->predictNumberResult += GinGetNPosting(itup);
+ 		}
+ 
+@@ -430,6 +455,9 @@
+ 			BlockNumber rootPostingTree = GinGetPostingTree(itup);
+ 			GinPostingTreeScan *gdi;
+ 			Page		page;
++			OffsetNumber maxoff, i;
++			Pointer ptr;
++			ItemPointerData iptr = {{0,0},0};
+ 
+ 			/*
+ 			 * We should unlock entry page before touching posting tree to
+@@ -440,9 +468,15 @@
+ 			 */
+ 			LockBuffer(stackEntry->buffer, GIN_UNLOCK);
+ 			needUnlock = FALSE;
+-			gdi = ginPrepareScanPostingTree(ginstate->index, rootPostingTree, TRUE);
++			gdi = ginPrepareScanPostingTree(ginstate->index, rootPostingTree, TRUE, entry->attnum, ginstate);
+ 
+ 			entry->buffer = ginScanBeginPostingTree(gdi);
++			entry->stack = gdi->stack;
++			entry->context = AllocSetContextCreate(CurrentMemoryContext,
++								 "GiST temporary context",
++								 ALLOCSET_DEFAULT_MINSIZE,
++								 ALLOCSET_DEFAULT_INITSIZE,
++								 ALLOCSET_DEFAULT_MAXSIZE);
+ 
+ 			/*
+ 			 * We keep buffer pinned because we need to prevent deletion of
+@@ -457,10 +491,21 @@
+ 			/*
+ 			 * Keep page content in memory to prevent durable page locking
+ 			 */
+-			entry->list = (ItemPointerData *) palloc(BLCKSZ);
+-			entry->nlist = GinPageGetOpaque(page)->maxoff;
+-			memcpy(entry->list, GinDataPageGetItem(page, FirstOffsetNumber),
+-				   GinPageGetOpaque(page)->maxoff * sizeof(ItemPointerData));
++			entry->list = (ItemPointerData *) palloc(BLCKSZ * sizeof(ItemPointerData));
++			entry->addInfo = (Datum *) palloc(BLCKSZ * sizeof(Datum));
++			entry->addInfoIsNull = (bool *) palloc(BLCKSZ * sizeof(bool));
++			maxoff = GinPageGetOpaque(page)->maxoff;
++			entry->nlist = maxoff;
++
++			ptr = GinDataPageGetData(page);
++
++			for (i = FirstOffsetNumber; i <= maxoff; i = OffsetNumberNext(i))
++			{
++				ptr = ginDataPageLeafRead(ptr, entry->attnum, &iptr,
++					&entry->addInfo[i - FirstOffsetNumber],
++					&entry->addInfoIsNull[i - FirstOffsetNumber], ginstate);
++				entry->list[i - FirstOffsetNumber] = iptr;
++			}
+ 
+ 			LockBuffer(entry->buffer, GIN_UNLOCK);
+ 			freeGinBtreeStack(gdi->stack);
+@@ -470,8 +515,14 @@
+ 		else if (GinGetNPosting(itup) > 0)
+ 		{
+ 			entry->nlist = GinGetNPosting(itup);
++			entry->predictNumberResult = entry->nlist;
+ 			entry->list = (ItemPointerData *) palloc(sizeof(ItemPointerData) * entry->nlist);
+-			memcpy(entry->list, GinGetPosting(itup), sizeof(ItemPointerData) * entry->nlist);
++			entry->addInfo = (Datum *) palloc(sizeof(Datum) * entry->nlist);
++			entry->addInfoIsNull = (bool *) palloc(sizeof(bool) * entry->nlist);
++
++			ginReadTuple(ginstate, entry->attnum, itup,
++				entry->list, entry->addInfo, entry->addInfoIsNull);
++
+ 			entry->isFinished = FALSE;
+ 		}
+ 	}
+@@ -541,12 +594,16 @@
+ 	{
+ 		if (entry->offset < entry->nlist)
+ 		{
+-			entry->curItem = entry->list[entry->offset++];
++			entry->curItem = entry->list[entry->offset];
++			entry->curAddInfo = entry->addInfo[entry->offset];
++			entry->curAddInfoIsNull = entry->addInfoIsNull[entry->offset];
++			entry->offset++;
+ 			return;
+ 		}
+ 
+ 		LockBuffer(entry->buffer, GIN_SHARE);
+ 		page = BufferGetPage(entry->buffer);
++
+ 		for (;;)
+ 		{
+ 			/*
+@@ -569,14 +626,27 @@
+ 
+ 			entry->offset = InvalidOffsetNumber;
+ 			if (!ItemPointerIsValid(&entry->curItem) ||
+-				findItemInPostingPage(page, &entry->curItem, &entry->offset))
++				findItemInPostingPage(page, &entry->curItem, &entry->offset,
++				entry->attnum, ginstate))
+ 			{
++				OffsetNumber maxoff, i;
++				Pointer ptr;
++				ItemPointerData iptr = {{0,0},0};
++
+ 				/*
+ 				 * Found position equal to or greater than stored
+ 				 */
+-				entry->nlist = GinPageGetOpaque(page)->maxoff;
+-				memcpy(entry->list, GinDataPageGetItem(page, FirstOffsetNumber),
+-				   GinPageGetOpaque(page)->maxoff * sizeof(ItemPointerData));
++				maxoff = GinPageGetOpaque(page)->maxoff;
++				entry->nlist = maxoff;
++
++				ptr = GinDataPageGetData(page);
++
++				for (i = FirstOffsetNumber; i <= maxoff; i = OffsetNumberNext(i))
++				{
++					ptr = ginDataPageLeafRead(ptr, entry->attnum, &iptr,
++						&entry->addInfo[i - FirstOffsetNumber], &entry->addInfoIsNull[i - FirstOffsetNumber], ginstate);
++					entry->list[i - FirstOffsetNumber] = iptr;
++				}
+ 
+ 				LockBuffer(entry->buffer, GIN_UNLOCK);
+ 
+@@ -595,6 +665,8 @@
+ 				 * Find greater than entry->curItem position, store it.
+ 				 */
+ 				entry->curItem = entry->list[entry->offset - 1];
++				entry->curAddInfo = entry->addInfo[entry->offset - 1];
++				entry->curAddInfoIsNull = entry->addInfoIsNull[entry->offset - 1];
+ 
+ 				return;
+ 			}
+@@ -676,7 +748,11 @@
+ 	{
+ 		entry->offset++;
+ 		if (entry->offset <= entry->nlist)
++		{
+ 			entry->curItem = entry->list[entry->offset - 1];
++			entry->curAddInfo = entry->addInfo[entry->offset - 1];
++			entry->curAddInfoIsNull = entry->addInfoIsNull[entry->offset - 1];
++		}
+ 		else
+ 		{
+ 			ItemPointerSetInvalid(&entry->curItem);
+@@ -820,6 +896,11 @@
+ 	if (haveLossyEntry)
+ 	{
+ 		/* Single lossy-page entry, so see if whole page matches */
++		for (i = 0; i < key->nentries; i++)
++		{
++			key->addInfo[i] = (Datum) 0;
++			key->addInfoIsNull[i] = true;
++		}
+ 		memset(key->entryRes, FALSE, key->nentries);
+ 		key->entryRes[lossyEntry] = TRUE;
+ 
+@@ -854,12 +935,24 @@
+ 		entry = key->scanEntry[i];
+ 		if (entry->isFinished == FALSE &&
+ 			ginCompareItemPointers(&entry->curItem, &key->curItem) == 0)
++		{
+ 			key->entryRes[i] = TRUE;
++			key->addInfo[i] = entry->curAddInfo;
++			key->addInfoIsNull[i] = entry->curAddInfoIsNull;
++		}
+ 		else
++		{
+ 			key->entryRes[i] = FALSE;
++			key->addInfo[i] = (Datum) 0;
++			key->addInfoIsNull[i] = true;
++		}
+ 	}
+ 	if (haveLossyEntry)
++	{
+ 		key->entryRes[lossyEntry] = TRUE;
++		key->addInfo[lossyEntry] = (Datum) 0;
++		key->addInfoIsNull[lossyEntry] = true;
++	}
+ 
+ 	res = callConsistentFn(ginstate, key);
+ 
+@@ -867,6 +960,8 @@
+ 	{
+ 		/* try the other way for the lossy item */
+ 		key->entryRes[lossyEntry] = FALSE;
++		key->addInfo[lossyEntry] = (Datum) 0;
++		key->addInfoIsNull[lossyEntry] = true;
+ 
+ 		res = callConsistentFn(ginstate, key);
+ 	}
+@@ -1208,6 +1303,8 @@
+ 		GinScanKey	key = so->keys + i;
+ 
+ 		memset(key->entryRes, FALSE, key->nentries);
++		memset(key->addInfo, FALSE, sizeof(Datum) * key->nentries);
++		memset(key->addInfoIsNull, TRUE, key->nentries);
+ 	}
+ 	memset(pos->hasMatchKey, FALSE, so->nkeys);
+ 

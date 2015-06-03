@@ -1,0 +1,25 @@
+--- src/include/access/gin.h
++++ src/include/access/gin.h
+@@ -23,7 +23,8 @@
+ #define GIN_EXTRACTQUERY_PROC		   3
+ #define GIN_CONSISTENT_PROC			   4
+ #define GIN_COMPARE_PARTIAL_PROC	   5
+-#define GINNProcs					   5
++#define GIN_CONFIG_PROC				   6
++#define GINNProcs					   6
+ 
+ /*
+  * searchMode settings for extractQueryFn.
+@@ -46,6 +47,12 @@
+ 	int32		ginVersion;
+ } GinStatsData;
+ 
++
++typedef struct GinConfig
++{
++	Oid			addInfoTypeOid;
++} GinConfig;
++
+ /* GUC parameter */
+ extern PGDLLIMPORT int GinFuzzySearchLimit;
+ 
