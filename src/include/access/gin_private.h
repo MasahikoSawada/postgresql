@@ -35,6 +35,7 @@ typedef struct GinPageOpaqueData
 	OffsetNumber maxoff;		/* number of PostingItems on GIN_DATA &
 								 * ~GIN_LEAF page. On GIN_LIST page, number of
 								 * heap tuples. */
+	OffsetNumber freespace;
 	uint16		flags;			/* see bit definitions below */
 } GinPageOpaqueData;
 
@@ -205,10 +206,16 @@ typedef signed char GinNullCategory;
 #define GinCategoryOffset(itup,ginstate) \
 	(IndexInfoFindDataOffset((itup)->t_info) + \
 	 ((ginstate)->oneCol ? 0 : sizeof(int16)))
-#define GinGetNullCategory(itup,ginstate) \
+/*#define GinGetNullCategory(itup,ginstate) \
 	(*((GinNullCategory *) ((char*)(itup) + GinCategoryOffset(itup,ginstate))))
 #define GinSetNullCategory(itup,ginstate,c) \
-	(*((GinNullCategory *) ((char*)(itup) + GinCategoryOffset(itup,ginstate))) = (c))
+	(*((GinNullCategory *) ((char*)(itup) + GinCategoryOffset(itup,ginstate))) = (c))*/
+
+#define GinGetNullCategory(itup,ginstate) \
+	(*((GinNullCategory *) ((char*)(itup) + IndexTupleSize(itup) - sizeof(GinNullCategory))))
+#define GinSetNullCategory(itup,ginstate,c) \
+	(*((GinNullCategory *) ((char*)(itup) + IndexTupleSize(itup) - sizeof(GinNullCategory))) = (c))
+
 
 /*
  * Access macros for leaf-page entry tuples (see discussion in README)
@@ -315,6 +322,29 @@ typedef signed char GinNullCategory;
 #define GinListPageSize  \
 	( BLCKSZ - SizeOfPageHeaderData - MAXALIGN(sizeof(GinPageOpaqueData)) )
 
+typedef struct
+{
+	ItemPointerData iptr;
+	OffsetNumber offsetNumer;
+	uint16 pageOffset;
+} GinDataLeafItemIndex;
+
+#define GinDataLeafIndexCount 32
+
+#define GinDataPageSize	\
+	(BLCKSZ - MAXALIGN(SizeOfPageHeaderData) \
+	 - MAXALIGN(sizeof(ItemPointerData)) \
+	 - MAXALIGN(sizeof(GinPageOpaqueData)) \
+	 - MAXALIGN(sizeof(GinDataLeafItemIndex) * GinDataLeafIndexCount))
+
+#define GinDataPageFreeSpacePre(page,ptr) \
+	(GinDataPageSize \
+	 - ((ptr) - GinDataPageGetData(page)))
+
+#define GinPageGetIndexes(page) \
+	((GinDataLeafItemIndex *)(GinDataPageGetData(page) + GinDataPageSize))
+
+
 /*
  * Storage type for GIN's reloptions
  */
@@ -363,6 +393,8 @@ typedef struct GinState
 	 */
 	TupleDesc	origTupdesc;
 	TupleDesc	tupdesc[INDEX_MAX_KEYS];
+	Oid			addInfoTypeOid[INDEX_MAX_KEYS];
+	Form_pg_attribute addAttrs[INDEX_MAX_KEYS];
 
 	/*
 	 * Per-index-column opclass support functions
@@ -607,7 +639,8 @@ extern int ginCompareAttEntries(GinState *ginstate,
 				   OffsetNumber attnumb, Datum b, GinNullCategory categoryb);
 extern Datum *ginExtractEntries(GinState *ginstate, OffsetNumber attnum,
 				  Datum value, bool isNull,
-				  int32 *nentries, GinNullCategory **categories);
+				  int32 *nentries, GinNullCategory **categories,
+				  Datum **addInfo, bool **addInfoIsNull);
 
 extern OffsetNumber gintuple_get_attrnum(GinState *ginstate, IndexTuple tuple);
 extern Datum gintuple_get_key(GinState *ginstate, IndexTuple tuple,
@@ -619,7 +652,8 @@ extern Datum ginbuildempty(PG_FUNCTION_ARGS);
 extern Datum gininsert(PG_FUNCTION_ARGS);
 extern void ginEntryInsert(GinState *ginstate,
 			   OffsetNumber attnum, Datum key, GinNullCategory category,
-			   ItemPointerData *items, uint32 nitem,
+			   ItemPointerData *items, Datum *addInfo,
+			   bool *addInfoIsNull, uint32 nitem,
 			   GinStatsData *buildStats);
 
 /* ginbtree.c */
@@ -690,6 +724,9 @@ typedef struct
 typedef struct
 {
 	ItemPointerData *items;
+	Datum		*addInfo;
+	bool		*addInfoIsNull;
+
 	uint32		nitem;
 	uint32		curitem;
 } GinBtreeDataLeafInsertData;
@@ -831,6 +868,8 @@ typedef struct GinScanEntryData
 
 	/* current ItemPointer to heap */
 	ItemPointerData curItem;
+	Datum		curAddInfo;
+	bool		curAddInfoIsNull;
 
 	/* for a partial-match or full-scan query, we accumulate all TIDs here */
 	TIDBitmap  *matchBitmap;
@@ -887,6 +926,19 @@ extern Datum ginvacuumcleanup(PG_FUNCTION_ARGS);
 extern ItemPointer ginVacuumItemPointers(GinVacuumState *gvs,
 					  ItemPointerData *items, int nitem, int *nremaining);
 
+/*----
+ * Item for accumulation item pointers and additional information for particular
+ * GIN entry.
+ *
+ * ginbulk.c
+ */
+typedef struct GinEntryAccumulatorItem
+{
+	ItemPointerData	iptr;
+	Datum			addInfo;
+	bool			addInfoIsNull;
+} GinEntryAccumulatorItem;
+
 /* ginbulk.c */
 typedef struct GinEntryAccumulator
 {
@@ -895,7 +947,7 @@ typedef struct GinEntryAccumulator
 	GinNullCategory category;
 	OffsetNumber attnum;
 	bool		shouldSort;
-	ItemPointerData *list;
+	GinEntryAccumulatorItem *list;
 	uint32		maxcount;		/* allocated size of list[] */
 	uint32		count;			/* current number of list[] entries */
 } GinEntryAccumulator;
@@ -912,10 +964,10 @@ typedef struct
 extern void ginInitBA(BuildAccumulator *accum);
 extern void ginInsertBAEntries(BuildAccumulator *accum,
 				   ItemPointer heapptr, OffsetNumber attnum,
-				   Datum *entries, GinNullCategory *categories,
-				   int32 nentries);
+				   Datum *entries, Datum *addInfo, bool *addInfoIsNull,
+				   GinNullCategory *categories, int32 nentries);
 extern void ginBeginBAScan(BuildAccumulator *accum);
-extern ItemPointerData *ginGetBAEntry(BuildAccumulator *accum,
+extern GinEntryAccumulatorItem *ginGetBAEntry(BuildAccumulator *accum,
 			  OffsetNumber *attnum, Datum *key, GinNullCategory *category,
 			  uint32 *n);
 
@@ -973,5 +1025,98 @@ ginCompareItemPointers(ItemPointer a, ItemPointer b)
 #else
 #define ginCompareItemPointers(a, b) ItemPointerCompare(a, b)
 #endif   /* PG_USE_INLINE */
+
+/*
+ * Functions for reading ItemPointers with additional information. Used in
+ * various .c files and have to be inline for being fast.
+ */
+
+#define SEVENTHBIT	(0x40)
+#define SIXMASK		(0x3F)
+
+/*
+ * Read next item pointer from leaf data page. Replaces current item pointer
+ * with the next one. Zero item pointer should be passed in order to read the
+ * first item pointer. Also reads value of addInfoIsNull flag which is stored
+ * with item pointer.
+ */
+static inline char *
+ginDataPageLeafReadItemPointer(char *ptr, ItemPointer iptr, bool *addInfoIsNull)
+{
+	uint32 blockNumberIncr = 0;
+	uint16 offset = 0;
+	int i;
+	uint8 v;
+
+	i = 0;
+	do
+	{
+		v = *ptr;
+		ptr++;
+		blockNumberIncr |= (v & (~HIGHBIT)) << i;
+		i += 7;
+	}
+	while (v & HIGHBIT);
+
+	blockNumberIncr += iptr->ip_blkid.bi_lo + (iptr->ip_blkid.bi_hi << 16);
+
+	iptr->ip_blkid.bi_lo = blockNumberIncr & 0xFFFF;
+	iptr->ip_blkid.bi_hi = (blockNumberIncr >> 16) & 0xFFFF;
+
+	i = 0;
+
+	while(true)
+	{
+		v = *ptr;
+		ptr++;
+
+		if (v & HIGHBIT)
+		{
+			offset |= (v & (~HIGHBIT)) << i;
+		}
+		else
+		{
+			offset |= (v & SIXMASK) << i;
+			if (addInfoIsNull)
+				*addInfoIsNull = (v & SEVENTHBIT) ? true : false;
+			break;
+		}
+		i += 7;
+	}
+
+	iptr->ip_posid = offset;
+
+	return ptr;
+}
+
+/*
+ * Reads next item pointer and additional information from leaf data page.
+ * Replaces current item pointer with the next one. Zero item pointer should be
+ * passed in order to read the first item pointer.
+ */
+static inline Pointer
+ginDataPageLeafRead(Pointer ptr, OffsetNumber attnum, ItemPointer iptr,
+	Datum *addInfo, bool *addInfoIsNull, GinState *ginstate)
+{
+	Form_pg_attribute attr;
+	bool isNull;
+
+	ptr = ginDataPageLeafReadItemPointer(ptr, iptr, &isNull);
+
+	if (addInfoIsNull)
+		*addInfoIsNull = isNull;
+
+	if (!isNull)
+	{
+		attr = ginstate->addAttrs[attnum - 1];
+		if (addInfo)
+		{
+			//ptr = (char *)att_align_nominal(ptr, attr->attalign);
+			*addInfo = fetch_att(ptr,  attr->attbyval,  attr->attlen);
+		}
+		ptr = (Pointer) att_addlength_pointer(ptr, attr->attlen, ptr);
+	}
+	return ptr;
+}
 
 #endif   /* GIN_PRIVATE_H */

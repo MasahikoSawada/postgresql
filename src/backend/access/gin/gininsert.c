@@ -23,7 +23,7 @@
 #include "storage/indexfsm.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
-
+#include "utils/datum.h"
 
 typedef struct
 {
@@ -35,6 +35,145 @@ typedef struct
 	BuildAccumulator accum;
 } GinBuildState;
 
+/*
+ * Form a tuple for entry tree.
+ *
+ * If the tuple would be too big to be stored, function throws a suitable
+ * error if errorTooBig is TRUE, or returns NULL if errorTooBig is FALSE.
+ *
+ * See src/backend/access/gin/README for a description of the index tuple
+ * format that is being built here.  We build on the assumption that we
+ * are making a leaf-level key entry containing a posting list of nipd items.
+ * If the caller is actually trying to make a posting-tree entry, non-leaf
+ * entry, or pending-list entry, it should pass nipd = 0 and then overwrite
+ * the t_tid fields as necessary.  In any case, ipd can be NULL to skip
+ * copying any itempointers into the posting list; the caller is responsible
+ * for filling the posting list afterwards, if ipd = NULL and nipd > 0.
+ */
+static IndexTuple
+GinFormTuple(GinState *ginstate,
+			 OffsetNumber attnum, Datum key, GinNullCategory category,
+			 ItemPointerData *ipd,
+			 Datum *addInfo,
+			 bool *addInfoIsNull,
+			 uint32 nipd,
+			 bool errorTooBig)
+{
+	Datum		datums[3];
+	bool		isnull[3];
+	IndexTuple	itup;
+	uint32		newsize;
+	int			i;
+	ItemPointerData nullItemPointer = {{0,0},0};
+
+	/* Build the basic tuple: optional column number, plus key datum */
+	if (ginstate->oneCol)
+	{
+		datums[0] = key;
+		isnull[0] = (category != GIN_CAT_NORM_KEY);
+		isnull[1] = true;
+	}
+	else
+	{
+		datums[0] = UInt16GetDatum(attnum);
+		isnull[0] = false;
+		datums[1] = key;
+		isnull[1] = (category != GIN_CAT_NORM_KEY);
+		isnull[2] = true;
+	}
+
+	itup = index_form_tuple(ginstate->tupdesc[attnum - 1], datums, isnull);
+
+	/*
+	 * Determine and store offset to the posting list, making sure there is
+	 * room for the category byte if needed.
+	 *
+	 * Note: because index_form_tuple MAXALIGNs the tuple size, there may well
+	 * be some wasted pad space.  Is it worth recomputing the data length to
+	 * prevent that?  That would also allow us to Assert that the real data
+	 * doesn't overlap the GinNullCategory byte, which this code currently
+	 * takes on faith.
+	 */
+	newsize = IndexTupleSize(itup);
+
+	GinSetPostingOffset(itup, newsize);
+
+	GinSetNPosting(itup, nipd);
+
+	/*
+	 * Add space needed for posting list, if any.  Then check that the tuple
+	 * won't be too big to store.
+	 */
+
+	if (nipd > 0)
+	{
+		newsize = ginCheckPlaceToDataPageLeaf(attnum, &ipd[0], addInfo[0],
+			addInfoIsNull[0], &nullItemPointer, ginstate, newsize);
+		for (i = 1; i < nipd; i++)
+		{
+			newsize = ginCheckPlaceToDataPageLeaf(attnum, &ipd[i], addInfo[i],
+							addInfoIsNull[i], &ipd[i - 1], ginstate, newsize);
+		}
+	}
+
+	if (category != GIN_CAT_NORM_KEY)
+	{
+		Assert(IndexTupleHasNulls(itup));
+		newsize = newsize + sizeof(GinNullCategory);
+	}
+	newsize = MAXALIGN(newsize);
+
+	if (newsize > Min(INDEX_SIZE_MASK, GinMaxItemSize))
+	{
+		if (errorTooBig)
+			ereport(ERROR,
+					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+			errmsg("index row size %lu exceeds maximum %lu for index \"%s\"",
+				   (unsigned long) newsize,
+				   (unsigned long) Min(INDEX_SIZE_MASK,
+									   GinMaxItemSize),
+				   RelationGetRelationName(ginstate->index))));
+		pfree(itup);
+		return NULL;
+	}
+
+	/*
+	 * Resize tuple if needed
+	 */
+	if (newsize != IndexTupleSize(itup))
+	{
+		itup = repalloc(itup, newsize);
+
+		/* set new size in tuple header */
+		itup->t_info &= ~INDEX_SIZE_MASK;
+		itup->t_info |= newsize;
+	}
+
+	/*
+	 * Copy in the posting list, if provided
+	 */
+	if (nipd > 0)
+	{
+		char *ptr = GinGetPosting(itup);
+		ptr = ginPlaceToDataPageLeaf(ptr, attnum, &ipd[0], addInfo[0],
+								addInfoIsNull[0], &nullItemPointer, ginstate);
+		for (i = 1; i < nipd; i++)
+		{
+			ptr = ginPlaceToDataPageLeaf(ptr, attnum, &ipd[i], addInfo[i],
+										addInfoIsNull[i], &ipd[i-1], ginstate);
+		}
+	}
+
+	/*
+	 * Insert category byte, if needed
+	 */
+	if (category != GIN_CAT_NORM_KEY)
+	{
+		Assert(IndexTupleHasNulls(itup));
+		GinSetNullCategory(itup, ginstate, category);
+	}
+	return itup;
+}
 
 /*
  * Adds array of item pointers to tuple's posting list, or
@@ -218,7 +357,7 @@ ginEntryInsert(GinState *ginstate,
 
 		/* modify an existing leaf entry */
 		itup = addItemPointersToLeafTuple(ginstate, itup,
-										  items, nitem, buildStats);
+										  items, addInfo, addInfoIsNull, nitem, buildStats);
 
 		insertdata.isDelete = TRUE;
 	}
@@ -226,7 +365,7 @@ ginEntryInsert(GinState *ginstate,
 	{
 		/* no match, so construct a new leaf entry */
 		itup = buildFreshLeafTuple(ginstate, attnum, key, category,
-								   items, nitem, buildStats);
+								   items, addInfo, addInfoIsNull, nitem, buildStats);
 	}
 
 	/* Insert the new or modified leaf tuple */
@@ -250,15 +389,27 @@ ginHeapTupleBulkInsert(GinBuildState *buildstate, OffsetNumber attnum,
 	GinNullCategory *categories;
 	int32		nentries;
 	MemoryContext oldCtx;
+	Datum	   *addInfo;
+	bool	   *addInfoIsNull;
+	int			i;
+	Form_pg_attribute attr = buildstate->ginstate.addAttrs[attnum - 1];
 
 	oldCtx = MemoryContextSwitchTo(buildstate->funcCtx);
 	entries = ginExtractEntries(buildstate->accum.ginstate, attnum,
 								value, isNull,
-								&nentries, &categories);
+								&nentries, &categories,
+								&addInfo, &addInfoIsNull);
 	MemoryContextSwitchTo(oldCtx);
+	for (i = 0; i < nentries; i++)
+	{
+		if (!addInfoIsNull[i])
+		{
+			addInfo[i] = datumCopy(addInfo[i], attr->attbyval, attr->attlen);
+		}
+	}
 
 	ginInsertBAEntries(&buildstate->accum, heapptr, attnum,
-					   entries, categories, nentries);
+					   entries, addInfo, addInfoIsNull, categories, nentries);
 
 	buildstate->indtuples += nentries;
 
@@ -283,7 +434,7 @@ ginBuildCallback(Relation index, HeapTuple htup, Datum *values,
 	/* If we've maxed out our available memory, dump everything to the index */
 	if (buildstate->accum.allocatedMemory >= maintenance_work_mem * 1024L)
 	{
-		ItemPointerData *list;
+		GinEntryAccumulatorItem *list;
 		Datum		key;
 		GinNullCategory category;
 		uint32		nlist;
@@ -293,10 +444,23 @@ ginBuildCallback(Relation index, HeapTuple htup, Datum *values,
 		while ((list = ginGetBAEntry(&buildstate->accum,
 								  &attnum, &key, &category, &nlist)) != NULL)
 		{
+			ItemPointerData *iptrs = (ItemPointerData *)palloc(sizeof(ItemPointerData) *nlist);
+			Datum *addInfo = (Datum *)palloc(sizeof(Datum) * nlist);
+			bool *addInfoIsNull = (bool *)palloc(sizeof(bool) * nlist);
+			int i;
+
+			for (i = 0; i < nlist; i++)
+			{
+				iptrs[i] = list[i].iptr;
+				addInfo[i] = list[i].addInfo;
+				addInfoIsNull[i] = list[i].addInfoIsNull;
+			}
+
+
 			/* there could be many entries, so be willing to abort here */
 			CHECK_FOR_INTERRUPTS();
 			ginEntryInsert(&buildstate->ginstate, attnum, key, category,
-						   list, nlist, &buildstate->buildStats);
+						   iptrs, addInfo, addInfoIsNull, nlist, &buildstate->buildStats);
 		}
 
 		MemoryContextReset(buildstate->tmpCtx);
@@ -317,7 +481,7 @@ ginbuild(PG_FUNCTION_ARGS)
 	GinBuildState buildstate;
 	Buffer		RootBuffer,
 				MetaBuffer;
-	ItemPointerData *list;
+	GinEntryAccumulatorItem *list;
 	Datum		key;
 	GinNullCategory category;
 	uint32		nlist;
@@ -405,10 +569,22 @@ ginbuild(PG_FUNCTION_ARGS)
 	while ((list = ginGetBAEntry(&buildstate.accum,
 								 &attnum, &key, &category, &nlist)) != NULL)
 	{
+		ItemPointerData *iptrs = (ItemPointerData *)palloc(sizeof(ItemPointerData) *nlist);
+		Datum *addInfo = (Datum *)palloc(sizeof(Datum) * nlist);
+		bool *addInfoIsNull = (bool *)palloc(sizeof(bool) * nlist);
+		int i;
+
+		for (i = 0; i < nlist; i++)
+		{
+			iptrs[i] = list[i].iptr;
+			addInfo[i] = list[i].addInfo;
+			addInfoIsNull[i] = list[i].addInfoIsNull;
+		}
+
 		/* there could be many entries, so be willing to abort here */
 		CHECK_FOR_INTERRUPTS();
 		ginEntryInsert(&buildstate.ginstate, attnum, key, category,
-					   list, nlist, &buildstate.buildStats);
+					   iptrs, addInfo, addInfoIsNull, nlist, &buildstate.buildStats);
 	}
 	MemoryContextSwitchTo(oldCtx);
 
@@ -480,13 +656,15 @@ ginHeapTupleInsert(GinState *ginstate, OffsetNumber attnum,
 	GinNullCategory *categories;
 	int32		i,
 				nentries;
+	Datum	   *addInfo;
+	bool	   *addInfoIsNull;
 
 	entries = ginExtractEntries(ginstate, attnum, value, isNull,
-								&nentries, &categories);
+								&nentries, &categories, &addInfo, &addInfoIsNull);
 
 	for (i = 0; i < nentries; i++)
 		ginEntryInsert(ginstate, attnum, entries[i], categories[i],
-					   item, 1, NULL);
+					   item, &addInfo[i], &addInfoIsNull[i], 1, NULL);
 }
 
 Datum

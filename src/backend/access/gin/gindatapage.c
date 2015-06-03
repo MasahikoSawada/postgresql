@@ -168,6 +168,74 @@ GinDataLeafPageGetItems(Page page, int *nitems, ItemPointerData advancePast)
 	return result;
 }
 
+/**
+ * Find item pointer in leaf data page. Returns true if given item pointer is
+ * found and false if it's not. Sets offset and iptrOut to last item pointer
+ * which is less than given one. Sets ptrOut ahead that item pointer.
+ */
+static bool
+findInLeafPage(GinBtree btree, Page page, OffsetNumber *offset,
+	ItemPointerData *iptrOut, Pointer *ptrOut)
+{
+	Pointer		ptr = GinDataPageGetData(page);
+	OffsetNumber i, maxoff, first = FirstOffsetNumber;
+	ItemPointerData iptr = {{0,0},0};
+	int cmp;
+
+	maxoff = GinPageGetOpaque(page)->maxoff;
+
+	/*
+	 * At first, search index at the end of page. As the result we narrow
+	 * [first, maxoff] range.
+	 */
+	for (i = 0; i < GinDataLeafIndexCount; i++)
+	{
+		GinDataLeafItemIndex *index = &GinPageGetIndexes(page)[i];
+		if (index->offsetNumer == InvalidOffsetNumber)
+			break;
+
+		cmp = ginCompareItemPointers(&index->iptr, btree->items + btree->curitem);
+		if (cmp < 0)
+		{
+			ptr = GinDataPageGetData(page) + index->pageOffset;
+			first = index->offsetNumer;
+			iptr = index->iptr;
+		}
+		else
+		{
+			maxoff = index->offsetNumer - 1;
+			break;
+		}
+	}
+
+	/* Search page in [first, maxoff] range found by page index */
+	for (i = first; i <= maxoff; i++)
+	{
+		*ptrOut = ptr;
+		*iptrOut = iptr;
+		ptr = ginDataPageLeafRead(ptr, btree->entryAttnum, &iptr,
+			NULL, NULL, btree->ginstate);
+
+		cmp = ginCompareItemPointers(btree->items + btree->curitem, &iptr);
+		if (cmp == 0)
+		{
+			*offset = i;
+			return true;
+		}
+		if (cmp < 0)
+		{
+			*offset = i;
+			return false;
+		}
+	}
+
+	*ptrOut = ptr;
+	*iptrOut = iptr;
+	*offset = GinPageGetOpaque(page)->maxoff + 1;
+	return false;
+}
+
+
 /*
  * Places all TIDs from leaf data page to bitmap.
  */
@@ -1244,6 +1312,62 @@ dataPrepareDownlink(GinBtree btree, Buffer lbuf)
 	pitem->key = *GinDataPageGetRightBound(lpage);
 
 	return pitem;
+}
+
+/*
+ * Split page of posting tree. Calls relevant function of internal of leaf page
+ * because they are handled very different.
+ */
+static Page
+dataSplitPage(GinBtree btree, Buffer lbuf, Buffer rbuf, OffsetNumber off,
+														XLogRecData **prdata)
+{
+	if (GinPageIsLeaf(BufferGetPage(lbuf)))
+		return dataSplitPageLeaf(btree, lbuf, rbuf, off, prdata);
+	else
+		return dataSplitPageInternal(btree, lbuf, rbuf, off, prdata);
+}
+
+/*
+ * Updates indexes in the end of leaf page which are used for faster search.
+ * Also updates freespace opaque field of page. Returns last item pointer of
+ * page.
+ */
+ItemPointerData
+updateItemIndexes(Page page, OffsetNumber attnum, GinState *ginstate)
+{
+	Pointer ptr;
+	ItemPointerData iptr;
+	int j = 0, maxoff, i;
+
+	/* Iterate over page */
+
+	maxoff = GinPageGetOpaque(page)->maxoff;
+	ptr = GinDataPageGetData(page);
+	iptr.ip_blkid.bi_lo = 0;
+	iptr.ip_blkid.bi_hi = 0;
+	iptr.ip_posid = 0;
+
+	for (i = FirstOffsetNumber; i <= maxoff; i++)
+	{
+		/* Place next page index entry if it's time to */
+		if (i * (GinDataLeafIndexCount + 1) > (j + 1) * maxoff)
+		{
+			GinPageGetIndexes(page)[j].iptr = iptr;
+			GinPageGetIndexes(page)[j].offsetNumer = i;
+			GinPageGetIndexes(page)[j].pageOffset = ptr - GinDataPageGetData(page);
+			j++;
+		}
+		ptr = ginDataPageLeafRead(ptr, attnum, &iptr, NULL, NULL, ginstate);
+	}
+	/* Fill rest of page indexes with InvalidOffsetNumber if any */
+	for (; j < GinDataLeafIndexCount; j++)
+	{
+		GinPageGetIndexes(page)[j].offsetNumer = InvalidOffsetNumber;
+	}
+	/* Update freespace of page */
+	GinPageGetOpaque(page)->freespace = GinDataPageFreeSpacePre(page, ptr);
+	return iptr;
 }
 
 /*

@@ -31,8 +31,6 @@ ginbeginscan(PG_FUNCTION_ARGS)
 	GinScanOpaque so;
 
 	/* no order by operators allowed */
-	Assert(norderbys == 0);
-
 	scan = RelationGetIndexScan(rel, nkeys, norderbys);
 
 	/* allocate private workspace */
@@ -76,7 +74,7 @@ ginFillScanEntry(GinScanOpaque so, OffsetNumber attnum,
 	 * Entries with non-null extra_data are never considered identical, since
 	 * we can't know exactly what the opclass might be doing with that.
 	 */
-	if (extra_data == NULL)
+	if (extra_data == NULL || !isPartialMatch)
 	{
 		for (i = 0; i < so->totalentries; i++)
 		{
@@ -155,6 +153,10 @@ ginFillScanKey(GinScanOpaque so, OffsetNumber attnum,
 
 	key->scanEntry = (GinScanEntry *) palloc(sizeof(GinScanEntry) * nQueryValues);
 	key->entryRes = (bool *) palloc0(sizeof(bool) * nQueryValues);
+	key->addInfo = (Datum *) palloc0(sizeof(Datum) * nQueryValues);
+	key->addInfoIsNull = (bool *) palloc(sizeof(bool) * nQueryValues);
+	for (i = 0; i < nQueryValues; i++)
+		key->addInfoIsNull[i] = true;
 
 	key->query = query;
 	key->queryValues = queryValues;

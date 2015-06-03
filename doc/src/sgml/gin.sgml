@@ -33,7 +33,9 @@
   occurs.  The same row ID can appear in multiple posting lists, since
   an item can contain more than one key.  Each key value is stored only
   once, so a <acronym>GIN</acronym> index is very compact for cases
-  where the same key appears many times.
+  where the same key appears many times. Posting list may also contain some
+  additional information with each row ID which may be useful during index
+  scan. For example, additional information might be word positions in document.
  </para>
 
  <para>
@@ -459,7 +461,7 @@
 
     <varlistentry>
      <term><function>Datum *extractValue(Datum itemValue, int32 *nkeys,
-        bool **nullFlags)</></term>
+        bool **nullFlags, Datum **addInfo, bool **addInfoIsNull)</></term>
      <listitem>
       <para>
        Returns a palloc'd array of keys given an item to be indexed.  The
@@ -470,6 +472,12 @@
        <literal>*nullFlags</> can be left <symbol>NULL</symbol> (its initial value)
        if all keys are non-null.
        The return value can be <symbol>NULL</symbol> if the item contains no keys.
+       Also, extractValue can put some additional information to be stored
+       with keys associated with given item. <literal>*addInfo</> is an
+       <literal>*nkeys</> length array of additional information datums and
+       <literal>*addInfoIsNull</> is array of booleans indicates with of
+       <literal>*addInfo</> is null.
+       array that indi
       </para>
      </listitem>
     </varlistentry>
@@ -565,7 +573,8 @@
     <varlistentry>
      <term><function>bool consistent(bool check[], StrategyNumber n, Datum query,
         int32 nkeys, Pointer extra_data[], bool *recheck,
-        Datum queryKeys[], bool nullFlags[])</></term>
+        Datum queryKeys[], bool nullFlags[], Datum addInfo[],
+        bool addInfoIsNull[])</></term>
      <listitem>
       <para>
        Returns TRUE if an indexed item satisfies the query operator with
@@ -587,6 +596,8 @@
        arrays previously returned by <function>extractQuery</>.
        <literal>extra_data</> is the extra-data array returned by
        <function>extractQuery</>, or <symbol>NULL</symbol> if none.
+       <literal>addInfo[]</> and <literal>addInfoIsNull[]</> contain additional
+       information previously extracted in <literal>extractValue</> method.
       </para>
 
       <para>
@@ -662,6 +673,18 @@
        <literal>extra_data</> is the corresponding element of the extra-data
        array made by <function>extractQuery</>, or <symbol>NULL</symbol> if none.
        Null keys are never passed to this function.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><function>int config(GinConfig *ginConfig)</></term>
+     <listitem>
+      <para>
+       Configures additional parameters of <acronym>GIN</acronym> operator
+       class. This method can set <literal>addInfoTypeOid</> field of
+       <literal>ginConfig</>. This field indicates <acronym>OID</acronym> of
+       datatype used for additional information storage. 
       </para>
      </listitem>
     </varlistentry>

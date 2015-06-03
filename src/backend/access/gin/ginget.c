@@ -32,7 +32,6 @@ typedef struct pendingPosition
 	bool	   *hasMatchKey;
 } pendingPosition;
 
-
 /*
  * Goes to the next page if current offset is outside of bounds
  */
@@ -224,7 +223,7 @@ collectMatchBitmap(GinBtreeData *btree, GinBtreeStack *stack,
 			LockBuffer(stack->buffer, GIN_UNLOCK);
 
 			/* Collect all the TIDs in this entry's posting tree */
-			scanPostingTree(btree->index, scanEntry, rootPostingTree);
+			scanPostingTree(btree->index, scanEntry, rootPostingTree, attnum, btree->ginstate);
 
 			/*
 			 * We lock again the entry page and while it was unlocked insert
@@ -301,6 +300,8 @@ startScanEntry(GinState *ginstate, GinScanEntry entry)
 restartScanEntry:
 	entry->buffer = InvalidBuffer;
 	ItemPointerSetMin(&entry->curItem);
+	entry->curAddInfo = (Datum) 0;
+	entry->curAddInfoIsNull = true;
 	entry->offset = InvalidOffsetNumber;
 	entry->list = NULL;
 	entry->nlist = 0;
@@ -533,7 +534,9 @@ startScan(IndexScanDesc scan)
 	uint32		i;
 
 	for (i = 0; i < so->totalentries; i++)
+	{
 		startScanEntry(ginstate, so->entries[i]);
+	}
 
 	if (GinFuzzySearchLimit > 0)
 	{
@@ -1610,7 +1613,14 @@ collectMatchesForHeapRow(IndexScanDesc scan, pendingPosition *pos)
 														  category,
 														  datumExtracted);
 						else
+						{
 							key->entryRes[j] = true;
+							if (OidIsValid(so->ginstate.addInfoTypeOid[i]))
+								key->addInfo[j] = index_getattr(itup,
+												so->ginstate.oneCol ? 2 : 3,
+											so->ginstate.tupdesc[attrnum - 1],
+														&key->addInfoIsNull[j]);
+						}
 
 						/* done with binary search */
 						break;

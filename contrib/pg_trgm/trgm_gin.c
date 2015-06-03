@@ -15,6 +15,10 @@ PG_FUNCTION_INFO_V1(gin_extract_value_trgm);
 PG_FUNCTION_INFO_V1(gin_extract_query_trgm);
 PG_FUNCTION_INFO_V1(gin_trgm_consistent);
 
+PG_FUNCTION_INFO_V1(gin_trgm_config);
+Datum		gin_trgm_config(PG_FUNCTION_ARGS);
+
+
 /*
  * This function can only be called if a pre-9.1 version of the GIN operator
  * class definition is present in the catalogs (probably as a consequence
@@ -32,13 +36,27 @@ gin_extract_trgm(PG_FUNCTION_ARGS)
 }
 
 Datum
+gin_trgm_config(PG_FUNCTION_ARGS)
+{
+	GinConfig *ginConfig = (GinConfig *)PG_GETARG_DATUM(0);
+
+	ginConfig->addInfoTypeOid = (Oid)23;
+	PG_RETURN_OID((Oid)23);
+//	PG_RETURN_NULL();
+}
+
+Datum
 gin_extract_value_trgm(PG_FUNCTION_ARGS)
 {
 	text	   *val = (text *) PG_GETARG_TEXT_P(0);
 	int32	   *nentries = (int32 *) PG_GETARG_POINTER(1);
+	int		**addinfo = (int **) PG_GETARG_POINTER(3);
+	bool		**addinfoIsNull = (bool **) PG_GETARG_POINTER(4);
 	Datum	   *entries = NULL;
 	TRGM	   *trg;
 	int32		trglen;
+	int	*info;
+	bool *isnull;
 
 	*nentries = 0;
 
@@ -49,15 +67,22 @@ gin_extract_value_trgm(PG_FUNCTION_ARGS)
 	{
 		trgm	   *ptr;
 		int32		i;
+		int j = 0;
 
 		*nentries = trglen;
 		entries = (Datum *) palloc(sizeof(Datum) * trglen);
+		*addinfo = (int *) palloc(sizeof(int) * trglen);
+		*addinfoIsNull = (bool *) palloc(sizeof(bool) *trglen);
+		info = *addinfo;
+		isnull = *addinfoIsNull;
 
 		ptr = GETARR(trg);
 		for (i = 0; i < trglen; i++)
 		{
 			int32		item = trgm2int(ptr);
-
+			j += 100;
+			info[i] = j;
+			isnull[i] = false;
 			entries[i] = Int32GetDatum(item);
 			ptr++;
 		}
@@ -172,12 +197,16 @@ gin_trgm_consistent(PG_FUNCTION_ARGS)
 	int32		nkeys = PG_GETARG_INT32(3);
 	Pointer    *extra_data = (Pointer *) PG_GETARG_POINTER(4);
 	bool	   *recheck = (bool *) PG_GETARG_POINTER(5);
+	Pointer	   *addinfo = (Pointer *) PG_GETARG_POINTER(8);
 	bool		res;
 	int32		i,
 				ntrue;
+	int32		position = *((int *)addinfo);
 
 	/* All cases served by this function are inexact */
 	*recheck = true;
+
+	elog(WARNING, "addinfo data = %d", position);
 
 	switch (strategy)
 	{

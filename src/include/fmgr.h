@@ -467,6 +467,11 @@ extern Datum DirectFunctionCall9Coll(PGFunction func, Oid collation,
 						Datum arg3, Datum arg4, Datum arg5,
 						Datum arg6, Datum arg7, Datum arg8,
 						Datum arg9);
+extern Datum DirectFunctionCall10Coll(PGFunction func, Oid collation,
+						Datum arg1, Datum arg2,
+						Datum arg3, Datum arg4, Datum arg5,
+						Datum arg6, Datum arg7, Datum arg8,
+						Datum arg9, Datum arg10);
 
 /* These are for invocation of a previously-looked-up function with a
  * directly-computed parameter list.  Note that neither arguments nor result
@@ -502,6 +507,11 @@ extern Datum FunctionCall9Coll(FmgrInfo *flinfo, Oid collation,
 				  Datum arg3, Datum arg4, Datum arg5,
 				  Datum arg6, Datum arg7, Datum arg8,
 				  Datum arg9);
+extern Datum FunctionCall10Coll(FmgrInfo *flinfo, Oid collation,
+				  Datum arg1, Datum arg2,
+				  Datum arg3, Datum arg4, Datum arg5,
+				  Datum arg6, Datum arg7, Datum arg8,
+				  Datum arg9, Datum arg10);
 
 /* These are for invocation of a function identified by OID with a
  * directly-computed parameter list.  Note that neither arguments nor result
@@ -540,6 +550,11 @@ extern Datum OidFunctionCall9Coll(Oid functionId, Oid collation,
 					 Datum arg3, Datum arg4, Datum arg5,
 					 Datum arg6, Datum arg7, Datum arg8,
 					 Datum arg9);
+extern Datum OidFunctionCall10Coll(Oid functionId, Oid collation,
+					 Datum arg1, Datum arg2,
+					 Datum arg3, Datum arg4, Datum arg5,
+					 Datum arg6, Datum arg7, Datum arg8,
+					 Datum arg9, Datum arg10);
 
 /* These macros allow the collation argument to be omitted (with a default of
  * InvalidOid, ie, no collation).  They exist mostly for backwards
@@ -563,6 +578,8 @@ extern Datum OidFunctionCall9Coll(Oid functionId, Oid collation,
 	DirectFunctionCall8Coll(func, InvalidOid, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8)
 #define DirectFunctionCall9(func, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9) \
 	DirectFunctionCall9Coll(func, InvalidOid, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9)
+#define DirectFunctionCall10(func, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10) \
+	DirectFunctionCall10Coll(func, InvalidOid, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
 #define FunctionCall1(flinfo, arg1) \
 	FunctionCall1Coll(flinfo, InvalidOid, arg1)
 #define FunctionCall2(flinfo, arg1, arg2) \
@@ -581,6 +598,8 @@ extern Datum OidFunctionCall9Coll(Oid functionId, Oid collation,
 	FunctionCall8Coll(flinfo, InvalidOid, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8)
 #define FunctionCall9(flinfo, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9) \
 	FunctionCall9Coll(flinfo, InvalidOid, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9)
+#define FunctionCall10(flinfo, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10) \
+	FunctionCall10Coll(flinfo, InvalidOid, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
 #define OidFunctionCall0(functionId) \
 	OidFunctionCall0Coll(functionId, InvalidOid)
 #define OidFunctionCall1(functionId, arg1) \
@@ -601,6 +620,8 @@ extern Datum OidFunctionCall9Coll(Oid functionId, Oid collation,
 	OidFunctionCall8Coll(functionId, InvalidOid, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8)
 #define OidFunctionCall9(functionId, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9) \
 	OidFunctionCall9Coll(functionId, InvalidOid, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9)
+#define OidFunctionCall10(functionId, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10) \
+	OidFunctionCall10Coll(functionId, InvalidOid, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
 
 
 /* Special cases for convenient invocation of datatype I/O functions. */

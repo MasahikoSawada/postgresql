@@ -38,6 +38,17 @@ ginRedoClearIncompleteSplit(XLogReaderState *record, uint8 block_id)
 		UnlockReleaseBuffer(buffer);
 }
 
+#define FILL_GINSTATE_ATTR                               \
+	do {                                                 \
+		memset(&ginstate, 0, sizeof(GinState));          \
+		memset(&attr, 0, sizeof(FormData_pg_attribute)); \
+ 		ginstate.addAttrs[0] = &attr;                    \
+		attr.attlen = data->typlen;                      \
+		attr.attalign = data->typalign;                  \
+		attr.attbyval = data->typbyval;                  \
+		attr.attstorage = data->typstorage;              \
+	} while (0)
+
 static void
 ginRedoCreateIndex(XLogReaderState *record)
 {
@@ -402,6 +413,9 @@ ginRedoSplit(XLogReaderState *record)
 			elog(ERROR, "GIN split record did not contain a full-page image of root page");
 		UnlockReleaseBuffer(rootbuf);
 	}
+
+	/*if (data->rblkno == 7103)
+		dumpPage(rpage, "/home/smagen/projects/postgresql/waltest/page1.dat");*/
 
 	UnlockReleaseBuffer(rbuffer);
 	UnlockReleaseBuffer(lbuffer);
