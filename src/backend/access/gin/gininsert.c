@@ -264,7 +264,8 @@ addItemPointersToLeafTuple(GinState *ginstate,
 static IndexTuple
 buildFreshLeafTuple(GinState *ginstate,
 					OffsetNumber attnum, Datum key, GinNullCategory category,
-					ItemPointerData *items, uint32 nitem,
+					ItemPointerData *items, Datum *addInfo,
+					bool *addInfoIsNull, uint32 nitem,
 					GinStatsData *buildStats)
 {
 	IndexTuple	res = NULL;
@@ -314,7 +315,10 @@ buildFreshLeafTuple(GinState *ginstate,
 void
 ginEntryInsert(GinState *ginstate,
 			   OffsetNumber attnum, Datum key, GinNullCategory category,
-			   ItemPointerData *items, uint32 nitem,
+			   ItemPointerData *items,
+			   Datum *addInfo,
+			   bool *addInfoIsNull,
+			   uint32 nitem,
 			   GinStatsData *buildStats)
 {
 	GinBtreeData btree;
@@ -322,6 +326,18 @@ ginEntryInsert(GinState *ginstate,
 	GinBtreeStack *stack;
 	IndexTuple	itup;
 	Page		page;
+	int i;
+
+	if (!addInfoIsNull || !addInfo)
+	{
+		addInfoIsNull = (bool *)palloc(sizeof(bool) * nitem);
+		addInfo = (Datum *)palloc(sizeof(Datum) * nitem);
+		for (i = 0; i < nitem; i++)
+		{
+			addInfoIsNull[i] = true;
+			addInfo[i] = (Datum) 0;
+		}
+	}
 
 	insertdata.isDelete = FALSE;
 

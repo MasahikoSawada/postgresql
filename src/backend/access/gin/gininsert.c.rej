@@ -249,36 +249,6 @@
  								  buildStats);
  
  			pfree(gdi);
-@@ -385,13 +583,28 @@
- void
- ginEntryInsert(GinState *ginstate,
- 			   OffsetNumber attnum, Datum key, GinNullCategory category,
--			   ItemPointerData *items, uint32 nitem,
-+			   ItemPointerData *items,
-+			   Datum *addInfo,
-+			   bool *addInfoIsNull,
-+			   uint32 nitem,
- 			   GinStatsData *buildStats)
- {
- 	GinBtreeData btree;
- 	GinBtreeStack *stack;
- 	IndexTuple	itup;
- 	Page		page;
-+	int i;
-+
-+	if (!addInfoIsNull || !addInfo)
-+	{
-+		addInfoIsNull = (bool *)palloc(sizeof(bool) * nitem);
-+		addInfo = (Datum *)palloc(sizeof(Datum) * nitem);
-+		for (i = 0; i < nitem; i++)
-+		{
-+			addInfoIsNull[i] = true;
-+			addInfo[i] = (Datum) 0;
-+		}
-+	}
- 
- 	/* During index build, count the to-be-inserted entry */
- 	if (buildStats)
 @@ -418,9 +631,9 @@
  			freeGinBtreeStack(stack);
  
