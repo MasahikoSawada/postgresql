@@ -405,6 +405,7 @@ typedef struct GinState
 	FmgrInfo	consistentFn[INDEX_MAX_KEYS];
 	FmgrInfo	triConsistentFn[INDEX_MAX_KEYS];
 	FmgrInfo	comparePartialFn[INDEX_MAX_KEYS];		/* optional method */
+	FmgrInfo	configFn[INDEX_MAX_KEYS];				/* optonal method */
 	/* canPartialMatch[i] is true if comparePartialFn[i] is valid */
 	bool		canPartialMatch[INDEX_MAX_KEYS];
 	/* Collations to pass to the support functions */
@@ -438,6 +439,11 @@ typedef struct
 typedef struct ginxlogCreatePostingTree
 {
 	uint32		size;
+	uint16		typlen;
+
+	bool		typbyval;
+	char		typalign;
+	char		typstorage;
 	/* A compressed posting list follows */
 } ginxlogCreatePostingTree;
 
@@ -562,6 +568,11 @@ typedef struct ginxlogSplit
 typedef struct ginxlogVacuumDataLeafPage
 {
 	ginxlogRecompressDataLeaf data;
+
+	utin16 	typlen;
+	bool 	typbyval;
+	char 	typalign;
+	char 	typstorage;
 } ginxlogVacuumDataLeafPage;
 
 /*

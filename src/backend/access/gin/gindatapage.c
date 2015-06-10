@@ -1798,6 +1798,7 @@ leafRepackItems(disassembledLeaf *leaf, ItemPointer remaining)
  */
 BlockNumber
 createPostingTree(Relation index, ItemPointerData *items, uint32 nitems,
+				  Datum *addInfo, bool *addinfoIsNull,
 				  GinStatsData *buildStats)
 {
 	BlockNumber blkno;
@@ -1828,6 +1829,7 @@ createPostingTree(Relation index, ItemPointerData *items, uint32 nitems,
 
 		segment = ginCompressPostingList(&items[nrootitems],
 										 nitems - nrootitems,
+										 addInfo, addInfoIsNull,
 										 GinPostingListSegmentMaxSize,
 										 &npacked);
 		segsize = SizeOfGinPostingList(segment);
@@ -1861,6 +1863,14 @@ createPostingTree(Relation index, ItemPointerData *items, uint32 nitems,
 
 		data.size = rootsize;
 
+		if (ginstate->addAttrs[attnum - 1])
+		{
+			data.typlen = ginstate->addAttr[attnum - 1]->attlen;
+			data.typalign = ginstate->addAttr[attnum - 1]->attalign;
+			data.typbyval = ginstate->addAttr[attnum - 1]->attbyval;
+			data.typstorate = ginstate->addAttr[attnum - 1]->attstorage;
+		}
+
 		XLogBeginInsert();
 		XLogRegisterData((char *) &data, sizeof(ginxlogCreatePostingTree));
 
@@ -1878,7 +1888,7 @@ createPostingTree(Relation index, ItemPointerData *items, uint32 nitems,
 
 	/* During index build, count the newly-added data page */
 	if (buildStats)
-		buildStats->nDataPages++;
+		Buildstats->nDataPages++;
 
 	elog(DEBUG2, "created GIN posting tree with %d items", nrootitems);
 
@@ -1889,6 +1899,8 @@ createPostingTree(Relation index, ItemPointerData *items, uint32 nitems,
 	{
 		ginInsertItemPointers(index, blkno,
 							  items + nrootitems,
+							  addInfo + nrootitems,
+							  addInfoIsNull + nrootitems,
 							  nitems - nrootitems,
 							  buildStats);
 	}

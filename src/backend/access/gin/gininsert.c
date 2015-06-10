@@ -186,6 +186,7 @@ static IndexTuple
 addItemPointersToLeafTuple(GinState *ginstate,
 						   IndexTuple old,
 						   ItemPointerData *items, uint32 nitem,
+						   Datum *addInfo, bool *addInfoIsNull,
 						   GinStatsData *buildStats)
 {
 	OffsetNumber attnum;
@@ -196,6 +197,8 @@ addItemPointersToLeafTuple(GinState *ginstate,
 			   *oldItems;
 	int			oldNPosting,
 				newNPosting;
+	Datum		*oldAddInfo, *newAddInfo;
+	bool		*oldAddInfoIsNull, *newAddInfoIsNull;
 	GinPostingList *compressedList;
 
 	Assert(!GinIsPostingTree(old));
@@ -204,16 +207,19 @@ addItemPointersToLeafTuple(GinState *ginstate,
 	key = gintuple_get_key(ginstate, old, &category);
 
 	/* merge the old and new posting lists */
-	oldItems = ginReadTuple(ginstate, attnum, old, &oldNPosting);
+	/* @@@ : ginReadTuple() should allocate memory and store add-info for oldAddInfo, isnull */
+	oldItems = ginReadTuple(ginstate, attnum, old, &oldNPosting, oldAddInfo, oldAddInfoIsNull);
 
-	newItems = ginMergeItemPointers(items, nitem,
-									oldItems, oldNPosting,
-									&newNPosting);
+	/* @@@ : we're assumed that ginMergeItemPointers() allocate newAddinfo, new-isnull */
+	newItems = ginMergeItemPointers(items, nitem, addInfo, addInfoIsNull,
+									oldItems, oldNPosting, oldAddInfo, oldAddInfoIsNull,
+									newAddInfo, newAddInfoIsNull, &newNPosting);
 
 	/* Compress the posting list, and try to a build tuple with room for it */
 	res = NULL;
-	compressedList = ginCompressPostingList(newItems, newNPosting, GinMaxItemSize,
-											NULL);
+	compressedList = ginCompressPostingList(newItems, newNPosting,
+											newAddInfo, newAddInfoIsNull,
+											GinMaxItemSize, NULL);
 	pfree(newItems);
 	if (compressedList)
 	{
@@ -234,14 +240,18 @@ addItemPointersToLeafTuple(GinState *ginstate,
 		 * surely small enough to fit on one posting-tree page, and should
 		 * already be in order with no duplicates.
 		 */
-		postingRoot = createPostingTree(ginstate->index,
+		postingRoot = createPostingTree(ginstate,
+										attnum,
+										ginstate->index,
 										oldItems,
+										oldAddInfo,
+										oldAddInfoIsNull,
 										oldNPosting,
 										buildStats);
 
 		/* Now insert the TIDs-to-be-added into the posting tree */
 		ginInsertItemPointers(ginstate->index, postingRoot,
-							  items, nitem,
+							  items, addInfo, addinfoIsNull, nitem,
 							  buildStats);
 
 		/* And build a new posting-tree-only result tuple */
@@ -296,7 +306,12 @@ buildFreshLeafTuple(GinState *ginstate,
 		/*
 		 * Initialize a new posting tree with the TIDs.
 		 */
-		postingRoot = createPostingTree(ginstate->index, items, nitem,
+		postingRoot = createPostingTree(ginstate,
+										attnum,
+										ginstate->index,
+										items,
+										nitem,
+										addInfo, addInfoIsNull,
 										buildStats);
 
 		/* And save the root link in the result tuple */

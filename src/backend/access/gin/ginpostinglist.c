@@ -181,7 +181,7 @@ decode_varbyte(unsigned char **ptr)
  * byte at the end, if any, is zero.
  */
 GinPostingList *
-ginCompressPostingList(const ItemPointer ipd, int nipd, Datum addInfo,
+ginCompressPostingList(const ItemPointer ipd, int nipd, Datum *addInfo,
 					   boll *addInfoIsNull, int maxsize, int *nwritten)
 {
 	Form_pg_attribute attr = ginstate->addAttrs[attnum - 1];
@@ -466,11 +466,15 @@ ginPostingListDecodeAllSegmentsToTbm(GinPostingList *ptr, int len,
 ItemPointer
 ginMergeItemPointers(ItemPointerData *a, uint32 na,
 					 ItemPointerData *b, uint32 nb,
+					 Datum *aAddInfo, bool *aAddInfoIsNull,
+					 Datum *bAddInfo, bool *bAddInfoIsNull,
 					 int *nmerged)
 {
 	ItemPointerData *dst;
 
 	dst = (ItemPointer) palloc((na + nb) * sizeof(ItemPointerData));
+	bAddInfo = (Datum *) palloc((na + nb) * sizeof(Datum));
+	bAddInfoIsNull = (bool *) palloc((na + nb) * sizeof(bool));
 
 	/*
 	 * If the argument arrays don't overlap, we can just append them to each

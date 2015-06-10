@@ -14,28 +14,6 @@
  
  /*
   * Access macros for non-leaf entry tuples
-@@ -337,7 +369,8 @@
- 	FmgrInfo	extractValueFn[INDEX_MAX_KEYS];
- 	FmgrInfo	extractQueryFn[INDEX_MAX_KEYS];
- 	FmgrInfo	consistentFn[INDEX_MAX_KEYS];
--	FmgrInfo	comparePartialFn[INDEX_MAX_KEYS];		/* optional method */
-+	FmgrInfo	comparePartialFn[INDEX_MAX_KEYS];	/* optional method */
-+	FmgrInfo	configFn[INDEX_MAX_KEYS];			/* optional method */
- 	/* canPartialMatch[i] is true if comparePartialFn[i] is valid */
- 	bool		canPartialMatch[INDEX_MAX_KEYS];
- 	/* Collations to pass to the support functions */
-@@ -355,6 +388,11 @@
- 	RelFileNode node;
- 	BlockNumber blkno;
- 	uint32		nitem;
-+	int16		typlen;
-+
-+	bool		typbyval;
-+	char		typalign;
-+	char		typstorage;
- 	/* follows list of heap's ItemPointer */
- } ginxlogCreatePostingTree;
- 
 @@ -366,10 +404,15 @@
  	BlockNumber blkno;
  	BlockNumber updateBlkno;
@@ -65,18 +43,6 @@
  	bool		isData;
  	bool		isLeaf;
  	bool		isRootSplit;
-@@ -407,6 +454,11 @@
- 	RelFileNode node;
- 	BlockNumber blkno;
- 	OffsetNumber nitem;
-+	int16		typlen;
-+
-+	bool		typbyval;
-+	char		typalign;
-+	char		typstorage;
- 	/* follows content of page */
- } ginxlogVacuumPage;
- 
 @@ -557,22 +614,27 @@
  extern void ginFindParents(GinBtree btree, GinBtreeStack *stack, BlockNumber rootBlkno);
  
