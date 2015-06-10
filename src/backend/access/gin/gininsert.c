@@ -272,7 +272,8 @@ buildFreshLeafTuple(GinState *ginstate,
 	GinPostingList *compressedList;
 
 	/* try to build a posting list tuple with all the items */
-	compressedList = ginCompressPostingList(items, nitem, GinMaxItemSize, NULL);
+	compressedList = ginCompressPostingList(items, nitem, addInfo, addInfoIsNull,
+											GinMaxItemSize, NULL);
 	if (compressedList)
 	{
 		res = GinFormTuple(ginstate, attnum, key, category,

@@ -181,9 +181,10 @@ decode_varbyte(unsigned char **ptr)
  * byte at the end, if any, is zero.
  */
 GinPostingList *
-ginCompressPostingList(const ItemPointer ipd, int nipd, int maxsize,
-					   int *nwritten)
+ginCompressPostingList(const ItemPointer ipd, int nipd, Datum addInfo,
+					   boll *addInfoIsNull, int maxsize, int *nwritten)
 {
+	Form_pg_attribute attr = ginstate->addAttrs[attnum - 1];
 	uint64		prev;
 	int			totalpacked = 0;
 	int			maxbytes;
@@ -200,6 +201,13 @@ ginCompressPostingList(const ItemPointer ipd, int nipd, int maxsize,
 
 	/* Store the first special item */
 	result->first = ipd[0];
+	result->fAddInfoIsNull = addInfoIsNull[0];
+	if (!result->fAddInfoIsNull[0])
+	{
+		/* Addinfo for first item is stored */
+		ginDatumWrite(result->firstitem, addInfo[0], attr->attbyval, attr->attalign,
+					  attr->attlen, attr->attstorage);
+	}
 
 	prev = itemptr_to_uint64(&result->first);
 
@@ -229,6 +237,15 @@ ginCompressPostingList(const ItemPointer ipd, int nipd, int maxsize,
 
 			memcpy(ptr, buf, p - buf);
 			ptr += (p - buf);
+		}
+
+		/* Information about is-null stored into before addInfo. */
+		ptr->bytes += addInfoIsNull[totalpacked] ? true : false;
+
+		if (!addInfoIsNull[totalpacked])
+		{
+			ginDatumWrite(ptr, addInfo[1], attr->attbyval, attr->attalign,
+						  attr->attlen, attr->attstorage);
 		}
 		prev = val;
 	}
@@ -275,6 +292,89 @@ ginPostingListDecode(GinPostingList *plist, int *ndecoded)
 	return ginPostingListDecodeAllSegments(plist,
 										   SizeOfGinPostingList(plist),
 										   ndecoded);
+}
+
+/*
+ * Write the given datum beginning at ptr (after advancing to correct
+ * alignment, if needed). Setting padding bytes to zero if needed. Return the
+ * pointer incremented by space used.
+ */
+static Pointer
+ginDatumWrite(Pointer ptr, Datum datum, bool typbyval, char typalign,
+			int16 typlen, char typstorage)
+{
+	Size		data_length;
+	Pointer		prev_ptr = ptr;
+
+	if (typbyval)
+	{
+		/* pass-by-value */
+		store_att_byval(ptr, datum, typlen);
+		/**/ptr = ptr + typlen;
+		ptr = (char *) att_align_nominal(ptr, typalign);
+//		store_att_byval(ptr, datum, typlen);
+		data_length = typlen;
+	}
+	else if (typlen == -1)
+	{
+		/* varlena */
+		Pointer		val = DatumGetPointer(datum);
+
+		if (VARATT_IS_EXTERNAL(val))
+		{
+			/*
+			 * Throw error, because we must never put a toast pointer inside a
+			 * range object.  Caller should have detoasted it.
+			 */
+			elog(ERROR, "cannot store a toast pointer inside a range");
+			data_length = 0;	/* keep compiler quiet */
+		}
+		else if (VARATT_IS_SHORT(val))
+		{
+			/* no alignment for short varlenas */
+			data_length = VARSIZE_SHORT(val);
+			memmove(ptr, val, data_length);
+		}
+		else if (TYPE_IS_PACKABLE(typlen, typstorage) &&
+				 VARATT_CAN_MAKE_SHORT(val))
+		{
+			/* convert to short varlena -- no alignment */
+			data_length = VARATT_CONVERTED_SHORT_SIZE(val);
+			SET_VARSIZE_SHORT(ptr, data_length);
+			memmove(ptr + 1, VARDATA(val), data_length - 1);
+		}
+		else
+		{
+			/* full 4-byte header varlena */
+			ptr = (char *) att_align_nominal(ptr, typalign);
+			data_length = VARSIZE(val);
+			memmove(ptr, val, data_length);
+		}
+	}
+	else if (typlen == -2)
+	{
+		/* cstring ... never needs alignment */
+		Assert(typalign == 'c');
+		data_length = strlen(DatumGetCString(datum)) + 1;
+		memmove(ptr, DatumGetPointer(datum), data_length);
+	}
+	else
+	{
+		/* fixed-length pass-by-reference */
+		ptr = (char *) att_align_nominal(ptr, typalign);
+		Assert(typlen > 0);
+		data_length = typlen;
+		memmove(ptr, DatumGetPointer(datum), data_length);
+	}
+
+	if (!typbyval)
+	{
+		if (ptr != prev_ptr)
+			memset(prev_ptr, 0, ptr - prev_ptr);
+		ptr += data_length;
+	}
+
+	return ptr;
 }
 
 /*

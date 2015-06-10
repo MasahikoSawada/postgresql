@@ -420,6 +420,7 @@ typedef struct GinState
 typedef struct
 {
 	ItemPointerData first;		/* first item in this posting list (unpacked) */
+	bool		fAddInfoIsNull;
 	uint16		nbytes;			/* number of bytes that follow */
 	unsigned char bytes[FLEXIBLE_ARRAY_MEMBER]; /* varbyte encoded items */
 } GinPostingList;
