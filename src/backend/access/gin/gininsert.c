@@ -696,7 +696,7 @@ ginHeapTupleInsert(GinState *ginstate, OffsetNumber attnum,
 
 	for (i = 0; i < nentries; i++)
 		ginEntryInsert(ginstate, attnum, entries[i], categories[i],
-					   item, &addInfo[i], &addInfoIsNull[i], 1, NULL);
+					   item, addInfo[i], &addInfoIsNull[i], 1, NULL);
 }
 
 Datum

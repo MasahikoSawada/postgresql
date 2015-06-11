@@ -287,11 +287,17 @@ ginCompressPostingList(const ItemPointer ipd, int nipd, Datum *addInfo,
  * The number of items is returned in *ndecoded.
  */
 ItemPointer
-ginPostingListDecode(GinPostingList *plist, int *ndecoded)
+ginPostingListDecode(GinPostingList *plist, int *ndecoded,
+					 Datum *addInfo, bool *addInfoIsNull,
+					 OffsetNumber attnum, GinState *ginstate)
 {
 	return ginPostingListDecodeAllSegments(plist,
 										   SizeOfGinPostingList(plist),
-										   ndecoded);
+										   ndecoded,
+										   addInfo,
+										   addInfoIsNull,
+										   attnum,
+										   ginstate);
 }
 
 /*
@@ -383,8 +389,11 @@ ginDatumWrite(Pointer ptr, Datum datum, bool typbyval, char typalign,
  * one after each other, with total size 'len' bytes.
  */
 ItemPointer
-ginPostingListDecodeAllSegments(GinPostingList *segment, int len, int *ndecoded_out)
+ginPostingListDecodeAllSegments(GinPostingList *segment, int len, int *ndecoded_out,
+								Datum *addInfo, bool *addInfoIsNull, OffsetNumber attnum,
+								GinState *ginstate)
 {
+	Form_pg_attribute attr;
 	ItemPointer result;
 	int			nallocated;
 	uint64		val;
@@ -398,6 +407,10 @@ ginPostingListDecodeAllSegments(GinPostingList *segment, int len, int *ndecoded_
 	 */
 	nallocated = segment->nbytes * 2 + 1;
 	result = palloc(nallocated * sizeof(ItemPointerData));
+	addInfo = (Datum *)palloc(nallocated * sizeof(Datum));
+	addInfoIsNull = (bool *)palloc(nallocated * sizeof(bool));
+
+	attr = ginstate->addAttrs[attnum - 1];
 
 	ndecoded = 0;
 	while ((char *) segment < endseg)
@@ -413,11 +426,20 @@ ginPostingListDecodeAllSegments(GinPostingList *segment, int len, int *ndecoded_
 		Assert(OffsetNumberIsValid(ItemPointerGetOffsetNumber(&segment->first)));
 		Assert(ndecoded == 0 || ginCompareItemPointers(&segment->first, &result[ndecoded - 1]) > 0);
 		result[ndecoded] = segment->first;
+		addInfoIsNull[ndecoded] = segment->fAddInfoIsNull;
 		ndecoded++;
 
 		val = itemptr_to_uint64(&segment->first);
 		ptr = segment->bytes;
 		endptr = segment->bytes + segment->nbytes;
+
+		/* Fetch the first add info, if present */
+		if (!addInfoIsNull[0])
+		{
+			addInfo[0] = fetch_att(ptr, attr->attbyval, attr->attlen);
+			ptr = att_addlength_pointer(ptr, attr->attlen, ptr);
+		}
+
 		while (ptr < endptr)
 		{
 			/* enlarge output array if needed */
@@ -430,6 +452,18 @@ ginPostingListDecodeAllSegments(GinPostingList *segment, int len, int *ndecoded_
 			val += decode_varbyte(&ptr);
 
 			uint64_to_itemptr(val, &result[ndecoded]);
+
+			/* addInfoIsNull */
+			addInfoIsNull[ndecoded] = ptr ? true : false;
+			ptr++;
+
+			/* addInfo */
+			if (!addInfoIsNull[ndecoded])
+			{
+				addInfo[ndecoded] = fetch_att(ptr, attr->attbyval, attr->attlen);
+				ptr = att_addlength_pointer(ptr, attr->attlen, ptr);
+			}
+
 			ndecoded++;
 		}
 		segment = GinNextPostingListSegment(segment);
@@ -468,13 +502,14 @@ ginMergeItemPointers(ItemPointerData *a, uint32 na,
 					 ItemPointerData *b, uint32 nb,
 					 Datum *aAddInfo, bool *aAddInfoIsNull,
 					 Datum *bAddInfo, bool *bAddInfoIsNull,
+					 Datum *dstAddInfo, bool *dstAddInfoIsNull,
 					 int *nmerged)
 {
 	ItemPointerData *dst;
 
 	dst = (ItemPointer) palloc((na + nb) * sizeof(ItemPointerData));
-	bAddInfo = (Datum *) palloc((na + nb) * sizeof(Datum));
-	bAddInfoIsNull = (bool *) palloc((na + nb) * sizeof(bool));
+	dstAddInfo = (Datum *) palloc((na + nb) * sizeof(Datum));
+	dstAddInfoIsNull = (bool *) palloc((na + nb) * sizeof(bool));
 
 	/*
 	 * If the argument arrays don't overlap, we can just append them to each
@@ -484,12 +519,26 @@ ginMergeItemPointers(ItemPointerData *a, uint32 na,
 	{
 		memcpy(dst, a, na * sizeof(ItemPointerData));
 		memcpy(&dst[na], b, nb * sizeof(ItemPointerData));
+
+		/* AddInfo and AddInfoIsNull */
+		memcpy(dstAddInfo, aAddInfo, na * sizeof(Datum));
+		memcpy(&dstAddInfo[na], bAddInfo, nb * sizeof(Datum));
+		memcpy(dstAddInfoIsNull, aAddInfoIsNull, na * sizeof(bool));
+		memcpy(&dstAddInfoIsNull[na], bAddInfoIsNull, nb * sizeof(bool));
+
 		*nmerged = na + nb;
 	}
 	else if (ginCompareItemPointers(&b[nb - 1], &a[0]) < 0)
 	{
 		memcpy(dst, b, nb * sizeof(ItemPointerData));
 		memcpy(&dst[nb], a, na * sizeof(ItemPointerData));
+
+		/* AddInfo and AddInfoIsNull */
+		memcpy(dstAddInfo, bAddInfo, nb * sizeof(Datum));
+		memcpy(&dstAddInfo[nb], aAddInfo, na * sizeof(Datum));
+		memcpy(dstAddInfoIsNull, bAddInfoIsNull, nb * sizeof(bool));
+		memcpy(&dstAddInfoIsNull[nb], aAddInfoIsNull, na * sizeof(bool));
+
 		*nmerged = na + nb;
 	}
 	else
@@ -497,28 +546,58 @@ ginMergeItemPointers(ItemPointerData *a, uint32 na,
 		ItemPointerData *dptr = dst;
 		ItemPointerData *aptr = a;
 		ItemPointerData *bptr = b;
+		Datum *aAddInfoptr = aAddInfo;
+		Datum *bAddInfoptr = bAddInfo;
+		Datum *dstAddInfoptr = dstAddInfo;
+		bool *aAddInfoIsNullptr = aAddInfoIsNull;
+		bool *bAddInfoIsNullptr = bAddInfoIsNull;
+		bool *dstAddInfoIsNullptr = dstAddInfoIsNull;
 
 		while (aptr - a < na && bptr - b < nb)
 		{
 			int			cmp = ginCompareItemPointers(aptr, bptr);
 
 			if (cmp > 0)
+			{
 				*dptr++ = *bptr++;
+				*dstAddInfoptr++ = *bAddInfoptr++;
+				*dstAddInfoIsNullptr++ = *bAddInfoIsNullptr++;
+			}
 			else if (cmp == 0)
 			{
 				/* only keep one copy of the identical items */
 				*dptr++ = *bptr++;
 				aptr++;
+
+				*dstAddInfoptr++ = *bAddInfoptr++;
+				*dstAddInfoIsNullptr++ = *bAddInfoIsNullptr++;
+				aAddInfoptr++;
+				aAddInfoIsNullptr++;
 			}
 			else
+			{
 				*dptr++ = *aptr++;
+
+				*dstAddInfoptr++ = *aAddInfoptr++;
+				*dstAddInfoIsNullptr++ = *aAddInfoIsNullptr++;
+			}
 		}
 
 		while (aptr - a < na)
+		{
 			*dptr++ = *aptr++;
 
+			*dstAddInfoptr++ = *aAddInfoptr++;
+			*dstAddInfoIsNullptr++ = *aAddInfoIsNullptr++;
+		}
+
 		while (bptr - b < nb)
+		{
 			*dptr++ = *bptr++;
+
+			*dstAddInfoptr++ = *bAddInfoptr++;
+			*dstAddInfoIsNullptr++ = *bAddInfoIsNullptr++;
+		}
 
 		*nmerged = dptr - dst;
 	}

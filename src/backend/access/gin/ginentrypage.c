@@ -160,7 +160,7 @@ GinFormTuple(GinState *ginstate,
  */
 ItemPointer
 ginReadTuple(GinState *ginstate, OffsetNumber attnum, IndexTuple itup,
-			 int *nitems)
+			 int *nitems, Datum *addInfo, bool *addInfoIsNull)
 {
 	Pointer		ptr = GinGetPosting(itup);
 	int			nipd = GinGetNPosting(itup);
@@ -171,7 +171,7 @@ ginReadTuple(GinState *ginstate, OffsetNumber attnum, IndexTuple itup,
 	{
 		if (nipd > 0)
 		{
-			ipd = ginPostingListDecode((GinPostingList *) ptr, &ndecoded);
+			ipd = ginPostingListDecode((GinPostingList *) ptr, &ndecoded, addInfo, addInfoIsNull, attnum, ginstate);
 			if (nipd != ndecoded)
 				elog(ERROR, "number of items mismatch in GIN entry tuple, %d in tuple header, %d decoded",
 					 nipd, ndecoded);

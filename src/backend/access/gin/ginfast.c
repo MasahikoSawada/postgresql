@@ -579,8 +579,8 @@ ginHeapTupleFastCollect(GinState *ginstate,
 	{
 		IndexTuple	itup;
 
-		itup = GinFormTuple(ginstate, attnum, entries[i], categories[i],
-							NULL, 0, 0, true);
+		itup = GinFastFormTuple(ginstate, attnum, entries[i], categories[i],
+								addInfo[i], addInfoIsNull[i]);
 		itup->t_tid = *ht_ctid;
 		collector->tuples[collector->ntuples++] = itup;
 		collector->sumsize += IndexTupleSize(itup);
@@ -719,6 +719,93 @@ initKeyArray(KeyArray *keys, int32 maxvalues)
 		palloc(sizeof(GinNullCategory) * maxvalues);
 	keys->nvalues = 0;
 	keys->maxvalues = maxvalues;
+}
+
+IndexTuple
+GinFastFormTuple(Ginstate *ginstate,
+				 OffsetNumber attnum, Datum key, GinNullCategory category,
+				 Datum *addInfo, bool *addInfoIsNull)
+{
+	Datum       datums[3];
+    bool        isnull[3];
+    IndexTuple  itup;
+    uint32      newsize;
+
+    /* Build the basic tuple: optional column number, plus key datum */
+
+    if (ginstate->oneCol)
+    {
+        datums[0] = key;
+        isnull[0] = (category != GIN_CAT_NORM_KEY);
+		datums[1] = addInfo;
+        isnull[1] = addInfoIsNull;
+    }
+    else
+    {
+        datums[0] = UInt16GetDatum(attnum);
+        isnull[0] = false;
+        datums[1] = key;
+        isnull[1] = (category != GIN_CAT_NORM_KEY);
+        datums[2] = addInfo;
+        isnull[2] = addInfoIsNull;
+    }
+
+    itup = index_form_tuple(ginstate->tupdesc[attnum - 1], datums, isnull);
+
+    newsize = IndexTupleSize(itup);
+
+    if (category != GIN_CAT_NORM_KEY)
+    {
+        uint32      minsize;
+
+        Assert(IndexTupleHasNulls(itup));
+		minsize = IndexInfoFindDataOffset(itup->t_info) +
+            heap_compute_data_size(ginstate->tupdesc[attnum - 1], datums, isnull) +
+            sizeof(GinNullCategory);
+        newsize = Max(newsize, minsize);
+    }
+
+    /*
+     * Place category to the last byte of index tuple extending it's size if
+     * needed
+     */
+    newsize = MAXALIGN(newsize);
+
+    if (newsize > Min(INDEX_SIZE_MASK, GinMaxItemSize))
+    {
+        ereport(ERROR,
+                (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+				 errmsg("index row size %lu exceeds maximum %lu for index \"%s\"",
+						(unsigned long) newsize,
+						(unsigned long) Min(INDEX_SIZE_MASK,
+											GinMaxItemSize),
+						RelationGetRelationName(ginstate->index))));
+        pfree(itup);
+        return NULL;
+    }
+
+    /*
+     * Resize tuple if needed
+     */
+    if (newsize != IndexTupleSize(itup))
+    {
+		itup = repalloc(itup, newsize);
+
+        /* set new size in tuple header */
+        itup->t_info &= ~INDEX_SIZE_MASK;
+        itup->t_info |= newsize;
+    }
+
+    /*
+     * Insert category byte, if needed
+     */
+    if (category != GIN_CAT_NORM_KEY)
+    {
+        Assert(IndexTupleHasNulls(itup));
+        GinSetNullCategory(itup, ginstate, category);
+    }
+
+    return itup;
 }
 
 /* Add datum to KeyArray, resizing if needed */
