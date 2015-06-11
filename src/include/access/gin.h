@@ -25,7 +25,8 @@
 #define GIN_CONSISTENT_PROC			   4
 #define GIN_COMPARE_PARTIAL_PROC	   5
 #define GIN_TRICONSISTENT_PROC		   6
-#define GINNProcs					   6
+#define GIN_CONFIG_PROC				   7
+#define GINNProcs					   7
 
 /*
  * searchMode settings for extractQueryFn.
@@ -64,6 +65,11 @@ typedef char GinTernaryValue;
 #define DatumGetGinTernaryValue(X) ((GinTernaryValue)(X))
 #define GinTernaryValueGetDatum(X) ((Datum)(X))
 #define PG_RETURN_GIN_TERNARY_VALUE(x) return GinTernaryValueGetDatum(x)
+
+typedef struct GinConfig
+{
+	Oid			addInfoTypeOid;
+} GinConfig;
 
 /* GUC parameters */
 extern PGDLLIMPORT int GinFuzzySearchLimit;

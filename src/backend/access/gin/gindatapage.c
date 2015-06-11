@@ -1797,9 +1797,9 @@ leafRepackItems(disassembledLeaf *leaf, ItemPointer remaining)
  * items[] must be in sorted order with no duplicates.
  */
 BlockNumber
-createPostingTree(Relation index, ItemPointerData *items, uint32 nitems,
-				  Datum *addInfo, bool *addinfoIsNull,
-				  GinStatsData *buildStats)
+createPostingTree(Ginstate *ginstate, Relation index, ItemPointerData *items,
+				  OffsetNumber attnum, Datum *addInfo, bool *addinfoIsNull,
+				  uint32 nitems, GinStatsData *buildStats)
 {
 	BlockNumber blkno;
 	Buffer		buffer;
@@ -1936,6 +1936,7 @@ ginPrepareDataScan(GinBtree btree, Relation index, BlockNumber rootBlkno)
 void
 ginInsertItemPointers(Relation index, BlockNumber rootBlkno,
 					  ItemPointerData *items, uint32 nitem,
+					  Datum *addInfo, bool *addInfoIsNull,
 					  GinStatsData *buildStats)
 {
 	GinBtreeData btree;
@@ -1946,6 +1947,8 @@ ginInsertItemPointers(Relation index, BlockNumber rootBlkno,
 	btree.isBuild = (buildStats != NULL);
 	insertdata.items = items;
 	insertdata.nitem = nitem;
+	insertdata.addInfo = addInfo;
+	insertdata.addInfoIsNull = addInfoIsNull;
 	insertdata.curitem = 0;
 
 	while (insertdata.curitem < insertdata.nitem)

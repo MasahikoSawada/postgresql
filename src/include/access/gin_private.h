@@ -569,7 +569,7 @@ typedef struct ginxlogVacuumDataLeafPage
 {
 	ginxlogRecompressDataLeaf data;
 
-	utin16 	typlen;
+	uint16 	typlen;
 	bool 	typbyval;
 	char 	typalign;
 	char 	typstorage;
@@ -763,18 +763,20 @@ extern void ginPrepareEntryScan(GinBtree btree, OffsetNumber attnum,
 					GinState *ginstate);
 extern void ginEntryFillRoot(GinBtree btree, Page root, BlockNumber lblkno, Page lpage, BlockNumber rblkno, Page rpage);
 extern ItemPointer ginReadTuple(GinState *ginstate, OffsetNumber attnum,
-			 IndexTuple itup, int *nitems);
+								IndexTuple itup, int *nitems,
+								Datum *addInfo, bool *addInfoIsNull);
 
 /* gindatapage.c */
 extern ItemPointer GinDataLeafPageGetItems(Page page, int *nitems, ItemPointerData advancePast);
 extern int	GinDataLeafPageGetItemsToTbm(Page page, TIDBitmap *tbm);
-extern BlockNumber createPostingTree(Relation index,
-				  ItemPointerData *items, uint32 nitems,
-				  GinStatsData *buildStats);
+extern BlockNumber createPostingTree(GinState *ginstate, OffsetNumber attnum, Relation index,
+				  ItemPointerData *items, Datum *addInfo, bool *addInfoIsNull,
+				  uint32 nitems, GinStatsData *buildStats);
 extern void GinDataPageAddPostingItem(Page page, PostingItem *data, OffsetNumber offset);
 extern void GinPageDeletePostingItem(Page page, OffsetNumber offset);
 extern void ginInsertItemPointers(Relation index, BlockNumber rootBlkno,
 					  ItemPointerData *items, uint32 nitem,
+					  Datum *addInfo, bool *addInfoIsNull,
 					  GinStatsData *buildStats);
 extern GinBtreeStack *ginScanBeginPostingTree(GinBtree btree, Relation index, BlockNumber rootBlkno);
 extern void ginDataFillRoot(GinBtree btree, Page root, BlockNumber lblkno, Page lpage, BlockNumber rblkno, Page rpage);
@@ -1007,14 +1009,18 @@ extern void ginInsertCleanup(GinState *ginstate,
 /* ginpostinglist.c */
 
 extern GinPostingList *ginCompressPostingList(const ItemPointer ptrs, int nptrs,
+					   Datum *addInfo, bool *addInfoIsNull,
 					   int maxsize, int *nwritten);
 extern int	ginPostingListDecodeAllSegmentsToTbm(GinPostingList *ptr, int totalsize, TIDBitmap *tbm);
 
 extern ItemPointer ginPostingListDecodeAllSegments(GinPostingList *ptr, int len, int *ndecoded);
 extern ItemPointer ginPostingListDecode(GinPostingList *ptr, int *ndecoded);
 extern ItemPointer ginMergeItemPointers(ItemPointerData *a, uint32 na,
-					 ItemPointerData *b, uint32 nb,
-					 int *nmerged);
+										ItemPointerData *b, uint32 nb,
+										Datum *aAddInfo, bool *aAddInfoIsNull,
+										Datum *bAddInfo, bool *bAddInfoIsNull,
+										Datum *dstAddInfo, bool *dstAddInfoIsNull,
+										int *nmerged);
 
 /*
  * Merging the results of several gin scans compares item pointers a lot,
