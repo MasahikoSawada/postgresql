@@ -76,7 +76,7 @@ directBoolConsistentFn(GinScanKey key)
 	 */
 	key->recheckCurItem = true;
 
-	return DatumGetBool(FunctionCall8Coll(key->consistentFmgrInfo,
+	return DatumGetBool(FunctionCall10Coll(key->consistentFmgrInfo,
 										  key->collation,
 										  PointerGetDatum(key->entryRes),
 										  UInt16GetDatum(key->strategy),
@@ -85,7 +85,9 @@ directBoolConsistentFn(GinScanKey key)
 										  PointerGetDatum(key->extra_data),
 									   PointerGetDatum(&key->recheckCurItem),
 										  PointerGetDatum(key->queryValues),
-									 PointerGetDatum(key->queryCategories)));
+										   PointerGetDatum(key->queryCategories),
+										   PointerGetDatum(key->addInfo),
+										   PointerGetDatum(key->addInfoIsNull)));
 }
 
 /*

@@ -1,24 +1,5 @@
 --- src/backend/access/gin/ginget.c
 +++ src/backend/access/gin/ginget.c
-@@ -52,7 +51,7 @@
- 	 */
- 	key->recheckCurItem = true;
- 
--	return DatumGetBool(FunctionCall8Coll(&ginstate->consistentFn[key->attnum - 1],
-+	return DatumGetBool(FunctionCall10Coll(&ginstate->consistentFn[key->attnum - 1],
- 								 ginstate->supportCollation[key->attnum - 1],
- 										  PointerGetDatum(key->entryRes),
- 										  UInt16GetDatum(key->strategy),
-@@ -61,29 +60,37 @@
- 										  PointerGetDatum(key->extra_data),
- 									   PointerGetDatum(&key->recheckCurItem),
- 										  PointerGetDatum(key->queryValues),
--									 PointerGetDatum(key->queryCategories)));
-+									 PointerGetDatum(key->queryCategories),
-+										  PointerGetDatum(key->addInfo),
-+										  PointerGetDatum(key->addInfoIsNull)
-+		));
- }
  
  /*
   * Tries to refind previously taken ItemPointer on a posting page.

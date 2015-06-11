@@ -409,7 +409,7 @@ restartScanEntry:
 		else if (GinGetNPosting(itup) > 0)
 		{
 			entry->list = ginReadTuple(ginstate, entry->attnum, itup,
-									   &entry->nlist);
+									   &entry->nlist, entry->addInfo, entry->addInfoIsNull);
 			entry->predictNumberResult = entry->nlist;
 
 			entry->isFinished = FALSE;

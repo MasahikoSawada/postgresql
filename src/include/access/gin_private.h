@@ -890,6 +890,8 @@ typedef struct GinScanEntryData
 
 	/* used for Posting list and one page in Posting tree */
 	ItemPointerData *list;
+	Datum		*addInfo;
+	bool		*addInfoIsNull;
 	int			nlist;
 	OffsetNumber offset;
 
