@@ -48,6 +48,7 @@
 
 #include "access/xact.h"
 #include "miscadmin.h"
+#include "nodes/pg_list.h"
 #include "replication/syncrep.h"
 #include "replication/walsender.h"
 #include "replication/walsender_private.h"
@@ -58,10 +59,11 @@
 #include "utils/ps_status.h"
 
 /* User-settable parameters for sync rep */
-char	   *SyncRepStandbyNames;
+GroupNode	*SyncRepStandbyNames;
+char	*SyncRepStandbyNameString;
 
 #define SyncStandbysDefined() \
-	(SyncRepStandbyNames != NULL && SyncRepStandbyNames[0] != '\0')
+	(SyncRepStandbyNameString != NULL)
 
 static bool announce_next_takeover = true;
 
@@ -72,6 +74,7 @@ static void SyncRepCancelWait(void);
 static int	SyncRepWakeQueue(bool all, int mode);
 
 static int	SyncRepGetStandbyPriority(void);
+static bool CheckNameList(GroupNode *expr, char *name);
 
 #ifdef USE_ASSERT_CHECKING
 static bool SyncRepQueueIsOrderedByLSN(int mode);
@@ -348,12 +351,112 @@ SyncRepInitConfig(void)
 	}
 }
 
+static bool CheckNameList(GroupNode *expr, char *name)
+{
+	switch (expr->gtype)
+	{
+		case GNODE_NAME: 
+			{
+					if(strcmp(expr->u.node.name, name) != 0)
+						return false;
+					break;
+			}
+		case GNODE_GROUP: 
+			{
+					if(!CheckNameList(expr->u.groups.lgroup, name))
+						if(expr->u.groups.rgroup != NULL &&
+							!CheckNameList(expr->u.groups.rgroup, name))
+							return false;
+					break;
+			}
+	}
+
+	return true;
+}
+
 /*
  * Find the WAL sender servicing the synchronous standby with the lowest
  * priority value, or NULL if no synchronous standby is connected. If there
  * are multiple standbys with the same lowest priority value, the first one
  * found is selected. The caller must hold SyncRepLock.
  */
+
+bool GetSyncStandbys(List *sync_nodes, GroupNode *expr, int req_count, int *cur_count)
+{
+	int i;
+	switch (expr->gtype)
+	{
+		case GNODE_NAME: 
+			{
+				for (i = 0; i < max_wal_senders; i++)
+				{
+					/* Use volatile pointer to prevent code rearrangement */
+					volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
+//					int			this_priority;
+
+					/* Must be active */
+					if (walsnd->pid == 0)
+						continue;
+
+					/* Must be streaming */
+					if (walsnd->state != WALSNDSTATE_STREAMING)
+						continue;
+
+					/* Must be synchronous */
+					if (walsnd->sync_standby_priority == 0)
+						continue;
+
+					/* Must have a lower priority value than any previous ones */
+//					if (result != NULL && result_priority <= this_priority)
+//						continue;
+
+					/* Must have a valid flush position */
+					if (XLogRecPtrIsInvalid(walsnd->flush))
+						continue;
+
+					if(strcmp(expr->u.node.name, walsnd->name) == 0)
+					{
+						sync_nodes = lappend_int(sync_nodes, i);
+						*cur_count++;
+						return true;
+					}
+				}
+
+				break;
+			}
+		case GNODE_GROUP:
+			{
+				int r_count, c_count;
+				List *l = NIL;
+
+				if(expr->gcount == -1)
+					r_count = req_count;
+				else
+				{
+					c_count = *cur_count;
+					r_count = expr->gcount;
+				}
+
+				if(!GetSyncStandbys(l, expr->u.groups.lgroup, r_count, cur_count))
+					return false;
+
+				if(*cur_count != req_count && expr->u.groups.rgroup != NULL)
+					if(!GetSyncStandbys(l, expr->u.groups.rgroup, r_count, cur_count))
+						return false;
+
+				if(*cur_count == req_count)
+				{
+					sync_nodes = list_union_int(sync_nodes, l);
+					return true;
+				}
+				break;
+			}
+	}
+	return false;
+}
+
+
+
 WalSnd *
 SyncRepGetSynchronousStandby(void)
 {
@@ -413,7 +516,8 @@ void
 SyncRepReleaseWaiters(void)
 {
 	volatile WalSndCtlData *walsndctl = WalSndCtl;
-	WalSnd	   *syncWalSnd;
+	List	   *walSndList = NIL;
+	ListCell   *cell;
 	int			numwrite = 0;
 	int			numflush = 0;
 
@@ -433,21 +537,27 @@ SyncRepReleaseWaiters(void)
 	 * priority standby.
 	 */
 	LWLockAcquire(SyncRepLock, LW_EXCLUSIVE);
-	syncWalSnd = SyncRepGetSynchronousStandby();
+	
+	GetSyncStandbys(walSndList, SyncRepStandbyNames, SyncRepStandbyNames->gcount, 0);
 
 	/* We should have found ourselves at least */
-	Assert(syncWalSnd != NULL);
+//	Assert(syncWalSnd != NULL);
 
 	/*
 	 * If we aren't managing the highest priority standby then just leave.
 	 */
-	if (syncWalSnd != MyWalSnd)
+	foreach(cell, walSndList)
 	{
-		LWLockRelease(SyncRepLock);
-		announce_next_takeover = true;
-		return;
-	}
+		int idx = lfirst_int(cell);
 
+		volatile WalSnd *walsndloc = &WalSndCtl->walsnds[idx];
+		if (walsndloc != MyWalSnd)
+		{
+			LWLockRelease(SyncRepLock);
+			announce_next_takeover = true;
+			return;
+		}
+	}
 	/*
 	 * Set the lsn first so that when we wake backends they will release up to
 	 * this location.
@@ -493,12 +603,6 @@ SyncRepReleaseWaiters(void)
 static int
 SyncRepGetStandbyPriority(void)
 {
-	char	   *rawstring;
-	List	   *elemlist;
-	ListCell   *l;
-	int			priority = 0;
-	bool		found = false;
-
 	/*
 	 * Since synchronous cascade replication is not allowed, we always set the
 	 * priority of cascading walsender to zero.
@@ -506,37 +610,10 @@ SyncRepGetStandbyPriority(void)
 	if (am_cascading_walsender)
 		return 0;
 
-	/* Need a modifiable copy of string */
-	rawstring = pstrdup(SyncRepStandbyNames);
-
-	/* Parse string into list of identifiers */
-	if (!SplitIdentifierString(rawstring, ',', &elemlist))
-	{
-		/* syntax error in list */
-		pfree(rawstring);
-		list_free(elemlist);
-		/* GUC machinery will have already complained - no need to do again */
-		return 0;
-	}
-
-	foreach(l, elemlist)
-	{
-		char	   *standby_name = (char *) lfirst(l);
-
-		priority++;
-
-		if (pg_strcasecmp(standby_name, application_name) == 0 ||
-			pg_strcasecmp(standby_name, "*") == 0)
-		{
-			found = true;
-			break;
-		}
-	}
-
-	pfree(rawstring);
-	list_free(elemlist);
-
-	return (found ? priority : 0);
+	if(CheckNameList(SyncRepStandbyNames, application_name))
+		return 1;
+	 
+	return 0;
 }
 
 /*
@@ -687,33 +764,16 @@ SyncRepQueueIsOrderedByLSN(int mode)
 bool
 check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 {
-	char	   *rawstring;
-	List	   *elemlist;
+    int parse_rc;
 
-	/* Need a modifiable copy of string */
-	rawstring = pstrdup(*newval);
-
-	/* Parse string into list of identifiers */
-	if (!SplitIdentifierString(rawstring, ',', &elemlist))
-	{
-		/* syntax error in list */
-		GUC_check_errdetail("List syntax is invalid.");
-		pfree(rawstring);
-		list_free(elemlist);
-		return false;
-	}
-
-	/*
-	 * Any additional validation of standby names should go here.
-	 *
-	 * Don't attempt to set WALSender priority because this is executed by
-	 * postmaster at startup, not WALSender, so the application_name is not
-	 * yet correctly set.
-	 */
-
-	pfree(rawstring);
-	list_free(elemlist);
-
+    repl_guc_scanner_init(*newval);
+    parse_rc = repl_guc_yyparse();
+    if (parse_rc != 0)
+    {
+        GUC_check_errdetail("List syntax is invalid.");
+        return false;
+    }
+	repl_guc_scanner_finish();
 	return true;
 }
 
@@ -733,3 +793,5 @@ assign_synchronous_commit(int newval, void *extra)
 			break;
 	}
 }
+
+

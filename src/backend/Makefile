@@ -191,7 +191,7 @@ distprep:
 	$(MAKE) -C parser	gram.c gram.h scan.c
 	$(MAKE) -C bootstrap	bootparse.c bootscanner.c
 	$(MAKE) -C catalog	schemapg.h postgres.bki postgres.description postgres.shdescription
-	$(MAKE) -C replication	repl_gram.c repl_scanner.c
+	$(MAKE) -C replication	guc_gram.c guc_scanner.c repl_gram.c repl_scanner.c
 	$(MAKE) -C utils	fmgrtab.c fmgroids.h errcodes.h
 	$(MAKE) -C utils/misc	guc-file.c
 	$(MAKE) -C utils/sort	qsort_tuple.c
@@ -305,6 +305,8 @@ maintainer-clean: distclean
 	      catalog/postgres.bki \
 	      catalog/postgres.description \
 	      catalog/postgres.shdescription \
+	      replication/guc_gram.c \
+	      replication/guc_scanner.c \
 	      replication/repl_gram.c \
 	      replication/repl_scanner.c \
 	      utils/fmgroids.h \

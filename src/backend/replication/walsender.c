@@ -1944,6 +1944,7 @@ InitWalSenderSlot(void)
 			walsnd->pid = MyProcPid;
 			walsnd->sentPtr = InvalidXLogRecPtr;
 			walsnd->state = WALSNDSTATE_STARTUP;
+			walsnd->name = strdup(application_name);
 			walsnd->latch = &MyProc->procLatch;
 			SpinLockRelease(&walsnd->mutex);
 			/* don't need the lock anymore */
@@ -2732,7 +2733,8 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 	Tuplestorestate *tupstore;
 	MemoryContext per_query_ctx;
 	MemoryContext oldcontext;
-	WalSnd	   *sync_standby;
+	List       *walSndList = NIL;
+	ListCell   *cell;
 	int			i;
 
 	/* check to see if caller supports us returning a tuplestore */
@@ -2764,7 +2766,7 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 	 * Get the currently active synchronous standby.
 	 */
 	LWLockAcquire(SyncRepLock, LW_SHARED);
-	sync_standby = SyncRepGetSynchronousStandby();
+	GetSyncStandbys(walSndList, SyncRepStandbyNames, SyncRepStandbyNames->gcount, 0);
 	LWLockRelease(SyncRepLock);
 
 	for (i = 0; i < max_wal_senders; i++)
@@ -2835,10 +2837,17 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 			 */
 			if (priority == 0)
 				values[7] = CStringGetTextDatum("async");
-			else if (walsnd == sync_standby)
-				values[7] = CStringGetTextDatum("sync");
 			else
-				values[7] = CStringGetTextDatum("potential");
+			{
+				bool found = false;
+				foreach(cell, walSndList)
+					if(walsnd ==lfirst_int(cell))
+						found = true;
+				if (found)						
+					values[7] = CStringGetTextDatum("sync");
+				else
+					values[7] = CStringGetTextDatum("potential");
+			}
 		}
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);

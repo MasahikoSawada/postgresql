@@ -38,6 +38,8 @@ typedef struct WalSnd
 	bool		needreload;		/* does currently-open file need to be
 								 * reloaded? */
 
+	char 	   *name;
+
 	/*
 	 * The xlog locations that have been written, flushed, and applied by
 	 * standby-side. These may be invalid if the standby-side has not offered
