@@ -376,9 +376,11 @@ bool CheckNameList(GroupNode *expr, char *name, bool found)
 	return found;
 }
 
+static 
+
 /* Decide LSN in acordance with status of syn standbys at this time */
 XLogRecPtr *
-GetSyncStandbysRecPtr(GroupNode *node, List *xlogrecptr)
+GetSyncStandbysRecPtr(GroupNode *node, List **xlogreclist)
 {
 	int i = 0;
 	
@@ -392,7 +394,7 @@ GetSyncStandbysRecPtr(GroupNode *node, List *xlogrecptr)
 		
 		if (node->next)
 		{
-			GetSyncStandbysRecPtr(node->next, xlogrecptr);
+			GetSyncStandbysRecPtr(node->next, xlogreclist);
 		}
 
 		for (i = 0; i < max_wal_senders; i++)
@@ -431,11 +433,11 @@ GetSyncStandbysRecPtr(GroupNode *node, List *xlogrecptr)
 		 * Insert lsn[] into list.
 		 * We're asuumed that list is descending order.
 		 */
-		if (xlogrecptr == NIL)
-			xlogrecptr = lappend(xlogrecptr, lsn);
+		if (*xlogreclist == NIL)
+			*xlogreclist = lappend(xlogreclist, lsn);
 		else
 		{
-			foreach(cell, xlogrecptr)
+			foreach(cell, xlogreclist)
 			{
 				XLogRecPtr *cur_lsn = (XLogRecPtr *)lfirst(cell);
 				XLogRecPtr *next_lsn = (XLogRecPtr *)lfirst(cell->next);
@@ -443,7 +445,7 @@ GetSyncStandbysRecPtr(GroupNode *node, List *xlogrecptr)
 				/* append lsn to tail */
 				if (next_lsn == NULL)
 				{
-					xlogrecptr = lappend(xlogrecptr, lsn);
+					*xlogreclist = lappend(xlogreclist, lsn);
 					break;
 				}
 				
@@ -451,7 +453,7 @@ GetSyncStandbysRecPtr(GroupNode *node, List *xlogrecptr)
 				if (next_lsn[SYNC_REP_WAIT_WRITE] < lsn[SYNC_REP_WAIT_WRITE] &&
 					next_lsn[SYNC_REP_WAIT_FLUSH] < lsn[SYNC_REP_WAIT_FLUSH])
 				{
-					xlogrecptr = lappend_cell(xlogrecptr, cur_lsn, lsn);
+					xlogreclist = lappend_cell(xlogreclist, cur_lsn, lsn);
 					break;
 				}
 			}
@@ -459,7 +461,7 @@ GetSyncStandbysRecPtr(GroupNode *node, List *xlogrecptr)
 
 		/* Debug print */
 		i = 0;
-		foreach(cell, xlogrecptr)
+		foreach(cell, xlogreclist)
 		{
 			XLogRecPtr *lsn = (XLogRecPtr *)lfirst(cell);
 			elog(WARNING, "    [%d] : write : %x, flush : %x",
@@ -488,7 +490,7 @@ GetSyncStandbysRecPtr(GroupNode *node, List *xlogrecptr)
 
 		/* If I is called recursively, insert result into list */
 		if (xlogrecptr == NIL)
-			lappend(xlogrecptr, result);
+			xlogrecptr = lappend(xlogrecptr, result);
 		else
 		{
 			foreach(cell, xlogrecptr)
@@ -499,7 +501,7 @@ GetSyncStandbysRecPtr(GroupNode *node, List *xlogrecptr)
 				/* append lsn to tail */
 				if (next_lsn == NULL)
 				{
-					lappend(xlogrecptr, result);
+					xlogrecptr = lappend(xlogrecptr, result);
 					break;
 				}
 				
