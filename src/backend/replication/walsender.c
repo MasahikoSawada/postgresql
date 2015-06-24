@@ -238,7 +238,11 @@ InitWalSender(void)
 	 * there's no going back, and we mustn't write any WAL records after this.
 	 */
 	MarkPostmasterChildWalSender();
+	elog(WARNING, "@@@@@@@@@@@@@@@@@@@@@ name = %s @@@@@@@@@@@@@@@@@@@@", (WalSndCtl->walsnds[0]).name);
+
 	SendPostmasterSignal(PMSIGNAL_ADVANCE_STATE_MACHINE);
+	elog(WARNING, "@@@@@@@@@@@@@@@@@@@@@ name = %s @@@@@@@@@@@@@@@@@@@@", (WalSndCtl->walsnds[0]).name);
+
 }
 
 /*
@@ -520,6 +524,10 @@ StartReplication(StartReplicationCmd *cmd)
 					 (errmsg("cannot use a logical replication slot for physical replication"))));
 	}
 
+	elog(WARNING, "@@@@@@@@@@@@@@@@@@@@@ name = %s @@@@@@@@@@@@@@@@@@@@", (WalSndCtl->walsnds[0]).name);
+
+
+
 	/*
 	 * Select the timeline. If it was given explicitly by the client, use
 	 * that. Otherwise use the timeline of the last replayed record, which is
@@ -639,6 +647,10 @@ StartReplication(StartReplicationCmd *cmd)
 		/* Start streaming from the requested point */
 		sentPtr = cmd->startpoint;
 
+	elog(WARNING, "@@@@@@@@@@@@@@@@@@@@@ name = %s @@@@@@@@@@@@@@@@@@@@", (WalSndCtl->walsnds[0]).name);
+
+
+
 		/* Initialize shared memory status, too */
 		{
 			/* use volatile pointer to prevent code rearrangement */
@@ -648,6 +660,8 @@ StartReplication(StartReplicationCmd *cmd)
 			walsnd->sentPtr = sentPtr;
 			SpinLockRelease(&walsnd->mutex);
 		}
+
+		elog(WARNING, "##################### name = %s ######################", (WalSndCtl->walsnds[0]).name);
 
 		SyncRepInitConfig();
 
@@ -1920,6 +1934,10 @@ InitWalSenderSlot(void)
 	Assert(WalSndCtl != NULL);
 	Assert(MyWalSnd == NULL);
 
+	elog(WARNING, "@@@@@@@@@@@@@@@@@@@@@ name = %s : %s @@@@@@@@@@@@@@@@@@@@", (WalSndCtl->walsnds[0]).name, (WalSndCtl->walsnds[1]).name);
+
+
+
 	/*
 	 * Find a free walsender slot and reserve it. If this fails, we must be
 	 * out of WalSnd structures.
@@ -1930,6 +1948,7 @@ InitWalSenderSlot(void)
 		volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
 
 		SpinLockAcquire(&walsnd->mutex);
+
 
 		if (walsnd->pid != 0)
 		{
@@ -1953,6 +1972,8 @@ InitWalSenderSlot(void)
 			break;
 		}
 	}
+	elog(WARNING, "@@@@@@@@@@@@@@@@@@@@@ name = %s : %s @@@@@@@@@@@@@@@@@@@@", (WalSndCtl->walsnds[0]).name, (WalSndCtl->walsnds[1]).name);
+
 	if (MyWalSnd == NULL)
 		ereport(FATAL,
 				(errcode(ERRCODE_TOO_MANY_CONNECTIONS),
@@ -2737,6 +2758,12 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 	ListCell   *cell;
 	int			i;
 
+	for (i = 0; i < max_wal_senders; i++)
+	{	
+		volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
+		elog(WARNING, "############################ [%d] [%d] pid = %d, name = %s(%x)", MyProcPid, i, walsnd->pid, walsnd->name, &(walsnd->name));
+	}
+
 	/* check to see if caller supports us returning a tuplestore */
 	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
 		ereport(ERROR,
@@ -2772,6 +2799,7 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 	{
 		/* use volatile pointer to prevent code rearrangement */
 		volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
+
 		XLogRecPtr	sentPtr;
 		XLogRecPtr	write;
 		XLogRecPtr	flush;
@@ -2837,14 +2865,7 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 			if (priority == 0)
 				values[7] = CStringGetTextDatum("async");
 			else
-			{
-				bool found = CheckNameList(SyncRepStandbyNames, walsnd->name, false);
-
-				if (found)						
-					values[7] = CStringGetTextDatum("sync");
-				else
-					values[7] = CStringGetTextDatum("potential");
-			}
+				values[7] = CStringGetTextDatum("sync");
 		}
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);

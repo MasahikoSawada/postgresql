@@ -376,31 +376,32 @@ bool CheckNameList(GroupNode *expr, char *name, bool found)
 	return found;
 }
 
-static 
-
 /* Decide LSN in acordance with status of syn standbys at this time */
 XLogRecPtr *
-GetSyncStandbysRecPtr(GroupNode *node, List **xlogreclist)
+GetSyncStandbysRecPtr(GroupNode *node, List **lsnlist)
 {
-	int i = 0;
-	
+	int i;
+	XLogRecPtr *lsn;
+	ListCell *cell;
+
 	if (node->gtype == GNODE_NAME)
 	{
-		XLogRecPtr lsn[NUM_SYNC_REP_WAIT_MODE];
-		ListCell *cell;
+		XLogRecPtr *tmplsn = (XLogRecPtr *) palloc(sizeof(XLogRecPtr) * NUM_SYNC_REP_WAIT_MODE);
 
-		lsn[SYNC_REP_WAIT_WRITE] = InvalidXLogRecPtr;
-		lsn[SYNC_REP_WAIT_FLUSH] = InvalidXLogRecPtr;
+		tmplsn[SYNC_REP_WAIT_WRITE] = InvalidXLogRecPtr;
+		tmplsn[SYNC_REP_WAIT_FLUSH] = InvalidXLogRecPtr;
 		
+		/* Process same group member in advance */
 		if (node->next)
 		{
-			GetSyncStandbysRecPtr(node->next, xlogreclist);
+			GetSyncStandbysRecPtr(node->next, lsnlist);
 		}
 
+		/* Select corresponding active wal sender */
 		for (i = 0; i < max_wal_senders; i++)
 		{
 			volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
-
+	
 			/* Must bev active */
 			if (walsnd->pid == 0)
 				continue;
@@ -420,187 +421,111 @@ GetSyncStandbysRecPtr(GroupNode *node, List **xlogreclist)
 			if(strcmp(node->name, walsnd->name) == 0)
 			{
 				/* Found same name node. Get highest lsn */
-				if (lsn[SYNC_REP_WAIT_WRITE] < walsnd->write &&
-					lsn[SYNC_REP_WAIT_FLUSH] < walsnd->flush)
+				if (tmplsn[SYNC_REP_WAIT_WRITE] < walsnd->write &&
+					tmplsn[SYNC_REP_WAIT_FLUSH] < walsnd->flush)
 				{
-					lsn[SYNC_REP_WAIT_WRITE] = walsnd->write;
-					lsn[SYNC_REP_WAIT_FLUSH] = walsnd->flush;
+					tmplsn[SYNC_REP_WAIT_WRITE] = walsnd->write;
+					tmplsn[SYNC_REP_WAIT_FLUSH] = walsnd->flush;
 				}
 			}
 		}
 
-		/*
-		 * Insert lsn[] into list.
-		 * We're asuumed that list is descending order.
-		 */
-		if (*xlogreclist == NIL)
-			*xlogreclist = lappend(xlogreclist, lsn);
-		else
-		{
-			foreach(cell, xlogreclist)
-			{
-				XLogRecPtr *cur_lsn = (XLogRecPtr *)lfirst(cell);
-				XLogRecPtr *next_lsn = (XLogRecPtr *)lfirst(cell->next);
-				
-				/* append lsn to tail */
-				if (next_lsn == NULL)
-				{
-					*xlogreclist = lappend(xlogreclist, lsn);
-					break;
-				}
-				
-				/* Found lsn */
-				if (next_lsn[SYNC_REP_WAIT_WRITE] < lsn[SYNC_REP_WAIT_WRITE] &&
-					next_lsn[SYNC_REP_WAIT_FLUSH] < lsn[SYNC_REP_WAIT_FLUSH])
-				{
-					xlogreclist = lappend_cell(xlogreclist, cur_lsn, lsn);
-					break;
-				}
-			}
-		}
+		lsn = tmplsn;
+		elog(WARNING, "[%d]---- [%s] : write : %x, flush : %x",
+			 MyProcPid,
+			 node->name,
+			 lsn[SYNC_REP_WAIT_WRITE],
+			 lsn[SYNC_REP_WAIT_FLUSH]);
 
-		/* Debug print */
-		i = 0;
-		foreach(cell, xlogreclist)
-		{
-			XLogRecPtr *lsn = (XLogRecPtr *)lfirst(cell);
-			elog(WARNING, "    [%d] : write : %x, flush : %x",
-				 i,
-				 lsn[SYNC_REP_WAIT_WRITE],
-				 lsn[SYNC_REP_WAIT_FLUSH]);
-		}
 	}
 	else if (node->gtype == GNODE_GROUP)
 	{
-		List *xlogrec = NIL;
-		XLogRecPtr *result;
-		ListCell *cur_lsn, *next_lsn, *cell;
+		List *new_lsnlist = NIL;
 		
 		/* Get list of whole group's lsn */
-		GetSyncStandbysRecPtr(node->group, xlogrec);
-		
-		if (xlogrec == NIL)
-			return NIL;
+		GetSyncStandbysRecPtr(node->group, &new_lsnlist);
 
-		/* Decide group's lsn using by quorum */
-		result = (XLogRecPtr *)list_nth(xlogrec, node->quorum - 1);
-		elog(WARNING, "GROUP[%d] LSN : write = %x, flush = %x",node->quorum,
-			 result[SYNC_REP_WAIT_WRITE],
-			 result[SYNC_REP_WAIT_FLUSH]);
+		Assert(new_lsnlist);
 
-		/* If I is called recursively, insert result into list */
-		if (xlogrecptr == NIL)
-			xlogrecptr = lappend(xlogrecptr, result);
-		else
+		/* Decide group's lsn using by quorum number */
+		lsn = (XLogRecPtr *)list_nth(new_lsnlist, node->quorum - 1);
+
+		/* Debug print */
+		i = 0;
+		elog(WARNING, "[%d]-------- GROUP [%d] decided LSN : write = %x, flush = %x",
+			 MyProcPid,
+			 node->quorum,
+			 lsn[SYNC_REP_WAIT_WRITE],
+			 lsn[SYNC_REP_WAIT_FLUSH]);
+
+		elog(WARNING, "[%d]---- [%s] : write : %x, flush : %x",
+			 MyProcPid,
+			 "G",
+			 lsn[SYNC_REP_WAIT_WRITE],
+			 lsn[SYNC_REP_WAIT_FLUSH]);
+/*
+		foreach(cell, new_lsnlist)
 		{
-			foreach(cell, xlogrecptr)
+			XLogRecPtr *tmp = (XLogRecPtr *)lfirst(cell);
+			elog(WARNING, "-------- [%s(%d)] : write : %x, flush : %x",
+				 node->gtype == GNODE_NAME ? node->name : "G",
+				 i++,
+				 tmp[SYNC_REP_WAIT_WRITE],
+				 tmp[SYNC_REP_WAIT_FLUSH]);
+		}
+*/
+	}
+
+	/* For root call */
+	if (lsnlist == NULL)
+		return lsn;
+
+	/*
+	 * At last, Insert lsn[] into list.
+	 * We're asuumed that list is descending order.
+	 */
+	if (*lsnlist == NIL)
+		*lsnlist = lappend(*lsnlist, lsn);
+	else
+	{
+		bool inserted = false;
+		foreach(cell, *lsnlist)
+		{
+			XLogRecPtr *cur_lsn = (XLogRecPtr *)lfirst(cell);
+			XLogRecPtr *next_lsn;
+			
+			/* If list has only one lsn element, just compare two LSNs. */
+			if (cell->next == NULL)
 			{
-				XLogRecPtr *cur_lsn = (XLogRecPtr *)lfirst(cell);
-				XLogRecPtr *next_lsn = (XLogRecPtr *)lfirst(cell->next);
-				
-				/* append lsn to tail */
-				if (next_lsn == NULL)
-				{
-					xlogrecptr = lappend(xlogrecptr, result);
-					break;
-				}
-				
-				/* Found lsn */
-				if (next_lsn[SYNC_REP_WAIT_WRITE] < result[SYNC_REP_WAIT_WRITE] &&
-					next_lsn[SYNC_REP_WAIT_FLUSH] < result[SYNC_REP_WAIT_FLUSH])
-				{
-					xlogrecptr = lappend_cell(xlogrecptr, cur_lsn, result);
-					break;
-				}
+				inserted = true;
+				if (cur_lsn[SYNC_REP_WAIT_WRITE] < lsn[SYNC_REP_WAIT_WRITE] &&
+					cur_lsn[SYNC_REP_WAIT_FLUSH] < lsn[SYNC_REP_WAIT_FLUSH])
+					*lsnlist = lcons(lsn, *lsnlist); /* Prepend lsn to list */
+				else
+					*lsnlist = lappend(*lsnlist, lsn); /* Append lsn to list */
+				break;
+			}
+			
+			/* Get next lsn in advance to insert lsn immidiately after cur_lsn */
+			next_lsn = (XLogRecPtr *)lfirst(cell->next);
+
+			/* Found lsn */
+			if (next_lsn[SYNC_REP_WAIT_WRITE] < lsn[SYNC_REP_WAIT_WRITE] &&
+				next_lsn[SYNC_REP_WAIT_FLUSH] < lsn[SYNC_REP_WAIT_FLUSH])
+			{
+				inserted = true;
+				lappend_cell(*lsnlist, cell, lsn);
+				break;
 			}
 		}
-			
-		return result;
+		/* If there is not cell which is smaller than me, append lsn into tail */
+		if (!inserted)
+			*lsnlist = lappend(*lsnlist, lsn);
+
 	}
+
+	return lsn;
 }
-
-/*
- * Find the WAL sender servicing the synchronous standby with the lowest
- * priority value, or NULL if no synchronous standby is connected. If there
- * are multiple standbys with the same lowest priority value, the first one
- * found is selected. The caller must hold SyncRepLock.
- */
-
-bool GetSyncStandbys(List *sync_nodes, GroupNode *expr, int req_count, int *cur_count)
-{
-	int i;
-	switch (expr->gtype)
-	{
-		case GNODE_NAME: 
-			{
-				for (i = 0; i < max_wal_senders; i++)
-				{
-					/* Use volatile pointer to prevent code rearrangement */
-					volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
-//					int			this_priority;
-
-					/* Must be active */
-					if (walsnd->pid == 0)
-						continue;
-
-					/* Must be streaming */
-					if (walsnd->state != WALSNDSTATE_STREAMING)
-						continue;
-
-					/* Must be synchronous */
-					if (walsnd->sync_standby_priority == 0)
-						continue;
-
-					/* Must have a lower priority value than any previous ones */
-//					if (result != NULL && result_priority <= this_priority)
-//						continue;
-
-					/* Must have a valid flush position */
-					if (XLogRecPtrIsInvalid(walsnd->flush))
-						continue;
-
-					if(strcmp(expr->u.node.name, walsnd->name) == 0)
-					{
-						sync_nodes = lappend_int(sync_nodes, i);
-						*cur_count++;
-						return true;
-					}
-				}
-
-				break;
-			}
-		case GNODE_GROUP:
-			{
-				int r_count, c_count;
-				List *l = NIL;
-
-				if(expr->gcount == -1)
-					r_count = req_count;
-				else
-				{
-					c_count = *cur_count;
-					r_count = expr->gcount;
-				}
-
-				if(!GetSyncStandbys(l, expr->u.groups.lgroup, r_count, cur_count))
-					return false;
-
-				if(*cur_count != req_count && expr->u.groups.rgroup != NULL)
-					if(!GetSyncStandbys(l, expr->u.groups.rgroup, r_count, cur_count))
-						return false;
-
-				if(*cur_count == req_count)
-				{
-					sync_nodes = list_union_int(sync_nodes, l);
-					return true;
-				}
-				break;
-			}
-	}
-	return false;
-}
-
-
 
 WalSnd *
 SyncRepGetSynchronousStandby(void)
@@ -685,43 +610,27 @@ SyncRepReleaseWaiters(void)
 	LWLockAcquire(SyncRepLock, LW_EXCLUSIVE);
 
 	elog(WARNING, "hogehoge");
-	pg_usleep(60 * 1000L * 1000L);
+	//pg_usleep(30 * 1000L * 1000L);
 	elog(WARNING, "hogehogehogehoge");
-	pg_usleep(30 * 1000L * 1000L);
+	//pg_usleep(30 * 1000L * 1000L);
 	lsn = GetSyncStandbysRecPtr(SyncRepStandbyNames, NULL);
-//	GetSyncStandbys(walSndList, SyncRepStandbyNames, SyncRepStandbyNames->gcount, 0);
 
-	/* We should have found ourselves at least */
-//	Assert(syncWalSnd != NULL);
+	/* Debug print */
+	elog(WARNING, "FINAL : write = %x, flush = %x",
+		 lsn[SYNC_REP_WAIT_WRITE],
+		 lsn[SYNC_REP_WAIT_FLUSH]);
 
-	/*
-	 * If we aren't managing the highest priority standby then just leave.
-	 */
-	/*
-	  foreach(cell, walSndList)
-	{
-		int idx = lfirst_int(cell);
+	Assert(lsn);
 
-		volatile WalSnd *walsndloc = &WalSndCtl->walsnds[idx];
-		if (walsndloc != MyWalSnd)
-		{
-			LWLockRelease(SyncRepLock);
-			announce_next_takeover = true;
-			return;
-		}
-	}
-	*/
 	/*
 	 * Set the lsn first so that when we wake backends they will release up to
 	 * this location.
 	 */
-//	if (walsndctl->lsn[SYNC_REP_WAIT_WRITE] < MyWalSnd->write)
 	if (walsndctl->lsn[SYNC_REP_WAIT_WRITE] < lsn[SYNC_REP_WAIT_WRITE])
 	{
 		walsndctl->lsn[SYNC_REP_WAIT_WRITE] = MyWalSnd->write;
 		numwrite = SyncRepWakeQueue(false, SYNC_REP_WAIT_WRITE);
 	}
-//	if (walsndctl->lsn[SYNC_REP_WAIT_FLUSH] < MyWalSnd->flush)
 	if (walsndctl->lsn[SYNC_REP_WAIT_FLUSH] < lsn[SYNC_REP_WAIT_FLUSH])
 	{
 		walsndctl->lsn[SYNC_REP_WAIT_FLUSH] = MyWalSnd->flush;
