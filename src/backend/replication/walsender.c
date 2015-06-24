@@ -2766,7 +2766,6 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 	 * Get the currently active synchronous standby.
 	 */
 	LWLockAcquire(SyncRepLock, LW_SHARED);
-	GetSyncStandbys(walSndList, SyncRepStandbyNames, SyncRepStandbyNames->gcount, 0);
 	LWLockRelease(SyncRepLock);
 
 	for (i = 0; i < max_wal_senders; i++)
@@ -2839,10 +2838,8 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 				values[7] = CStringGetTextDatum("async");
 			else
 			{
-				bool found = false;
-				foreach(cell, walSndList)
-					if(walsnd ==lfirst_int(cell))
-						found = true;
+				bool found = CheckNameList(SyncRepStandbyNames, walsnd->name, false);
+
 				if (found)						
 					values[7] = CStringGetTextDatum("sync");
 				else

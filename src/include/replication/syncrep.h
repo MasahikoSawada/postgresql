@@ -54,23 +54,6 @@ typedef enum GroupNodeType
 struct GroupNode;
 typedef struct GroupNode GroupNode;
 
-struct GroupNode
-{
-	GroupNodeType gtype;
-	int			gcount;
-	union
-	{
-		struct
-		{
-			char	   *name;
-		}			node;
-		struct
-		{
-			GroupNode  *lgroup;
-			GroupNode  *rgroup;
-		}			groups;
-	}			u;
-};
 
 extern GroupNode *SyncRepStandbyNames;
 extern char *SyncRepStandbyNameString;
@@ -92,8 +75,43 @@ extern void SyncRepUpdateSyncStandbysDefined(void);
 struct WalSnd;
 extern struct WalSnd *SyncRepGetSynchronousStandby(void);
 extern bool GetSyncStandbys(List *sync_nodes, GroupNode * expr, int req_count, int *cur_count);
-
+extern XLogRecPtr *GetSyncStandbysRecPtr(GroupNode *node, List *xlogrecptr);
 extern bool check_synchronous_standby_names(char **newval, void **extra, GucSource source);
 extern void assign_synchronous_commit(int newval, void *extra);
+extern bool CheckNameList(GroupNode *expr, char *name, bool found);
+
+struct GroupNode
+{
+	/* For Common */
+	GroupNodeType gtype;
+	XLogRecPtr write;
+	XLogRecPtr flush;
+
+	/* For NAME */
+	char *name;
+	struct WalSnd	*walsnd;
+	GroupNode	*next;
+	
+	/* For GROUP */
+	int			quorum;
+	int			ngroups;
+	GroupNode	*group;
+
+	int gcount;
+	
+	union
+	{
+		struct
+		{
+			char	   *name;
+		}			node;
+		struct
+		{
+			GroupNode  *lgroup;
+			GroupNode  *rgroup;
+		}			groups;
+	}			u;
+};
+
 
 #endif   /* _SYNCREP_H */
