@@ -238,11 +238,7 @@ InitWalSender(void)
 	 * there's no going back, and we mustn't write any WAL records after this.
 	 */
 	MarkPostmasterChildWalSender();
-	elog(WARNING, "@@@@@@@@@@@@@@@@@@@@@ name = %s @@@@@@@@@@@@@@@@@@@@", (WalSndCtl->walsnds[0]).name);
-
 	SendPostmasterSignal(PMSIGNAL_ADVANCE_STATE_MACHINE);
-	elog(WARNING, "@@@@@@@@@@@@@@@@@@@@@ name = %s @@@@@@@@@@@@@@@@@@@@", (WalSndCtl->walsnds[0]).name);
-
 }
 
 /*
@@ -524,10 +520,6 @@ StartReplication(StartReplicationCmd *cmd)
 					 (errmsg("cannot use a logical replication slot for physical replication"))));
 	}
 
-	elog(WARNING, "@@@@@@@@@@@@@@@@@@@@@ name = %s @@@@@@@@@@@@@@@@@@@@", (WalSndCtl->walsnds[0]).name);
-
-
-
 	/*
 	 * Select the timeline. If it was given explicitly by the client, use
 	 * that. Otherwise use the timeline of the last replayed record, which is
@@ -647,10 +639,6 @@ StartReplication(StartReplicationCmd *cmd)
 		/* Start streaming from the requested point */
 		sentPtr = cmd->startpoint;
 
-	elog(WARNING, "@@@@@@@@@@@@@@@@@@@@@ name = %s @@@@@@@@@@@@@@@@@@@@", (WalSndCtl->walsnds[0]).name);
-
-
-
 		/* Initialize shared memory status, too */
 		{
 			/* use volatile pointer to prevent code rearrangement */
@@ -660,8 +648,6 @@ StartReplication(StartReplicationCmd *cmd)
 			walsnd->sentPtr = sentPtr;
 			SpinLockRelease(&walsnd->mutex);
 		}
-
-		elog(WARNING, "##################### name = %s ######################", (WalSndCtl->walsnds[0]).name);
 
 		SyncRepInitConfig();
 
@@ -1934,10 +1920,6 @@ InitWalSenderSlot(void)
 	Assert(WalSndCtl != NULL);
 	Assert(MyWalSnd == NULL);
 
-	elog(WARNING, "@@@@@@@@@@@@@@@@@@@@@ name = %s : %s @@@@@@@@@@@@@@@@@@@@", (WalSndCtl->walsnds[0]).name, (WalSndCtl->walsnds[1]).name);
-
-
-
 	/*
 	 * Find a free walsender slot and reserve it. If this fails, we must be
 	 * out of WalSnd structures.
@@ -1963,7 +1945,9 @@ InitWalSenderSlot(void)
 			walsnd->pid = MyProcPid;
 			walsnd->sentPtr = InvalidXLogRecPtr;
 			walsnd->state = WALSNDSTATE_STARTUP;
-			walsnd->name = strdup(application_name);
+			memcpy(walsnd->name, application_name, strlen(application_name));
+			walsnd->name[strlen(application_name)] = '\0';
+			//walsnd->name = strdup(application_name);
 			walsnd->latch = &MyProc->procLatch;
 			SpinLockRelease(&walsnd->mutex);
 			/* don't need the lock anymore */
@@ -1972,7 +1956,6 @@ InitWalSenderSlot(void)
 			break;
 		}
 	}
-	elog(WARNING, "@@@@@@@@@@@@@@@@@@@@@ name = %s : %s @@@@@@@@@@@@@@@@@@@@", (WalSndCtl->walsnds[0]).name, (WalSndCtl->walsnds[1]).name);
 
 	if (MyWalSnd == NULL)
 		ereport(FATAL,

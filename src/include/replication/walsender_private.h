@@ -27,6 +27,8 @@ typedef enum WalSndState
 	WALSNDSTATE_STREAMING
 } WalSndState;
 
+#define MAX_APPLICATION_NAME_LEN 8192
+
 /*
  * Each walsender has a WalSnd struct in shared memory.
  */
@@ -38,7 +40,8 @@ typedef struct WalSnd
 	bool		needreload;		/* does currently-open file need to be
 								 * reloaded? */
 
-	char 	   *name;
+	/* application name which wal sender has */
+	char 	   name[MAX_APPLICATION_NAME_LEN]; 
 
 	/*
 	 * The xlog locations that have been written, flushed, and applied by

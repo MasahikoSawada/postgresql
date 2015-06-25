@@ -79,6 +79,8 @@ static int	SyncRepGetStandbyPriority(void);
 static bool SyncRepQueueIsOrderedByLSN(int mode);
 #endif
 
+#define DEBUG_QUORUM 1
+
 /*
  * ===========================================================
  * Synchronous Replication functions for normal user backends
@@ -361,14 +363,10 @@ bool CheckNameList(GroupNode *expr, char *name, bool found)
 			found = CheckNameList(expr->next, name, found);
 		
 		if (!found && strcmp(expr->name, name) == 0)
-		{
-			elog(WARNING, "found! expr(%s) <-> (%s)", expr->name, name);
 			found = true;
-		}
 	}
 	else if (GNODE_GROUP)
 	{
-		elog(WARNING, "GROUP[%d]", expr->quorum);
 		if (expr->group != NULL)
 			found = CheckNameList(expr->group, name, found);
 	}
@@ -431,11 +429,16 @@ GetSyncStandbysRecPtr(GroupNode *node, List **lsnlist)
 		}
 
 		lsn = tmplsn;
-		elog(WARNING, "[%d]---- [%s] : write : %x, flush : %x",
+
+#ifdef DEBUG_QUORUM
+		/* debug print */
+		elog(WARNING, "[%d]---- [%s] : write : %X/%X, flush : %X/%X",
 			 MyProcPid,
 			 node->name,
-			 lsn[SYNC_REP_WAIT_WRITE],
-			 lsn[SYNC_REP_WAIT_FLUSH]);
+			 (uint32) (lsn[SYNC_REP_WAIT_WRITE] >> 32) , (uint32) lsn[SYNC_REP_WAIT_WRITE],
+			 (uint32) (lsn[SYNC_REP_WAIT_FLUSH] >> 32) , (uint32) lsn[SYNC_REP_WAIT_FLUSH]
+			);
+#endif
 
 	}
 	else if (node->gtype == GNODE_GROUP)
@@ -450,31 +453,24 @@ GetSyncStandbysRecPtr(GroupNode *node, List **lsnlist)
 		/* Decide group's lsn using by quorum number */
 		lsn = (XLogRecPtr *)list_nth(new_lsnlist, node->quorum - 1);
 
+#ifdef DEBUG_QUORUM
 		/* Debug print */
 		i = 0;
-		elog(WARNING, "[%d]-------- GROUP [%d] decided LSN : write = %x, flush = %x",
+		elog(WARNING, "[%d]-------- GROUP [%d] decided LSN : write = %X/%X, flush = %X/%X",
 			 MyProcPid,
 			 node->quorum,
-			 lsn[SYNC_REP_WAIT_WRITE],
-			 lsn[SYNC_REP_WAIT_FLUSH]);
+			 (uint32) (lsn[SYNC_REP_WAIT_WRITE] >> 32) , (uint32) lsn[SYNC_REP_WAIT_WRITE],
+			 (uint32) (lsn[SYNC_REP_WAIT_FLUSH] >> 32) , (uint32) lsn[SYNC_REP_WAIT_FLUSH]
+			);
 
-		elog(WARNING, "[%d]---- [%s] : write : %x, flush : %x",
+		elog(WARNING, "[%d]---- [%s] : write : %X/%X, flush : %X/%X",
 			 MyProcPid,
 			 "G",
-			 lsn[SYNC_REP_WAIT_WRITE],
-			 lsn[SYNC_REP_WAIT_FLUSH]);
-/*
-		foreach(cell, new_lsnlist)
-		{
-			XLogRecPtr *tmp = (XLogRecPtr *)lfirst(cell);
-			elog(WARNING, "-------- [%s(%d)] : write : %x, flush : %x",
-				 node->gtype == GNODE_NAME ? node->name : "G",
-				 i++,
-				 tmp[SYNC_REP_WAIT_WRITE],
-				 tmp[SYNC_REP_WAIT_FLUSH]);
-		}
-*/
+			 (uint32) (lsn[SYNC_REP_WAIT_WRITE] >> 32) , (uint32) lsn[SYNC_REP_WAIT_WRITE],
+			 (uint32) (lsn[SYNC_REP_WAIT_FLUSH] >> 32) , (uint32) lsn[SYNC_REP_WAIT_FLUSH]
+			);
 	}
+#endif
 
 	/* For root call */
 	if (lsnlist == NULL)
@@ -586,8 +582,6 @@ void
 SyncRepReleaseWaiters(void)
 {
 	volatile WalSndCtlData *walsndctl = WalSndCtl;
-	List	   *walSndList = NIL;
-	ListCell   *cell;
 	int			numwrite = 0;
 	int			numflush = 0;
 	XLogRecPtr	*lsn;
@@ -609,16 +603,14 @@ SyncRepReleaseWaiters(void)
 	 */
 	LWLockAcquire(SyncRepLock, LW_EXCLUSIVE);
 
-	elog(WARNING, "hogehoge");
-	//pg_usleep(30 * 1000L * 1000L);
-	elog(WARNING, "hogehogehogehoge");
-	//pg_usleep(30 * 1000L * 1000L);
 	lsn = GetSyncStandbysRecPtr(SyncRepStandbyNames, NULL);
 
+#ifdef DEBUG_QUORUM	
 	/* Debug print */
-	elog(WARNING, "FINAL : write = %x, flush = %x",
-		 lsn[SYNC_REP_WAIT_WRITE],
-		 lsn[SYNC_REP_WAIT_FLUSH]);
+	elog(WARNING, "====== CONCLUSION write = %X/%X, flush = %X/%X ======",
+		 (uint32) (lsn[SYNC_REP_WAIT_WRITE] >> 32) , (uint32) lsn[SYNC_REP_WAIT_WRITE],
+		 (uint32) (lsn[SYNC_REP_WAIT_FLUSH] >> 32) , (uint32) lsn[SYNC_REP_WAIT_FLUSH]);
+#endif
 
 	Assert(lsn);
 
@@ -866,7 +858,9 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 		repl_guc_scanner_finish();
 		
 		GroupNode *expr  = SyncRepStandbyNames;
+		elog(WARNING, "---- PRINT SyncRepStandbyNames structure ----");
 		print_structure(expr, 0);
+		elog(WARNING, "---------------------------------------------");
 	}
 	return true;
 }
