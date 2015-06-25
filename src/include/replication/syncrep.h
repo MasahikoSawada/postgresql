@@ -83,12 +83,9 @@ struct GroupNode
 {
 	/* For Common */
 	GroupNodeType gtype;
-	XLogRecPtr write;
-	XLogRecPtr flush;
 
 	/* For NAME */
 	char *name;
-	struct WalSnd	*walsnd;
 	GroupNode	*next;
 	
 	/* For GROUP */

@@ -54,7 +54,6 @@ create_node(char *name)
 	expr->gtype = GNODE_NAME;
 
 	/* For NAME */
-	expr->walsnd = NULL;
 	expr->next = NULL;
 	expr->name = name;
 	
@@ -73,8 +72,8 @@ create_group(int count, GroupNode *grp1)
 	expr->gtype = GNODE_GROUP;
 
 	/* For NAME */
-	expr->walsnd = NULL;
 	expr->next = NULL;
+	expr->name = NULL;
 	
 	/* For GROUP */
 	expr->quorum = count;
@@ -92,7 +91,6 @@ add_node(char *name, GroupNode *grp2)
 	expr->gtype = GNODE_NAME;
 
 	/* For NAME */
-	expr->walsnd = NULL;
 	expr->next = NULL;
 	expr->name = name;
 	
