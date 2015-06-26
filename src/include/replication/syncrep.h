@@ -74,7 +74,7 @@ extern void SyncRepUpdateSyncStandbysDefined(void);
 /* forward declaration to avoid pulling in walsender_private.h */
 struct WalSnd;
 extern struct WalSnd *SyncRepGetSynchronousStandby(void);
-extern XLogRecPtr *GetSyncStandbysRecPtr(GroupNode *node, List **xlogrecptr);
+extern XLogRecPtr *SyncRepQuorumRecPtr(GroupNode *node, List **xlogrecptr);
 extern bool check_synchronous_standby_names(char **newval, void **extra, GucSource source);
 extern void assign_synchronous_commit(int newval, void *extra);
 extern bool CheckNameList(GroupNode *expr, char *name, bool found);
@@ -87,7 +87,7 @@ struct GroupNode
 	/* For NAME */
 	char *name;
 	GroupNode	*next;
-	
+
 	/* For GROUP */
 	int			quorum;
 	int			ngroups;

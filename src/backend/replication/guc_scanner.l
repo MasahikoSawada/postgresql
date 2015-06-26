@@ -22,22 +22,22 @@ static char *scanbuf;
 
 [a-zA-Z][a-zA-Z0-9]*    {
 				yylval.str = strdup(yytext);
-                  return NAME;
-                }
+				return NAME;
+			}
 
 [1-9][0-9]*  {yylval.val = atoi(yytext);   return INT;}
 
 [,()\n]        {
-                 return yytext[0];
-               }
+			return yytext[0];
+		}
 %%
 
 void
 yyerror(const char *message)
 {
     ereport(LOG,
-            (errcode(ERRCODE_SYNTAX_ERROR),
-             errmsg_internal("%s", message)));
+	    (errcode(ERRCODE_SYNTAX_ERROR),
+		    errmsg_internal("%s", message)));
 }
 
 void

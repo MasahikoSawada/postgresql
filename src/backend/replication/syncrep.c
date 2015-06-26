@@ -361,7 +361,7 @@ bool CheckNameList(GroupNode *expr, char *name, bool found)
 	{
 		if (expr->next)
 			found = CheckNameList(expr->next, name, found);
-		
+
 		if (!found && strcmp(expr->name, name) == 0)
 			found = true;
 	}
@@ -374,9 +374,9 @@ bool CheckNameList(GroupNode *expr, char *name, bool found)
 	return found;
 }
 
-/* Decide LSN in acordance with status of syn standbys at this time */
+/* Decide LSN in acordance with status of sync standbys at this time */
 XLogRecPtr *
-GetSyncStandbysRecPtr(GroupNode *node, List **lsnlist)
+SyncRepGetQuorumRecPtr(GroupNode *node, List **lsnlist)
 {
 	int i;
 	XLogRecPtr *lsn;
@@ -388,26 +388,29 @@ GetSyncStandbysRecPtr(GroupNode *node, List **lsnlist)
 
 		tmplsn[SYNC_REP_WAIT_WRITE] = InvalidXLogRecPtr;
 		tmplsn[SYNC_REP_WAIT_FLUSH] = InvalidXLogRecPtr;
-		
-		/* Process same group member in advance */
-		if (node->next)
-		{
-			GetSyncStandbysRecPtr(node->next, lsnlist);
-		}
 
-		/* Select corresponding active wal sender */
+		/* Process same group members in advance */
+		if (node->next)
+			SyncRepGetQuorumRecPtr(node->next, lsnlist);
+
+		/*
+		 * Get write/flush LSN from corresponding active wal sender
+		 * using WalSnd->name. If there are wal senders which has same
+		 * name, we select higher.
+		 * XXX : Is it right way?
+		 */
 		for (i = 0; i < max_wal_senders; i++)
 		{
 			volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
-	
+
 			/* Must bev active */
 			if (walsnd->pid == 0)
 				continue;
-			
+
 			/* Must be streaming */
 			if (walsnd->state != WALSNDSTATE_STREAMING)
 				continue;
-			
+
 			/* Must be synchronous */
 			if (walsnd->sync_standby_priority == 0)
 				continue;
@@ -444,13 +447,16 @@ GetSyncStandbysRecPtr(GroupNode *node, List **lsnlist)
 	else if (node->gtype == GNODE_GROUP)
 	{
 		List *new_lsnlist = NIL;
-		
+
 		/* Get list of whole group's lsn */
-		GetSyncStandbysRecPtr(node->group, &new_lsnlist);
+		SyncRepGetQuorumRecPtr(node->group, &new_lsnlist);
 
 		Assert(new_lsnlist);
 
-		/* Decide group's lsn using by quorum number */
+		/*
+		 * Decide group's lsn using by quorum number
+		 * Assume the list is order by LSN in desc.
+		 */
 		lsn = (XLogRecPtr *)list_nth(new_lsnlist, node->quorum - 1);
 
 #ifdef DEBUG_QUORUM
@@ -489,7 +495,7 @@ GetSyncStandbysRecPtr(GroupNode *node, List **lsnlist)
 		{
 			XLogRecPtr *cur_lsn = (XLogRecPtr *)lfirst(cell);
 			XLogRecPtr *next_lsn;
-			
+
 			/* If list has only one lsn element, just compare two LSNs. */
 			if (cell->next == NULL)
 			{
@@ -501,7 +507,7 @@ GetSyncStandbysRecPtr(GroupNode *node, List **lsnlist)
 					*lsnlist = lappend(*lsnlist, lsn); /* Append lsn to list */
 				break;
 			}
-			
+
 			/* Get next lsn in advance to insert lsn immidiately after cur_lsn */
 			next_lsn = (XLogRecPtr *)lfirst(cell->next);
 
@@ -585,7 +591,7 @@ SyncRepReleaseWaiters(void)
 	int			numwrite = 0;
 	int			numflush = 0;
 	XLogRecPtr	*lsn;
-	
+
 	/*
 	 * If this WALSender is serving a standby that is not on the list of
 	 * potential standbys then we have nothing to do. If we are still starting
@@ -603,9 +609,9 @@ SyncRepReleaseWaiters(void)
 	 */
 	LWLockAcquire(SyncRepLock, LW_EXCLUSIVE);
 
-	lsn = GetSyncStandbysRecPtr(SyncRepStandbyNames, NULL);
+	lsn = SyncRepGetQuorumRecPtr(SyncRepStandbyNames, NULL);
 
-#ifdef DEBUG_QUORUM	
+#ifdef DEBUG_QUORUM
 	/* Debug print */
 	elog(WARNING, "====== CONCLUSION write = %X/%X, flush = %X/%X ======",
 		 (uint32) (lsn[SYNC_REP_WAIT_WRITE] >> 32) , (uint32) lsn[SYNC_REP_WAIT_WRITE],
@@ -668,7 +674,7 @@ SyncRepGetStandbyPriority(void)
 
 	if (CheckNameList(SyncRepStandbyNames, application_name, false))
 		return 1;
-	 
+
 	return 0;
 }
 
@@ -823,7 +829,7 @@ print_structure(GroupNode *expr, int level)
 	char *blank = (char *)palloc(sizeof(char) * ((level * 4) + 1));
 	memset(blank, '-', level * 4);
 	blank[level*4] = '\0';
-	
+
 	if (expr->gtype == GNODE_NAME)
 	{
 		if (expr->next)
@@ -856,7 +862,7 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 			return false;
 		}
 		repl_guc_scanner_finish();
-		
+
 		GroupNode *expr  = SyncRepStandbyNames;
 		elog(WARNING, "---- PRINT SyncRepStandbyNames structure ----");
 		print_structure(expr, 0);

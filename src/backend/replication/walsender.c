@@ -2741,12 +2741,6 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 	ListCell   *cell;
 	int			i;
 
-	for (i = 0; i < max_wal_senders; i++)
-	{	
-		volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
-		elog(WARNING, "############################ [%d] [%d] pid = %d, name = %s(%x)", MyProcPid, i, walsnd->pid, walsnd->name, &(walsnd->name));
-	}
-
 	/* check to see if caller supports us returning a tuplestore */
 	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
 		ereport(ERROR,

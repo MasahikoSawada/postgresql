@@ -26,5 +26,5 @@ repl_gram.o: repl_scanner.c
 # guc_scanner is compiled as part of guc_gram
 guc_gram.o: guc_scanner.c
 
-# guc_gram.c, guc_scanner.c, repl_gram.c and repl_scanner.c are in the 
+# guc_gram.c, guc_scanner.c, repl_gram.c and repl_scanner.c are in the
 # distribution tarball, so they are not cleaned here.

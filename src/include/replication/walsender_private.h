@@ -41,7 +41,7 @@ typedef struct WalSnd
 								 * reloaded? */
 
 	/* application name which wal sender has */
-	char 	   name[MAX_APPLICATION_NAME_LEN]; 
+	char 	   name[MAX_APPLICATION_NAME_LEN];
 
 	/*
 	 * The xlog locations that have been written, flushed, and applied by

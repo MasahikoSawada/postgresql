@@ -25,29 +25,29 @@ static GroupNode *create_group(int count, GroupNode *grp1);
 %token <str> NAME
 %token <val> INT
 
-%type <expr> result list element group
- 
+%type <expr> result sync_list sync_element sync_node_group
+
 %start result
 
 %%
 
 result: {SyncRepStandbyNames = NULL;}
-| list									{SyncRepStandbyNames = $1; }
+| sync_list									{SyncRepStandbyNames = $1; }
 	;
 
-list:
-element { $$ = $1;}
-| list ',' NAME { $$ = add_new_node($3, $1);}
-| list ',' group { $$ = add_node($1, $3);}
+sync_list:
+sync_element { $$ = $1;}
+| sync_list ',' NAME { $$ = add_new_node($3, $1);}
+| sync_list ',' sync_node_group { $$ = add_node($1, $3);}
 ;
 
-element:
+sync_element:
 NAME { $$ = create_node($1);}
-| group { $$ = $1} 
+| sync_node_group { $$ = $1}
 ;
 
-group:
-INT '(' list ')' { $$ = create_group($1, $3);}
+sync_node_group:
+INT '(' sync_list ')' { $$ = create_group($1, $3);}
 ;
 
 %%
@@ -62,7 +62,7 @@ create_node(char *name)
 	/* For NAME */
 	expr->next = NULL;
 	expr->name = name;
-	
+
 	/* For GROUP */
 	expr->quorum = -1;
 	expr->group = NULL;
@@ -80,7 +80,7 @@ create_group(int count, GroupNode *grp1)
 	/* For NAME */
 	expr->next = NULL;
 	expr->name = NULL;
-	
+
 	/* For GROUP */
 	expr->quorum = count;
 	expr->group = grp1;
@@ -110,7 +110,7 @@ add_new_node(char *name, GroupNode *grp2)
 
 	expr->next = NULL;
 	expr->name = name;
-	
+
 	expr->quorum = -1;
 	expr->group = NULL;
 
