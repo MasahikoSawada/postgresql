@@ -30,6 +30,16 @@ typedef struct ItemIdData
 
 typedef ItemIdData *ItemId;
 
+typedef struct ItemIdDataWithAbbrKey
+{
+	unsigned	lp_off:15,		/* offset to tuple (from start of page) */
+				lp_flags:2,		/* state of item pointer, see below */
+				lp_len:15,		/* byte length of tuple */
+				abbrkey:32;
+} ItemIdDataWithAbbrKey;
+
+typedef ItemIdDataWithAbbrKey *ItemIdWithAbbrKey;
+
 /*
  * lp_flags has these possible states.  An UNUSED line pointer is available
  * for immediate re-use, the other states are not.
@@ -69,6 +79,12 @@ typedef uint16 ItemLength;
  */
 #define ItemIdGetFlags(itemId) \
    ((itemId)->lp_flags)
+
+/*
+ *		ItemIdGetAbbrKey
+ */
+#define ItemIdGetAbbrKey(itemIdWithAbbrKey) \
+	((itemIdWithAbbrKey)->abbrkey)
 
 /*
  *		ItemIdGetRedirect
