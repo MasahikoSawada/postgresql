@@ -2922,7 +2922,7 @@ _bt2_insert_parent(Relation rel,
 				elog(ERROR, "failed to re-find parent key in index \"%s\" for split pages %u/%u",
 					 RelationGetRelationName(rel), bknum, rbknum);
 
-			abbrkey = (int32) new_item + sizeof(IndexTupleData);
+			abbrkey = *(int32*) ((Item) new_item + sizeof(IndexTupleData));
 			
 			/* Recursively update the parent */
 			_bt2_insertonpg(rel, pbuf, buf, stack->bts_parent,
@@ -2963,7 +2963,7 @@ _bt2_insert_parent(Relation rel,
 				elog(ERROR, "failed to re-find parent key in index \"%s\" for split pages %u/%u",
 					 RelationGetRelationName(rel), bknum, rbknum);
 
-			abbrkey = (int32) new_item + sizeof(IndexTupleData);
+			abbrkey = *(int32 *) ((Item) new_item + sizeof(IndexTupleData));
 			
 			/* Recursively update the parent */
 			_bt2_insertonpg(rel, pbuf, buf, stack->bts_parent,
@@ -3517,7 +3517,7 @@ _bt2_newroot_leaf(Relation rel, Buffer lbuf, Buffer rbuf)
 
 	/* Set abbreviate key */
 	labbrkey = 0;
-	rabbrkey = (int32) (item + sizeof(IndexTupleData));
+	rabbrkey = *(int32 *) ((Item) item + sizeof(IndexTupleData));
 	elog(WARNING, "rabbrkey : %d", rabbrkey);
 
 	/*
