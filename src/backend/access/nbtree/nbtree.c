@@ -247,6 +247,29 @@ btinsert(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(result);
 }
 
+Datum
+bt2insert(PG_FUNCTION_ARGS)
+{
+	Relation	rel = (Relation) PG_GETARG_POINTER(0);
+	Datum	   *values = (Datum *) PG_GETARG_POINTER(1);
+	bool	   *isnull = (bool *) PG_GETARG_POINTER(2);
+	ItemPointer ht_ctid = (ItemPointer) PG_GETARG_POINTER(3);
+	Relation	heapRel = (Relation) PG_GETARG_POINTER(4);
+	IndexUniqueCheck checkUnique = (IndexUniqueCheck) PG_GETARG_INT32(5);
+	bool		result;
+	IndexTuple	itup;
+
+	/* generate an index tuple */
+	itup = index_form_tuple(RelationGetDescr(rel), values, isnull);
+	itup->t_tid = *ht_ctid;
+
+	result = _bt2_doinsert(rel, itup, checkUnique, heapRel);
+
+	pfree(itup);
+
+	PG_RETURN_BOOL(result);
+}
+
 /*
  *	btgettuple() -- Get the next tuple in the scan.
  */
