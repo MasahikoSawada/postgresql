@@ -160,7 +160,7 @@ PageAddItemWithAbbrKey(Page page,
 			bool is_heap,
 			int32 abbrkey)
 {
-	PageHeader	phdr = (PageHeader) page;
+	PageHeaderWithAbbrKey	phdr = (PageHeaderWithAbbrKey) page;
 	Size		alignedSize;
 	int			lower;
 	int			upper;
@@ -277,7 +277,7 @@ PageAddItemWithAbbrKey(Page page,
 				(limit - offsetNumber) * sizeof(ItemIdDataWithAbbrKey));
 
 	/* set the item pointer */
-	ItemIdSetNormal(itemId, upper, size);
+	ItemIdWithAbbrKeySetNormal(itemId, upper, size, abbrkey);
 
 	/*
 	 * Items normally contain no uninitialized bytes.  Core bufpage consumers

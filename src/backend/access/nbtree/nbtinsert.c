@@ -1293,7 +1293,6 @@ _bt2_split(Relation rel ,Buffer buf, Buffer cbuf, OffsetNumber firstright,
 	BTPageOpaque	opaque;
 
 	elog(WARNING, "Splitting");
-	pg_usleep(30 * 1000L * 1000L);
 
 	page = BufferGetPage(buf);
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);

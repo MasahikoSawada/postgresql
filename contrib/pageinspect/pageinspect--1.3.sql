@@ -98,6 +98,18 @@ RETURNS SETOF record
 AS 'MODULE_PATHNAME', 'bt_page_items'
 LANGUAGE C STRICT;
 
+CREATE FUNCTION bt2_page_items(IN relname text, IN blkno int4,
+    OUT itemoffset smallint,
+    OUT ctid tid,
+    OUT itemlen smallint,
+    OUT abbrkey int4,
+    OUT nulls bool,
+    OUT vars bool,
+    OUT data text)
+RETURNS SETOF record
+AS 'MODULE_PATHNAME', 'bt2_page_items'
+LANGUAGE C STRICT;
+
 --
 -- brin_page_type()
 --

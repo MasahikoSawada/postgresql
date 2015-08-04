@@ -38,9 +38,11 @@
 PG_FUNCTION_INFO_V1(bt_metap);
 PG_FUNCTION_INFO_V1(bt_page_items);
 PG_FUNCTION_INFO_V1(bt_page_stats);
+PG_FUNCTION_INFO_V1(bt2_page_items);
 
 #define IS_INDEX(r) ((r)->rd_rel->relkind == RELKIND_INDEX)
 #define IS_BTREE(r) ((r)->rd_rel->relam == BTREE_AM_OID)
+#define IS_BTREE2(r) ((r)->rd_rel->relam = BTREE2_AM_OID)
 
 #define CHECK_PAGE_OFFSET_RANGE(pg, offnum) { \
 		if ( !(FirstOffsetNumber <= (offnum) && \
@@ -284,7 +286,7 @@ bt_page_items(PG_FUNCTION_ARGS)
 		relrv = makeRangeVarFromNameList(textToQualifiedNameList(relname));
 		rel = relation_openrv(relrv, AccessShareLock);
 
-		if (!IS_INDEX(rel) || !IS_BTREE(rel))
+		if (!IS_INDEX(rel) || (!IS_BTREE(rel) && !IS_BTREE2(rel)))
 			elog(ERROR, "relation \"%s\" is not a btree index",
 				 RelationGetRelationName(rel));
 
@@ -397,6 +399,149 @@ bt_page_items(PG_FUNCTION_ARGS)
 	}
 }
 
+Datum
+bt2_page_items(PG_FUNCTION_ARGS)
+{
+	text	   *relname = PG_GETARG_TEXT_P(0);
+	uint32		blkno = PG_GETARG_UINT32(1);
+	Datum		result;
+	char	   *values[7];
+	HeapTuple	tuple;
+	FuncCallContext *fctx;
+	MemoryContext mctx;
+	struct user_args *uargs;
+
+	if (!superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 (errmsg("must be superuser to use pageinspect functions"))));
+
+	if (SRF_IS_FIRSTCALL())
+	{
+		RangeVar   *relrv;
+		Relation	rel;
+		Buffer		buffer;
+		BTPageOpaque opaque;
+		TupleDesc	tupleDesc;
+
+		fctx = SRF_FIRSTCALL_INIT();
+
+		relrv = makeRangeVarFromNameList(textToQualifiedNameList(relname));
+		rel = relation_openrv(relrv, AccessShareLock);
+
+		if (!IS_INDEX(rel) || (!IS_BTREE(rel) && !IS_BTREE2(rel)))
+			elog(ERROR, "relation \"%s\" is not a btree index",
+				 RelationGetRelationName(rel));
+
+		/*
+		 * Reject attempts to read non-local temporary relations; we would be
+		 * likely to get wrong data since we have no visibility into the
+		 * owning session's local buffers.
+		 */
+		if (RELATION_IS_OTHER_TEMP(rel))
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				errmsg("cannot access temporary tables of other sessions")));
+
+		if (blkno == 0)
+			elog(ERROR, "block 0 is a meta page");
+
+		CHECK_RELATION_BLOCK_RANGE(rel, blkno);
+
+		buffer = ReadBuffer(rel, blkno);
+		LockBuffer(buffer, BUFFER_LOCK_SHARE);
+
+		/*
+		 * We copy the page into local storage to avoid holding pin on the
+		 * buffer longer than we must, and possibly failing to release it at
+		 * all if the calling query doesn't fetch all rows.
+		 */
+		mctx = MemoryContextSwitchTo(fctx->multi_call_memory_ctx);
+
+		uargs = palloc(sizeof(struct user_args));
+
+		uargs->page = palloc(BLCKSZ);
+		memcpy(uargs->page, BufferGetPage(buffer), BLCKSZ);
+
+		UnlockReleaseBuffer(buffer);
+		relation_close(rel, AccessShareLock);
+
+		uargs->offset = FirstOffsetNumber;
+
+		opaque = (BTPageOpaque) PageGetSpecialPointer(uargs->page);
+
+		if (P_ISDELETED(opaque))
+			elog(NOTICE, "page is deleted");
+
+        fctx->max_calls = PageWithAbbrKeyGetMaxOffsetNumber(uargs->page);
+
+		/* Build a tuple descriptor for our result type */
+		if (get_call_result_type(fcinfo, NULL, &tupleDesc) != TYPEFUNC_COMPOSITE)
+			elog(ERROR, "return type must be a row type");
+
+		fctx->attinmeta = TupleDescGetAttInMetadata(tupleDesc);
+
+		fctx->user_fctx = uargs;
+
+		MemoryContextSwitchTo(mctx);
+	}
+
+	fctx = SRF_PERCALL_SETUP();
+	uargs = fctx->user_fctx;
+
+	if (fctx->call_cntr < fctx->max_calls)
+	{
+		ItemIdWithAbbrKey		id;
+		IndexTuple	itup;
+		int			j;
+		int			off;
+		int			dlen;
+		char	   *dump;
+		char	   *ptr;
+
+		id = PageGetItemIdWithAbbrKey(uargs->page, uargs->offset);
+
+		if (!ItemIdIsValid(id))
+			elog(ERROR, "invalid ItemId");
+
+		itup = (IndexTuple) PageGetItem(uargs->page, id);
+
+		j = 0;
+		values[j++] = psprintf("%d", uargs->offset);
+		values[j++] = psprintf("(%u,%u)",
+							   BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)),
+							   itup->t_tid.ip_posid);
+		values[j++] = psprintf("%d", (int) IndexTupleSize(itup));
+		values[j++] = psprintf("%d", * (int32*) ((Item)itup + sizeof(IndexTupleData))); 
+		values[j++] = psprintf("%c", IndexTupleHasNulls(itup) ? 't' : 'f');
+		values[j++] = psprintf("%c", IndexTupleHasVarwidths(itup) ? 't' : 'f');
+
+		ptr = (char *) itup + IndexInfoFindDataOffset(itup->t_info);
+		dlen = IndexTupleSize(itup) - IndexInfoFindDataOffset(itup->t_info);
+		dump = palloc0(dlen * 3 + 1);
+		values[j] = dump;
+		for (off = 0; off < dlen; off++)
+		{
+			if (off > 0)
+				*dump++ = ' ';
+			sprintf(dump, "%02x", *(ptr + off) & 0xff);
+			dump += 2;
+		}
+
+		tuple = BuildTupleFromCStrings(fctx->attinmeta, values);
+		result = HeapTupleGetDatum(tuple);
+
+		uargs->offset = uargs->offset + 1;
+
+		SRF_RETURN_NEXT(fctx, result);
+	}
+	else
+	{
+		pfree(uargs->page);
+		pfree(uargs);
+		SRF_RETURN_DONE(fctx);
+	}
+}
 
 /* ------------------------------------------------
  * bt_metap()
@@ -429,7 +574,7 @@ bt_metap(PG_FUNCTION_ARGS)
 	relrv = makeRangeVarFromNameList(textToQualifiedNameList(relname));
 	rel = relation_openrv(relrv, AccessShareLock);
 
-	if (!IS_INDEX(rel) || !IS_BTREE(rel))
+	if (!IS_INDEX(rel) || (!IS_BTREE(rel) && !IS_BTREE2(rel)))
 		elog(ERROR, "relation \"%s\" is not a btree index",
 			 RelationGetRelationName(rel));
 

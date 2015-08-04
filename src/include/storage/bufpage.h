@@ -174,7 +174,7 @@ typedef struct PageHeaderDataWithAbbrKey
 	ItemIdDataWithAbbrKey	pd_linp[FLEXIBLE_ARRAY_MEMBER]; /* line pointer array */
 } PageHeaderDataWithAbbrKey;
 
-
+typedef PageHeaderDataWithAbbrKey *PageHeaderWithAbbrKey;
 typedef PageHeaderData *PageHeader;
 
 /*
@@ -228,6 +228,8 @@ typedef PageHeaderData *PageHeader;
  */
 #define SizeOfPageHeaderData (offsetof(PageHeaderData, pd_linp))
 
+#define SizeOfPageHeaderDataWithAbbrKey (offsetof(PageHeaderDataWithAbbrKey, pd_linp))
+
 /*
  * PageIsEmpty
  *		returns true iff no itemid has been allocated on the page
@@ -249,7 +251,7 @@ typedef PageHeaderData *PageHeader;
 	((ItemId) (&((PageHeader) (page))->pd_linp[(offsetNumber) - 1]))
 
 #define PageGetItemIdWithAbbrKey(page, offsetNumber) \
-	((ItemIdWithAbbrKey) (&((PageHeader) (page))->pd_linp[(offsetNumber) - 1]))
+	((ItemIdWithAbbrKey) (&((PageHeaderWithAbbrKey) (page))->pd_linp[(offsetNumber) - 1]))
 
 /*
  * PageGetContents
@@ -357,6 +359,11 @@ typedef PageHeaderData *PageHeader;
 	(((PageHeader) (page))->pd_lower <= SizeOfPageHeaderData ? 0 : \
 	 ((((PageHeader) (page))->pd_lower - SizeOfPageHeaderData) \
 	  / sizeof(ItemIdData)))
+
+#define PageWithAbbrKeyGetMaxOffsetNumber(page) \
+	(((PageHeaderWithAbbrKey) (page))->pd_lower <= SizeOfPageHeaderDataWithAbbrKey ? 0 : \
+	 ((((PageHeaderWithAbbrKey) (page))->pd_lower - SizeOfPageHeaderDataWithAbbrKey) \
+	  / sizeof(ItemIdDataWithAbbrKey)))
 
 /*
  * Additional macros for access to page headers. (Beware multiple evaluation
