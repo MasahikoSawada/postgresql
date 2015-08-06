@@ -243,6 +243,9 @@ typedef PageHeaderData *PageHeader;
  */
 #define PageIsNew(page) (((PageHeader) (page))->pd_upper == 0)
 
+#define PageWithAbbrKeyIsNew(page) (((PageHeaderWithAbbrKey) (page))->pd_upper == 0)
+
+
 /*
  * PageGetItemId
  *		Returns an item identifier of a page.
@@ -317,6 +320,10 @@ typedef PageHeaderData *PageHeader;
  */
 #define PageGetSpecialSize(page) \
 	((uint16) (PageGetPageSize(page) - ((PageHeader)(page))->pd_special))
+
+#define PageWithAbbrKeyGetSpecialSize(page) \
+	((uint16) (PageGetPageSize(page) - ((PageHeaderWithAbbrKey)(page))->pd_special))
+
 
 /*
  * PageGetSpecialPointer
@@ -418,6 +425,7 @@ do { \
  */
 
 extern void PageInit(Page page, Size pageSize, Size specialSize);
+extern void PageWithAbbrKeyInit(Page page, Size pageSize, Size specialSize);
 extern bool PageIsVerified(Page page, BlockNumber blkno);
 extern OffsetNumber PageAddItem(Page page, Item item, Size size,
 			OffsetNumber offsetNumber, bool overwrite, bool is_heap);

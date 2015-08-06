@@ -655,6 +655,7 @@ typedef BTScanOpaqueData *BTScanOpaque;
 extern Datum btbuild(PG_FUNCTION_ARGS);
 extern Datum btbuildempty(PG_FUNCTION_ARGS);
 extern Datum btinsert(PG_FUNCTION_ARGS);
+extern Datum bt2insert(PG_FUNCTION_ARGS);
 extern Datum btbeginscan(PG_FUNCTION_ARGS);
 extern Datum btgettuple(PG_FUNCTION_ARGS);
 extern Datum btgetbitmap(PG_FUNCTION_ARGS);
@@ -675,7 +676,9 @@ extern bool _bt_doinsert(Relation rel, IndexTuple itup,
 extern bool _bt2_doinsert(Relation rel, IndexTuple itup,
 			 IndexUniqueCheck checkUnique, Relation heapRel);
 extern Buffer _bt_getstackbuf(Relation rel, BTStack stack, int access);
+extern Buffer _bt2_getstackbuf(Relation rel, BTStack stack, int access);
 extern void _bt_finish_split(Relation rel, Buffer bbuf, BTStack stack);
+extern void _bt2_finish_split(Relation rel, Buffer bbuf, BTStack stack);
 
 /*
  * prototypes for functions in nbtpage.c
@@ -685,12 +688,18 @@ extern Buffer _bt_getroot(Relation rel, int access);
 extern Buffer _bt_gettrueroot(Relation rel);
 extern int	_bt_getrootheight(Relation rel);
 extern void _bt_checkpage(Relation rel, Buffer buf);
+extern void _bt2_checkpage(Relation rel, Buffer buf);
 extern Buffer _bt_getbuf(Relation rel, BlockNumber blkno, int access);
+extern Buffer _bt2_getbuf(Relation rel, BlockNumber blkno, int access);
 extern Buffer _bt_relandgetbuf(Relation rel, Buffer obuf,
+				 BlockNumber blkno, int access);
+extern Buffer _bt2_relandgetbuf(Relation rel, Buffer obuf,
 				 BlockNumber blkno, int access);
 extern void _bt_relbuf(Relation rel, Buffer buf);
 extern void _bt_pageinit(Page page, Size size);
 extern bool _bt_page_recyclable(Page page);
+extern void _bt2_pageinit(Page page, Size size);
+extern bool _bt2_page_recyclable(Page page);
 extern void _bt_delitems_delete(Relation rel, Buffer buf,
 					OffsetNumber *itemnos, int nitems, Relation heapRel);
 extern void _bt_delitems_vacuum(Relation rel, Buffer buf,
@@ -704,12 +713,22 @@ extern int	_bt_pagedel(Relation rel, Buffer buf);
 extern BTStack _bt_search(Relation rel,
 		   int keysz, ScanKey scankey, bool nextkey,
 		   Buffer *bufP, int access);
+extern BTStack _bt2_search(Relation rel,
+		   int keysz, ScanKey scankey, bool nextkey,
+		   Buffer *bufP, int access);
 extern Buffer _bt_moveright(Relation rel, Buffer buf, int keysz,
 			  ScanKey scankey, bool nextkey, bool forupdate, BTStack stack,
 			  int access);
 extern OffsetNumber _bt_binsrch(Relation rel, Buffer buf, int keysz,
 			ScanKey scankey, bool nextkey);
+extern Buffer _bt2_moveright(Relation rel, Buffer buf, int keysz,
+			  ScanKey scankey, bool nextkey, bool forupdate, BTStack stack,
+			  int access);
+extern OffsetNumber _bt2_binsrch(Relation rel, Buffer buf, int keysz,
+			ScanKey scankey, bool nextkey);
 extern int32 _bt_compare(Relation rel, int keysz, ScanKey scankey,
+			Page page, OffsetNumber offnum);
+extern int32 _bt2_compare(Relation rel, int keysz, ScanKey scankey,
 			Page page, OffsetNumber offnum);
 extern bool _bt_first(IndexScanDesc scan, ScanDirection dir);
 extern bool _bt_next(IndexScanDesc scan, ScanDirection dir);

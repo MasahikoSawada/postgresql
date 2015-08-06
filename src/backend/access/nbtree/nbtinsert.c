@@ -123,7 +123,7 @@ _bt2_doinsert(Relation rel, IndexTuple itup,
 
 top:
 	/* find the first page containing this key */
-	stack = _bt_search(rel, natts, itup_scankey, false, &buf, BT_WRITE);
+	stack = _bt2_search(rel, natts, itup_scankey, false, &buf, BT_WRITE);
 
 	offset = InvalidOffsetNumber;
 
@@ -138,7 +138,7 @@ top:
 	 * move right in the tree.  See Lehman and Yao for an excruciatingly
 	 * precise description.
 	 */
-	buf = _bt_moveright(rel, buf, natts, itup_scankey, false,
+	buf = _bt2_moveright(rel, buf, natts, itup_scankey, false,
 						true, stack, BT_WRITE);
 
 	/*
@@ -2908,7 +2908,7 @@ _bt2_insert_parent(Relation rel,
 			 * 05/27/97
 			 */
 			ItemPointerSet(&(stack->bts_btentry.t_tid), bknum, P_HIKEY);
-			pbuf = _bt_getstackbuf(rel, stack, BT_WRITE);
+			pbuf = _bt2_getstackbuf(rel, stack, BT_WRITE);
 			
 			/*
 			 * Now we can unlock the right child. The left child will be unlocked
@@ -3132,6 +3132,52 @@ _bt_finish_split(Relation rel, Buffer lbuf, BTStack stack)
 	_bt_insert_parent(rel, lbuf, rbuf, stack, was_root, was_only);
 }
 
+void
+_bt2_finish_split(Relation rel, Buffer lbuf, BTStack stack)
+{
+	Page		lpage = BufferGetPage(lbuf);
+	BTPageOpaque lpageop = (BTPageOpaque) PageGetSpecialPointer(lpage);
+	Buffer		rbuf;
+	Page		rpage;
+	BTPageOpaque rpageop;
+	bool		was_root;
+	bool		was_only;
+
+	Assert(P_INCOMPLETE_SPLIT(lpageop));
+
+	/* Lock right sibling, the one missing the downlink */
+	rbuf = _bt_getbuf(rel, lpageop->btpo_next, BT_WRITE);
+	rpage = BufferGetPage(rbuf);
+	rpageop = (BTPageOpaque) PageGetSpecialPointer(rpage);
+
+	/* Could this be a root split? */
+	if (!stack)
+	{
+		Buffer		metabuf;
+		Page		metapg;
+		BTMetaPageData *metad;
+
+		/* acquire lock on the metapage */
+		metabuf = _bt_getbuf(rel, BTREE_METAPAGE, BT_WRITE);
+		metapg = BufferGetPage(metabuf);
+		metad = BTPageGetMeta(metapg);
+
+		was_root = (metad->btm_root == BufferGetBlockNumber(lbuf));
+
+		_bt_relbuf(rel, metabuf);
+	}
+	else
+		was_root = false;
+
+	/* Was this the only page on the level before split? */
+	was_only = (P_LEFTMOST(lpageop) && P_RIGHTMOST(rpageop));
+
+	elog(DEBUG1, "finishing incomplete split of %u/%u",
+		 BufferGetBlockNumber(lbuf), BufferGetBlockNumber(rbuf));
+
+	_bt2_insert_parent(rel, lbuf, rbuf, stack, was_root, was_only);
+}
+
 /*
  *	_bt_getstackbuf() -- Walk back up the tree one step, and find the item
  *						 we last looked at in the parent.
@@ -3166,7 +3212,7 @@ _bt_getstackbuf(Relation rel, BTStack stack, int access)
 
 		if (access == BT_WRITE && P_INCOMPLETE_SPLIT(opaque))
 		{
-			_bt_finish_split(rel, buf, stack->bts_parent);
+			_bt2_finish_split(rel, buf, stack->bts_parent);
 			continue;
 		}
 
@@ -3221,6 +3267,107 @@ _bt_getstackbuf(Relation rel, BTStack stack, int access)
 				 offnum = OffsetNumberPrev(offnum))
 			{
 				itemid = PageGetItemId(page, offnum);
+				item = (IndexTuple) PageGetItem(page, itemid);
+				if (BTEntrySame(item, &stack->bts_btentry))
+				{
+					/* Return accurate pointer to where link is now */
+					stack->bts_blkno = blkno;
+					stack->bts_offset = offnum;
+					return buf;
+				}
+			}
+		}
+		
+		/*
+		 * The item we're looking for moved right at least one page.
+		 */
+		if (P_RIGHTMOST(opaque))
+		{
+			_bt_relbuf(rel, buf);
+			return InvalidBuffer;
+		}
+		blkno = opaque->btpo_next;
+		start = InvalidOffsetNumber;
+		_bt_relbuf(rel, buf);
+	}
+}
+
+Buffer
+_bt2_getstackbuf(Relation rel, BTStack stack, int access)
+{
+	BlockNumber blkno;
+	OffsetNumber start;
+
+	blkno = stack->bts_blkno;
+	start = stack->bts_offset;
+
+	for (;;)
+	{
+		Buffer		buf;
+		Page		page;
+		BTPageOpaque opaque;
+
+		buf = _bt_getbuf(rel, blkno, access);
+		page = BufferGetPage(buf);
+		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+
+		if (access == BT_WRITE && P_INCOMPLETE_SPLIT(opaque))
+		{
+			_bt_finish_split(rel, buf, stack->bts_parent);
+			continue;
+		}
+
+		if (!P_IGNORE(opaque))
+		{
+			OffsetNumber offnum,
+						minoff,
+						maxoff;
+			ItemIdWithAbbrKey		itemid;
+			IndexTuple	item;
+
+			minoff = P_FIRSTDATAKEY(opaque);
+			maxoff = PageWithAbbrKeyGetMaxOffsetNumber(page);
+
+			/*
+			 * start = InvalidOffsetNumber means "search the whole page". We
+			 * need this test anyway due to possibility that page has a high
+			 * key now when it didn't before.
+			 */
+			if (start < minoff)
+				start = minoff;
+
+			/*
+			 * Need this check too, to guard against possibility that page
+			 * split since we visited it originally.
+			 */
+			if (start > maxoff)
+				start = OffsetNumberNext(maxoff);
+
+			/*
+			 * These loops will check every item on the page --- but in an
+			 * order that's attuned to the probability of where it actually
+			 * is.  Scan to the right first, then to the left.
+			 */
+			for (offnum = start;
+				 offnum <= maxoff;
+				 offnum = OffsetNumberNext(offnum))
+			{
+				itemid = PageGetItemIdWithAbbrKey(page, offnum);
+				item = (IndexTuple) PageGetItem(page, itemid);
+				if (BTEntrySame(item, &stack->bts_btentry))
+				{
+					/* Return accurate pointer to where link is now */
+					stack->bts_blkno = blkno;
+					stack->bts_offset = offnum;
+					return buf;
+				}
+			}
+
+			for (offnum = OffsetNumberPrev(start);
+				 offnum >= minoff;
+				 offnum = OffsetNumberPrev(offnum))
+			{
+				itemid = PageGetItemIdWithAbbrKey(page, offnum);
 				item = (IndexTuple) PageGetItem(page, itemid);
 				if (BTEntrySame(item, &stack->bts_btentry))
 				{
