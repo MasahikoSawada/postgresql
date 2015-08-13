@@ -205,7 +205,7 @@ _bt2_search(Relation rel, int keysz, ScanKey scankey, bool nextkey,
 		 * if the leaf page is split and we insert to the parent page).  But
 		 * this is a good opportunity to finish splits of internal pages too.
 		 */
-		*bufP = _bt2_moveright(rel, *bufP, keysz, scankey, nextkey,
+		*bufP = _bt_moveright(rel, *bufP, keysz, scankey, nextkey,
 							  (access == BT_WRITE), stack_in,
 							  BT_READ);
 
@@ -223,6 +223,7 @@ _bt2_search(Relation rel, int keysz, ScanKey scankey, bool nextkey,
 		itemid = PageGetItemIdWithAbbrKey(page, offnum);
 		itup = (IndexTuple) PageGetItem(page, itemid);
 		blkno = ItemPointerGetBlockNumber(&(itup->t_tid));
+		elog(WARNING, "    -> selected block %u", blkno);
 		par_blkno = BufferGetBlockNumber(*bufP);
 
 		/*
@@ -314,6 +315,7 @@ _bt_moveright(Relation rel,
 
 	for (;;)
 	{
+		int res;
 		page = BufferGetPage(buf);
 		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 
@@ -344,90 +346,15 @@ _bt_moveright(Relation rel,
 			continue;
 		}
 
-		if (P_IGNORE(opaque) || _bt_compare(rel, keysz, scankey, page, P_HIKEY) >= cmpval)
+		if (P_ISLEAF(opaque))
+			res = _bt_compare(rel, keysz, scankey, page, P_HIKEY);
+		else
+			res = _bt2_compare(rel, keysz, scankey, page, P_HIKEY);
+
+		if (P_IGNORE(opaque) || res >= cmpval)
 		{
 			/* step right one page */
 			buf = _bt_relandgetbuf(rel, buf, opaque->btpo_next, access);
-			continue;
-		}
-		else
-			break;
-	}
-
-	if (P_IGNORE(opaque))
-		elog(ERROR, "fell off the end of index \"%s\"",
-			 RelationGetRelationName(rel));
-
-	return buf;
-}
-
-Buffer
-_bt2_moveright(Relation rel,
-			  Buffer buf,
-			  int keysz,
-			  ScanKey scankey,
-			  bool nextkey,
-			  bool forupdate,
-			  BTStack stack,
-			  int access)
-{
-	Page		page;
-	BTPageOpaque opaque;
-	int32		cmpval;
-
-	/*
-	 * When nextkey = false (normal case): if the scan key that brought us to
-	 * this page is > the high key stored on the page, then the page has split
-	 * and we need to move right.  (If the scan key is equal to the high key,
-	 * we might or might not need to move right; have to scan the page first
-	 * anyway.)
-	 *
-	 * When nextkey = true: move right if the scan key is >= page's high key.
-	 *
-	 * The page could even have split more than once, so scan as far as
-	 * needed.
-	 *
-	 * We also have to move right if we followed a link that brought us to a
-	 * dead page.
-	 */
-	cmpval = nextkey ? 0 : 1;
-
-	for (;;)
-	{
-		page = BufferGetPage(buf);
-		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-
-		if (P_RIGHTMOST(opaque))
-			break;
-
-		/*
-		 * Finish any incomplete splits we encounter along the way.
-		 */
-		if (forupdate && P_INCOMPLETE_SPLIT(opaque))
-		{
-			BlockNumber blkno = BufferGetBlockNumber(buf);
-
-			/* upgrade our lock if necessary */
-			if (access == BT_READ)
-			{
-				LockBuffer(buf, BUFFER_LOCK_UNLOCK);
-				LockBuffer(buf, BT_WRITE);
-			}
-
-			if (P_INCOMPLETE_SPLIT(opaque))
-				_bt2_finish_split(rel, buf, stack);
-			else
-				_bt_relbuf(rel, buf);
-
-			/* re-acquire the lock in the right mode, and re-check */
-			buf = _bt2_getbuf(rel, blkno, access);
-			continue;
-		}
-
-		if (P_IGNORE(opaque) || _bt_compare(rel, keysz, scankey, page, P_HIKEY) >= cmpval)
-		{
-			/* step right one page */
-			buf = _bt2_relandgetbuf(rel, buf, opaque->btpo_next, access);
 			continue;
 		}
 		else
@@ -768,8 +695,7 @@ _bt2_compare(Relation rel,
 	itemId = PageGetItemIdWithAbbrKey(page, offnum);
 	abbrkey = ItemIdGetAbbrKey(itemId);
 	argument = DatumGetInt32(scankey->sk_argument);
-	elog(WARNING, "_bt_compare abbrkey : %d", abbrkey);
-	elog(WARNING, "_bt_compare argument : %d", argument);
+	elog(WARNING, "_bt_compare abbrkey : %d, keyword : %d", abbrkey, argument);
 
 	if (argument < abbrkey)
 		return -1;
@@ -1987,12 +1913,18 @@ _bt_get_endpoint(Relation rel, uint32 level, bool rightmost)
 				 level, RelationGetRelationName(rel));
 
 		/* Descend to leftmost or rightmost child page */
-		if (rightmost)
+		if (rightmost && P_ISLEAF(opaque))
 			offnum = PageGetMaxOffsetNumber(page);
+		else if (rightmost)
+			offnum = PageWithAbbrKeyGetMaxOffsetNumber(page);
 		else
 			offnum = P_FIRSTDATAKEY(opaque);
 
-		itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, offnum));
+		if (P_ISLEAF(opaque))
+			itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, offnum));
+		else
+			itup = (IndexTuple) PageGetItem(page, PageGetItemIdWithAbbrKey(page, offnum));
+
 		blkno = ItemPointerGetBlockNumber(&(itup->t_tid));
 
 		buf = _bt_relandgetbuf(rel, buf, blkno, BT_READ);

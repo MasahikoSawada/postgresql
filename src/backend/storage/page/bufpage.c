@@ -58,28 +58,6 @@ PageInit(Page page, Size pageSize, Size specialSize)
 	/* p->pd_prune_xid = InvalidTransactionId;		done by above MemSet */
 }
 
-void
-PageWithAbbrKeyInit(Page page, Size pageSize, Size specialSize)
-{
-	PageHeaderWithAbbrKey	p = (PageHeaderWithAbbrKey) page;
-
-	specialSize = MAXALIGN(specialSize);
-
-	Assert(pageSize == BLCKSZ);
-	Assert(pageSize > specialSize + SizeOfPageHeaderData);
-
-	/* Make sure all fields of page are zero, as well as unused space */
-	MemSet(p, 0, pageSize);
-
-	p->pd_flags = 0;
-	p->pd_lower = SizeOfPageHeaderData;
-	p->pd_upper = pageSize - specialSize;
-	p->pd_special = pageSize - specialSize;
-	PageSetPageSizeAndVersion(page, pageSize, PG_PAGE_LAYOUT_VERSION);
-	/* p->pd_prune_xid = InvalidTransactionId;		done by above MemSet */
-}
-
-
 /*
  * PageIsVerified
  *		Check that the page header and checksum (if any) appear valid.
@@ -189,7 +167,7 @@ PageAddItemWithAbbrKey(Page page,
 	OffsetNumber limit;
 	bool		needshuffle = false;
 
-	elog(WARNING, "AbbrKeyItem add : %d", abbrkey);
+	elog(WARNING, "    [PageAddItemWithAbbrKey] AbbrKeyItem add : %d", abbrkey);
 
 	/*
 	 * Be wary about corrupted page pointers
@@ -301,6 +279,8 @@ PageAddItemWithAbbrKey(Page page,
 
 	/* set the item pointer */
 	ItemIdWithAbbrKeySetNormal(itemId, upper, size, abbrkey);
+
+	elog(WARNING, "        Added item id with abbrkey : lp_off = %d, lp_len = %d, abbrkey = %d", upper, size, abbrkey);
 
 	/*
 	 * Items normally contain no uninitialized bytes.  Core bufpage consumers

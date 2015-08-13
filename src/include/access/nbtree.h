@@ -688,18 +688,12 @@ extern Buffer _bt_getroot(Relation rel, int access);
 extern Buffer _bt_gettrueroot(Relation rel);
 extern int	_bt_getrootheight(Relation rel);
 extern void _bt_checkpage(Relation rel, Buffer buf);
-extern void _bt2_checkpage(Relation rel, Buffer buf);
 extern Buffer _bt_getbuf(Relation rel, BlockNumber blkno, int access);
-extern Buffer _bt2_getbuf(Relation rel, BlockNumber blkno, int access);
 extern Buffer _bt_relandgetbuf(Relation rel, Buffer obuf,
-				 BlockNumber blkno, int access);
-extern Buffer _bt2_relandgetbuf(Relation rel, Buffer obuf,
 				 BlockNumber blkno, int access);
 extern void _bt_relbuf(Relation rel, Buffer buf);
 extern void _bt_pageinit(Page page, Size size);
 extern bool _bt_page_recyclable(Page page);
-extern void _bt2_pageinit(Page page, Size size);
-extern bool _bt2_page_recyclable(Page page);
 extern void _bt_delitems_delete(Relation rel, Buffer buf,
 					OffsetNumber *itemnos, int nitems, Relation heapRel);
 extern void _bt_delitems_vacuum(Relation rel, Buffer buf,
@@ -721,9 +715,6 @@ extern Buffer _bt_moveright(Relation rel, Buffer buf, int keysz,
 			  int access);
 extern OffsetNumber _bt_binsrch(Relation rel, Buffer buf, int keysz,
 			ScanKey scankey, bool nextkey);
-extern Buffer _bt2_moveright(Relation rel, Buffer buf, int keysz,
-			  ScanKey scankey, bool nextkey, bool forupdate, BTStack stack,
-			  int access);
 extern OffsetNumber _bt2_binsrch(Relation rel, Buffer buf, int keysz,
 			ScanKey scankey, bool nextkey);
 extern int32 _bt_compare(Relation rel, int keysz, ScanKey scankey,

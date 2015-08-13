@@ -96,6 +96,10 @@ static OffsetNumber _bt_findsplitloc(Relation rel, Page page,
 				 OffsetNumber newitemoff,
 				 Size newitemsz,
 				 bool *newitemonleft);
+static OffsetNumber _bt2_findsplitloc(Relation rel, Page page,
+				 OffsetNumber newitemoff,
+				 Size newitemsz,
+				 bool *newitemonleft);
 static void _bt_checksplitloc(FindSplitData *state,
 				  OffsetNumber firstoldonright, bool newitemonleft,
 				  int dataitemstoleft, Size firstoldonrightsz);
@@ -138,7 +142,7 @@ top:
 	 * move right in the tree.  See Lehman and Yao for an excruciatingly
 	 * precise description.
 	 */
-	buf = _bt2_moveright(rel, buf, natts, itup_scankey, false,
+	buf = _bt_moveright(rel, buf, natts, itup_scankey, false,
 						true, stack, BT_WRITE);
 
 	/*
@@ -167,7 +171,7 @@ top:
 		TransactionId xwait;
 		uint32		speculativeToken;
 
-		offset = _bt_binsrch(rel, buf, natts, itup_scankey, false);
+		offset = _bt2_binsrch(rel, buf, natts, itup_scankey, false);
 		xwait = _bt_check_unique(rel, itup, heapRel, buf, offset, itup_scankey,
 								 checkUnique, &is_unique, &speculativeToken);
 
@@ -1096,6 +1100,8 @@ _bt2_insertonpg(Relation rel,
 	itemsz = MAXALIGN(itemsz);	/* be safe, PageAddItem will do this but we
 								 * need to be consistent */
 
+	elog(WARNING, "    == REMAIN SPACE %u block  : %d ==", BufferGetBlockNumber(buf), PageGetFreeSpace(page));
+
 	/*
 	 * Do we need to split the page to fit the item on it?
 	 *
@@ -1111,7 +1117,7 @@ _bt2_insertonpg(Relation rel,
 		Buffer		rbuf;
 
 		/* Choose the split point */
-		firstright = _bt_findsplitloc(rel, page,
+		firstright = _bt2_findsplitloc(rel, page,
 									  newitemoff, itemsz,
 									  &newitemonleft);
 
@@ -1174,6 +1180,8 @@ _bt2_insertonpg(Relation rel,
 				metabuf = InvalidBuffer;
 			}
 		}
+
+		elog(WARNING, "    Inserting... block %u", itup_blkno);
 
 		/* Do the update.  No ereport(ERROR) until changes are logged */
 		START_CRIT_SECTION();
@@ -2720,6 +2728,141 @@ _bt_findsplitloc(Relation rel,
 	return state.firstright;
 }
 
+static OffsetNumber
+_bt2_findsplitloc(Relation rel,
+				 Page page,
+				 OffsetNumber newitemoff,
+				 Size newitemsz,
+				 bool *newitemonleft)
+{
+	BTPageOpaque opaque;
+	OffsetNumber offnum;
+	OffsetNumber maxoff;
+	ItemIdWithAbbrKey		itemid;
+	FindSplitData state;
+	int			leftspace,
+				rightspace,
+				goodenough,
+				olddataitemstotal,
+				olddataitemstoleft;
+	bool		goodenoughfound;
+
+	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+
+	/* Passed-in newitemsz is MAXALIGNED but does not include line pointer */
+	newitemsz += sizeof(ItemIdDataWithAbbrKey);
+
+	/* Total free space available on a btree page, after fixed overhead */
+	leftspace = rightspace =
+		PageGetPageSize(page) - SizeOfPageHeaderData -
+		MAXALIGN(sizeof(BTPageOpaqueData));
+
+	/* The right page will have the same high key as the old page */
+	if (!P_RIGHTMOST(opaque))
+	{
+		itemid = PageGetItemIdWithAbbrKey(page, P_HIKEY);
+		rightspace -= (int) (MAXALIGN(ItemIdGetLength(itemid)) +
+							 sizeof(ItemIdDataWithAbbrKey));
+	}
+
+	/* Count up total space in data items without actually scanning 'em */
+	olddataitemstotal = rightspace - (int) PageGetExactFreeSpace(page);
+
+	state.newitemsz = newitemsz;
+	state.is_leaf = P_ISLEAF(opaque);
+	state.is_rightmost = P_RIGHTMOST(opaque);
+	state.have_split = false;
+	if (state.is_leaf)
+		state.fillfactor = RelationGetFillFactor(rel,
+												 BTREE_DEFAULT_FILLFACTOR);
+	else
+		state.fillfactor = BTREE_NONLEAF_FILLFACTOR;
+	state.newitemonleft = false;	/* these just to keep compiler quiet */
+	state.firstright = 0;
+	state.best_delta = 0;
+	state.leftspace = leftspace;
+	state.rightspace = rightspace;
+	state.olddataitemstotal = olddataitemstotal;
+	state.newitemoff = newitemoff;
+
+	/*
+	 * Finding the best possible split would require checking all the possible
+	 * split points, because of the high-key and left-key special cases.
+	 * That's probably more work than it's worth; instead, stop as soon as we
+	 * find a "good-enough" split, where good-enough is defined as an
+	 * imbalance in free space of no more than pagesize/16 (arbitrary...) This
+	 * should let us stop near the middle on most pages, instead of plowing to
+	 * the end.
+	 */
+	goodenough = leftspace / 16;
+
+	/*
+	 * Scan through the data items and calculate space usage for a split at
+	 * each possible position.
+	 */
+	olddataitemstoleft = 0;
+	goodenoughfound = false;
+	maxoff = PageWithAbbrKeyGetMaxOffsetNumber(page);
+
+	for (offnum = P_FIRSTDATAKEY(opaque);
+		 offnum <= maxoff;
+		 offnum = OffsetNumberNext(offnum))
+	{
+		Size		itemsz;
+
+		itemid = PageGetItemIdWithAbbrKey(page, offnum);
+		itemsz = MAXALIGN(ItemIdGetLength(itemid)) + sizeof(ItemIdDataWithAbbrKey);
+
+		/*
+		 * Will the new item go to left or right of split?
+		 */
+		if (offnum > newitemoff)
+			_bt_checksplitloc(&state, offnum, true,
+							  olddataitemstoleft, itemsz);
+
+		else if (offnum < newitemoff)
+			_bt_checksplitloc(&state, offnum, false,
+							  olddataitemstoleft, itemsz);
+		else
+		{
+			/* need to try it both ways! */
+			_bt_checksplitloc(&state, offnum, true,
+							  olddataitemstoleft, itemsz);
+
+			_bt_checksplitloc(&state, offnum, false,
+							  olddataitemstoleft, itemsz);
+		}
+
+		/* Abort scan once we find a good-enough choice */
+		if (state.have_split && state.best_delta <= goodenough)
+		{
+			goodenoughfound = true;
+			break;
+		}
+
+		olddataitemstoleft += itemsz;
+	}
+
+	/*
+	 * If the new item goes as the last item, check for splitting so that all
+	 * the old items go to the left page and the new item goes to the right
+	 * page.
+	 */
+	if (newitemoff > maxoff && !goodenoughfound)
+		_bt_checksplitloc(&state, newitemoff, false, olddataitemstotal, 0);
+
+	/*
+	 * I believe it is not possible to fail to find a feasible split, but just
+	 * in case ...
+	 */
+	if (!state.have_split)
+		elog(ERROR, "could not find a feasible split point for index \"%s\"",
+			 RelationGetRelationName(rel));
+
+	*newitemonleft = state.newitemonleft;
+	return state.firstright;
+}
+
 /*
  * Subroutine to analyze a particular possible split choice (ie, firstright
  * and newitemonleft settings), and record the best split so far in *state.
@@ -3664,7 +3807,7 @@ _bt2_newroot_leaf(Relation rel, Buffer lbuf, Buffer rbuf)
 	/* Set abbreviate key */
 	labbrkey = 0;
 	rabbrkey = *(int32 *) ((Item) item + sizeof(IndexTupleData));
-	elog(WARNING, "rabbrkey : %d", rabbrkey);
+	elog(WARNING, "    [_bt2_newroot_leaf] Right ABBR KEY : %d", rabbrkey);
 
 	/*
 	 * Insert the left page pointer into the new root page.  The root page is
@@ -3921,6 +4064,8 @@ _bt2_pgaddtup_internal(Page page,
 		itemsize = sizeof(IndexTupleData);
 	}
 
+	elog(WARNING, "    [_bt2_pgaddtup_internal] ABBR KEY item inserted : %d", abbrkey);
+
 	if (PageAddItemWithAbbrKey(page, (Item) itup, itemsize, itup_off,
 							   false, false, abbrkey) == InvalidOffsetNumber)
 		return false;
@@ -3959,6 +4104,8 @@ _bt_pgaddtup(Page page,
 		itup = &trunctuple;
 		itemsize = sizeof(IndexTupleData);
 	}
+
+	elog(WARNING, "    NORMAL KEY inserted %d", *(int32*) ((Item) itup + sizeof(IndexTupleData)));
 
 	if (PageAddItem(page, (Item) itup, itemsize, itup_off,
 					false, false) == InvalidOffsetNumber)

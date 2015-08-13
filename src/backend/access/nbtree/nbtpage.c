@@ -529,37 +529,6 @@ _bt_checkpage(Relation rel, Buffer buf)
 				 errhint("Please REINDEX it.")));
 }
 
-void
-_bt2_checkpage(Relation rel, Buffer buf)
-{
-	Page		page = BufferGetPage(buf);
-
-	/*
-	 * ReadBuffer verifies that every newly-read page passes
-	 * PageHeaderIsValid, which means it either contains a reasonably sane
-	 * page header or is all-zero.  We have to defend against the all-zero
-	 * case, however.
-	 */
-	if (PageWithAbbrKeyIsNew(page))
-		ereport(ERROR,
-				(errcode(ERRCODE_INDEX_CORRUPTED),
-			 errmsg("index \"%s\" contains unexpected zero page at block %u",
-					RelationGetRelationName(rel),
-					BufferGetBlockNumber(buf)),
-				 errhint("Please REINDEX it.")));
-
-	/*
-	 * Additionally check that the special area looks sane.
-	 */
-	if (PageWithAbbrKeyGetSpecialSize(page) != MAXALIGN(sizeof(BTPageOpaqueData)))
-		ereport(ERROR,
-				(errcode(ERRCODE_INDEX_CORRUPTED),
-				 errmsg("index \"%s\" contains corrupted page at block %u",
-						RelationGetRelationName(rel),
-						BufferGetBlockNumber(buf)),
-				 errhint("Please REINDEX it.")));
-}
-
 /*
  * Log the reuse of a page from the FSM.
  */
@@ -714,125 +683,6 @@ _bt_getbuf(Relation rel, BlockNumber blkno, int access)
 	return buf;
 }
 
-Buffer
-_bt2_getbuf(Relation rel, BlockNumber blkno, int access)
-{
-	Buffer		buf;
-
-	if (blkno != P_NEW)
-	{
-		/* Read an existing block of the relation */
-		buf = ReadBuffer(rel, blkno);
-		LockBuffer(buf, access);
-		_bt2_checkpage(rel, buf);
-	}
-	else
-	{
-		bool		needLock;
-		Page		page;
-
-		Assert(access == BT_WRITE);
-
-		/*
-		 * First see if the FSM knows of any free pages.
-		 *
-		 * We can't trust the FSM's report unreservedly; we have to check that
-		 * the page is still free.  (For example, an already-free page could
-		 * have been re-used between the time the last VACUUM scanned it and
-		 * the time the VACUUM made its FSM updates.)
-		 *
-		 * In fact, it's worse than that: we can't even assume that it's safe
-		 * to take a lock on the reported page.  If somebody else has a lock
-		 * on it, or even worse our own caller does, we could deadlock.  (The
-		 * own-caller scenario is actually not improbable. Consider an index
-		 * on a serial or timestamp column.  Nearly all splits will be at the
-		 * rightmost page, so it's entirely likely that _bt_split will call us
-		 * while holding a lock on the page most recently acquired from FSM. A
-		 * VACUUM running concurrently with the previous split could well have
-		 * placed that page back in FSM.)
-		 *
-		 * To get around that, we ask for only a conditional lock on the
-		 * reported page.  If we fail, then someone else is using the page,
-		 * and we may reasonably assume it's not free.  (If we happen to be
-		 * wrong, the worst consequence is the page will be lost to use till
-		 * the next VACUUM, which is no big problem.)
-		 */
-		for (;;)
-		{
-			blkno = GetFreeIndexPage(rel);
-			if (blkno == InvalidBlockNumber)
-				break;
-			buf = ReadBuffer(rel, blkno);
-			if (ConditionalLockBuffer(buf))
-			{
-				page = BufferGetPage(buf);
-				if (_bt2_page_recyclable(page))
-				{
-					/*
-					 * If we are generating WAL for Hot Standby then create a
-					 * WAL record that will allow us to conflict with queries
-					 * running on standby.
-					 */
-					if (XLogStandbyInfoActive() && RelationNeedsWAL(rel))
-					{
-						BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-
-						_bt_log_reuse_page(rel, blkno, opaque->btpo.xact);
-					}
-
-					/* Okay to use page.  Re-initialize and return it */
-					_bt2_pageinit(page, BufferGetPageSize(buf));
-					return buf;
-				}
-				elog(DEBUG2, "FSM returned nonrecyclable page");
-				_bt_relbuf(rel, buf);
-			}
-			else
-			{
-				elog(DEBUG2, "FSM returned nonlockable page");
-				/* couldn't get lock, so just drop pin */
-				ReleaseBuffer(buf);
-			}
-		}
-
-		/*
-		 * Extend the relation by one page.
-		 *
-		 * We have to use a lock to ensure no one else is extending the rel at
-		 * the same time, else we will both try to initialize the same new
-		 * page.  We can skip locking for new or temp relations, however,
-		 * since no one else could be accessing them.
-		 */
-		needLock = !RELATION_IS_LOCAL(rel);
-
-		if (needLock)
-			LockRelationForExtension(rel, ExclusiveLock);
-
-		buf = ReadBuffer(rel, P_NEW);
-
-		/* Acquire buffer lock on new page */
-		LockBuffer(buf, BT_WRITE);
-
-		/*
-		 * Release the file-extension lock; it's now OK for someone else to
-		 * extend the relation some more.  Note that we cannot release this
-		 * lock before we have buffer lock on the new page, or we risk a race
-		 * condition against btvacuumscan --- see comments therein.
-		 */
-		if (needLock)
-			UnlockRelationForExtension(rel, ExclusiveLock);
-
-		/* Initialize the new page before returning it */
-		page = BufferGetPage(buf);
-		Assert(PageWithAbbrKeyIsNew(page));
-		_bt2_pageinit(page, BufferGetPageSize(buf));
-	}
-
-	/* ref count and lock type are correct */
-	return buf;
-}
-
-
 /*
  *	_bt_relandgetbuf() -- release a locked buffer and get another one.
  *
@@ -860,21 +710,6 @@ _bt_relandgetbuf(Relation rel, Buffer obuf, BlockNumber blkno, int access)
 	return buf;
 }
 
-Buffer
-_bt2_relandgetbuf(Relation rel, Buffer obuf, BlockNumber blkno, int access)
-{
-	Buffer		buf;
-
-	Assert(blkno != P_NEW);
-	if (BufferIsValid(obuf))
-		LockBuffer(obuf, BUFFER_LOCK_UNLOCK);
-	buf = ReleaseAndReadBuffer(obuf, rel, blkno);
-	LockBuffer(buf, access);
-	_bt2_checkpage(rel, buf);
-	return buf;
-}
-
-
 /*
  *	_bt_relbuf() -- release a locked buffer.
  *
@@ -896,12 +731,6 @@ void
 _bt_pageinit(Page page, Size size)
 {
 	PageInit(page, size, sizeof(BTPageOpaqueData));
-}
-
-void
-_bt2_pageinit(Page page, Size size)
-{
-	PageWithAbbrKeyInit(page, size, sizeof(BTPageOpaqueData));
 }
 
 /*
@@ -934,32 +763,6 @@ _bt_page_recyclable(Page page)
 		return true;
 	return false;
 }
-
-bool
-_bt2_page_recyclable(Page page)
-{
-	BTPageOpaque opaque;
-
-	/*
-	 * It's possible to find an all-zeroes page in an index --- for example, a
-	 * backend might successfully extend the relation one page and then crash
-	 * before it is able to make a WAL entry for adding the page. If we find a
-	 * zeroed page then reclaim it.
-	 */
-	if (PageWithAbbrKeyIsNew(page))
-		return true;
-
-	/*
-	 * Otherwise, recycle if deleted and too old to have any processes
-	 * interested in it.
-	 */
-	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-	if (P_ISDELETED(opaque) &&
-		TransactionIdPrecedes(opaque->btpo.xact, RecentGlobalXmin))
-		return true;
-	return false;
-}
-
 
 /*
  * Delete item(s) from a btree page during VACUUM.

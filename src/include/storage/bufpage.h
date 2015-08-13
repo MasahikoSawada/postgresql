@@ -243,9 +243,6 @@ typedef PageHeaderData *PageHeader;
  */
 #define PageIsNew(page) (((PageHeader) (page))->pd_upper == 0)
 
-#define PageWithAbbrKeyIsNew(page) (((PageHeaderWithAbbrKey) (page))->pd_upper == 0)
-
-
 /*
  * PageGetItemId
  *		Returns an item identifier of a page.
@@ -320,10 +317,6 @@ typedef PageHeaderData *PageHeader;
  */
 #define PageGetSpecialSize(page) \
 	((uint16) (PageGetPageSize(page) - ((PageHeader)(page))->pd_special))
-
-#define PageWithAbbrKeyGetSpecialSize(page) \
-	((uint16) (PageGetPageSize(page) - ((PageHeaderWithAbbrKey)(page))->pd_special))
-
 
 /*
  * PageGetSpecialPointer
