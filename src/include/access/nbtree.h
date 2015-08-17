@@ -743,6 +743,9 @@ extern void _bt_preprocess_keys(IndexScanDesc scan);
 extern IndexTuple _bt_checkkeys(IndexScanDesc scan,
 			  Page page, OffsetNumber offnum,
 			  ScanDirection dir, bool *continuescan);
+extern IndexTuple _bt2_checkkeys(IndexScanDesc scan,
+			  Page page, OffsetNumber offnum,
+			  ScanDirection dir, bool *continuescan);
 extern void _bt_killitems(IndexScanDesc scan);
 extern BTCycleId _bt_vacuum_cycleid(Relation rel);
 extern BTCycleId _bt_start_vacuum(Relation rel);

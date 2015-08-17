@@ -1560,6 +1560,198 @@ _bt_checkkeys(IndexScanDesc scan,
 	return tuple;
 }
 
+IndexTuple
+_bt2_checkkeys(IndexScanDesc scan,
+			  Page page, OffsetNumber offnum,
+			  ScanDirection dir, bool *continuescan)
+{
+	ItemIdWithAbbrKey		iid = PageGetItemIdWithAbbrKey(page, offnum);
+	bool		tuple_alive;
+	IndexTuple	tuple;
+	TupleDesc	tupdesc;
+	BTScanOpaque so;
+	int			keysz;
+	int			ikey;
+	ScanKey		key;
+
+	*continuescan = true;		/* default assumption */
+
+	/*
+	 * If the scan specifies not to return killed tuples, then we treat a
+	 * killed tuple as not passing the qual.  Most of the time, it's a win to
+	 * not bother examining the tuple's index keys, but just return
+	 * immediately with continuescan = true to proceed to the next tuple.
+	 * However, if this is the last tuple on the page, we should check the
+	 * index keys to prevent uselessly advancing to the next page.
+	 */
+	if (scan->ignore_killed_tuples && ItemIdIsDead(iid))
+	{
+		/* return immediately if there are more tuples on the page */
+		if (ScanDirectionIsForward(dir))
+		{
+			if (offnum < PageWithAbbrKeyGetMaxOffsetNumber(page))
+				return NULL;
+		}
+		else
+		{
+			BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+
+			if (offnum > P_FIRSTDATAKEY(opaque))
+				return NULL;
+		}
+
+		/*
+		 * OK, we want to check the keys so we can set continuescan correctly,
+		 * but we'll return NULL even if the tuple passes the key tests.
+		 */
+		tuple_alive = false;
+	}
+	else
+		tuple_alive = true;
+
+	tuple = (IndexTuple) PageGetItem(page, iid);
+
+	tupdesc = RelationGetDescr(scan->indexRelation);
+	so = (BTScanOpaque) scan->opaque;
+	keysz = so->numberOfKeys;
+
+	for (key = so->keyData, ikey = 0; ikey < keysz; key++, ikey++)
+	{
+		Datum		datum;
+		bool		isNull;
+		Datum		test;
+
+		/*
+		 * If the scan key has already matched we can skip this key, as long
+		 * as the index tuple does not contain NULL values.
+		 */
+		if (key->sk_flags & SK_BT_MATCHED && !IndexTupleHasNulls(tuple))
+			continue;
+
+		/* row-comparison keys need special processing */
+		if (key->sk_flags & SK_ROW_HEADER)
+		{
+			if (_bt_check_rowcompare(key, tuple, tupdesc, dir, continuescan))
+				continue;
+			return NULL;
+		}
+
+		datum = index_getattr(tuple,
+							  key->sk_attno,
+							  tupdesc,
+							  &isNull);
+
+		if (key->sk_flags & SK_ISNULL)
+		{
+			/* Handle IS NULL/NOT NULL tests */
+			if (key->sk_flags & SK_SEARCHNULL)
+			{
+				if (isNull)
+					continue;	/* tuple satisfies this qual */
+			}
+			else
+			{
+				Assert(key->sk_flags & SK_SEARCHNOTNULL);
+				if (!isNull)
+					continue;	/* tuple satisfies this qual */
+			}
+
+			/*
+			 * Tuple fails this qual.  If it's a required qual for the current
+			 * scan direction, then we can conclude no further tuples will
+			 * pass, either.
+			 */
+			if ((key->sk_flags & SK_BT_REQFWD) &&
+				ScanDirectionIsForward(dir))
+				*continuescan = false;
+			else if ((key->sk_flags & SK_BT_REQBKWD) &&
+					 ScanDirectionIsBackward(dir))
+				*continuescan = false;
+
+			/*
+			 * In any case, this indextuple doesn't match the qual.
+			 */
+			return NULL;
+		}
+
+		if (isNull)
+		{
+			if (key->sk_flags & SK_BT_NULLS_FIRST)
+			{
+				/*
+				 * Since NULLs are sorted before non-NULLs, we know we have
+				 * reached the lower limit of the range of values for this
+				 * index attr.  On a backward scan, we can stop if this qual
+				 * is one of the "must match" subset.  We can stop regardless
+				 * of whether the qual is > or <, so long as it's required,
+				 * because it's not possible for any future tuples to pass. On
+				 * a forward scan, however, we must keep going, because we may
+				 * have initially positioned to the start of the index.
+				 */
+				if ((key->sk_flags & (SK_BT_REQFWD | SK_BT_REQBKWD)) &&
+					ScanDirectionIsBackward(dir))
+					*continuescan = false;
+			}
+			else
+			{
+				/*
+				 * Since NULLs are sorted after non-NULLs, we know we have
+				 * reached the upper limit of the range of values for this
+				 * index attr.  On a forward scan, we can stop if this qual is
+				 * one of the "must match" subset.  We can stop regardless of
+				 * whether the qual is > or <, so long as it's required,
+				 * because it's not possible for any future tuples to pass. On
+				 * a backward scan, however, we must keep going, because we
+				 * may have initially positioned to the end of the index.
+				 */
+				if ((key->sk_flags & (SK_BT_REQFWD | SK_BT_REQBKWD)) &&
+					ScanDirectionIsForward(dir))
+					*continuescan = false;
+			}
+
+			/*
+			 * In any case, this indextuple doesn't match the qual.
+			 */
+			return NULL;
+		}
+
+		test = FunctionCall2Coll(&key->sk_func, key->sk_collation,
+								 datum, key->sk_argument);
+
+		if (!DatumGetBool(test))
+		{
+			/*
+			 * Tuple fails this qual.  If it's a required qual for the current
+			 * scan direction, then we can conclude no further tuples will
+			 * pass, either.
+			 *
+			 * Note: because we stop the scan as soon as any required equality
+			 * qual fails, it is critical that equality quals be used for the
+			 * initial positioning in _bt_first() when they are available. See
+			 * comments in _bt_first().
+			 */
+			if ((key->sk_flags & SK_BT_REQFWD) &&
+				ScanDirectionIsForward(dir))
+				*continuescan = false;
+			else if ((key->sk_flags & SK_BT_REQBKWD) &&
+					 ScanDirectionIsBackward(dir))
+				*continuescan = false;
+
+			/*
+			 * In any case, this indextuple doesn't match the qual.
+			 */
+			return NULL;
+		}
+	}
+
+	/* Check for failure due to it being a killed tuple. */
+	if (!tuple_alive)
+		return NULL;
+
+	/* If we get here, the tuple passes all index quals. */
+	return tuple;
+}
+
 /*
  * Test whether an indextuple satisfies a row-comparison scan condition.
  *

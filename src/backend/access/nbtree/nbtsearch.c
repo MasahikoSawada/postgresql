@@ -27,9 +27,12 @@
 
 static bool _bt_readpage(IndexScanDesc scan, ScanDirection dir,
 			 OffsetNumber offnum);
+static bool _bt2_readpage(IndexScanDesc scan, ScanDirection dir,
+			 OffsetNumber offnum);
 static void _bt_saveitem(BTScanOpaque so, int itemIndex,
 			 OffsetNumber offnum, IndexTuple itup);
 static bool _bt_steppage(IndexScanDesc scan, ScanDirection dir);
+static bool _bt2_steppage(IndexScanDesc scan, ScanDirection dir);
 static Buffer _bt_walk_left(Relation rel, Buffer buf);
 static bool _bt_endpoint(IndexScanDesc scan, ScanDirection dir);
 static void _bt_drop_lock_and_maybe_pin(IndexScanDesc scan, BTScanPos sp);
@@ -492,7 +495,10 @@ _bt2_binsrch(Relation rel,
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 
 	low = P_FIRSTDATAKEY(opaque);
-	high = PageWithAbbrKeyGetMaxOffsetNumber(page);
+	if (!P_ISLEAF(opaque))
+		high = PageWithAbbrKeyGetMaxOffsetNumber(page);
+	else
+		high = PageWithAbbrKeyGetMaxOffsetNumber(page);
 
 	/*
 	 * If there are no keys on the page, return the first available slot. Note
@@ -2130,6 +2136,124 @@ _bt_saveitem(BTScanOpaque so, int itemIndex,
 	}
 }
 
+static bool
+_bt2_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
+{
+	BTScanOpaque so = (BTScanOpaque) scan->opaque;
+	Page		page;
+	BTPageOpaque opaque;
+	OffsetNumber minoff;
+	OffsetNumber maxoff;
+	int			itemIndex;
+	IndexTuple	itup;
+	bool		continuescan;
+
+	/*
+	 * We must have the buffer pinned and locked, but the usual macro can't be
+	 * used here; this function is what makes it good for currPos.
+	 */
+	Assert(BufferIsValid(so->currPos.buf));
+
+	page = BufferGetPage(so->currPos.buf);
+	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+	minoff = P_FIRSTDATAKEY(opaque);
+	maxoff = PageWithAbbrKeyGetMaxOffsetNumber(page);
+
+	/*
+	 * We note the buffer's block number so that we can release the pin later.
+	 * This allows us to re-read the buffer if it is needed again for hinting.
+	 */
+	so->currPos.currPage = BufferGetBlockNumber(so->currPos.buf);
+
+	/*
+	 * We save the LSN of the page as we read it, so that we know whether it
+	 * safe to apply LP_DEAD hints to the page later.  This allows us to drop
+	 * the pin for MVCC scans, which allows vacuum to avoid blocking.
+	 */
+	so->currPos.lsn = PageGetLSN(page);
+
+	/*
+	 * we must save the page's right-link while scanning it; this tells us
+	 * where to step right to after we're done with these items.  There is no
+	 * corresponding need for the left-link, since splits always go right.
+	 */
+	so->currPos.nextPage = opaque->btpo_next;
+
+	/* initialize tuple workspace to empty */
+	so->currPos.nextTupleOffset = 0;
+
+	/*
+	 * Now that the current page has been made consistent, the macro should be
+	 * good.
+	 */
+	Assert(BTScanPosIsPinned(so->currPos));
+
+	if (ScanDirectionIsForward(dir))
+	{
+		/* load items[] in ascending order */
+		itemIndex = 0;
+
+		offnum = Max(offnum, minoff);
+
+		while (offnum <= maxoff)
+		{
+			itup = _bt_checkkeys(scan, page, offnum, dir, &continuescan);
+			if (itup != NULL)
+			{
+				/* tuple passes all scan key conditions, so remember it */
+				_bt_saveitem(so, itemIndex, offnum, itup);
+				itemIndex++;
+			}
+			if (!continuescan)
+			{
+				/* there can't be any more matches, so stop */
+				so->currPos.moreRight = false;
+				break;
+			}
+
+			offnum = OffsetNumberNext(offnum);
+		}
+
+		Assert(itemIndex <= MaxIndexTuplesPerPage);
+		so->currPos.firstItem = 0;
+		so->currPos.lastItem = itemIndex - 1;
+		so->currPos.itemIndex = 0;
+	}
+	else
+	{
+		/* load items[] in descending order */
+		itemIndex = MaxIndexTuplesPerPage;
+
+		offnum = Min(offnum, maxoff);
+
+		while (offnum >= minoff)
+		{
+			itup = _bt2_checkkeys(scan, page, offnum, dir, &continuescan);
+			if (itup != NULL)
+			{
+				/* tuple passes all scan key conditions, so remember it */
+				itemIndex--;
+				_bt_saveitem(so, itemIndex, offnum, itup);
+			}
+			if (!continuescan)
+			{
+				/* there can't be any more matches, so stop */
+				so->currPos.moreLeft = false;
+				break;
+			}
+
+			offnum = OffsetNumberPrev(offnum);
+		}
+
+		Assert(itemIndex >= 0);
+		so->currPos.firstItem = itemIndex;
+		so->currPos.lastItem = MaxIndexTuplesPerPage - 1;
+		so->currPos.itemIndex = MaxIndexTuplesPerPage - 1;
+	}
+
+	return (so->currPos.firstItem <= so->currPos.lastItem);
+}
+
 /*
  *	_bt_steppage() -- Step to next page containing valid data for scan
  *
@@ -2286,6 +2410,158 @@ _bt_steppage(IndexScanDesc scan, ScanDirection dir)
 				/* see if there are any matches on this page */
 				/* note that this will clear moreLeft if we can stop */
 				if (_bt_readpage(scan, dir, PageGetMaxOffsetNumber(page)))
+					break;
+			}
+		}
+	}
+
+	/* Drop the lock, and maybe the pin, on the current page */
+	_bt_drop_lock_and_maybe_pin(scan, &so->currPos);
+
+	return true;
+}
+
+static bool
+_bt2_steppage(IndexScanDesc scan, ScanDirection dir)
+{
+	BTScanOpaque so = (BTScanOpaque) scan->opaque;
+	Relation	rel;
+	Page		page;
+	BTPageOpaque opaque;
+
+	Assert(BTScanPosIsValid(so->currPos));
+
+	/* Before leaving current page, deal with any killed items */
+	if (so->numKilled > 0)
+		_bt_killitems(scan);
+
+	/*
+	 * Before we modify currPos, make a copy of the page data if there was a
+	 * mark position that needs it.
+	 */
+	if (so->markItemIndex >= 0)
+	{
+		/* bump pin on current buffer for assignment to mark buffer */
+		if (BTScanPosIsPinned(so->currPos))
+			IncrBufferRefCount(so->currPos.buf);
+		memcpy(&so->markPos, &so->currPos,
+			   offsetof(BTScanPosData, items[1]) +
+			   so->currPos.lastItem * sizeof(BTScanPosItem));
+		if (so->markTuples)
+			memcpy(so->markTuples, so->currTuples,
+				   so->currPos.nextTupleOffset);
+		so->markPos.itemIndex = so->markItemIndex;
+		so->markItemIndex = -1;
+	}
+
+	rel = scan->indexRelation;
+
+	if (ScanDirectionIsForward(dir))
+	{
+		/* Walk right to the next page with data */
+		/* We must rely on the previously saved nextPage link! */
+		BlockNumber blkno = so->currPos.nextPage;
+
+		/* Remember we left a page with data */
+		so->currPos.moreLeft = true;
+
+		/* release the previous buffer, if pinned */
+		BTScanPosUnpinIfPinned(so->currPos);
+
+		for (;;)
+		{
+			/* if we're at end of scan, give up */
+			if (blkno == P_NONE || !so->currPos.moreRight)
+			{
+				BTScanPosInvalidate(so->currPos);
+				return false;
+			}
+			/* check for interrupts while we're not holding any buffer lock */
+			CHECK_FOR_INTERRUPTS();
+			/* step right one page */
+			so->currPos.buf = _bt_getbuf(rel, blkno, BT_READ);
+			/* check for deleted page */
+			page = BufferGetPage(so->currPos.buf);
+			opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+			if (!P_IGNORE(opaque))
+			{
+				PredicateLockPage(rel, blkno, scan->xs_snapshot);
+				/* see if there are any matches on this page */
+				/* note that this will clear moreRight if we can stop */
+				if (_bt2_readpage(scan, dir, P_FIRSTDATAKEY(opaque)))
+					break;
+			}
+
+			/* nope, keep going */
+			blkno = opaque->btpo_next;
+			_bt_relbuf(rel, so->currPos.buf);
+		}
+	}
+	else
+	{
+		/* Remember we left a page with data */
+		so->currPos.moreRight = true;
+
+		/*
+		 * Walk left to the next page with data.  This is much more complex
+		 * than the walk-right case because of the possibility that the page
+		 * to our left splits while we are in flight to it, plus the
+		 * possibility that the page we were on gets deleted after we leave
+		 * it.  See nbtree/README for details.
+		 *
+		 * It might be possible to rearrange this code to have less overhead
+		 * in pinning and locking, but that would require capturing the left
+		 * pointer when the page is initially read, and using it here, along
+		 * with big changes to _bt_walk_left() and the code below.  It is not
+		 * clear whether this would be a win, since if the page immediately to
+		 * the left splits after we read this page and before we step left, we
+		 * would need to visit more pages than with the current code.
+		 *
+		 * Note that if we change the code so that we drop the pin for a scan
+		 * which uses a non-MVCC snapshot, we will need to modify the code for
+		 * walking left, to allow for the possibility that a referenced page
+		 * has been deleted.  As long as the buffer is pinned or the snapshot
+		 * is MVCC the page cannot move past the half-dead state to fully
+		 * deleted.
+		 */
+		if (BTScanPosIsPinned(so->currPos))
+			LockBuffer(so->currPos.buf, BT_READ);
+		else
+			so->currPos.buf = _bt_getbuf(rel, so->currPos.currPage, BT_READ);
+
+		for (;;)
+		{
+			/* Done if we know there are no matching keys to the left */
+			if (!so->currPos.moreLeft)
+			{
+				_bt_relbuf(rel, so->currPos.buf);
+				BTScanPosInvalidate(so->currPos);
+				return false;
+			}
+
+			/* Step to next physical page */
+			so->currPos.buf = _bt_walk_left(rel, so->currPos.buf);
+
+			/* if we're physically at end of index, return failure */
+			if (so->currPos.buf == InvalidBuffer)
+			{
+				BTScanPosInvalidate(so->currPos);
+				return false;
+			}
+
+			/*
+			 * Okay, we managed to move left to a non-deleted page. Done if
+			 * it's not half-dead and contains matching tuples. Else loop back
+			 * and do it all again.
+			 */
+			page = BufferGetPage(so->currPos.buf);
+			opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+			if (!P_IGNORE(opaque))
+			{
+				PredicateLockPage(rel, BufferGetBlockNumber(so->currPos.buf), scan->xs_snapshot);
+				/* see if there are any matches on this page */
+				/* note that this will clear moreLeft if we can stop */
+				if (_bt2_readpage(scan, dir, PageGetMaxOffsetNumber(page)))
 					break;
 			}
 		}
