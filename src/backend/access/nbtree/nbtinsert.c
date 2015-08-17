@@ -1300,10 +1300,16 @@ _bt2_split(Relation rel ,Buffer buf, Buffer cbuf, OffsetNumber firstright,
 	Page			page;
 	BTPageOpaque	opaque;
 
-	elog(WARNING, "Splitting");
-
 	page = BufferGetPage(buf);
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+
+	if (!P_ISLEAF(opaque))
+		elog(WARNING, "INTERNAL PAGE Splitting: buf : %d",
+			 BufferGetBlockNumber(buf));
+	else
+		elog(WARNING, "LEAF PAGE Splitting: buf : %d",
+			 BufferGetBlockNumber(buf));
+
 
 	if (!P_ISLEAF(opaque))
 		return _bt2_split_internal(rel, buf, cbuf, firstright, newitemoff, newitemsz,
