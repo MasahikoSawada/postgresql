@@ -703,7 +703,7 @@ _bt2_compare(Relation rel,
 	itemId = PageGetItemIdWithAbbrKey(page, offnum);
 	abbrkey = ItemIdGetAbbrKey(itemId);
 	argument = DatumGetInt32(scankey->sk_argument);
-	elog(WARNING, "_bt2_compare abbrkey : %d, keyword : %d", abbrkey, argument);
+	//elog(WARNING, "_bt2_compare abbrkey : %d, keyword : %d", abbrkey, argument);
 
 	if (argument < abbrkey)
 		return -1;
