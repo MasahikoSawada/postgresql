@@ -166,6 +166,7 @@ PageAddItemWithAbbrKey(Page page,
 	ItemIdWithAbbrKey		itemId;
 	OffsetNumber limit;
 	bool		needshuffle = false;
+	int offnum;
 
 	elog(WARNING, "    [PageAddItemWithAbbrKey] AbbrKeyItem add : %d", abbrkey);
 
@@ -184,7 +185,7 @@ PageAddItemWithAbbrKey(Page page,
 	/*
 	 * Select offsetNumber to place the new item at
 	 */
-	limit = OffsetNumberNext(PageGetMaxOffsetNumber(page));
+	limit = OffsetNumberNext(PageWithAbbrKeyGetMaxOffsetNumber(page));
 
 	/* was offsetNumber passed in? */
 	if (OffsetNumberIsValid(offsetNumber))
@@ -244,7 +245,7 @@ PageAddItemWithAbbrKey(Page page,
 		return InvalidOffsetNumber;
 	}
 
-	if (is_heap && offsetNumber > MaxHeapTuplesPerPage)
+	if (is_heap && offsetNumber > MaxHeapTuplesPerPageWithAbbrKey)
 	{
 		elog(WARNING, "can't put more than MaxHeapTuplesPerPage items in a heap page");
 		return InvalidOffsetNumber;

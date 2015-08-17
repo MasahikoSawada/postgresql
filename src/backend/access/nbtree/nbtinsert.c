@@ -1473,7 +1473,7 @@ _bt2_split_internal(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstrig
 	 * Note: we *must* insert at least the right page's items in item-number
 	 * order, for the benefit of _bt_restore_page().
 	 */
-	maxoff = PageGetMaxOffsetNumber(origpage);
+	maxoff = PageWithAbbrKeyGetMaxOffsetNumber(origpage);
 
 	for (i = P_FIRSTDATAKEY(oopaque); i <= maxoff; i = OffsetNumberNext(i))
 	{
@@ -3092,7 +3092,7 @@ _bt2_insert_parent(Relation rel,
 			 * 05/27/97
 			 */
 			ItemPointerSet(&(stack->bts_btentry.t_tid), bknum, P_HIKEY);
-			pbuf = _bt_getstackbuf(rel, stack, BT_WRITE);
+			pbuf = _bt2_getstackbuf(rel, stack, BT_WRITE);
 			
 			/*
 			 * Now we can unlock the right child. The left child will be unlocked
@@ -4055,6 +4055,8 @@ _bt2_pgaddtup_internal(Page page,
 {
 	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 	IndexTupleData trunctuple;
+	int offnum;
+
 
 	if (!P_ISLEAF(opaque) && itup_off == P_FIRSTDATAKEY(opaque))
 	{
@@ -4063,6 +4065,23 @@ _bt2_pgaddtup_internal(Page page,
 		itup = &trunctuple;
 		itemsize = sizeof(IndexTupleData);
 	}
+
+/*
+ * DEBUG : output all items in single page.
+ *`
+	elog(WARNING, "=========== INTERNAL PAGE OVER VIEW (BEFORE) : %d items ==============",
+		 PageGetMaxOffsetNumber(page));
+
+	for (offnum = FirstOffsetNumber; offnum < PageWithAbbrKeyGetMaxOffsetNumber(page); offnum++)
+	{
+		ItemIdWithAbbrKey itemid = PageGetItemIdWithAbbrKey(page, offnum);
+		IndexTuple it = (IndexTuple) PageGetItem(page, itemid);
+
+		elog(WARNING, "(%x,%x) [%d] : abbrkey = %d, size = %d", itemid, it, offnum,
+			 ItemIdGetAbbrKey(itemid),
+			 IndexTupleSize(it));
+	}
+*/
 
 	elog(WARNING, "    [_bt2_pgaddtup_internal] ABBR KEY item inserted : %d", abbrkey);
 
@@ -4105,7 +4124,7 @@ _bt_pgaddtup(Page page,
 		itemsize = sizeof(IndexTupleData);
 	}
 
-	elog(WARNING, "    NORMAL KEY inserted %d", *(int32*) ((Item) itup + sizeof(IndexTupleData)));
+	//elog(WARNING, "    NORMAL KEY inserted %d", *(int32*) ((Item) itup + sizeof(IndexTupleData)));
 
 	if (PageAddItem(page, (Item) itup, itemsize, itup_off,
 					false, false) == InvalidOffsetNumber)

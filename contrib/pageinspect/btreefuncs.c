@@ -499,6 +499,7 @@ bt2_page_items(PG_FUNCTION_ARGS)
 		char	   *dump;
 		char	   *ptr;
 
+
 		id = PageGetItemIdWithAbbrKey(uargs->page, uargs->offset);
 
 		if (!ItemIdIsValid(id))
@@ -511,6 +512,8 @@ bt2_page_items(PG_FUNCTION_ARGS)
 		values[j++] = psprintf("(%u,%u)",
 							   BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)),
 							   itup->t_tid.ip_posid);
+		elog(WARNING, "tup_offset = %d, size = %d, (%u,%u)", uargs->offset, (int) IndexTupleSize(itup), BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)), itup->t_tid.ip_posid);
+
 		values[j++] = psprintf("%d", (int) IndexTupleSize(itup));
 		values[j++] = psprintf("%d", * (int32*) ((Item)itup + sizeof(IndexTupleData))); 
 		values[j++] = psprintf("%c", IndexTupleHasNulls(itup) ? 't' : 'f');
@@ -518,8 +521,13 @@ bt2_page_items(PG_FUNCTION_ARGS)
 
 		ptr = (char *) itup + IndexInfoFindDataOffset(itup->t_info);
 		dlen = IndexTupleSize(itup) - IndexInfoFindDataOffset(itup->t_info);
-		dump = palloc0(dlen * 3 + 1);
-		values[j] = dump;
+		if (dlen < 0)
+			values[j] = "HOGE";
+		else
+		{
+			dump = palloc0(dlen * 3 + 1);
+			values[j] = dump;
+		}
 		for (off = 0; off < dlen; off++)
 		{
 			if (off > 0)

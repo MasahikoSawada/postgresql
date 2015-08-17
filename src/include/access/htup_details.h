@@ -551,6 +551,11 @@ do { \
 	((int) ((BLCKSZ - SizeOfPageHeaderData) / \
 			(MAXALIGN(SizeofHeapTupleHeader) + sizeof(ItemIdData))))
 
+#define MaxHeapTuplesPerPageWithAbbrKey	\
+	((int) ((BLCKSZ - SizeOfPageHeaderData) / \
+			(MAXALIGN(SizeofHeapTupleHeader) + sizeof(ItemIdData))))
+
+
 /*
  * MaxAttrSize is a somewhat arbitrary upper limit on the declared size of
  * data fields of char(n) and similar types.  It need not have anything
