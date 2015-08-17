@@ -226,7 +226,7 @@ _bt2_search(Relation rel, int keysz, ScanKey scankey, bool nextkey,
 		itemid = PageGetItemIdWithAbbrKey(page, offnum);
 		itup = (IndexTuple) PageGetItem(page, itemid);
 		blkno = ItemPointerGetBlockNumber(&(itup->t_tid));
-		elog(WARNING, "    -> selected block %u", blkno);
+		//elog(WARNING, "    -> selected block %u", blkno);
 		par_blkno = BufferGetBlockNumber(*bufP);
 
 		/*
@@ -628,6 +628,8 @@ _bt_compare(Relation rel,
 		int32		result;
 
 		datum = index_getattr(itup, scankey->sk_attno, itupdesc, &isNull);
+
+		//elog(WARNING, "   _bt_compare: item = %d, key = %d", (int)datum, scankey->sk_argument);
 
 		/* see comments about NULLs handling in btbuild */
 		if (scankey->sk_flags & SK_ISNULL)		/* key is NULL */

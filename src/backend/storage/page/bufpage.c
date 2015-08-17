@@ -168,7 +168,7 @@ PageAddItemWithAbbrKey(Page page,
 	bool		needshuffle = false;
 	int offnum;
 
-	elog(WARNING, "    [PageAddItemWithAbbrKey] AbbrKeyItem add : %d", abbrkey);
+	//elog(WARNING, "    [PageAddItemWithAbbrKey] AbbrKeyItem add : %d", abbrkey);
 
 	/*
 	 * Be wary about corrupted page pointers
@@ -281,7 +281,7 @@ PageAddItemWithAbbrKey(Page page,
 	/* set the item pointer */
 	ItemIdWithAbbrKeySetNormal(itemId, upper, size, abbrkey);
 
-	elog(WARNING, "        Added item id with abbrkey : lp_off = %d, lp_len = %d, abbrkey = %d", upper, size, abbrkey);
+	//elog(WARNING, "        Added item id with abbrkey : lp_off = %d, lp_len = %d, abbrkey = %d", upper, size, abbrkey);
 
 	/*
 	 * Items normally contain no uninitialized bytes.  Core bufpage consumers

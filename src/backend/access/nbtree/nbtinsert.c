@@ -1100,7 +1100,7 @@ _bt2_insertonpg(Relation rel,
 	itemsz = MAXALIGN(itemsz);	/* be safe, PageAddItem will do this but we
 								 * need to be consistent */
 
-	elog(WARNING, "    == REMAIN SPACE %u block  : %d ==", BufferGetBlockNumber(buf), PageGetFreeSpace(page));
+	//elog(WARNING, "    == REMAIN SPACE %u block  : %d ==", BufferGetBlockNumber(buf), PageGetFreeSpace(page));
 
 	/*
 	 * Do we need to split the page to fit the item on it?
@@ -1181,7 +1181,7 @@ _bt2_insertonpg(Relation rel,
 			}
 		}
 
-		elog(WARNING, "    Inserting... block %u", itup_blkno);
+		//elog(WARNING, "    Inserting... block %u", itup_blkno);
 
 		/* Do the update.  No ereport(ERROR) until changes are logged */
 		START_CRIT_SECTION();
@@ -1303,13 +1303,14 @@ _bt2_split(Relation rel ,Buffer buf, Buffer cbuf, OffsetNumber firstright,
 	page = BufferGetPage(buf);
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 
+/*
 	if (!P_ISLEAF(opaque))
 		elog(WARNING, "INTERNAL PAGE Splitting: buf : %d",
 			 BufferGetBlockNumber(buf));
 	else
 		elog(WARNING, "LEAF PAGE Splitting: buf : %d",
 			 BufferGetBlockNumber(buf));
-
+*/
 
 	if (!P_ISLEAF(opaque))
 		return _bt2_split_internal(rel, buf, cbuf, firstright, newitemoff, newitemsz,
@@ -3813,7 +3814,7 @@ _bt2_newroot_leaf(Relation rel, Buffer lbuf, Buffer rbuf)
 	/* Set abbreviate key */
 	labbrkey = 0;
 	rabbrkey = *(int32 *) ((Item) item + sizeof(IndexTupleData));
-	elog(WARNING, "    [_bt2_newroot_leaf] Right ABBR KEY : %d", rabbrkey);
+	//elog(WARNING, "    [_bt2_newroot_leaf] Right ABBR KEY : %d", rabbrkey);
 
 	/*
 	 * Insert the left page pointer into the new root page.  The root page is
@@ -4061,8 +4062,6 @@ _bt2_pgaddtup_internal(Page page,
 {
 	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 	IndexTupleData trunctuple;
-	int offnum;
-
 
 	if (!P_ISLEAF(opaque) && itup_off == P_FIRSTDATAKEY(opaque))
 	{
@@ -4089,7 +4088,7 @@ _bt2_pgaddtup_internal(Page page,
 	}
 */
 
-	elog(WARNING, "    [_bt2_pgaddtup_internal] ABBR KEY item inserted : %d", abbrkey);
+	//elog(WARNING, "    [_bt2_pgaddtup_internal] ABBR KEY item inserted : %d", abbrkey);
 
 	if (PageAddItemWithAbbrKey(page, (Item) itup, itemsize, itup_off,
 							   false, false, abbrkey) == InvalidOffsetNumber)
