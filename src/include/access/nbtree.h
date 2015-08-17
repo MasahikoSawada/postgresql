@@ -658,6 +658,7 @@ extern Datum btinsert(PG_FUNCTION_ARGS);
 extern Datum bt2insert(PG_FUNCTION_ARGS);
 extern Datum btbeginscan(PG_FUNCTION_ARGS);
 extern Datum btgettuple(PG_FUNCTION_ARGS);
+extern Datum bt2gettuple(PG_FUNCTION_ARGS);
 extern Datum btgetbitmap(PG_FUNCTION_ARGS);
 extern Datum btrescan(PG_FUNCTION_ARGS);
 extern Datum btendscan(PG_FUNCTION_ARGS);
@@ -722,6 +723,7 @@ extern int32 _bt_compare(Relation rel, int keysz, ScanKey scankey,
 extern int32 _bt2_compare(Relation rel, int keysz, ScanKey scankey,
 			Page page, OffsetNumber offnum);
 extern bool _bt_first(IndexScanDesc scan, ScanDirection dir);
+extern bool _bt2_first(IndexScanDesc scan, ScanDirection dir);
 extern bool _bt_next(IndexScanDesc scan, ScanDirection dir);
 extern Buffer _bt_get_endpoint(Relation rel, uint32 level, bool rightmost);
 

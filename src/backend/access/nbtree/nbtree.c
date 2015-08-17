@@ -346,6 +346,79 @@ btgettuple(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(res);
 }
 
+Datum
+bt2gettuple(PG_FUNCTION_ARGS)
+{
+	IndexScanDesc scan = (IndexScanDesc) PG_GETARG_POINTER(0);
+	ScanDirection dir = (ScanDirection) PG_GETARG_INT32(1);
+	BTScanOpaque so = (BTScanOpaque) scan->opaque;
+	bool		res;
+
+	/* btree indexes are never lossy */
+	scan->xs_recheck = false;
+
+	/*
+	 * If we have any array keys, initialize them during first call for a
+	 * scan.  We can't do this in btrescan because we don't know the scan
+	 * direction at that time.
+	 */
+	if (so->numArrayKeys && !BTScanPosIsValid(so->currPos))
+	{
+		/* punt if we have any unsatisfiable array keys */
+		if (so->numArrayKeys < 0)
+			PG_RETURN_BOOL(false);
+
+		_bt_start_array_keys(scan, dir);
+	}
+
+	/* This loop handles advancing to the next array elements, if any */
+	do
+	{
+		/*
+		 * If we've already initialized this scan, we can just advance it in
+		 * the appropriate direction.  If we haven't done so yet, we call
+		 * _bt_first() to get the first item in the scan.
+		 */
+		if (!BTScanPosIsValid(so->currPos))
+			res = _bt2_first(scan, dir);
+		else
+		{
+			/*
+			 * Check to see if we should kill the previously-fetched tuple.
+			 */
+			if (scan->kill_prior_tuple)
+			{
+				/*
+				 * Yes, remember it for later. (We'll deal with all such
+				 * tuples at once right before leaving the index page.)  The
+				 * test for numKilled overrun is not just paranoia: if the
+				 * caller reverses direction in the indexscan then the same
+				 * item might get entered multiple times. It's not worth
+				 * trying to optimize that, so we don't detect it, but instead
+				 * just forget any excess entries.
+				 */
+				if (so->killedItems == NULL)
+					so->killedItems = (int *)
+						palloc(MaxIndexTuplesPerPage * sizeof(int));
+				if (so->numKilled < MaxIndexTuplesPerPage)
+					so->killedItems[so->numKilled++] = so->currPos.itemIndex;
+			}
+
+			/*
+			 * Now continue the scan.
+			 */
+			res = _bt_next(scan, dir);
+		}
+
+		/* If we have a tuple, return it ... */
+		if (res)
+			break;
+		/* ... otherwise see if we have more array keys to deal with */
+	} while (so->numArrayKeys && _bt_advance_array_keys(scan, dir));
+
+	PG_RETURN_BOOL(res);
+}
+
 /*
  * btgetbitmap() -- gets all matching tuples, and adds them to a bitmap
  */
