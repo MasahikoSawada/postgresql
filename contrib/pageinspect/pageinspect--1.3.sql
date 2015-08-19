@@ -102,7 +102,7 @@ CREATE FUNCTION bt2_page_items(IN relname text, IN blkno int4,
     OUT itemoffset smallint,
     OUT ctid tid,
     OUT itemlen smallint,
-    OUT abbrkey int4,
+    OUT abbrkey int,
     OUT nulls bool,
     OUT vars bool,
     OUT data text)

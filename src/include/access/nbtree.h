@@ -660,6 +660,7 @@ extern Datum btbeginscan(PG_FUNCTION_ARGS);
 extern Datum btgettuple(PG_FUNCTION_ARGS);
 extern Datum bt2gettuple(PG_FUNCTION_ARGS);
 extern Datum btgetbitmap(PG_FUNCTION_ARGS);
+extern Datum bt2getbitmap(PG_FUNCTION_ARGS);
 extern Datum btrescan(PG_FUNCTION_ARGS);
 extern Datum btendscan(PG_FUNCTION_ARGS);
 extern Datum btmarkpos(PG_FUNCTION_ARGS);

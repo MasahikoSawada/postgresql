@@ -1181,7 +1181,7 @@ _bt2_insertonpg(Relation rel,
 			}
 		}
 
-		//elog(WARNING, "    Inserting... block %u", itup_blkno);
+		elog(WARNING, "    Inserting... block %u", itup_blkno);
 
 		/* Do the update.  No ereport(ERROR) until changes are logged */
 		START_CRIT_SECTION();
@@ -1362,6 +1362,8 @@ _bt2_split_internal(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstrig
 	bool		isroot;
 	bool		isleaf;
 	int32		abbrkey;
+
+	elog(WARNING, "INTERNAL SPLIT");
 
 	/* Acquire a new page to split into */
 	rbuf = _bt_getbuf(rel, P_NEW, BT_WRITE);

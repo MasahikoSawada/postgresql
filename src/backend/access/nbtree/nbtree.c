@@ -479,6 +479,63 @@ btgetbitmap(PG_FUNCTION_ARGS)
 	PG_RETURN_INT64(ntids);
 }
 
+Datum
+bt2getbitmap(PG_FUNCTION_ARGS)
+{
+	IndexScanDesc scan = (IndexScanDesc) PG_GETARG_POINTER(0);
+	TIDBitmap  *tbm = (TIDBitmap *) PG_GETARG_POINTER(1);
+	BTScanOpaque so = (BTScanOpaque) scan->opaque;
+	int64		ntids = 0;
+	ItemPointer heapTid;
+
+	/*
+	 * If we have any array keys, initialize them.
+	 */
+	if (so->numArrayKeys)
+	{
+		/* punt if we have any unsatisfiable array keys */
+		if (so->numArrayKeys < 0)
+			PG_RETURN_INT64(ntids);
+
+		_bt_start_array_keys(scan, ForwardScanDirection);
+	}
+
+	/* This loop handles advancing to the next array elements, if any */
+	do
+	{
+		/* Fetch the first page & tuple */
+		if (_bt2_first(scan, ForwardScanDirection))
+		{
+			/* Save tuple ID, and continue scanning */
+			heapTid = &scan->xs_ctup.t_self;
+			tbm_add_tuples(tbm, heapTid, 1, false);
+			ntids++;
+
+			for (;;)
+			{
+				/*
+				 * Advance to next tuple within page.  This is the same as the
+				 * easy case in _bt_next().
+				 */
+				if (++so->currPos.itemIndex > so->currPos.lastItem)
+				{
+					/* let _bt_next do the heavy lifting */
+					if (!_bt_next(scan, ForwardScanDirection))
+						break;
+				}
+
+				/* Save tuple ID, and continue scanning */
+				heapTid = &so->currPos.items[so->currPos.itemIndex].heapTid;
+				tbm_add_tuples(tbm, heapTid, 1, false);
+				ntids++;
+			}
+		}
+		/* Now see if we have more array keys to deal with */
+	} while (so->numArrayKeys && _bt_advance_array_keys(scan, ForwardScanDirection));
+
+	PG_RETURN_INT64(ntids);
+}
+
 /*
  *	btbeginscan() -- start a scan on a btree index
  */

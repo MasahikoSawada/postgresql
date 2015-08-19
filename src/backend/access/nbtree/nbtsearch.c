@@ -226,7 +226,7 @@ _bt2_search(Relation rel, int keysz, ScanKey scankey, bool nextkey,
 		itemid = PageGetItemIdWithAbbrKey(page, offnum);
 		itup = (IndexTuple) PageGetItem(page, itemid);
 		blkno = ItemPointerGetBlockNumber(&(itup->t_tid));
-		//elog(WARNING, "    -> selected block %u", blkno);
+		elog(WARNING, "    -> selected block %u", blkno);
 		par_blkno = BufferGetBlockNumber(*bufP);
 
 		/*
@@ -498,7 +498,7 @@ _bt2_binsrch(Relation rel,
 	if (!P_ISLEAF(opaque))
 		high = PageWithAbbrKeyGetMaxOffsetNumber(page);
 	else
-		high = PageWithAbbrKeyGetMaxOffsetNumber(page);
+		high = PageGetMaxOffsetNumber(page);
 
 	/*
 	 * If there are no keys on the page, return the first available slot. Note
@@ -703,7 +703,7 @@ _bt2_compare(Relation rel,
 	itemId = PageGetItemIdWithAbbrKey(page, offnum);
 	abbrkey = ItemIdGetAbbrKey(itemId);
 	argument = DatumGetInt32(scankey->sk_argument);
-	//elog(WARNING, "_bt2_compare abbrkey : %d, keyword : %d", abbrkey, argument);
+	elog(WARNING, "_bt2_compare abbrkey : %d, keyword : %d", abbrkey, argument);
 
 	if (argument < abbrkey)
 		return -1;
