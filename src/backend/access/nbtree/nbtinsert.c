@@ -3548,11 +3548,13 @@ _bt2_getstackbuf(Relation rel, BTStack stack, int access)
 static Buffer
 _bt2_newroot(Relation rel, Buffer lbuf, Buffer rbuf)
 {
-	BTPageOpaque lopaque;
-	Page	lpage;
+	BTPageOpaque lopaque, ropaque;
+	Page	lpage, rpage;
 	
 	lpage = BufferGetPage(lbuf);
+	rpage = BufferGetPage(rbuf);
 	lopaque = (BTPageOpaque) PageGetSpecialPointer(lpage);
+	ropaque = (BTPageOpaque) PageGetSpecialPointer(rpage);
 
 	if (!P_ISLEAF(lopaque))
 		return _bt2_newroot_internal( rel, lbuf, rbuf);
@@ -3648,7 +3650,7 @@ _bt2_newroot_internal(Relation rel, Buffer lbuf, Buffer rbuf)
 	 * benefit of _bt_restore_page().
 	 */
 	if (PageAddItemWithAbbrKey(rootpage, (Item) left_item, left_item_sz, P_HIKEY,
-							   false, false, rabbrkey) == InvalidOffsetNumber)
+							   false, false, labbrkey) == InvalidOffsetNumber)
 		elog(PANIC, "failed to add leftkey to new root page"
 			 " while splitting block %u of index \"%s\"",
 			 BufferGetBlockNumber(lbuf), RelationGetRelationName(rel));
@@ -3657,7 +3659,7 @@ _bt2_newroot_internal(Relation rel, Buffer lbuf, Buffer rbuf)
 	 * insert the right page pointer into the new root page.
 	 */
 	if (PageAddItemWithAbbrKey(rootpage, (Item) right_item, right_item_sz, P_FIRSTKEY,
-							   false, false, labbrkey) == InvalidOffsetNumber)
+							   false, false, rabbrkey) == InvalidOffsetNumber)
 		elog(PANIC, "failed to add rightkey to new root page"
 			 " while splitting block %u of index \"%s\"",
 			 BufferGetBlockNumber(lbuf), RelationGetRelationName(rel));
