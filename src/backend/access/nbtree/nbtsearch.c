@@ -226,7 +226,7 @@ _bt2_search(Relation rel, int keysz, ScanKey scankey, bool nextkey,
 		itemid = PageGetItemIdWithAbbrKey(page, offnum);
 		itup = (IndexTuple) PageGetItem(page, itemid);
 		blkno = ItemPointerGetBlockNumber(&(itup->t_tid));
-		elog(WARNING, "    -> selected block %u", blkno);
+		//elog(WARNING, "    -> selected block %u", blkno);
 		par_blkno = BufferGetBlockNumber(*bufP);
 
 		/*
@@ -685,10 +685,7 @@ _bt2_compare(Relation rel,
 			Page page,
 			OffsetNumber offnum)
 {
-	TupleDesc	itupdesc = RelationGetDescr(rel);
 	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-	IndexTuple	itup;
-	int			i;
 	ItemIdWithAbbrKey	itemId;
 	int32				abbrkey, argument;
 
@@ -703,7 +700,7 @@ _bt2_compare(Relation rel,
 	itemId = PageGetItemIdWithAbbrKey(page, offnum);
 	abbrkey = ItemIdGetAbbrKey(itemId);
 	argument = DatumGetInt32(scankey->sk_argument);
-	elog(WARNING, "_bt2_compare abbrkey : %d, keyword : %d", abbrkey, argument);
+	//elog(WARNING, "_bt2_compare abbrkey : %d, keyword : %d", abbrkey, argument);
 
 	if (argument < abbrkey)
 		return -1;
@@ -711,75 +708,6 @@ _bt2_compare(Relation rel,
 		return 0;
 	else
 		return 1;
-			
-
-	itup = (IndexTuple) PageGetItem(page, PageGetItemIdWithAbbrKey(page, offnum));
-
-	/*
-	 * The scan key is set up with the attribute number associated with each
-	 * term in the key.  It is important that, if the index is multi-key, the
-	 * scan contain the first k key attributes, and that they be in order.  If
-	 * you think about how multi-key ordering works, you'll understand why
-	 * this is.
-	 *
-	 * We don't test for violation of this condition here, however.  The
-	 * initial setup for the index scan had better have gotten it right (see
-	 * _bt_first).
-	 */
-
-	for (i = 1; i <= keysz; i++)
-	{
-		Datum		datum;
-		bool		isNull;
-		int32		result;
-
-		datum = index_getattr(itup, scankey->sk_attno, itupdesc, &isNull);
-
-		/* see comments about NULLs handling in btbuild */
-		if (scankey->sk_flags & SK_ISNULL)		/* key is NULL */
-		{
-			if (isNull)
-				result = 0;		/* NULL "=" NULL */
-			else if (scankey->sk_flags & SK_BT_NULLS_FIRST)
-				result = -1;	/* NULL "<" NOT_NULL */
-			else
-				result = 1;		/* NULL ">" NOT_NULL */
-		}
-		else if (isNull)		/* key is NOT_NULL and item is NULL */
-		{
-			if (scankey->sk_flags & SK_BT_NULLS_FIRST)
-				result = 1;		/* NOT_NULL ">" NULL */
-			else
-				result = -1;	/* NOT_NULL "<" NULL */
-		}
-		else
-		{
-			/*
-			 * The sk_func needs to be passed the index value as left arg and
-			 * the sk_argument as right arg (they might be of different
-			 * types).  Since it is convenient for callers to think of
-			 * _bt_compare as comparing the scankey to the index item, we have
-			 * to flip the sign of the comparison result.  (Unless it's a DESC
-			 * column, in which case we *don't* flip the sign.)
-			 */
-			result = DatumGetInt32(FunctionCall2Coll(&scankey->sk_func,
-													 scankey->sk_collation,
-													 datum,
-													 scankey->sk_argument));
-
-			if (!(scankey->sk_flags & SK_BT_DESC))
-				result = -result;
-		}
-
-		/* if the keys are unequal, return the difference */
-		if (result != 0)
-			return result;
-
-		scankey++;
-	}
-
-	/* if we get here, the keys are equal */
-	return 0;
 }
 
 /*
@@ -1986,6 +1914,42 @@ _bt_next(IndexScanDesc scan, ScanDirection dir)
 	return true;
 }
 
+bool
+_bt2_next(IndexScanDesc scan, ScanDirection dir)
+{
+	BTScanOpaque so = (BTScanOpaque) scan->opaque;
+	BTScanPosItem *currItem;
+
+	/*
+	 * Advance to next tuple on current page; or if there's no more, try to
+	 * step to the next page with data.
+	 */
+	if (ScanDirectionIsForward(dir))
+	{
+		if (++so->currPos.itemIndex > so->currPos.lastItem)
+		{
+			if (!_bt2_steppage(scan, dir))
+				return false;
+		}
+	}
+	else
+	{
+		if (--so->currPos.itemIndex < so->currPos.firstItem)
+		{
+			if (!_bt2_steppage(scan, dir))
+				return false;
+		}
+	}
+
+	/* OK, itemIndex says what to return */
+	currItem = &so->currPos.items[so->currPos.itemIndex];
+	scan->xs_ctup.t_self = currItem->heapTid;
+	if (scan->xs_want_itup)
+		scan->xs_itup = (IndexTuple) (so->currTuples + currItem->tupleOffset);
+
+	return true;
+}
+
 /*
  *	_bt_readpage() -- Load data from current index page into so->currPos
  *
@@ -2435,7 +2399,7 @@ _bt2_steppage(IndexScanDesc scan, ScanDirection dir)
 
 	/* Before leaving current page, deal with any killed items */
 	if (so->numKilled > 0)
-		_bt_killitems(scan);
+		_bt2_killitems(scan);
 
 	/*
 	 * Before we modify currPos, make a copy of the page data if there was a

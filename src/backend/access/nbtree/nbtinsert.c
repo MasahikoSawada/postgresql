@@ -1181,7 +1181,7 @@ _bt2_insertonpg(Relation rel,
 			}
 		}
 
-		elog(WARNING, "    Inserting... block %u", itup_blkno);
+		//elog(WARNING, "    Inserting... block %u", itup_blkno);
 
 		/* Do the update.  No ereport(ERROR) until changes are logged */
 		START_CRIT_SECTION();
@@ -1363,7 +1363,7 @@ _bt2_split_internal(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstrig
 	bool		isleaf;
 	int32		abbrkey;
 
-	elog(WARNING, "INTERNAL SPLIT");
+	//elog(WARNING, "INTERNAL SPLIT");
 
 	/* Acquire a new page to split into */
 	rbuf = _bt_getbuf(rel, P_NEW, BT_WRITE);
@@ -3548,13 +3548,11 @@ _bt2_getstackbuf(Relation rel, BTStack stack, int access)
 static Buffer
 _bt2_newroot(Relation rel, Buffer lbuf, Buffer rbuf)
 {
-	BTPageOpaque lopaque, ropaque;
-	Page	lpage, rpage;
+	BTPageOpaque lopaque;
+	Page	lpage;
 	
 	lpage = BufferGetPage(lbuf);
-	rpage = BufferGetPage(rbuf);
 	lopaque = (BTPageOpaque) PageGetSpecialPointer(lpage);
-	ropaque = (BTPageOpaque) PageGetSpecialPointer(rpage);
 
 	if (!P_ISLEAF(lopaque))
 		return _bt2_newroot_internal( rel, lbuf, rbuf);

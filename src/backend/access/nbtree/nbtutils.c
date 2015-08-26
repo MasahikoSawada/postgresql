@@ -1941,6 +1941,7 @@ _bt_check_rowcompare(ScanKey skey, IndexTuple tuple, TupleDesc tupdesc,
  * away and the TID was re-used by a completely different heap tuple.
  */
 void
+
 _bt_killitems(IndexScanDesc scan)
 {
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
@@ -2011,6 +2012,104 @@ _bt_killitems(IndexScanDesc scan)
 		while (offnum <= maxoff)
 		{
 			ItemId		iid = PageGetItemId(page, offnum);
+			IndexTuple	ituple = (IndexTuple) PageGetItem(page, iid);
+
+			if (ItemPointerEquals(&ituple->t_tid, &kitem->heapTid))
+			{
+				/* found the item */
+				ItemIdMarkDead(iid);
+				killedsomething = true;
+				break;			/* out of inner search loop */
+			}
+			offnum = OffsetNumberNext(offnum);
+		}
+	}
+
+	/*
+	 * Since this can be redone later if needed, mark as dirty hint.
+	 *
+	 * Whenever we mark anything LP_DEAD, we also set the page's
+	 * BTP_HAS_GARBAGE flag, which is likewise just a hint.
+	 */
+	if (killedsomething)
+	{
+		opaque->btpo_flags |= BTP_HAS_GARBAGE;
+		MarkBufferDirtyHint(so->currPos.buf, true);
+	}
+
+	LockBuffer(so->currPos.buf, BUFFER_LOCK_UNLOCK);
+}
+
+_bt2_killitems(IndexScanDesc scan)
+{
+	BTScanOpaque so = (BTScanOpaque) scan->opaque;
+	Page		page;
+	BTPageOpaque opaque;
+	OffsetNumber minoff;
+	OffsetNumber maxoff;
+	int			i;
+	int			numKilled = so->numKilled;
+	bool		killedsomething = false;
+
+	Assert(BTScanPosIsValid(so->currPos));
+
+	/*
+	 * Always reset the scan state, so we don't look for same items on other
+	 * pages.
+	 */
+	so->numKilled = 0;
+
+	if (BTScanPosIsPinned(so->currPos))
+	{
+		/*
+		 * We have held the pin on this page since we read the index tuples,
+		 * so all we need to do is lock it.  The pin will have prevented
+		 * re-use of any TID on the page, so there is no need to check the
+		 * LSN.
+		 */
+		LockBuffer(so->currPos.buf, BT_READ);
+
+		page = BufferGetPage(so->currPos.buf);
+	}
+	else
+	{
+		Buffer		buf;
+
+		/* Attempt to re-read the buffer, getting pin and lock. */
+		buf = _bt_getbuf(scan->indexRelation, so->currPos.currPage, BT_READ);
+
+		/* It might not exist anymore; in which case we can't hint it. */
+		if (!BufferIsValid(buf))
+			return;
+
+		page = BufferGetPage(buf);
+		if (PageGetLSN(page) == so->currPos.lsn)
+			so->currPos.buf = buf;
+		else
+		{
+			/* Modified while not pinned means hinting is not safe. */
+			_bt_relbuf(scan->indexRelation, buf);
+			return;
+		}
+	}
+
+	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+	minoff = P_FIRSTDATAKEY(opaque);
+	maxoff = PageWithAbbrKeyGetMaxOffsetNumber(page);
+
+	for (i = 0; i < numKilled; i++)
+	{
+		int			itemIndex = so->killedItems[i];
+		BTScanPosItem *kitem = &so->currPos.items[itemIndex];
+		OffsetNumber offnum = kitem->indexOffset;
+
+		Assert(itemIndex >= so->currPos.firstItem &&
+			   itemIndex <= so->currPos.lastItem);
+		if (offnum < minoff)
+			continue;			/* pure paranoia */
+		while (offnum <= maxoff)
+		{
+			ItemIdWithAbbrKey		iid = PageGetItemIdWithAbbrKey(page, offnum);
 			IndexTuple	ituple = (IndexTuple) PageGetItem(page, iid);
 
 			if (ItemPointerEquals(&ituple->t_tid, &kitem->heapTid))
