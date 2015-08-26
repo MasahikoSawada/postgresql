@@ -520,7 +520,7 @@ bt2getbitmap(PG_FUNCTION_ARGS)
 				if (++so->currPos.itemIndex > so->currPos.lastItem)
 				{
 					/* let _bt_next do the heavy lifting */
-					if (!_bt_next(scan, ForwardScanDirection))
+					if (!_bt2_next(scan, ForwardScanDirection))
 						break;
 				}
 
