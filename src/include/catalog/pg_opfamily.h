@@ -83,7 +83,7 @@ DATA(insert OID = 1976 (	403		integer_ops		PGNSP PGUID ));
 #define INTEGER_BTREE_FAM_OID 1976
 
 DATA(insert OID = 3315 (	3308		integer_ops		PGNSP PGUID ));
-#define INTEGER_BTREE_FAM_OID 3315
+#define INTEGER_BTREE2_FAM_OID 3315
 
 
 DATA(insert OID = 1977 (	405		integer_ops		PGNSP PGUID ));

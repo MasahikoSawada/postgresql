@@ -166,9 +166,6 @@ PageAddItemWithAbbrKey(Page page,
 	ItemIdWithAbbrKey		itemId;
 	OffsetNumber limit;
 	bool		needshuffle = false;
-	int offnum;
-
-	//elog(WARNING, "    [PageAddItemWithAbbrKey] AbbrKeyItem add : %d", abbrkey);
 
 	/*
 	 * Be wary about corrupted page pointers

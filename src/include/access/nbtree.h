@@ -726,6 +726,7 @@ extern int32 _bt2_compare(Relation rel, int keysz, ScanKey scankey,
 extern bool _bt_first(IndexScanDesc scan, ScanDirection dir);
 extern bool _bt2_first(IndexScanDesc scan, ScanDirection dir);
 extern bool _bt_next(IndexScanDesc scan, ScanDirection dir);
+extern bool _bt2_next(IndexScanDesc scan, ScanDirection dir);
 extern Buffer _bt_get_endpoint(Relation rel, uint32 level, bool rightmost);
 
 /*

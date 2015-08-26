@@ -2040,6 +2040,7 @@ _bt_killitems(IndexScanDesc scan)
 	LockBuffer(so->currPos.buf, BUFFER_LOCK_UNLOCK);
 }
 
+void
 _bt2_killitems(IndexScanDesc scan)
 {
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
