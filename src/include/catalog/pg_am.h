@@ -121,7 +121,7 @@ DATA(insert OID = 403 (  btree		5 2 t f t t t t t t f t t 0 btinsert btbeginscan
 DESCR("b-tree index access method");
 #define BTREE_AM_OID 403
 
-DATA(insert OID = 3308 (  btree2		5 2 t f t t t t t t f t t 0 bt2insert btbeginscan bt2gettuple btgetbitmap btrescan btendscan btmarkpos btrestrpos btbuild btbuildempty btbulkdelete btvacuumcleanup btcanreturn btcostestimate btoptions ));
+DATA(insert OID = 3308 (  btree2		5 2 t f t t t t t t f t t 0 bt2insert btbeginscan bt2gettuple bt2getbitmap btrescan btendscan btmarkpos btrestrpos btbuild btbuildempty btbulkdelete btvacuumcleanup btcanreturn btcostestimate btoptions ));
 DESCR("b-tree index access method");
 #define BTREE2_AM_OID 3308
 

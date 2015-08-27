@@ -512,7 +512,7 @@ bt2_page_items(PG_FUNCTION_ARGS)
 		values[j++] = psprintf("(%u,%u)",
 							   BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)),
 							   itup->t_tid.ip_posid);
-		elog(WARNING, "tup_offset = %d, abbrkey = %d, data =%d,  size = %d, (%u,%u)", uargs->offset, (int) ItemIdGetAbbrKey(id),  * (int32*) ((Item)itup + sizeof(IndexTupleData)), (int) IndexTupleSize(itup), BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)), itup->t_tid.ip_posid);
+		//elog(WARNING, "tup_offset = %d, abbrkey = %d, data =%d,  size = %d, (%u,%u)", uargs->offset, (int) ItemIdGetAbbrKey(id),  * (int32*) ((Item)itup + sizeof(IndexTupleData)), (int) IndexTupleSize(itup), BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)), itup->t_tid.ip_posid);
 
 		values[j++] = psprintf("%d", (int) IndexTupleSize(itup));
 		values[j++] = psprintf("%d", ItemIdGetAbbrKey(id)); 

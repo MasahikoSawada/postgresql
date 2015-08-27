@@ -3364,7 +3364,7 @@ _bt_getstackbuf(Relation rel, BTStack stack, int access)
 
 		if (access == BT_WRITE && P_INCOMPLETE_SPLIT(opaque))
 		{
-			_bt2_finish_split(rel, buf, stack->bts_parent);
+			_bt_finish_split(rel, buf, stack->bts_parent);
 			continue;
 		}
 
@@ -3404,6 +3404,12 @@ _bt_getstackbuf(Relation rel, BTStack stack, int access)
 				 offnum = OffsetNumberNext(offnum))
 			{
 				itemid = PageGetItemId(page, offnum);
+				if (!ItemIdHasStorage(itemid))
+				{
+					elog(WARNING, "CAUGHT!!! : %d", MyProcPid);
+					pg_usleep(60 * 1000L * 1000L);
+					pg_usleep(60 * 1000L * 1000L);
+				}
 				item = (IndexTuple) PageGetItem(page, itemid);
 				if (BTEntrySame(item, &stack->bts_btentry))
 				{

@@ -715,6 +715,9 @@ extern BTStack _bt2_search(Relation rel,
 extern Buffer _bt_moveright(Relation rel, Buffer buf, int keysz,
 			  ScanKey scankey, bool nextkey, bool forupdate, BTStack stack,
 			  int access);
+extern Buffer _bt2_moveright(Relation rel, Buffer buf, int keysz,
+			  ScanKey scankey, bool nextkey, bool forupdate, BTStack stack,
+			  int access);
 extern OffsetNumber _bt_binsrch(Relation rel, Buffer buf, int keysz,
 			ScanKey scankey, bool nextkey);
 extern OffsetNumber _bt2_binsrch(Relation rel, Buffer buf, int keysz,

@@ -208,7 +208,7 @@ _bt2_search(Relation rel, int keysz, ScanKey scankey, bool nextkey,
 		 * if the leaf page is split and we insert to the parent page).  But
 		 * this is a good opportunity to finish splits of internal pages too.
 		 */
-		*bufP = _bt_moveright(rel, *bufP, keysz, scankey, nextkey,
+		*bufP = _bt2_moveright(rel, *bufP, keysz, scankey, nextkey,
 							  (access == BT_WRITE), stack_in,
 							  BT_READ);
 
@@ -341,6 +341,92 @@ _bt_moveright(Relation rel,
 
 			if (P_INCOMPLETE_SPLIT(opaque))
 				_bt_finish_split(rel, buf, stack);
+			else
+				_bt_relbuf(rel, buf);
+
+			/* re-acquire the lock in the right mode, and re-check */
+			buf = _bt_getbuf(rel, blkno, access);
+			continue;
+		}
+
+		if (P_ISLEAF(opaque))
+			res = _bt_compare(rel, keysz, scankey, page, P_HIKEY);
+		else
+			res = _bt2_compare(rel, keysz, scankey, page, P_HIKEY);
+
+		if (P_IGNORE(opaque) || res >= cmpval)
+		{
+			/* step right one page */
+			buf = _bt_relandgetbuf(rel, buf, opaque->btpo_next, access);
+			continue;
+		}
+		else
+			break;
+	}
+
+	if (P_IGNORE(opaque))
+		elog(ERROR, "fell off the end of index \"%s\"",
+			 RelationGetRelationName(rel));
+
+	return buf;
+}
+
+Buffer
+_bt2_moveright(Relation rel,
+			  Buffer buf,
+			  int keysz,
+			  ScanKey scankey,
+			  bool nextkey,
+			  bool forupdate,
+			  BTStack stack,
+			  int access)
+{
+	Page		page;
+	BTPageOpaque opaque;
+	int32		cmpval;
+
+	/*
+	 * When nextkey = false (normal case): if the scan key that brought us to
+	 * this page is > the high key stored on the page, then the page has split
+	 * and we need to move right.  (If the scan key is equal to the high key,
+	 * we might or might not need to move right; have to scan the page first
+	 * anyway.)
+	 *
+	 * When nextkey = true: move right if the scan key is >= page's high key.
+	 *
+	 * The page could even have split more than once, so scan as far as
+	 * needed.
+	 *
+	 * We also have to move right if we followed a link that brought us to a
+	 * dead page.
+	 */
+	cmpval = nextkey ? 0 : 1;
+
+	for (;;)
+	{
+		int res;
+		page = BufferGetPage(buf);
+		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+
+		if (P_RIGHTMOST(opaque))
+			break;
+
+		/*
+		 * Finish any incomplete splits we encounter along the way.
+		 */
+		if (forupdate && P_INCOMPLETE_SPLIT(opaque))
+		{
+			BlockNumber blkno = BufferGetBlockNumber(buf);
+
+			/* upgrade our lock if necessary */
+			if (access == BT_READ)
+			{
+				LockBuffer(buf, BUFFER_LOCK_UNLOCK);
+				LockBuffer(buf, BT_WRITE);
+			}
+
+			if (P_INCOMPLETE_SPLIT(opaque))
+				_bt2_finish_split(rel, buf, stack);
 			else
 				_bt_relbuf(rel, buf);
 
