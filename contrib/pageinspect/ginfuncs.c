@@ -27,6 +27,58 @@
 PG_FUNCTION_INFO_V1(gin_metapage_info);
 PG_FUNCTION_INFO_V1(gin_page_opaque_info);
 PG_FUNCTION_INFO_V1(gin_leafpage_items);
+PG_FUNCTION_INFO_V1(gin_pending_items);
+
+Datum
+gin_pending_items(PG_FUNCTION_ARGS)
+{
+	Oid			indexOid = PG_GETARG_OID(0);
+	Relation	indexRel;
+	Buffer		metabuffer;
+	Page		metapage;
+	GinMetaPageData *metadata;
+	BlockNumber	blkno;
+
+	indexRel = index_open(indexOid, AccessShareLock);
+	metabuffer = ReadBuffer(indexRel, GIN_METAPAGE_BLKNO);
+	LockBuffer(metabuffer, GIN_SHARE);
+	metapage = BufferGetPage(metabuffer);
+	metadata = GinPageGetMeta(metapage);
+	index_close(indexRel, AccessShareLock);
+
+	blkno = metadata->head;
+	while (blkno != InvalidBlockNumber)
+	{
+		Buffer		buf;
+		Page		page;
+		GinPageOpaque opaque;
+
+		/* Variables for output */
+		OffsetNumber	maxoff;
+		uint16			flags;
+
+		/* Preparation */
+		buf = ReadBuffer(indexRel ,blkno);
+		page = BufferGetPage(buf);
+		opaque = GinPageGetOpaque(page);
+
+		maxoff = PageGetMaxOffsetNumber(page);
+		flags = opaque->flags;
+
+		/* Emit */
+		elog(WARNING, "[%u] nitems = %d, flags = %d",
+			 blkno,
+			 maxoff,
+			 flags);
+
+		blkno = opaque->rightlink;
+		ReleaseBuffer(buf);
+	}
+
+	UnlockReleaseBuffer(metabuffer);
+
+	PG_RETURN_NULL();
+}
 
 Datum
 gin_metapage_info(PG_FUNCTION_ARGS)

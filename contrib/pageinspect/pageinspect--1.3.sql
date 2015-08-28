@@ -150,6 +150,11 @@ LANGUAGE C STRICT;
 -- GIN functions
 --
 
+CREATE FUNCTION gin_pending_items(index regclass)
+RETURNS text
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT IMMUTABLE;
+
 --
 -- gin_metapage_info()
 --
