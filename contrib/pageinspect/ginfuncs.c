@@ -38,6 +38,9 @@ gin_pending_items(PG_FUNCTION_ARGS)
 	Page		metapage;
 	GinMetaPageData *metadata;
 	BlockNumber	blkno;
+	uint16 flags_array[100] = {0};
+	BlockNumber min, max;
+	int i;
 
 	indexRel = index_open(indexOid, AccessShareLock);
 	metabuffer = ReadBuffer(indexRel, GIN_METAPAGE_BLKNO);
@@ -47,6 +50,7 @@ gin_pending_items(PG_FUNCTION_ARGS)
 	index_close(indexRel, AccessShareLock);
 
 	blkno = metadata->head;
+	min = max = blkno;
 	while (blkno != InvalidBlockNumber)
 	{
 		Buffer		buf;
@@ -64,16 +68,37 @@ gin_pending_items(PG_FUNCTION_ARGS)
 
 		maxoff = PageGetMaxOffsetNumber(page);
 		flags = opaque->flags;
+		flags_array[flags]++;
 
 		/* Emit */
+		/*
 		elog(WARNING, "[%u] nitems = %d, flags = %d",
 			 blkno,
 			 maxoff,
 			 flags);
+		*/
 
 		blkno = opaque->rightlink;
+
+		if ((blkno -1) != max)
+		{
+			elog(WARNING, "%u - %u, %u blocks", min, max, max - min + 1);
+			min = max = blkno;
+		}
+		else
+			max = blkno;
+
 		ReleaseBuffer(buf);
 	}
+
+	/*
+	elog(WARNING, "%u - %u, %d", min, max, max - min + 1);
+	for (i = 0; i < 100; i++)
+	{
+		if (flags_array[i])
+			elog(WARNING, "flags %d -> %d counts", i, flags_array[i]);
+	}
+	*/
 
 	UnlockReleaseBuffer(metabuffer);
 
