@@ -70,18 +70,11 @@ gin_pending_items(PG_FUNCTION_ARGS)
 		flags = opaque->flags;
 		flags_array[flags]++;
 
-		/* Emit */
-		/*
-		elog(WARNING, "[%u] nitems = %d, flags = %d",
-			 blkno,
-			 maxoff,
-			 flags);
-		*/
-
 		blkno = opaque->rightlink;
 
 		if ((blkno -1) != max)
 		{
+			/* Emit log */
 			elog(WARNING, "%u - %u, %u blocks", min, max, max - min + 1);
 			min = max = blkno;
 		}
@@ -91,17 +84,7 @@ gin_pending_items(PG_FUNCTION_ARGS)
 		ReleaseBuffer(buf);
 	}
 
-	/*
-	elog(WARNING, "%u - %u, %d", min, max, max - min + 1);
-	for (i = 0; i < 100; i++)
-	{
-		if (flags_array[i])
-			elog(WARNING, "flags %d -> %d counts", i, flags_array[i]);
-	}
-	*/
-
 	UnlockReleaseBuffer(metabuffer);
-
 	PG_RETURN_NULL();
 }
 
