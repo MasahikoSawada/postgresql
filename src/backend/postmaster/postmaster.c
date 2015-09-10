@@ -1252,6 +1252,13 @@ PostmasterMain(int argc, char *argv[])
 		 * to the log.
 		 */
 	}
+	if (!load_syncinfo())
+	{
+		/*
+		 * We can start up wihtout the SYNC file. In this case, there will be
+		 * no synchronous replicas; all the connected standby will be async.
+		 */
+	}
 
 #ifdef HAVE_PTHREAD_IS_THREADED_NP
 
@@ -2459,6 +2466,10 @@ SIGHUP_handler(SIGNAL_ARGS)
 		if (!load_ident())
 			ereport(WARNING,
 					(errmsg("pg_ident.conf not reloaded")));
+
+		if (!load_syncinfo())
+			ereport(WARNING,
+					(errmsg("pg_syncinfo.conf not reloaded")));
 
 #ifdef EXEC_BACKEND
 		/* Update the starting-point file for future children */

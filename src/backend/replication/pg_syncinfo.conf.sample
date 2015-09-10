@@ -1,0 +1,18 @@
+{
+	"sync_info":
+		{
+			"quorum": 2,
+
+			"nodes":
+				[
+					{"priority":1,"group":"cluster1"},
+					{"quorum":2,"group": "cluster2"},
+					"node99"
+				]
+		},
+		"groups":
+		{
+			"cluster1":["node11","node12"],
+			"cluster2":["node21","node22","node23"]
+		}
+}

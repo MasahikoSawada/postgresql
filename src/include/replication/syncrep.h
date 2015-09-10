@@ -15,9 +15,13 @@
 
 #include "access/xlogdefs.h"
 #include "utils/guc.h"
+#include "utils/jsonapi.h"
 
 #define SyncRepRequested() \
 	(max_wal_senders > 0 && synchronous_commit > SYNCHRONOUS_COMMIT_LOCAL_FLUSH)
+
+/* SyncRepFile */
+#define SYNC_FILENAME   "pg_syncinfo.conf"
 
 /* SyncRepWaitMode */
 #define SYNC_REP_NO_WAIT		-1
@@ -33,6 +37,40 @@
 
 /* user-settable parameters for synchronous replication */
 extern char *SyncRepStandbyNames;
+
+typedef enum SyncInfoNodeType
+{
+   GNODE_NAME,
+   GNODE_GROUP
+}  SyncInfoNodeType;
+
+//typedef struct SyncInfoNode SyncInfoNode;
+
+typedef struct SyncInfoNode
+{
+   SyncInfoNodeType gtype;
+   char       *name;
+   bool        priority_group;
+   int         count;
+   int         ngroups;
+   struct SyncInfoNode  *group;
+   struct SyncInfoNode  *next;
+} SyncInfoNode;
+
+typedef enum
+{
+	SYNC_INFO_MAIN_OBJECT_START,
+	SYNC_INFO_MAIN,
+	SYNC_INFO_NODES,
+	SYNC_INFO_OBJECT_START,
+	SYNC_INFO_COUNT,
+	SYNC_INFO_GROUP_NAME,
+	SYNC_INFO_GROUPS,
+	SYNC_INFO_ARRAY_START,
+	SYNC_INFO_GROUP_INFO
+}SyncParseStateName;
+
+extern SyncInfoNode *SyncRepStandbyInfo;
 
 /* called by user backend */
 extern void SyncRepWaitForLSN(XLogRecPtr XactCommitLSN);
@@ -50,6 +88,9 @@ extern void SyncRepUpdateSyncStandbysDefined(void);
 /* forward declaration to avoid pulling in walsender_private.h */
 struct WalSnd;
 extern struct WalSnd *SyncRepGetSynchronousStandby(void);
+
+extern bool CheckNameList(SyncInfoNode *expr, char *name, bool found);
+extern XLogRecPtr *SyncRepGetQuorumRecPtr(SyncInfoNode *node, List **lsnlist, bool set_prioirty);
 
 extern bool check_synchronous_standby_names(char **newval, void **extra, GucSource source);
 extern void assign_synchronous_commit(int newval, void *extra);

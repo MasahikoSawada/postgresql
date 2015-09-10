@@ -38,6 +38,8 @@ extern void WalSndRqstFileReload(void);
 
 extern Datum pg_stat_get_wal_senders(PG_FUNCTION_ARGS);
 
+extern bool load_syncinfo(void);
+
 /*
  * Remember that we want to wakeup walsenders later
  *

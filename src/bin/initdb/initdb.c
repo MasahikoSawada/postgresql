@@ -142,6 +142,7 @@ static char *bki_file;
 static char *desc_file;
 static char *shdesc_file;
 static char *hba_file;
+static char *sync_file;
 static char *ident_file;
 static char *conf_file;
 static char *conversion_file;
@@ -1411,6 +1412,22 @@ setup_config(void)
 							  username);
 
 	snprintf(path, sizeof(path), "%s/pg_hba.conf", pg_data);
+
+	writefile(path, conflines);
+	if (chmod(path, S_IRUSR | S_IWUSR) != 0)
+	{
+		fprintf(stderr, _("%s: could not change permissions of \"%s\": %s\n"),
+				progname, path, strerror(errno));
+		exit_nicely();
+	}
+
+	free(conflines);
+
+	/* pg_syncinfo.conf */
+
+	conflines = readfile(sync_file);
+
+	snprintf(path, sizeof(path), "%s/pg_syncinfo.conf", pg_data);
 
 	writefile(path, conflines);
 	if (chmod(path, S_IRUSR | S_IWUSR) != 0)
@@ -3016,6 +3033,7 @@ setup_data_file_paths(void)
 	set_input(&desc_file, "postgres.description");
 	set_input(&shdesc_file, "postgres.shdescription");
 	set_input(&hba_file, "pg_hba.conf.sample");
+	set_input(&sync_file, "pg_syncinfo.conf.sample");
 	set_input(&ident_file, "pg_ident.conf.sample");
 	set_input(&conf_file, "postgresql.conf.sample");
 	set_input(&conversion_file, "conversion_create.sql");
@@ -3032,13 +3050,13 @@ setup_data_file_paths(void)
 				"POSTGRES_SUPERUSERNAME=%s\nPOSTGRES_BKI=%s\n"
 				"POSTGRES_DESCR=%s\nPOSTGRES_SHDESCR=%s\n"
 				"POSTGRESQL_CONF_SAMPLE=%s\n"
-				"PG_HBA_SAMPLE=%s\nPG_IDENT_SAMPLE=%s\n",
+				"PG_HBA_SAMPLE=%s\nPG_SYNCINFO_SAMPLE=%s\nPG_IDENT_SAMPLE=%s\n",
 				PG_VERSION,
 				pg_data, share_path, bin_path,
 				username, bki_file,
 				desc_file, shdesc_file,
 				conf_file,
-				hba_file, ident_file);
+				hba_file, sync_file, ident_file);
 		if (show_setting)
 			exit(0);
 	}
@@ -3047,6 +3065,7 @@ setup_data_file_paths(void)
 	check_input(desc_file);
 	check_input(shdesc_file);
 	check_input(hba_file);
+	check_input(sync_file);
 	check_input(ident_file);
 	check_input(conf_file);
 	check_input(conversion_file);
