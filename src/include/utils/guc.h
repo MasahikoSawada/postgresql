@@ -260,6 +260,7 @@ extern char *cluster_name;
 extern char *ConfigFileName;
 extern char *HbaFileName;
 extern char *IdentFileName;
+extern char *SyncFileName;
 extern char *external_pid_file;
 
 extern char *application_name;

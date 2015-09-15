@@ -45,6 +45,7 @@
 #include "postgres.h"
 
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include "access/xact.h"
 #include "miscadmin.h"
@@ -56,13 +57,45 @@
 #include "tcop/tcopprot.h"
 #include "utils/builtins.h"
 #include "utils/ps_status.h"
+#include "utils/json.h"
+
+#define DEBUG_QUORUM 1
 
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
+SyncInfoNode *SyncRepStandbyInfo;
 
 #define SyncStandbysDefined() \
 	(SyncRepStandbyNames != NULL && SyncRepStandbyNames[0] != '\0')
 
+#define DefaultSyncGroupName "Default Group"
+
+static SyncInfoNode *init_node(SyncInfoNodeType type);
+
+typedef struct SyncInfoParseState
+{
+	SyncParseStateName state_name;
+	struct SyncInfoParseState *next;
+}	SyncInfoParseState;
+
+typedef struct SyncInfoState
+{
+	int			array_size;
+	char	   *key_name;
+	SyncInfoNode *array_first_node;
+	SyncInfoNode *cur_node;
+	SyncInfoParseState *parse_state;
+}	SyncInfoState;
+
+static char *read_sync_file(int *length);
+static void sync_info_object_start(void *pstate);
+static void sync_info_array_start(void *pstate);
+static void sync_info_array_end(void *pstate);
+static void sync_info_object_field_start(void *pstate, char *fname, bool isnull);
+static void sync_info_object_field_end(void *pstate, char *fname, bool isnull);
+static void sync_info_scalar(void *pstate, char *token, JsonTokenType tokentype);
+static void add_node(SyncInfoState * state, SyncInfoNodeType ntype);
+bool		populate_group(SyncInfoNode * expr, char *name, SyncInfoNode * group_node, bool found);
 static bool announce_next_takeover = true;
 
 static int	SyncRepWaitMode = SYNC_REP_NO_WAIT;
@@ -72,6 +105,8 @@ static void SyncRepCancelWait(void);
 static int	SyncRepWakeQueue(bool all, int mode);
 
 static int	SyncRepGetStandbyPriority(void);
+
+void print_structure(SyncInfoNode *expr, int level);
 
 #ifdef USE_ASSERT_CHECKING
 static bool SyncRepQueueIsOrderedByLSN(int mode);
@@ -354,6 +389,214 @@ SyncRepInitConfig(void)
  * are multiple standbys with the same lowest priority value, the first one
  * found is selected. The caller must hold SyncRepLock.
  */
+bool
+CheckNameList(SyncInfoNode * expr, char *name, bool found)
+{
+	if (expr->gtype == GNODE_NAME)
+	{
+		if (strcmp(expr->name, name) == 0)
+			found = true;
+	}
+	else if (GNODE_GROUP)
+	{
+		if (expr->group != NULL)
+			found = CheckNameList(expr->group, name, found);
+	}
+
+	if (!found && expr->next)
+		found = CheckNameList(expr->next, name, found);
+
+	return found;
+}
+
+bool
+populate_group(SyncInfoNode *expr, char *name, SyncInfoNode *group_node, bool found)
+{
+	if (GNODE_GROUP)
+	{
+		if (strcmp(expr->name, name) == 0)
+		{
+			expr->group = group_node;
+			found = true;
+		}
+
+		else if (expr->group != NULL)
+			found = populate_group(expr->group, name, group_node, found);
+	}
+
+	if (expr->next)
+		found = populate_group(expr->next, name, group_node, found);
+
+	return found;
+}
+
+/* Decide LSN in acordance with status of sync standbys at this time */
+XLogRecPtr *
+SyncRepGetQuorumRecPtr(SyncInfoNode *node, List **lsnlist, bool priority_group)
+{
+	int			i;
+	XLogRecPtr *lsn;
+	ListCell   *cell;
+
+	if (node->gtype == GNODE_NAME)
+	{
+		XLogRecPtr *tmplsn = (XLogRecPtr *) palloc(sizeof(XLogRecPtr) * NUM_SYNC_REP_WAIT_MODE);
+
+		tmplsn[SYNC_REP_WAIT_WRITE] = InvalidXLogRecPtr;
+		tmplsn[SYNC_REP_WAIT_FLUSH] = InvalidXLogRecPtr;
+
+		/*
+		 * Get write/flush LSN from corresponding active wal sender using
+		 * WalSnd->name. If there are wal senders which has same name, we
+		 * select higher.
+		 */
+		for (i = 0; i < max_wal_senders; i++)
+		{
+			volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
+
+			/* Must bev active */
+			if (walsnd->pid == 0)
+				continue;
+			/* Must be streaming */
+			if (walsnd->state != WALSNDSTATE_STREAMING)
+				continue;
+
+			/* Must be synchronous */
+			if (walsnd->sync_standby_priority == 0)
+				continue;
+
+			/* Must have a valid flush position */
+			if (XLogRecPtrIsInvalid(walsnd->flush))
+				continue;
+
+
+			if (strcmp(node->name, (char *) walsnd->name) == 0)
+			{
+				/* Found same name node. Get highest lsn */
+				if (tmplsn[SYNC_REP_WAIT_WRITE] < walsnd->write &&
+					tmplsn[SYNC_REP_WAIT_FLUSH] < walsnd->flush)
+				{
+					tmplsn[SYNC_REP_WAIT_WRITE] = walsnd->write;
+					tmplsn[SYNC_REP_WAIT_FLUSH] = walsnd->flush;
+				}
+#ifdef DEBUG_QUORUM
+				/* debug print */
+				elog(WARNING, "[%d]---- NAME [%s] : write : %X/%X, flush : %X/%X",
+					 MyProcPid,
+					 node->name,
+					 (uint32) (tmplsn[SYNC_REP_WAIT_WRITE] >> 32), (uint32) tmplsn[SYNC_REP_WAIT_WRITE],
+					 (uint32) (tmplsn[SYNC_REP_WAIT_FLUSH] >> 32), (uint32) tmplsn[SYNC_REP_WAIT_FLUSH]
+					);
+#endif
+			}
+		}
+
+		lsn = tmplsn;
+
+	}
+	else if (node->gtype == GNODE_GROUP)
+	{
+		List	   *new_lsnlist = NIL;
+
+		/* Get list of whole group's lsn */
+		if (node->group != NULL)
+		{
+			SyncRepGetQuorumRecPtr(node->group, &new_lsnlist, node->priority_group);
+			Assert(new_lsnlist);
+
+			/*
+			 * Decide group's lsn using by quorum number Assume the list is
+			 * order by LSN in desc.
+			 */
+			lsn = (XLogRecPtr *) list_nth(new_lsnlist, node->count - 1);
+
+#ifdef DEBUG_QUORUM
+			/* Debug print */
+			i = 0;
+			elog(WARNING, "[%d]---- %s GROUP [%s:%d] decided LSN : write = %X/%X, flush = %X/%X",
+				 MyProcPid,
+				 (node->priority_group == true) ? "PRIORITY" : "QUORUM",
+				 node->name,
+				 node->count,
+				 (uint32) (lsn[SYNC_REP_WAIT_WRITE] >> 32), (uint32) lsn[SYNC_REP_WAIT_WRITE],
+				 (uint32) (lsn[SYNC_REP_WAIT_FLUSH] >> 32), (uint32) lsn[SYNC_REP_WAIT_FLUSH]
+				);
+/*             elog(WARNING, "[%d]---- [%s] : write : %X/%X, flush : %X/%X",
+                        MyProcPid,
+                        "G",
+                        (uint32) (lsn[SYNC_REP_WAIT_WRITE] >> 32), (uint32) lsn[SYNC_REP_WAIT_WRITE],
+                        (uint32) (lsn[SYNC_REP_WAIT_FLUSH] >> 32), (uint32) lsn[SYNC_REP_WAIT_FLUSH]
+                       );*/
+#endif
+
+		}
+	}
+
+
+	if (node->next)
+	{
+		SyncRepGetQuorumRecPtr(node->next, lsnlist, node->priority_group);
+	}
+	/* For root call */
+	if (lsnlist == NULL)
+		return lsn;
+
+	/*
+	 * At last, Insert lsn[] into list. We're asuumed that list is descending
+	 * order.
+	 */
+	if (*lsnlist == NIL)
+	{
+		*lsnlist = lappend(*lsnlist, lsn);
+	}
+	else if (priority_group)
+	{
+		if (lsn[SYNC_REP_WAIT_WRITE] != InvalidXLogRecPtr &&
+			lsn[SYNC_REP_WAIT_FLUSH] != InvalidXLogRecPtr)
+			*lsnlist = lcons(lsn, *lsnlist);	/* Prepend lsn to list */
+	}
+	else
+	{
+		bool		inserted = false;
+
+		foreach(cell, *lsnlist)
+		{
+			XLogRecPtr *cur_lsn = (XLogRecPtr *) lfirst(cell);
+			XLogRecPtr *next_lsn;
+
+			/* If list has only one lsn element, just compare two LSNs. */
+			if (cell->next == NULL)
+			{
+				inserted = true;
+				if (
+					cur_lsn[SYNC_REP_WAIT_WRITE] < lsn[SYNC_REP_WAIT_WRITE] &&
+					cur_lsn[SYNC_REP_WAIT_FLUSH] < lsn[SYNC_REP_WAIT_FLUSH])
+					*lsnlist = lcons(lsn, *lsnlist);	/* Prepend lsn to list */
+				else
+					*lsnlist = lappend(*lsnlist, lsn);	/* Append lsn to list */
+				break;
+			}
+
+			/* Get next lsn in advance to insert lsn immidiately after cur_lsn */
+			next_lsn = (XLogRecPtr *) lfirst(cell->next);
+
+			/* Found lsn */
+			if (next_lsn[SYNC_REP_WAIT_WRITE] < lsn[SYNC_REP_WAIT_WRITE] &&
+				next_lsn[SYNC_REP_WAIT_FLUSH] < lsn[SYNC_REP_WAIT_FLUSH])
+			{
+				inserted = true;
+				lappend_cell(*lsnlist, cell, lsn);
+				break;
+			}
+		}
+		/* If there is not cell which is smaller than me, append lsn into tail */
+		if (!inserted)
+			*lsnlist = lappend(*lsnlist, lsn);
+	}
+
+	return lsn;
+}
+
 WalSnd *
 SyncRepGetSynchronousStandby(void)
 {
@@ -413,9 +656,9 @@ void
 SyncRepReleaseWaiters(void)
 {
 	volatile WalSndCtlData *walsndctl = WalSndCtl;
-	WalSnd	   *syncWalSnd;
 	int			numwrite = 0;
 	int			numflush = 0;
+	XLogRecPtr *lsn;
 
 	/*
 	 * If this WALSender is serving a standby that is not on the list of
@@ -433,31 +676,29 @@ SyncRepReleaseWaiters(void)
 	 * priority standby.
 	 */
 	LWLockAcquire(SyncRepLock, LW_EXCLUSIVE);
-	syncWalSnd = SyncRepGetSynchronousStandby();
 
-	/* We should have found ourselves at least */
-	Assert(syncWalSnd != NULL);
+	lsn = SyncRepGetQuorumRecPtr(SyncRepStandbyInfo, NULL, SyncRepStandbyInfo->priority_group);
 
-	/*
-	 * If we aren't managing the highest priority standby then just leave.
-	 */
-	if (syncWalSnd != MyWalSnd)
-	{
-		LWLockRelease(SyncRepLock);
-		announce_next_takeover = true;
-		return;
-	}
+	Assert(lsn);
+
+#ifdef DEBUG_QUORUM
+	/* Debug print */
+	elog(WARNING, "====== CONCLUSION write = %X/%X, flush = %X/%X ======",
+		 (uint32) (lsn[SYNC_REP_WAIT_WRITE] >> 32), (uint32) lsn[SYNC_REP_WAIT_WRITE],
+		 (uint32) (lsn[SYNC_REP_WAIT_FLUSH] >> 32), (uint32) lsn[SYNC_REP_WAIT_FLUSH]);
+#endif
+
 
 	/*
 	 * Set the lsn first so that when we wake backends they will release up to
 	 * this location.
 	 */
-	if (walsndctl->lsn[SYNC_REP_WAIT_WRITE] < MyWalSnd->write)
+	if (walsndctl->lsn[SYNC_REP_WAIT_WRITE] < lsn[SYNC_REP_WAIT_WRITE])
 	{
 		walsndctl->lsn[SYNC_REP_WAIT_WRITE] = MyWalSnd->write;
 		numwrite = SyncRepWakeQueue(false, SYNC_REP_WAIT_WRITE);
 	}
-	if (walsndctl->lsn[SYNC_REP_WAIT_FLUSH] < MyWalSnd->flush)
+	if (walsndctl->lsn[SYNC_REP_WAIT_FLUSH] < lsn[SYNC_REP_WAIT_FLUSH])
 	{
 		walsndctl->lsn[SYNC_REP_WAIT_FLUSH] = MyWalSnd->flush;
 		numflush = SyncRepWakeQueue(false, SYNC_REP_WAIT_FLUSH);
@@ -487,18 +728,12 @@ SyncRepReleaseWaiters(void)
  * priority sequence. Return priority if set, or zero to indicate that
  * we are not a potential sync standby.
  *
- * Compare the parameter SyncRepStandbyNames against the application_name
+ * Compare the parameter SyncRepStandbyInfo against the application_name
  * for this WALSender, or allow any name if we find a wildcard "*".
  */
 static int
 SyncRepGetStandbyPriority(void)
 {
-	char	   *rawstring;
-	List	   *elemlist;
-	ListCell   *l;
-	int			priority = 0;
-	bool		found = false;
-
 	/*
 	 * Since synchronous cascade replication is not allowed, we always set the
 	 * priority of cascading walsender to zero.
@@ -506,37 +741,10 @@ SyncRepGetStandbyPriority(void)
 	if (am_cascading_walsender)
 		return 0;
 
-	/* Need a modifiable copy of string */
-	rawstring = pstrdup(SyncRepStandbyNames);
+	if (CheckNameList(SyncRepStandbyInfo, application_name, false))
+		return 1;
 
-	/* Parse string into list of identifiers */
-	if (!SplitIdentifierString(rawstring, ',', &elemlist))
-	{
-		/* syntax error in list */
-		pfree(rawstring);
-		list_free(elemlist);
-		/* GUC machinery will have already complained - no need to do again */
-		return 0;
-	}
-
-	foreach(l, elemlist)
-	{
-		char	   *standby_name = (char *) lfirst(l);
-
-		priority++;
-
-		if (pg_strcasecmp(standby_name, application_name) == 0 ||
-			pg_strcasecmp(standby_name, "*") == 0)
-		{
-			found = true;
-			break;
-		}
-	}
-
-	pfree(rawstring);
-	list_free(elemlist);
-
-	return (found ? priority : 0);
+	return 0;
 }
 
 /*
@@ -684,6 +892,400 @@ SyncRepQueueIsOrderedByLSN(int mode)
  * ===========================================================
  */
 
+/*
+ * Read the whole of file into memory.
+ *
+ * The file contents are returned as a single palloc'd chunk. For convenience
+ * of the callers, an extra \0 byte is added to the end.
+ *
+ * This is a copy of function from extension.c
+ */
+static char *
+read_sync_file(int *length)
+{
+	char	   *buf;
+	FILE	   *file;
+	size_t		bytes_to_read;
+	struct stat fst;
+
+
+	if (stat(SyncFileName, &fst) < 0)
+	{
+		ereport(LOG,
+				(errcode_for_file_access(),
+				 errmsg("could not stat configuration file \"%s\": %m", SyncFileName)));
+		return NULL;
+	}
+
+	bytes_to_read = (size_t) fst.st_size;
+
+	if ((file = AllocateFile(SyncFileName, PG_BINARY_R)) == NULL)
+	{
+		ereport(LOG,
+				(errcode_for_file_access(),
+				 errmsg("could not open configuration file \"%s\": %m",
+						SyncFileName)));
+		return NULL;
+	}
+
+	buf = (char *) palloc(bytes_to_read + 1);
+
+
+	*length = fread(buf, 1, bytes_to_read, file);
+
+	if (ferror(file))
+	{
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not read file \"%s\": %m", SyncFileName)));
+		return NULL;
+	}
+
+	FreeFile(file);
+
+	buf[*length] = '\0';
+	return buf;
+}
+
+static SyncInfoNode *
+init_node(SyncInfoNodeType gtype)
+{
+	SyncInfoNode *expr = malloc(sizeof(SyncInfoNode));
+
+	expr->gtype = gtype;
+	expr->next = NULL;
+	expr->name = NULL;
+	expr->count = -1;
+	expr->group = NULL;
+
+	return expr;
+}
+
+static void
+add_node(SyncInfoState *state, SyncInfoNodeType ntype)
+{
+	SyncInfoParseState *pstate = state->parse_state;
+	SyncInfoNode *new_node = init_node(ntype);
+
+	switch (pstate->state_name)
+	{
+		case SYNC_INFO_MAIN:
+			Assert(!SyncRepStandbyInfo);
+			new_node->name = DefaultSyncGroupName;
+			SyncRepStandbyInfo = new_node;
+			break;
+		case SYNC_INFO_NODES:
+		case SYNC_INFO_GROUP_DETAIL:
+			if ((state->array_size)++ == 0)
+				state->array_first_node = new_node;
+			else if (state->array_size > 0)
+				state->cur_node->next = new_node;
+			break;
+		default:
+			/* do nothing */
+			break;
+	}
+	state->cur_node = new_node;
+}
+
+static SyncInfoParseState *
+pushState(SyncInfoParseState **pstate, SyncParseStateName state)
+{
+	SyncInfoParseState *ns = palloc(sizeof(SyncInfoParseState));
+	
+
+	if (state != SYNC_INFO_MAIN_OBJECT_START && state < (*pstate)->state_name)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+				 errmsg("Incorrect order of keys in file \"%s\"",
+						SYNC_FILENAME)));
+
+	ns->state_name = state;
+	ns->next = *pstate;
+
+#ifdef DEBUG_QUORUM
+	SyncInfoParseState *tmp = ns;
+
+	elog(WARNING, "====== STACK =====");
+	elog(WARNING, "%d", tmp->state_name);
+	while(tmp->next)
+	{
+		tmp = tmp->next;
+		elog(WARNING, "|");
+		elog(WARNING, "%d", tmp->state_name);
+	}
+#endif
+
+	return ns;
+}
+
+static SyncInfoParseState *
+popState(SyncInfoParseState **pstate)
+{
+	SyncInfoParseState *ps = (*pstate)->next;
+
+	pfree(*pstate);
+	return ps;
+}
+
+static void
+sync_info_object_start(void *istate)
+{
+	SyncInfoState *state = (SyncInfoState *) istate;
+
+	if (state->parse_state == NULL)
+		state->parse_state = pushState(&(state->parse_state), SYNC_INFO_MAIN_OBJECT_START);
+	else
+		add_node(state, GNODE_GROUP);
+}
+
+static void
+sync_info_array_start(void *istate)
+{
+	SyncInfoState *state = (SyncInfoState *) istate;
+
+	SyncParseStateName state_name = state->parse_state->state_name;
+
+	if (state_name == SYNC_INFO_GROUP_DETAIL || state_name == SYNC_INFO_NODES)
+		state->array_size = 0;
+	else
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("\"%s\": key \"%s\" value cannot be array",
+						SYNC_FILENAME, state->key_name)));
+}
+
+static void
+sync_info_array_end(void *istate)
+{
+	SyncInfoState *state = (SyncInfoState *) istate;
+
+	switch (state->parse_state->state_name)
+	{
+		case SYNC_INFO_GROUP_DETAIL:
+			if (!populate_group(SyncRepStandbyInfo, state->key_name, state->array_first_node, false))
+				ereport(LOG,
+						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+						 errmsg("\"%s\": group \"%s\" defined but not used",
+								SYNC_FILENAME, state->key_name)));
+			break;
+		case SYNC_INFO_NODES:
+			state->cur_node = SyncRepStandbyInfo;
+			SyncRepStandbyInfo->group = state->array_first_node;
+			break;
+		default:
+			/* do nothing */
+			return;
+	}
+	state->array_size = -1;
+	state->key_name = NULL;
+	state->array_first_node = NULL;
+}
+
+static void
+sync_info_object_field_start(void *istate, char *fname, bool isnull)
+{
+	SyncInfoState *state = (SyncInfoState *) istate;
+	SyncInfoParseState *pstate;
+
+	pstate = state->parse_state;
+
+	if (!fname)
+	{
+		SyncRepStandbyInfo = NULL;
+		ereport(ERROR, (errmsg("The token field name is NULL")));
+		return;
+	}
+	state->key_name = fname;
+
+	switch (pstate->state_name)
+	{
+		case SYNC_INFO_MAIN_OBJECT_START:
+			if (strcmp(fname, "sync_info") == 0)
+				state->parse_state = pushState(&(state->parse_state), SYNC_INFO_MAIN);
+			else if (strcmp(fname, "groups") == 0)
+			{
+				if (SyncRepStandbyInfo == NULL)
+					ereport(ERROR, (errmsg("'sync_info' should be defined before 'groups'")));
+
+				state->parse_state = pushState(&(state->parse_state), SYNC_INFO_GROUPS);
+			}
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("Unrecognised key \"%s\" in file \"%s\"",
+								fname, SYNC_FILENAME)));
+			break;
+
+		case SYNC_INFO_GROUPS:
+			state->parse_state = pushState(&(state->parse_state), SYNC_INFO_GROUP_DETAIL);
+			break;
+
+		default:
+			if (strcmp(fname, "priority") == 0)
+			{
+				state->cur_node->priority_group = true;
+				state->parse_state = pushState(&(state->parse_state), SYNC_INFO_COUNT);
+			}
+			else if (strcmp(fname, "quorum") == 0)
+			{
+				state->cur_node->priority_group = false;
+				state->parse_state = pushState(&(state->parse_state), SYNC_INFO_COUNT);
+			}
+			else if (strcmp(fname, "nodes") == 0)
+				state->parse_state = pushState(&(state->parse_state), SYNC_INFO_NODES);
+			else if (strcmp(fname, "group") == 0)
+				state->parse_state = pushState(&(state->parse_state), SYNC_INFO_GROUP_NAME);
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("Unrecognised key \"%s\" in file \"%s\"",
+								fname, SYNC_FILENAME)));
+	}
+}
+
+static void
+sync_info_object_field_end(void *istate, char *fname, bool isnull)
+{
+	SyncInfoState *state = (SyncInfoState *) istate;
+
+	state->parse_state = popState(&(state->parse_state));
+}
+
+static void
+sync_info_scalar(void *istate, char *token, JsonTokenType tokentype)
+{
+	SyncInfoState *state = (SyncInfoState *) istate;
+	SyncInfoParseState *pstate;
+
+	pstate = state->parse_state;
+	Assert(token != NULL);
+
+	switch (tokentype)
+	{
+		case JSON_TOKEN_NUMBER:
+			if (pstate->state_name == SYNC_INFO_COUNT)
+			{
+				state->cur_node->count = atoi(token);
+				break;
+			}
+		case JSON_TOKEN_STRING:
+			{
+				size_t		len = strlen(token);
+
+				if (pstate->state_name == SYNC_INFO_NODES || pstate->state_name == SYNC_INFO_GROUP_DETAIL)
+				{
+					if (state->array_size > -1)
+						add_node(state, GNODE_NAME);
+					else
+						ereport(ERROR,
+								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("\"%s\": key \"%s\" value must be array",
+									SYNC_FILENAME, state->key_name)));
+				}
+
+				state->cur_node->name = (char *) malloc(len);
+				memcpy(state->cur_node->name, token, strlen(token));
+				state->cur_node->name[len] = '\0';
+				break;
+			}
+
+		default:
+			ereport(LOG,
+					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+					 errmsg("Unrecognized token \"%s\" in file \"%s\"",
+							token, SYNC_FILENAME)));
+			break;
+	}
+
+}
+
+bool
+load_syncinfo()
+{
+	if (!SyncStandbysDefined())
+		return true;
+
+	if (strcmp(SyncRepStandbyNames, SYNC_FILENAME) == 0)
+	{
+		int			len;
+		char	   *json = read_sync_file(&len);
+		text	   *sync_info = cstring_to_text(json);
+		JsonLexContext *lex;
+		JsonSemAction sem;
+		SyncInfoState state;
+
+		if (len == 0)
+		{
+			ereport(LOG,
+					(errcode(ERRCODE_CONFIG_FILE_ERROR),
+					 errmsg("configuration file \"%s\" is empty",
+							SyncFileName)));
+			return false;
+		}
+
+		lex = makeJsonLexContext(sync_info, true);
+		memset(&sem, 0, sizeof(JsonSemAction));
+		memset(&state, 0, sizeof(SyncInfoState));
+
+		state.array_size = -1;
+		sem.semstate = (void *) &state;
+		sem.object_start = sync_info_object_start;
+		sem.array_start = sync_info_array_start;
+		sem.array_end = sync_info_array_end;
+		sem.scalar = sync_info_scalar;
+		sem.object_field_start = sync_info_object_field_start;
+		sem.object_field_end = sync_info_object_field_end;
+
+		pg_parse_json(lex, &sem);
+
+	}
+	else
+	{
+		char	   *rawstring;
+		List	   *elemlist;
+		ListCell   *l;
+		SyncInfoNode *temp = NULL;
+		size_t		len;
+
+		SyncRepStandbyInfo = init_node(GNODE_GROUP);
+		SyncRepStandbyInfo->name = DefaultSyncGroupName;
+		SyncRepStandbyInfo->priority_group = true;
+		SyncRepStandbyInfo->count = 1;
+
+		/* Need a modifiable copy of string */
+		rawstring = pstrdup(SyncRepStandbyNames);
+
+		/* Parse string into list of identifiers. */
+		SplitIdentifierString(rawstring, ',', &elemlist);
+
+		foreach(l, elemlist)
+		{
+			char	   *standby_name = (char *) lfirst(l);
+
+			if (temp != NULL)
+			{
+				temp->next = init_node(GNODE_NAME);
+				temp = temp->next;
+			}
+			else
+			{
+				temp = init_node(GNODE_NAME);
+				SyncRepStandbyInfo->group = temp;
+			}
+			len = strlen(standby_name);
+			temp->name = malloc(len);
+			memcpy(temp->name, standby_name, len);
+			temp->name[len] = '\0';
+		}
+
+		pfree(rawstring);
+		list_free(elemlist);
+	}
+	print_structure(SyncRepStandbyInfo, 0);
+	return true;
+}
+
 bool
 check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 {
@@ -713,6 +1315,7 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 
 	pfree(rawstring);
 	list_free(elemlist);
+	SyncRepStandbyInfo = NULL;
 
 	return true;
 }
@@ -732,4 +1335,31 @@ assign_synchronous_commit(int newval, void *extra)
 			SyncRepWaitMode = SYNC_REP_NO_WAIT;
 			break;
 	}
+}
+
+	
+void
+print_structure(SyncInfoNode * expr, int level)
+{
+	char       *blank = (char *) palloc(sizeof(char) * ((level * 4) + 1));
+	
+	memset(blank, '-', level * 4);
+	blank[level * 4] = '\0';
+	
+	if (expr->gtype == GNODE_NAME)
+		elog(WARNING, "[NAME] : %s name = %s", blank, expr->name);
+	else
+	{
+		elog(WARNING, "[GROUP]: %s %s = %d name = %s",
+			 blank,
+			 (expr->priority_group == true) ? "priority" : "quorum",
+			 expr->count,
+			 expr->name);
+		level++;
+		if (expr->group)
+			print_structure(expr->group, level);
+		level--;
+	}
+	if (expr->next)
+		print_structure(expr->next, level);
 }

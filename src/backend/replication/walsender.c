@@ -1952,6 +1952,8 @@ InitWalSenderSlot(void)
 			walsnd->pid = MyProcPid;
 			walsnd->sentPtr = InvalidXLogRecPtr;
 			walsnd->state = WALSNDSTATE_STARTUP;
+			memcpy(walsnd->name, application_name, strlen(application_name));
+			walsnd->name[strlen(application_name)] = '\0';
 			walsnd->latch = &MyProc->procLatch;
 			SpinLockRelease(&walsnd->mutex);
 			/* don't need the lock anymore */
