@@ -87,7 +87,7 @@ ID				{LETTER}{LETTER_OR_DIGIT}*
 QUALIFIED_ID	{ID}"."{ID}
 
 UNQUOTED_STRING {LETTER}({LETTER_OR_DIGIT}|[-._:/])*
-STRING			\'([^'\\\n]|\\.|\'\')*\'
+STRING			\'([^']|\\.|\'\')*\'
 
 %%
 
@@ -1153,6 +1153,8 @@ GUC_scanstr(const char *s)
 			/* doubled quote becomes just one quote */
 			newStr[j] = s[++i];
 		}
+		else if (s[i] == '\n' || (s[i] == '\r' && s[i + 1] == '\n'))
+			continue; /* Skip new line in GUC_STRING */
 		else
 			newStr[j] = s[i];
 		j++;
