@@ -1289,10 +1289,11 @@ print_structure(SyncInfoNode * expr, int level)
 		elog(WARNING, "[NAME] : %s name = %s", blank, expr->name);
 	else
 	{
-		elog(WARNING, "[GROUP]: %s %s = %d name = %s",
+		elog(WARNING, "[GROUP]: %s %s = %d, member = %d, name = %s",
 			 blank,
 			 (expr->priority_group == true) ? "priority" : "quorum",
 			 expr->count,
+			 expr->ngroups,
 			 expr->name);
 		level++;
 		if (expr->group)
