@@ -1036,6 +1036,18 @@ sync_info_array_end(void *istate)
 		case SYNC_INFO_NODES:
 			state->cur_node = SyncRepStandbyInfo;
 			SyncRepStandbyInfo->group = state->array_first_node;
+			SyncRepStandbyInfo->ngroups = state->array_size;
+
+			/*
+			 * Check if the priority/quorum number exceeds against the number
+			 * of node of group.
+			 */
+			if (SyncRepStandbyInfo->count > SyncRepStandbyInfo->ngroups)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("The not-existing order is specified in group \"%s\", The max number is \"%d\"",
+								SyncRepStandbyInfo->name, SyncRepStandbyInfo->ngroups)));
+
 			break;
 		default:
 			/* do nothing */
