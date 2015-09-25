@@ -106,7 +106,9 @@ static int	SyncRepWakeQueue(bool all, int mode);
 
 static int	SyncRepGetStandbyPriority(void);
 
+#ifdef DEBUG_QUORUM
 void print_structure(SyncInfoNode *expr, int level);
+#endif
 
 #ifdef USE_ASSERT_CHECKING
 static bool SyncRepQueueIsOrderedByLSN(int mode);
@@ -741,6 +743,12 @@ SyncRepGetStandbyPriority(void)
 	if (am_cascading_walsender)
 		return 0;
 
+	/*
+	 * There are not any synchronous standbys, return 0.
+	 */
+	if (SyncRepStandbyInfo == NULL)
+		return 0;
+
 	if (CheckNameList(SyncRepStandbyInfo, application_name, false))
 		return 1;
 
@@ -1184,9 +1192,7 @@ sync_info_scalar(void *istate, char *token, JsonTokenType tokentype)
 									SYNC_FILENAME, state->key_name)));
 				}
 
-				state->cur_node->name = (char *) malloc(len);
-				memcpy(state->cur_node->name, token, strlen(token));
-				state->cur_node->name[len] = '\0';
+				state->cur_node->name = pstrdup(token);
 				break;
 			}
 
@@ -1273,10 +1279,7 @@ load_syncinfo()
 				temp = init_node(GNODE_NAME);
 				SyncRepStandbyInfo->group = temp;
 			}
-			len = strlen(standby_name);
-			temp->name = malloc(len);
-			memcpy(temp->name, standby_name, len);
-			temp->name[len] = '\0';
+			temp->name = pstrdup(standby_name);
 		}
 
 		pfree(rawstring);
@@ -1337,7 +1340,7 @@ assign_synchronous_commit(int newval, void *extra)
 	}
 }
 
-	
+#ifdef DEBUG_QUORUM
 void
 print_structure(SyncInfoNode * expr, int level)
 {
@@ -1363,3 +1366,4 @@ print_structure(SyncInfoNode * expr, int level)
 	if (expr->next)
 		print_structure(expr->next, level);
 }
+#endif
