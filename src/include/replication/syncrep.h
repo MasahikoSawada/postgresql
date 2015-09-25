@@ -20,9 +20,6 @@
 #define SyncRepRequested() \
 	(max_wal_senders > 0 && synchronous_commit > SYNCHRONOUS_COMMIT_LOCAL_FLUSH)
 
-/* SyncRepFile */
-#define SYNC_FILENAME	"pg_syncinfo.conf"
-
 /* SyncRepWaitMode */
 #define SYNC_REP_NO_WAIT		-1
 #define SYNC_REP_WAIT_WRITE		0
@@ -89,6 +86,7 @@ extern bool CheckNameList(SyncInfoNode *expr, char *name, bool found);
 extern XLogRecPtr *SyncRepGetQuorumRecPtr(SyncInfoNode *node, List **lsnlist, bool set_prioirty);
 
 extern bool check_synchronous_standby_names(char **newval, void **extra, GucSource source);
+extern void assign_synchronous_standby_names(char *newval, void *extra);
 extern void assign_synchronous_commit(int newval, void *extra);
 
 #endif   /* _SYNCREP_H */

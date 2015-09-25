@@ -442,7 +442,6 @@ char	   *cluster_name = "";
 char	   *ConfigFileName;
 char	   *HbaFileName;
 char	   *IdentFileName;
-char	   *SyncFileName;
 char	   *external_pid_file;
 
 char	   *pgstat_temp_directory;
@@ -3240,17 +3239,6 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
-		{"sync_file", PGC_POSTMASTER, FILE_LOCATIONS,
-			gettext_noop("Sets the server's \"sync information\" configuration file."),
-			NULL,
-			GUC_SUPERUSER_ONLY
-		},
-		&SyncFileName,
-		NULL,
-		NULL, NULL, NULL
-	},
-
-	{
 		{"ident_file", PGC_POSTMASTER, FILE_LOCATIONS,
 			gettext_noop("Sets the server's \"ident\" configuration file."),
 			NULL,
@@ -3325,13 +3313,13 @@ static struct config_string ConfigureNamesString[] =
 
 	{
 		{"synchronous_standby_names", PGC_SIGHUP, REPLICATION_MASTER,
-			gettext_noop("List of names of potential synchronous standbys."),
+			gettext_noop("List of names of synchronous standbys."),
 			NULL,
 			GUC_LIST_INPUT
 		},
 		&SyncRepStandbyNames,
 		"",
-		check_synchronous_standby_names, NULL, NULL
+		check_synchronous_standby_names, assign_synchronous_standby_names, NULL
 	},
 
 	{
@@ -4560,30 +4548,6 @@ SelectConfigFiles(const char *userDoption, const char *progname)
 		return false;
 	}
 	SetConfigOption("hba_file", fname, PGC_POSTMASTER, PGC_S_OVERRIDE);
-	free(fname);
-
-	/*
-	 * Likewise for pg_syncinfo.conf.
-	 */
-
-	if (SyncFileName)
-		fname = make_absolute_path(SyncFileName);
-	else if (configdir)
-	{
-		fname = guc_malloc(FATAL,
-						   strlen(configdir) + strlen(SYNC_FILENAME) + 2);
-		sprintf(fname, "%s/%s", configdir, SYNC_FILENAME);
-	}
-	else
-	{
-		write_stderr("%s does not know where to find the \"sync_info\" configuration file.\n"
-					 "This can be specified as \"syncinfo_file\" in \"%s\", "
-					 "or by the -D invocation option, or by the "
-					 "PGDATA environment variable.\n",
-					 progname, ConfigFileName);
-		return false;
-	}
-	SetConfigOption("sync_file", fname, PGC_POSTMASTER, PGC_S_OVERRIDE);
 	free(fname);
 
 	/*

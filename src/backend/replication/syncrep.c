@@ -900,61 +900,6 @@ SyncRepQueueIsOrderedByLSN(int mode)
  * ===========================================================
  */
 
-/*
- * Read the whole of file into memory.
- *
- * The file contents are returned as a single palloc'd chunk. For convenience
- * of the callers, an extra \0 byte is added to the end.
- *
- * This is a copy of function from extension.c
- */
-static char *
-read_sync_file(int *length)
-{
-	char	   *buf;
-	FILE	   *file;
-	size_t		bytes_to_read;
-	struct stat fst;
-
-
-	if (stat(SyncFileName, &fst) < 0)
-	{
-		ereport(LOG,
-				(errcode_for_file_access(),
-				 errmsg("could not stat configuration file \"%s\": %m", SyncFileName)));
-		return NULL;
-	}
-
-	bytes_to_read = (size_t) fst.st_size;
-
-	if ((file = AllocateFile(SyncFileName, PG_BINARY_R)) == NULL)
-	{
-		ereport(LOG,
-				(errcode_for_file_access(),
-				 errmsg("could not open configuration file \"%s\": %m",
-						SyncFileName)));
-		return NULL;
-	}
-
-	buf = (char *) palloc(bytes_to_read + 1);
-
-
-	*length = fread(buf, 1, bytes_to_read, file);
-
-	if (ferror(file))
-	{
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not read file \"%s\": %m", SyncFileName)));
-		return NULL;
-	}
-
-	FreeFile(file);
-
-	buf[*length] = '\0';
-	return buf;
-}
-
 static SyncInfoNode *
 init_node(SyncInfoNodeType gtype)
 {
@@ -1005,8 +950,7 @@ pushState(SyncInfoParseState **pstate, SyncParseStateName state)
 	if (state != SYNC_INFO_MAIN_OBJECT_START && state < (*pstate)->state_name)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-				 errmsg("Incorrect order of keys in file \"%s\"",
-						SYNC_FILENAME)));
+				 errmsg("Incorrect order of keys in synchronous_standby_names")));
 
 	ns->state_name = state;
 	ns->next = *pstate;
@@ -1059,8 +1003,8 @@ sync_info_array_start(void *istate)
 	else
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("\"%s\": key \"%s\" value cannot be array",
-						SYNC_FILENAME, state->key_name)));
+				 errmsg("synchronous_standby_names : key \"%s\" value cannot be array",
+						state->key_name)));
 }
 
 static void
@@ -1074,8 +1018,8 @@ sync_info_array_end(void *istate)
 			if (!populate_group(SyncRepStandbyInfo, state->key_name, state->array_first_node, false))
 				ereport(LOG,
 						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-						 errmsg("\"%s\": group \"%s\" defined but not used",
-								SYNC_FILENAME, state->key_name)));
+						 errmsg("synchronous_standby_names : group \"%s\" defined but not used",
+								state->key_name)));
 			break;
 		case SYNC_INFO_NODES:
 			state->cur_node = SyncRepStandbyInfo;
@@ -1121,8 +1065,8 @@ sync_info_object_field_start(void *istate, char *fname, bool isnull)
 			else
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						 errmsg("Unrecognised key \"%s\" in file \"%s\"",
-								fname, SYNC_FILENAME)));
+						 errmsg("Unrecognised key \"%s\" in synchronous_standby_names",
+								fname)));
 			break;
 
 		case SYNC_INFO_GROUPS:
@@ -1147,8 +1091,8 @@ sync_info_object_field_start(void *istate, char *fname, bool isnull)
 			else
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						 errmsg("Unrecognised key \"%s\" in file \"%s\"",
-								fname, SYNC_FILENAME)));
+						 errmsg("Unrecognised key \"%s\" in synchronous_standby_names",
+								fname)));
 	}
 }
 
@@ -1179,8 +1123,6 @@ sync_info_scalar(void *istate, char *token, JsonTokenType tokentype)
 			}
 		case JSON_TOKEN_STRING:
 			{
-				size_t		len = strlen(token);
-
 				if (pstate->state_name == SYNC_INFO_NODES || pstate->state_name == SYNC_INFO_GROUP_DETAIL)
 				{
 					if (state->array_size > -1)
@@ -1188,8 +1130,8 @@ sync_info_scalar(void *istate, char *token, JsonTokenType tokentype)
 					else
 						ereport(ERROR,
 								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-							 errmsg("\"%s\": key \"%s\" value must be array",
-									SYNC_FILENAME, state->key_name)));
+							 errmsg("synchronous_standby_names: key \"%s\" value must be array",
+									state->key_name)));
 				}
 
 				state->cur_node->name = pstrdup(token);
@@ -1199,71 +1141,63 @@ sync_info_scalar(void *istate, char *token, JsonTokenType tokentype)
 		default:
 			ereport(LOG,
 					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-					 errmsg("Unrecognized token \"%s\" in file \"%s\"",
-							token, SYNC_FILENAME)));
+					 errmsg("Unrecognized token \"%s\" in synchronous_standby_names",
+							token)));
 			break;
 	}
 
 }
 
 bool
-load_syncinfo()
+check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 {
-	if (!SyncStandbysDefined())
-		return true;
+	char	   *rawstring;
+	List	   *elemlist;
 
-	if (strcmp(SyncRepStandbyNames, SYNC_FILENAME) == 0)
+	/* Need a modifiable copy of string */
+	rawstring = pstrdup(*newval);
+
+	if (SplitIdentifierString(rawstring, ',', &elemlist))
 	{
-		int			len;
-		char	   *json = read_sync_file(&len);
-		text	   *sync_info = cstring_to_text(json);
-		JsonLexContext *lex;
-		JsonSemAction sem;
-		SyncInfoState state;
+		/*
+		 * Any additional validation of standby names should go here.
+		 *
+		 * Don't attempt to set WALSender priority because this is executed by
+		 * postmaster at startup, not WALSender, so the application_name is not
+		 * yet correctly set.
+		 */
 
-		if (len == 0)
-		{
-			ereport(LOG,
-					(errcode(ERRCODE_CONFIG_FILE_ERROR),
-					 errmsg("configuration file \"%s\" is empty",
-							SyncFileName)));
-			return false;
-		}
+		pfree(rawstring);
+		list_free(elemlist);
+		SyncRepStandbyInfo = NULL;
 
-		lex = makeJsonLexContext(sync_info, true);
-		memset(&sem, 0, sizeof(JsonSemAction));
-		memset(&state, 0, sizeof(SyncInfoState));
-
-		state.array_size = -1;
-		sem.semstate = (void *) &state;
-		sem.object_start = sync_info_object_start;
-		sem.array_start = sync_info_array_start;
-		sem.array_end = sync_info_array_end;
-		sem.scalar = sync_info_scalar;
-		sem.object_field_start = sync_info_object_field_start;
-		sem.object_field_end = sync_info_object_field_end;
-
-		pg_parse_json(lex, &sem);
-
+		return true;
 	}
 	else
 	{
-		char	   *rawstring;
-		List	   *elemlist;
+		/* Do check something to validate JSON */
+		SyncRepStandbyInfo = NULL;
+	}
+
+	return true;
+}
+
+void
+assign_synchronous_standby_names(char *newval, void *extra)
+{
+	List	*elemlist;
+	char	*rawstring = pstrdup(newval);
+
+	/* First, we try to parse string as conma-sepalated list. */
+	if (SplitIdentifierString(rawstring, ',', &elemlist))
+	{
 		ListCell   *l;
 		SyncInfoNode *temp = NULL;
-		size_t		len;
 
 		SyncRepStandbyInfo = init_node(GNODE_GROUP);
 		SyncRepStandbyInfo->name = DefaultSyncGroupName;
 		SyncRepStandbyInfo->priority_group = true;
 		SyncRepStandbyInfo->count = 1;
-
-		/* Need a modifiable copy of string */
-		rawstring = pstrdup(SyncRepStandbyNames);
-
-		/* Parse string into list of identifiers. */
-		SplitIdentifierString(rawstring, ',', &elemlist);
 
 		foreach(l, elemlist)
 		{
@@ -1281,46 +1215,36 @@ load_syncinfo()
 			}
 			temp->name = pstrdup(standby_name);
 		}
-
-		pfree(rawstring);
-		list_free(elemlist);
 	}
-	print_structure(SyncRepStandbyInfo, 0);
-	return true;
-}
-
-bool
-check_synchronous_standby_names(char **newval, void **extra, GucSource source)
-{
-	char	   *rawstring;
-	List	   *elemlist;
-
-	/* Need a modifiable copy of string */
-	rawstring = pstrdup(*newval);
-
-	/* Parse string into list of identifiers */
-	if (!SplitIdentifierString(rawstring, ',', &elemlist))
+	else /* Otherwise, JSON format */
 	{
-		/* syntax error in list */
-		GUC_check_errdetail("List syntax is invalid.");
-		pfree(rawstring);
-		list_free(elemlist);
-		return false;
-	}
+		text	   *sync_info = cstring_to_text(rawstring);
+		JsonLexContext *lex;
+		JsonSemAction sem;
+		SyncInfoState state;
 
-	/*
-	 * Any additional validation of standby names should go here.
-	 *
-	 * Don't attempt to set WALSender priority because this is executed by
-	 * postmaster at startup, not WALSender, so the application_name is not
-	 * yet correctly set.
-	 */
+		lex = makeJsonLexContext(sync_info, true);
+		memset(&sem, 0, sizeof(JsonSemAction));
+		memset(&state, 0, sizeof(SyncInfoState));
+
+		state.array_size = -1;
+		sem.semstate = (void *) &state;
+		sem.object_start = sync_info_object_start;
+		sem.array_start = sync_info_array_start;
+		sem.array_end = sync_info_array_end;
+		sem.scalar = sync_info_scalar;
+		sem.object_field_start = sync_info_object_field_start;
+		sem.object_field_end = sync_info_object_field_end;
+
+		pg_parse_json(lex, &sem);
+	}
 
 	pfree(rawstring);
 	list_free(elemlist);
-	SyncRepStandbyInfo = NULL;
 
-	return true;
+#ifdef DEBUG_QUORUM
+	print_structure(SyncRepStandbyInfo, 0);
+#endif
 }
 
 void
