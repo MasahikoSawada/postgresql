@@ -95,7 +95,7 @@ static void sync_info_object_field_start(void *pstate, char *fname, bool isnull)
 static void sync_info_object_field_end(void *pstate, char *fname, bool isnull);
 static void sync_info_scalar(void *pstate, char *token, JsonTokenType tokentype);
 static void add_node(SyncInfoState * state, SyncInfoNodeType ntype);
-bool		populate_group(SyncInfoNode * expr, char *name, SyncInfoNode * group_node, bool found);
+bool		populate_group(SyncInfoNode * expr, SyncInfoState *state, bool found);
 static bool announce_next_takeover = true;
 
 static int	SyncRepWaitMode = SYNC_REP_NO_WAIT;
@@ -412,22 +412,34 @@ CheckNameList(SyncInfoNode * expr, char *name, bool found)
 }
 
 bool
-populate_group(SyncInfoNode *expr, char *name, SyncInfoNode *group_node, bool found)
+populate_group(SyncInfoNode *expr, SyncInfoState *state, bool found)
 {
 	if (GNODE_GROUP)
 	{
-		if (strcmp(expr->name, name) == 0)
+		if (strcmp(expr->name, state->key_name) == 0)
 		{
-			expr->group = group_node;
+			expr->group = state->array_first_node;
+			expr->ngroups = state->array_size;
+
+			/*
+			 * Check if the priority/quorum number exceeds against the number
+			 * of node of group.
+			 */
+			if (expr->count > expr->ngroups)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("The not-existing order is specified in group \"%s\", The max number is \"%d\"",
+								expr->name, expr->ngroups)));
+
 			found = true;
 		}
 
 		else if (expr->group != NULL)
-			found = populate_group(expr->group, name, group_node, found);
+			found = populate_group(expr->group, state, found);
 	}
 
 	if (expr->next)
-		found = populate_group(expr->next, name, group_node, found);
+		found = populate_group(expr->next, state, found);
 
 	return found;
 }
@@ -1015,7 +1027,7 @@ sync_info_array_end(void *istate)
 	switch (state->parse_state->state_name)
 	{
 		case SYNC_INFO_GROUP_DETAIL:
-			if (!populate_group(SyncRepStandbyInfo, state->key_name, state->array_first_node, false))
+			if (!populate_group(SyncRepStandbyInfo, state, false))
 				ereport(LOG,
 						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 						 errmsg("synchronous_standby_names : group \"%s\" defined but not used",
