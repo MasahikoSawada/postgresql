@@ -1,0 +1,5 @@
+# amcheck extension
+comment = 'verify the integrity of indexes at a low level'
+default_version = '1.0'
+module_pathname = '$libdir/amcheck'
+relocatable = true
