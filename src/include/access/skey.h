@@ -70,6 +70,7 @@ typedef struct ScanKeyData
 	Oid			sk_collation;	/* collation to use, if needed */
 	FmgrInfo	sk_func;		/* lookup info for function to call */
 	Datum		sk_argument;	/* data to compare */
+	uint16		sk_abbrkey;		/* leading attribute abbreviated key */
 } ScanKeyData;
 
 typedef ScanKeyData *ScanKey;

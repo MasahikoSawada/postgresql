@@ -81,10 +81,10 @@ static Buffer _bt_split(Relation rel, Buffer buf, Buffer cbuf,
 		  IndexTuple newitem, bool newitemonleft);
 static Buffer _bt2_split(Relation rel, Buffer buf, Buffer cbuf,
 		  OffsetNumber firstright, OffsetNumber newitemoff, Size newitemsz,
-		  IndexTuple newitem, bool newitemonleft);
+		  IndexTuple newitem, int32* newabbrev, bool newitemonleft);
 static Buffer _bt2_split_internal(Relation rel, Buffer buf, Buffer cbuf,
 		  OffsetNumber firstright, OffsetNumber newitemoff, Size newitemsz,
-		  IndexTuple newitem, bool newitemonleft);
+		  IndexTuple newitem, int32 *newabbrev, bool newitemonleft);
 static Buffer _bt2_split_leaf(Relation rel, Buffer buf, Buffer cbuf,
 		  OffsetNumber firstright, OffsetNumber newitemoff, Size newitemsz,
 		  IndexTuple newitem, bool newitemonleft);
@@ -106,7 +106,7 @@ static void _bt_checksplitloc(FindSplitData *state,
 static bool _bt_pgaddtup(Page page, Size itemsize, IndexTuple itup,
 			 OffsetNumber itup_off);
 static bool _bt2_pgaddtup_internal(Page page, Size itemsize, IndexTuple itup,
-			 OffsetNumber itup_off, int32 abbrkey);
+			 OffsetNumber itup_off, uint16 abbrkey);
 static bool _bt_isequal(TupleDesc itupdesc, Page page, OffsetNumber offnum,
 			int keysz, ScanKey scankey);
 static void _bt_vacuum_one_page(Relation rel, Buffer buffer, Relation heapRel);
@@ -1123,7 +1123,7 @@ _bt2_insertonpg(Relation rel,
 
 		/* split the buffer into left and right halves */
 		rbuf = _bt2_split(rel, buf, cbuf, firstright,
-						 newitemoff, itemsz, itup, newitemonleft);
+						 newitemoff, itemsz, itup, abbrkey, newitemonleft);
 		PredicateLockPageSplit(rel,
 							   BufferGetBlockNumber(buf),
 							   BufferGetBlockNumber(rbuf));
@@ -1187,7 +1187,10 @@ _bt2_insertonpg(Relation rel,
 		START_CRIT_SECTION();
 
 		if (abbrkey)
-			res = _bt2_pgaddtup_internal(page, itemsz, itup, newitemoff, *abbrkey);
+		{
+			uint16		realAbbrev = int32AbbrevConvert(*abbrkey);
+			res = _bt2_pgaddtup_internal(page, itemsz, itup, newitemoff, realAbbrev);
+		}
 		else
 			res = _bt_pgaddtup(page, itemsz, itup, newitemoff);
 
@@ -1294,7 +1297,7 @@ _bt2_insertonpg(Relation rel,
 
 static Buffer
 _bt2_split(Relation rel ,Buffer buf, Buffer cbuf, OffsetNumber firstright,
-		  OffsetNumber newitemoff, Size newitemsz, IndexTuple newitem,
+		  OffsetNumber newitemoff, Size newitemsz, IndexTuple newitem, int32* newabbrev,
 		  bool newitemonleft)
 {
 	Page			page;
@@ -1314,7 +1317,7 @@ _bt2_split(Relation rel ,Buffer buf, Buffer cbuf, OffsetNumber firstright,
 
 	if (!P_ISLEAF(opaque))
 		return _bt2_split_internal(rel, buf, cbuf, firstright, newitemoff, newitemsz,
-						   newitem, newitemonleft);
+						   newitem, newabbrev, newitemonleft);
 	else
 		return _bt2_split_leaf(rel, buf, cbuf, firstright, newitemoff, newitemsz,
 					   newitem, newitemonleft);
@@ -1337,7 +1340,7 @@ _bt2_split(Relation rel ,Buffer buf, Buffer cbuf, OffsetNumber firstright,
  */
 static Buffer
 _bt2_split_internal(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
-		  OffsetNumber newitemoff, Size newitemsz, IndexTuple newitem,
+		  OffsetNumber newitemoff, Size newitemsz, IndexTuple newitem, int32 *newabbrev,
 		  bool newitemonleft)
 {
 	Buffer		rbuf;
@@ -1361,7 +1364,7 @@ _bt2_split_internal(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstrig
 	OffsetNumber i;
 	bool		isroot;
 	bool		isleaf;
-	int32		abbrkey;
+	uint16		abbrkey;
 
 	//elog(WARNING, "INTERNAL SPLIT");
 
@@ -1457,6 +1460,7 @@ _bt2_split_internal(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstrig
 		/* incoming tuple will become first on right page */
 		itemsz = newitemsz;
 		item = newitem;
+		abbrkey = int32AbbrevConvert(*newabbrev);
 	}
 	else
 	{
@@ -3044,6 +3048,11 @@ _bt2_insert_parent(Relation rel,
 
 		if (P_ISLEAF(lopaque))
 		{
+			TupleDesc	itupdesc = RelationGetDescr(rel);
+			Datum		datum;
+			bool		isNull;
+			int32		abbrev;
+
 			/* get high key from left page == lowest key on new right page */
 			ritem = (IndexTuple) PageGetItem(page,
 											 PageGetItemId(page, P_HIKEY));
@@ -3061,25 +3070,27 @@ _bt2_insert_parent(Relation rel,
 			 */
 			ItemPointerSet(&(stack->bts_btentry.t_tid), bknum, P_HIKEY);
 			pbuf = _bt2_getstackbuf(rel, stack, BT_WRITE);
-			
+
 			/*
 			 * Now we can unlock the right child. The left child will be unlocked
 			 * by _bt_insertonpg().
 			 */
 			_bt_relbuf(rel, rbuf);
-			
+
+
 			/* Check for error only after writing children */
 			if (pbuf == InvalidBuffer)
 				elog(ERROR, "failed to re-find parent key in index \"%s\" for split pages %u/%u",
 					 RelationGetRelationName(rel), bknum, rbknum);
 
-			abbrkey = *(int32*) ((Item) new_item + sizeof(IndexTupleData));
-			
+			datum = index_getattr(new_item, 1, itupdesc, &isNull);
+
+			abbrev = DatumGetInt32(datum);
 			/* Recursively update the parent */
 			_bt2_insertonpg(rel, pbuf, buf, stack->bts_parent,
 						   new_item, stack->bts_offset + 1,
-						   is_only, &abbrkey);
-			
+						   is_only, &abbrev);
+
 			/* be tidy */
 			pfree(new_item);
 		}
@@ -3088,11 +3099,11 @@ _bt2_insert_parent(Relation rel,
 			/* get high key from left page == lowest key on new right page */
 			ritem = (IndexTuple) PageGetItem(page,
 											 PageGetItemIdWithAbbrKey(page, P_HIKEY));
-			
+
 			/* form an index tuple that points at the new right page */
 			new_item = CopyIndexTuple(ritem);
 			ItemPointerSet(&(new_item->t_tid), rbknum, P_HIKEY);
-			
+
 			/*
 			 * Find the parent buffer and get the parent page.
 			 *
@@ -3102,28 +3113,27 @@ _bt2_insert_parent(Relation rel,
 			 */
 			ItemPointerSet(&(stack->bts_btentry.t_tid), bknum, P_HIKEY);
 			pbuf = _bt2_getstackbuf(rel, stack, BT_WRITE);
-			
+
+			abbrkey = ItemIdGetAbbrKey(PageGetItemIdWithAbbrKey(page, P_HIKEY));
 			/*
 			 * Now we can unlock the right child. The left child will be unlocked
 			 * by _bt_insertonpg().
 			 */
 			_bt_relbuf(rel, rbuf);
-			
+
 			/* Check for error only after writing children */
 			if (pbuf == InvalidBuffer)
 				elog(ERROR, "failed to re-find parent key in index \"%s\" for split pages %u/%u",
 					 RelationGetRelationName(rel), bknum, rbknum);
 
-			abbrkey = *(int32 *) ((Item) new_item + sizeof(IndexTupleData));
-			
 			/* Recursively update the parent */
 			_bt2_insertonpg(rel, pbuf, buf, stack->bts_parent,
 						   new_item, stack->bts_offset + 1,
 							is_only, &abbrkey);
-			
+
 			/* be tidy */
 			pfree(new_item);
-			
+
 		}
 	}
 }
@@ -3587,7 +3597,7 @@ _bt2_newroot_internal(Relation rel, Buffer lbuf, Buffer rbuf)
 	Buffer		metabuf;
 	Page		metapg;
 	BTMetaPageData *metad;
-	int32		labbrkey, rabbrkey;
+	uint16		labbrkey, rabbrkey;
 
 	lbkno = BufferGetBlockNumber(lbuf);
 	rbkno = BufferGetBlockNumber(rbuf);
@@ -4066,7 +4076,7 @@ _bt2_pgaddtup_internal(Page page,
 			 Size itemsize,
 			 IndexTuple itup,
 		     OffsetNumber itup_off,
-			 int32 abbrkey)
+			 uint16 abbrkey)
 {
 	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 	IndexTupleData trunctuple;

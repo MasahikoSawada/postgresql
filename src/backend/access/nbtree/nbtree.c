@@ -383,6 +383,8 @@ bt2gettuple(PG_FUNCTION_ARGS)
 			res = _bt2_first(scan, dir);
 		else
 		{
+	scan->keyData->sk_abbrkey =
+		int32AbbrevConvert(DatumGetInt32(scan->keyData->sk_argument));
 			/*
 			 * Check to see if we should kill the previously-fetched tuple.
 			 */
@@ -500,6 +502,8 @@ bt2getbitmap(PG_FUNCTION_ARGS)
 		_bt_start_array_keys(scan, ForwardScanDirection);
 	}
 
+	scan->keyData->sk_abbrkey =
+		int32AbbrevConvert(DatumGetInt32(scan->keyData->sk_argument));
 	/* This loop handles advancing to the next array elements, if any */
 	do
 	{

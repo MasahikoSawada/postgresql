@@ -638,6 +638,29 @@ typedef struct BTScanOpaqueData
 typedef BTScanOpaqueData *BTScanOpaque;
 
 /*
+ * Convert int32 value to uint16 abbreviated key value.
+ */
+static inline uint16
+int32AbbrevConvert(int32 arg)
+{
+	/*
+	 * For now, optimize for positive representation.
+	 */
+	if (arg >= 0)
+	{
+		uint32		nosign = arg;
+
+		/*
+		 * Return approximation of value
+		 */
+		return (uint16) (nosign / (UINT32_MAX / UINT16_MAX));
+	}
+
+	return 0;
+}
+
+
+/*
  * We use some private sk_flags bits in preprocessed scan keys.  We're allowed
  * to use bits 16-31 (see skey.h).  The uppermost bits are copied from the
  * index's indoption[] array entry for the index attribute.

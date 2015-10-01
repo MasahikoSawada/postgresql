@@ -157,7 +157,7 @@ PageAddItemWithAbbrKey(Page page,
 			OffsetNumber offsetNumber,
 			bool overwrite,
 			bool is_heap,
-			int32 abbrkey)
+			uint16 abbrkey)
 {
 	PageHeaderWithAbbrKey	phdr = (PageHeaderWithAbbrKey) page;
 	Size		alignedSize;

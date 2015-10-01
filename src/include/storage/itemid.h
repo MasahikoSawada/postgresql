@@ -35,7 +35,7 @@ typedef struct ItemIdDataWithAbbrKey
 	unsigned	lp_off:15,		/* offset to tuple (from start of page) */
 				lp_flags:2,		/* state of item pointer, see below */
 				lp_len:15;		/* byte length of tuple */
-	unsigned 	abbrkey:32;
+	uint16 		lp_abbrkey;
 } ItemIdDataWithAbbrKey;
 
 typedef ItemIdDataWithAbbrKey *ItemIdWithAbbrKey;
@@ -84,7 +84,7 @@ typedef uint16 ItemLength;
  *		ItemIdGetAbbrKey
  */
 #define ItemIdGetAbbrKey(itemIdWithAbbrKey) \
-	((itemIdWithAbbrKey)->abbrkey)
+	((itemIdWithAbbrKey)->lp_abbrkey)
 
 /*
  *		ItemIdGetRedirect
@@ -164,7 +164,7 @@ typedef uint16 ItemLength;
 	(itemId)->lp_flags = LP_NORMAL, \
 	(itemId)->lp_off = (off), \
 	(itemId)->lp_len = (len), \
-	(itemId)->abbrkey = (abbrkey) \
+	(itemId)->lp_abbrkey = (abbrkey) \
 )
 
 /*

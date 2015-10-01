@@ -406,7 +406,7 @@ _bt2_moveright(Relation rel,
 	{
 		int res;
 		page = BufferGetPage(buf);
-		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+		opaque = (BTPageOpaque) PageWithAbbrKeyGetSpecialPointer(page);
 
 		if (P_RIGHTMOST(opaque))
 			break;
@@ -578,7 +578,7 @@ _bt2_binsrch(Relation rel,
 				cmpval;
 
 	page = BufferGetPage(buf);
-	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+	opaque = (BTPageOpaque) PageWithAbbrKeyGetSpecialPointer(page);
 
 	low = P_FIRSTDATAKEY(opaque);
 	if (!P_ISLEAF(opaque))
@@ -771,9 +771,10 @@ _bt2_compare(Relation rel,
 			Page page,
 			OffsetNumber offnum)
 {
-	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+	BTPageOpaque opaque = (BTPageOpaque) PageWithAbbrKeyGetSpecialPointer(page);
 	ItemIdWithAbbrKey	itemId;
-	int32				abbrkey, argument;
+	uint16				abbrkey;
+	uint16				abbrkeyArgument;
 
 	/*
 	 * Force result ">" if target item is first data item on an internal page
@@ -785,13 +786,77 @@ _bt2_compare(Relation rel,
 	/* @@@ : COMPARE LOGIC Is Here */
 	itemId = PageGetItemIdWithAbbrKey(page, offnum);
 	abbrkey = ItemIdGetAbbrKey(itemId);
-	argument = DatumGetInt32(scankey->sk_argument);
-	//elog(WARNING, "_bt2_compare abbrkey : %d, keyword : %d", abbrkey, argument);
+	scankey->sk_abbrkey =
+		int32AbbrevConvert(DatumGetInt32(scankey->sk_argument));
+	abbrkeyArgument = scankey->sk_abbrkey;
+	//elog(WARNING, "_bt2_compare abbrkey : %u, abbrkeyArgument : %u", abbrkey,
+	//abbrkeyArgument);
 
-	if (argument < abbrkey)
+	if (abbrkeyArgument < abbrkey)
 		return -1;
-	else if (argument == abbrkey)
+	else if (abbrkeyArgument == abbrkey)
+	{
+#if 0
+		int			i;
+		IndexTuple	itup;
+		itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, offnum));
+
+		for (i = 1; i <= keysz; i++)
+		{
+			Datum		datum;
+			bool		isNull;
+			int32		result;
+
+			TupleDesc	itupdesc = RelationGetDescr(rel);
+			datum = index_getattr(itup, scankey->sk_attno, itupdesc, &isNull);
+
+			//elog(WARNING, "   _bt_compare: item = %d, key = %d", (int)datum, scankey->sk_argument);
+
+			/* see comments about NULLs handling in btbuild */
+			if (scankey->sk_flags & SK_ISNULL)		/* key is NULL */
+			{
+				if (isNull)
+					result = 0;		/* NULL "=" NULL */
+				else if (scankey->sk_flags & SK_BT_NULLS_FIRST)
+					result = -1;	/* NULL "<" NOT_NULL */
+				else
+					result = 1;		/* NULL ">" NOT_NULL */
+			}
+			else if (isNull)		/* key is NOT_NULL and item is NULL */
+			{
+				if (scankey->sk_flags & SK_BT_NULLS_FIRST)
+					result = 1;		/* NOT_NULL ">" NULL */
+				else
+					result = -1;	/* NOT_NULL "<" NULL */
+			}
+			else
+			{
+				/*
+				 * The sk_func needs to be passed the index value as left arg and
+				 * the sk_argument as right arg (they might be of different
+				 * types).  Since it is convenient for callers to think of
+				 * _bt_compare as comparing the scankey to the index item, we have
+				 * to flip the sign of the comparison result.  (Unless it's a DESC
+				 * column, in which case we *don't* flip the sign.)
+				 */
+				result = DatumGetInt32(FunctionCall2Coll(&scankey->sk_func,
+														 scankey->sk_collation,
+														 datum,
+														 scankey->sk_argument));
+
+				if (!(scankey->sk_flags & SK_BT_DESC))
+					result = -result;
+			}
+
+			/* if the keys are unequal, return the difference */
+			if (result != 0)
+				return result;
+
+			scankey++;
+		}
+#endif
 		return 0;
+	}
 	else
 		return 1;
 }
@@ -1411,6 +1476,9 @@ _bt2_first(IndexScanDesc scan, ScanDirection dir)
 	 * keys that must be matched to continue the scan.
 	 */
 	_bt_preprocess_keys(scan);
+
+	scan->keyData->sk_abbrkey =
+		int32AbbrevConvert(DatumGetInt32(scan->keyData->sk_argument));
 
 	/*
 	 * Quit now if _bt_preprocess_keys() discovered that the scan keys can
@@ -2207,7 +2275,7 @@ _bt2_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 	Assert(BufferIsValid(so->currPos.buf));
 
 	page = BufferGetPage(so->currPos.buf);
-	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+	opaque = (BTPageOpaque) PageWithAbbrKeyGetSpecialPointer(page);
 	minoff = P_FIRSTDATAKEY(opaque);
 	maxoff = PageWithAbbrKeyGetMaxOffsetNumber(page);
 
@@ -2534,7 +2602,7 @@ _bt2_steppage(IndexScanDesc scan, ScanDirection dir)
 			so->currPos.buf = _bt_getbuf(rel, blkno, BT_READ);
 			/* check for deleted page */
 			page = BufferGetPage(so->currPos.buf);
-			opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+			opaque = (BTPageOpaque) PageWithAbbrKeyGetSpecialPointer(page);
 			if (!P_IGNORE(opaque))
 			{
 				PredicateLockPage(rel, blkno, scan->xs_snapshot);
@@ -2607,7 +2675,7 @@ _bt2_steppage(IndexScanDesc scan, ScanDirection dir)
 			 * and do it all again.
 			 */
 			page = BufferGetPage(so->currPos.buf);
-			opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+			opaque = (BTPageOpaque) PageWithAbbrKeyGetSpecialPointer(page);
 			if (!P_IGNORE(opaque))
 			{
 				PredicateLockPage(rel, BufferGetBlockNumber(so->currPos.buf), scan->xs_snapshot);

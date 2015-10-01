@@ -330,6 +330,14 @@ typedef PageHeaderData *PageHeader;
 	(char *) ((char *) (page) + ((PageHeader) (page))->pd_special) \
 )
 
+#define PageWithAbbrKeyGetSpecialPointer(page) \
+( \
+	AssertMacro(PageIsValid(page)), \
+	AssertMacro(((PageHeaderWithAbbrKey) (page))->pd_special <= BLCKSZ), \
+	AssertMacro(((PageHeaderWithAbbrKey) (page))->pd_special >= SizeOfPageHeaderData), \
+	(char *) ((char *) (page) + ((PageHeaderWithAbbrKey) (page))->pd_special) \
+)
+
 /*
  * PageGetItem
  *		Retrieves an item on the given page.
@@ -423,7 +431,7 @@ extern bool PageIsVerified(Page page, BlockNumber blkno);
 extern OffsetNumber PageAddItem(Page page, Item item, Size size,
 			OffsetNumber offsetNumber, bool overwrite, bool is_heap);
 extern OffsetNumber PageAddItemWithAbbrKey(Page page, Item item, Size size,
-		    OffsetNumber offsetNumber, bool overwrite, bool is_heap, int32 abbrkey);
+		    OffsetNumber offsetNumber, bool overwrite, bool is_heap, uint16 abbrkey);
 extern Page PageGetTempPage(Page page);
 extern Page PageGetTempPageCopy(Page page);
 extern Page PageGetTempPageCopySpecial(Page page);

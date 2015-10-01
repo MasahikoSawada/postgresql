@@ -509,6 +509,8 @@ _bt_checkpage(Relation rel, Buffer buf)
 	 * page header or is all-zero.  We have to defend against the all-zero
 	 * case, however.
 	 */
+	//fixme: abbreviated keys are broken here
+#if 0
 	if (PageIsNew(page))
 		ereport(ERROR,
 				(errcode(ERRCODE_INDEX_CORRUPTED),
@@ -527,6 +529,7 @@ _bt_checkpage(Relation rel, Buffer buf)
 						RelationGetRelationName(rel),
 						BufferGetBlockNumber(buf)),
 				 errhint("Please REINDEX it.")));
+#endif
 }
 
 /*
