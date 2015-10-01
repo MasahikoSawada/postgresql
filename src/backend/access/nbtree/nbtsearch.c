@@ -349,10 +349,10 @@ _bt_moveright(Relation rel,
 			continue;
 		}
 
-		if (P_ISLEAF(opaque))
-			res = _bt_compare(rel, keysz, scankey, page, P_HIKEY);
-		else
+		if (!P_ISLEAF(opaque) || P_ISROOT(opaque))
 			res = _bt2_compare(rel, keysz, scankey, page, P_HIKEY);
+		else
+			res = _bt_compare(rel, keysz, scankey, page, P_HIKEY);
 
 		if (P_IGNORE(opaque) || res >= cmpval)
 		{
@@ -435,10 +435,10 @@ _bt2_moveright(Relation rel,
 			continue;
 		}
 
-		if (P_ISLEAF(opaque))
-			res = _bt_compare(rel, keysz, scankey, page, P_HIKEY);
-		else
+		if (!P_ISLEAF(opaque) || P_ISROOT(opaque))
 			res = _bt2_compare(rel, keysz, scankey, page, P_HIKEY);
+		else
+			res = _bt_compare(rel, keysz, scankey, page, P_HIKEY);
 
 		if (P_IGNORE(opaque) || res >= cmpval)
 		{
@@ -581,7 +581,7 @@ _bt2_binsrch(Relation rel,
 	opaque = (BTPageOpaque) PageWithAbbrKeyGetSpecialPointer(page);
 
 	low = P_FIRSTDATAKEY(opaque);
-	if (!P_ISLEAF(opaque))
+	if (!P_ISLEAF(opaque) || P_ISROOT(opaque))
 		high = PageWithAbbrKeyGetMaxOffsetNumber(page);
 	else
 		high = PageGetMaxOffsetNumber(page);
@@ -618,7 +618,7 @@ _bt2_binsrch(Relation rel,
 
 		/* We have low <= mid < high, so mid points at a real slot */
 
-		if (!P_ISLEAF(opaque))
+		if (!P_ISLEAF(opaque) || P_ISROOT(opaque))
 			result = _bt2_compare(rel, keysz, scankey, page, mid);
 		else
 			result = _bt_compare(rel, keysz, scankey, page, mid);
@@ -2883,10 +2883,10 @@ _bt_get_endpoint(Relation rel, uint32 level, bool rightmost)
 		else
 			offnum = P_FIRSTDATAKEY(opaque);
 
-		if (P_ISLEAF(opaque))
-			itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, offnum));
-		else
+		if (!P_ISLEAF(opaque) || P_ISROOT(opaque))
 			itup = (IndexTuple) PageGetItem(page, PageGetItemIdWithAbbrKey(page, offnum));
+		else
+			itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, offnum));
 
 		blkno = ItemPointerGetBlockNumber(&(itup->t_tid));
 

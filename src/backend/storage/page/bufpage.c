@@ -236,6 +236,9 @@ PageAddItemWithAbbrKey(Page page,
 		}
 	}
 
+	elog(NOTICE, "PageAddItemWithAbbrKey : offet  = %d, limit = %d",
+		 offsetNumber, limit);
+
 	if (offsetNumber > limit)
 	{
 		elog(WARNING, "specified item offset is too large");
@@ -296,6 +299,9 @@ PageAddItemWithAbbrKey(Page page,
 
 	/* copy the item's data onto the page */
 	memcpy((char *) page + upper, item, size);
+
+	elog(NOTICE, "PageAddItemWithAbbrKey : old-lower = %d, old-upper = %d, new-lower = %d, new-upper = %d, ipdsize = %d, itemsize = %d",
+		 phdr->pd_lower, phdr->pd_upper, lower, upper, sizeof(ItemIdDataWithAbbrKey), size);
 
 	/* adjust page header */
 	phdr->pd_lower = (LocationIndex) lower;

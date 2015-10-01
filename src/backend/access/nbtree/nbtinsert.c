@@ -64,6 +64,14 @@ static void _bt_findinsertloc(Relation rel,
 				  IndexTuple newtup,
 				  BTStack stack,
 				  Relation heapRel);
+static void _bt2_findinsertloc(Relation rel,
+				  Buffer *bufptr,
+				  OffsetNumber *offsetptr,
+				  int keysz,
+				  ScanKey scankey,
+				  IndexTuple newtup,
+				  BTStack stack,
+				  Relation heapRel);
 static void _bt_insertonpg(Relation rel, Buffer buf, Buffer cbuf,
 			   BTStack stack,
 			   IndexTuple itup,
@@ -198,6 +206,7 @@ top:
 
 	if (checkUnique != UNIQUE_CHECK_EXISTING)
 	{
+		int32 abbrkey;
 		/*
 		 * The only conflict predicate locking cares about for indexes is when
 		 * an index tuple insert conflicts with an existing lock.  Since the
@@ -207,9 +216,18 @@ top:
 		 */
 		CheckForSerializableConflictIn(rel, NULL, buf);
 		/* do the insertion */
-		_bt_findinsertloc(rel, &buf, &offset, natts, itup_scankey, itup,
+		_bt2_findinsertloc(rel, &buf, &offset, natts, itup_scankey, itup,
 						  stack, heapRel);
-		_bt2_insertonpg(rel, buf, InvalidBuffer, stack, itup, offset, false, NULL);
+
+		if (!stack)
+		{
+			abbrkey = DatumGetInt32(itup_scankey->sk_argument);
+			elog(NOTICE, "_bt2_doinsert : abbrkey = %d", abbrkey);
+		}
+		if (!stack)
+			_bt2_insertonpg(rel, buf, InvalidBuffer, stack, itup, offset, false, &abbrkey);
+		else
+			_bt2_insertonpg(rel, buf, InvalidBuffer, stack, itup, offset, false, NULL);
 	}
 	else
 	{
@@ -826,6 +844,166 @@ _bt_findinsertloc(Relation rel,
 	*offsetptr = newitemoff;
 }
 
+static void
+_bt2_findinsertloc(Relation rel,
+				  Buffer *bufptr,
+				  OffsetNumber *offsetptr,
+				  int keysz,
+				  ScanKey scankey,
+				  IndexTuple newtup,
+				  BTStack stack,
+				  Relation heapRel)
+{
+	Buffer		buf = *bufptr;
+	Page		page = BufferGetPage(buf);
+	Size		itemsz;
+	BTPageOpaque lpageop;
+	bool		movedright,
+				vacuumed;
+	OffsetNumber newitemoff;
+	OffsetNumber firstlegaloff = *offsetptr;
+
+	lpageop = (BTPageOpaque) PageGetSpecialPointer(page);
+
+	itemsz = IndexTupleDSize(*newtup);
+	itemsz = MAXALIGN(itemsz);	/* be safe, PageAddItem will do this but we
+								 * need to be consistent */
+
+	/*
+	 * Check whether the item can fit on a btree page at all. (Eventually, we
+	 * ought to try to apply TOAST methods if not.) We actually need to be
+	 * able to fit three items on every page, so restrict any one item to 1/3
+	 * the per-page available space. Note that at this point, itemsz doesn't
+	 * include the ItemId.
+	 *
+	 * NOTE: if you change this, see also the similar code in _bt_buildadd().
+	 */
+	if (itemsz > BTMaxItemSize(page))
+		ereport(ERROR,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+			errmsg("index row size %zu exceeds maximum %zu for index \"%s\"",
+				   itemsz, BTMaxItemSize(page),
+				   RelationGetRelationName(rel)),
+		errhint("Values larger than 1/3 of a buffer page cannot be indexed.\n"
+				"Consider a function index of an MD5 hash of the value, "
+				"or use full text indexing."),
+				 errtableconstraint(heapRel,
+									RelationGetRelationName(rel))));
+
+	/*----------
+	 * If we will need to split the page to put the item on this page,
+	 * check whether we can put the tuple somewhere to the right,
+	 * instead.  Keep scanning right until we
+	 *		(a) find a page with enough free space,
+	 *		(b) reach the last page where the tuple can legally go, or
+	 *		(c) get tired of searching.
+	 * (c) is not flippant; it is important because if there are many
+	 * pages' worth of equal keys, it's better to split one of the early
+	 * pages than to scan all the way to the end of the run of equal keys
+	 * on every insert.  We implement "get tired" as a random choice,
+	 * since stopping after scanning a fixed number of pages wouldn't work
+	 * well (we'd never reach the right-hand side of previously split
+	 * pages).  Currently the probability of moving right is set at 0.99,
+	 * which may seem too high to change the behavior much, but it does an
+	 * excellent job of preventing O(N^2) behavior with many equal keys.
+	 *----------
+	 */
+	movedright = false;
+	vacuumed = false;
+	while (PageGetFreeSpace(page) < itemsz)
+	{
+		Buffer		rbuf;
+		BlockNumber rblkno;
+
+		/*
+		 * before considering moving right, see if we can obtain enough space
+		 * by erasing LP_DEAD items
+		 */
+		if (P_ISLEAF(lpageop) && P_HAS_GARBAGE(lpageop))
+		{
+			_bt_vacuum_one_page(rel, buf, heapRel);
+
+			/*
+			 * remember that we vacuumed this page, because that makes the
+			 * hint supplied by the caller invalid
+			 */
+			vacuumed = true;
+
+			if (PageGetFreeSpace(page) >= itemsz)
+				break;			/* OK, now we have enough space */
+		}
+
+		/*
+		 * nope, so check conditions (b) and (c) enumerated above
+		 */
+		if (P_RIGHTMOST(lpageop) ||
+			_bt2_compare(rel, keysz, scankey, page, P_HIKEY) != 0 ||
+			random() <= (MAX_RANDOM_VALUE / 100))
+			break;
+
+		/*
+		 * step right to next non-dead page
+		 *
+		 * must write-lock that page before releasing write lock on current
+		 * page; else someone else's _bt_check_unique scan could fail to see
+		 * our insertion.  write locks on intermediate dead pages won't do
+		 * because we don't know when they will get de-linked from the tree.
+		 */
+		rbuf = InvalidBuffer;
+
+		rblkno = lpageop->btpo_next;
+		for (;;)
+		{
+			rbuf = _bt_relandgetbuf(rel, rbuf, rblkno, BT_WRITE);
+			page = BufferGetPage(rbuf);
+			lpageop = (BTPageOpaque) PageGetSpecialPointer(page);
+
+			/*
+			 * If this page was incompletely split, finish the split now. We
+			 * do this while holding a lock on the left sibling, which is not
+			 * good because finishing the split could be a fairly lengthy
+			 * operation.  But this should happen very seldom.
+			 */
+			if (P_INCOMPLETE_SPLIT(lpageop))
+			{
+				_bt2_finish_split(rel, rbuf, stack);
+				rbuf = InvalidBuffer;
+				continue;
+			}
+
+			if (!P_IGNORE(lpageop))
+				break;
+			if (P_RIGHTMOST(lpageop))
+				elog(ERROR, "fell off the end of index \"%s\"",
+					 RelationGetRelationName(rel));
+
+			rblkno = lpageop->btpo_next;
+		}
+		_bt_relbuf(rel, buf);
+		buf = rbuf;
+		movedright = true;
+		vacuumed = false;
+	}
+
+	/*
+	 * Now we are on the right page, so find the insert position. If we moved
+	 * right at all, we know we should insert at the start of the page. If we
+	 * didn't move right, we can use the firstlegaloff hint if the caller
+	 * supplied one, unless we vacuumed the page which might have moved tuples
+	 * around making the hint invalid. If we didn't move right or can't use
+	 * the hint, find the position by searching.
+	 */
+	if (movedright)
+		newitemoff = P_FIRSTDATAKEY(lpageop);
+	else if (firstlegaloff != InvalidOffsetNumber && !vacuumed)
+		newitemoff = firstlegaloff;
+	else
+		newitemoff = _bt2_binsrch(rel, buf, keysz, scankey, false);
+
+	*bufptr = buf;
+	*offsetptr = newitemoff;
+}
+
 /*----------
  *	_bt_insertonpg() -- Insert a tuple on a particular page in the index.
  *
@@ -1109,6 +1287,8 @@ _bt2_insertonpg(Relation rel,
 	 * so this comparison is correct even though we appear to be accounting
 	 * only for the item and not for its line pointer.
 	 */
+	elog(NOTICE, "_bt2_insertonpg : FreeSpace = %d, itemsize = %d",
+		 PageGetFreeSpace(page), itemsz);
 	if (PageGetFreeSpace(page) < itemsz)
 	{
 		bool		is_root = P_ISROOT(lpageop);
@@ -1786,6 +1966,7 @@ _bt2_split_leaf(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 	BTPageOpaque sopaque = NULL;
 	Size		itemsz;
 	ItemId		itemid;
+	ItemIdWithAbbrKey itemidabbr;
 	IndexTuple	item;
 	OffsetNumber leftoff,
 				rightoff;
@@ -1860,18 +2041,35 @@ _bt2_split_leaf(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 
 	if (!P_RIGHTMOST(oopaque))
 	{
-		itemid = PageGetItemId(origpage, P_HIKEY);
-		itemsz = ItemIdGetLength(itemid);
-		item = (IndexTuple) PageGetItem(origpage, itemid);
-		if (PageAddItem(rightpage, (Item) item, itemsz, rightoff,
-						false, false) == InvalidOffsetNumber)
+		if (!P_ISROOT(oopaque))
 		{
-			memset(rightpage, 0, BufferGetPageSize(rbuf));
-			elog(ERROR, "failed to add hikey to the right sibling"
-				 " while splitting block %u of index \"%s\"",
-				 origpagenumber, RelationGetRelationName(rel));
+			itemidabbr = PageGetItemIdWithAbbrKey(origpage, P_HIKEY);
+			itemsz = ItemIdGetLength(itemidabbr);
+			item = (IndexTuple) PageGetItem(origpage, itemidabbr);
+			if (PageAddItem(rightpage, (Item) item, itemsz, rightoff,
+						false, false) == InvalidOffsetNumber)
+			{
+				memset(rightpage, 0, BufferGetPageSize(rbuf));
+				elog(ERROR, "failed to add hikey to the right sibling"
+					 " while splitting block %u of index \"%s\"",
+					 origpagenumber, RelationGetRelationName(rel));
+			}
 		}
-		rightoff = OffsetNumberNext(rightoff);
+		else
+		{
+			itemid = PageGetItemId(origpage, P_HIKEY);
+			itemsz = ItemIdGetLength(itemid);
+			item = (IndexTuple) PageGetItem(origpage, itemid);
+			if (PageAddItem(rightpage, (Item) item, itemsz, rightoff,
+							false, false) == InvalidOffsetNumber)
+			{
+				memset(rightpage, 0, BufferGetPageSize(rbuf));
+				elog(ERROR, "failed to add hikey to the right sibling"
+					 " while splitting block %u of index \"%s\"",
+					 origpagenumber, RelationGetRelationName(rel));
+			}
+		}
+			rightoff = OffsetNumberNext(rightoff);
 	}
 
 	/*
@@ -1889,9 +2087,18 @@ _bt2_split_leaf(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 	else
 	{
 		/* existing item at firstright will become first on right page */
-		itemid = PageGetItemId(origpage, firstright);
-		itemsz = ItemIdGetLength(itemid);
-		item = (IndexTuple) PageGetItem(origpage, itemid);
+		if (P_ISROOT(oopaque))
+		{
+			itemidabbr = PageGetItemIdWithAbbrKey(origpage, firstright);
+			itemsz = ItemIdGetLength(itemidabbr);
+			item = (IndexTuple) PageGetItem(origpage, itemidabbr);
+		}
+		else
+		{
+			itemid = PageGetItemId(origpage, firstright);
+			itemsz = ItemIdGetLength(itemid);
+			item = (IndexTuple) PageGetItem(origpage, itemid);
+		}
 	}
 	if (PageAddItem(leftpage, (Item) item, itemsz, leftoff,
 					false, false) == InvalidOffsetNumber)
@@ -1901,6 +2108,7 @@ _bt2_split_leaf(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 			 " while splitting block %u of index \"%s\"",
 			 origpagenumber, RelationGetRelationName(rel));
 	}
+	
 	leftoff = OffsetNumberNext(leftoff);
 
 	/*
@@ -1909,13 +2117,25 @@ _bt2_split_leaf(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 	 * Note: we *must* insert at least the right page's items in item-number
 	 * order, for the benefit of _bt_restore_page().
 	 */
-	maxoff = PageGetMaxOffsetNumber(origpage);
+	if (P_ISROOT(oopaque))
+		maxoff = PageWithAbbrKeyGetMaxOffsetNumber(origpage);
+	else
+		maxoff = PageGetMaxOffsetNumber(origpage);
 
 	for (i = P_FIRSTDATAKEY(oopaque); i <= maxoff; i = OffsetNumberNext(i))
 	{
-		itemid = PageGetItemId(origpage, i);
-		itemsz = ItemIdGetLength(itemid);
-		item = (IndexTuple) PageGetItem(origpage, itemid);
+		if (P_ISROOT(oopaque))
+		{
+			itemidabbr = PageGetItemIdWithAbbrKey(origpage, i);
+			itemsz = ItemIdGetLength(itemidabbr);
+			item = (IndexTuple) PageGetItem(origpage, itemidabbr);
+		}
+		else
+		{
+			itemid = PageGetItemId(origpage, i);
+			itemsz = ItemIdGetLength(itemid);
+			item = (IndexTuple) PageGetItem(origpage, itemid);
+		}
 
 		/* does new item belong before this one? */
 		if (i == newitemoff)
@@ -1947,6 +2167,7 @@ _bt2_split_leaf(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 		/* decide which page to put it on */
 		if (i < firstright)
 		{
+			elog(NOTICE, "_bt2_split_leaf : Move left %d to %d", i, leftoff);
 			if (!_bt_pgaddtup(leftpage, itemsz, item, leftoff))
 			{
 				memset(rightpage, 0, BufferGetPageSize(rbuf));
@@ -1958,6 +2179,7 @@ _bt2_split_leaf(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 		}
 		else
 		{
+			elog(NOTICE, "_bt2_split_leaf : Move right %d to %d", i, rightoff);
 			if (!_bt_pgaddtup(rightpage, itemsz, item, rightoff))
 			{
 				memset(rightpage, 0, BufferGetPageSize(rbuf));
@@ -4088,6 +4310,9 @@ _bt2_pgaddtup_internal(Page page,
 		itup = &trunctuple;
 		itemsize = sizeof(IndexTupleData);
 	}
+
+	elog(NOTICE, "_bt2_pgaddtup_internal : page = %d, offset = %u, abbrkey = %u",
+		 page, itup_off, abbrkey);
 
 /*
  * DEBUG : output all items in single page.
