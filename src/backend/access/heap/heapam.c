@@ -2196,6 +2196,7 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 
 		/* all-visible and all-frozen information are cleared at the same time */
 		PageClearAllVisible(BufferGetPage(buffer));
+
 		visibilitymap_clear(relation,
 							ItemPointerGetBlockNumber(&(heaptup->t_self)),
 							vmbuffer);
@@ -2499,6 +2500,7 @@ heap_multi_insert(Relation relation, HeapTuple *tuples, int ntuples,
 
 			/* all-visible and all-frozen information are cleared at the same time */
 			PageClearAllVisible(page);
+
 			visibilitymap_clear(relation,
 								BufferGetBlockNumber(buffer),
 								vmbuffer);
@@ -2984,6 +2986,7 @@ l1:
 
 		/* all-visible and all-frozen information are cleared at the same time */
 		PageClearAllVisible(page);
+
 		visibilitymap_clear(relation, BufferGetBlockNumber(buffer),
 							vmbuffer);
 	}
