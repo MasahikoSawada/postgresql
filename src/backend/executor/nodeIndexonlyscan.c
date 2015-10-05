@@ -116,7 +116,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 */
 		if (!visibilitymap_test(scandesc->heapRelation,
 								ItemPointerGetBlockNumber(tid),
-								&node->ioss_VMBuffer))
+								&node->ioss_VMBuffer, VISIBILITYMAP_ALL_VISIBLE))
 		{
 			/*
 			 * Rats, we have to visit the heap to check visibility.

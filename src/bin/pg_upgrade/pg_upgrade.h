@@ -112,6 +112,10 @@ extern char *output_files[];
 #define VISIBILITY_MAP_CRASHSAFE_CAT_VER 201107031
 
 /*
+ * The format of visibility map changed with this 9.6 commit,
+ */
+#define VISIBILITY_MAP_FROZEN_BIT_CAT_VER 201510051
+/*
  * pg_multixact format changed in 9.3 commit 0ac5ad5134f2769ccbaefec73844f85,
  * ("Improve concurrency of foreign key locking") which also updated catalog
  * version to this value.  pg_upgrade behavior depends on whether old and new
@@ -396,6 +400,8 @@ const pageCnvCtx *setupPageConverter(void);
 typedef void *pageCnvCtx;
 #endif
 
+const char *copyOrRewriteFile(pageCnvCtx *pageConverter, const char *src,
+				  const char *dst, bool force, bool rewrite_vm);
 const char *copyAndUpdateFile(pageCnvCtx *pageConverter, const char *src,
 				  const char *dst, bool force);
 const char *linkAndUpdateFile(pageCnvCtx *pageConverter, const char *src,

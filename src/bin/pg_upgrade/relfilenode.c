@@ -171,6 +171,7 @@ transfer_single_new_db(pageCnvCtx *pageConverter,
 {
 	int			mapnum;
 	bool		vm_crashsafe_match = true;
+	bool		vm_rewrite_needed = false;
 
 	/*
 	 * Do the old and new cluster disagree on the crash-safetiness of the vm
@@ -179,6 +180,13 @@ transfer_single_new_db(pageCnvCtx *pageConverter,
 	if (old_cluster.controldata.cat_ver < VISIBILITY_MAP_CRASHSAFE_CAT_VER &&
 		new_cluster.controldata.cat_ver >= VISIBILITY_MAP_CRASHSAFE_CAT_VER)
 		vm_crashsafe_match = false;
+
+	/*
+	 * Do we need to rewrite visibilitymap?
+	 */
+	if (old_cluster.controldata.cat_ver < VISIBILITY_MAP_FROZEN_BIT_CAT_VER &&
+		new_cluster.controldata.cat_ver >= VISIBILITY_MAP_FROZEN_BIT_CAT_VER)
+		vm_rewrite_needed = true;
 
 	for (mapnum = 0; mapnum < size; mapnum++)
 	{
@@ -195,7 +203,7 @@ transfer_single_new_db(pageCnvCtx *pageConverter,
 				 * Copy/link any fsm and vm files, if they exist
 				 */
 				transfer_relfile(pageConverter, &maps[mapnum], "_fsm");
-				if (vm_crashsafe_match)
+				if (vm_crashsafe_match || vm_rewrite_needed)
 					transfer_relfile(pageConverter, &maps[mapnum], "_vm");
 			}
 		}
@@ -218,6 +226,7 @@ transfer_relfile(pageCnvCtx *pageConverter, FileNameMap *map,
 	int			fd;
 	int			segno;
 	char		extent_suffix[65];
+	bool		rewrite_vm = false;
 
 	/*
 	 * Now copy/link any related segments as well. Remember, PG breaks large
@@ -276,7 +285,15 @@ transfer_relfile(pageCnvCtx *pageConverter, FileNameMap *map,
 		{
 			pg_log(PG_VERBOSE, "copying \"%s\" to \"%s\"\n", old_file, new_file);
 
-			if ((msg = copyAndUpdateFile(pageConverter, old_file, new_file, true)) != NULL)
+			/*
+			 * Do we need to rewrite visibilitymap?
+			 */
+			if (strcmp(type_suffix, "_vm") == 0 &&
+				old_cluster.controldata.cat_ver < VISIBILITY_MAP_FROZEN_BIT_CAT_VER &&
+				new_cluster.controldata.cat_ver >= VISIBILITY_MAP_FROZEN_BIT_CAT_VER)
+				rewrite_vm = true;
+
+			if ((msg = copyOrRewriteFile(pageConverter, old_file, new_file, true, rewrite_vm)) != NULL)
 				pg_fatal("error while copying relation \"%s.%s\" (\"%s\" to \"%s\"): %s\n",
 						 map->nspname, map->relname, old_file, new_file, msg);
 		}

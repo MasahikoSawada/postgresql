@@ -1919,11 +1919,18 @@ index_update_stats(Relation rel,
 	{
 		BlockNumber relpages = RelationGetNumberOfBlocks(rel);
 		BlockNumber relallvisible;
+		BlockNumber relallfrozen;
 
 		if (rd_rel->relkind != RELKIND_INDEX)
-			relallvisible = visibilitymap_count(rel);
+		{
+			relallvisible = visibilitymap_count(rel, VISIBILITYMAP_ALL_VISIBLE);
+			relallfrozen = visibilitymap_count(rel, VISIBILITYMAP_ALL_FROZEN);
+		}
 		else	/* don't bother for indexes */
+		{
 			relallvisible = 0;
+			relallfrozen = 0;
+		}
 
 		if (rd_rel->relpages != (int32) relpages)
 		{
@@ -1938,6 +1945,11 @@ index_update_stats(Relation rel,
 		if (rd_rel->relallvisible != (int32) relallvisible)
 		{
 			rd_rel->relallvisible = (int32) relallvisible;
+			dirty = true;
+		}
+		if (rd_rel->relallfrozen != (int32) relallfrozen)
+		{
+			rd_rel->relallfrozen = (int32) relallfrozen;
 			dirty = true;
 		}
 	}

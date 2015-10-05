@@ -106,6 +106,8 @@ typedef struct LVRelStats
 	BlockNumber rel_pages;		/* total number of pages */
 	BlockNumber scanned_pages;	/* number of pages we examined */
 	BlockNumber pinskipped_pages;		/* # of pages we skipped due to a pin */
+	BlockNumber vmskipped_frozen_pages; /* # of pages we skipped by all-frozen bit
+									of visibility map */
 	double		scanned_tuples; /* counts only tuples on scanned pages */
 	double		old_rel_tuples; /* previous value of pg_class.reltuples */
 	double		new_rel_tuples; /* new estimated total # of tuples */
@@ -156,7 +158,7 @@ static void lazy_record_dead_tuple(LVRelStats *vacrelstats,
 static bool lazy_tid_reaped(ItemPointer itemptr, void *state);
 static int	vac_cmp_itemptr(const void *left, const void *right);
 static bool heap_page_is_all_visible(Relation rel, Buffer buf,
-						 TransactionId *visibility_cutoff_xid);
+						 TransactionId *visibility_cutoff_xid, bool *all_frozen);
 
 
 /*
@@ -188,7 +190,8 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	MultiXactId mxactFullScanLimit;
 	BlockNumber new_rel_pages;
 	double		new_rel_tuples;
-	BlockNumber new_rel_allvisible;
+	BlockNumber new_rel_allvisible,
+				new_rel_allfrozen;
 	double		new_live_tuples;
 	TransactionId new_frozen_xid;
 	MultiXactId new_min_multi;
@@ -222,6 +225,8 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	 * than or equal to the requested Xid full-table scan limit; or if the
 	 * table's minimum MultiXactId is older than or equal to the requested
 	 * mxid full-table scan limit.
+	 * Even if scan_all is set so far, we could skip to scan some pages
+	 * according by frozen map.
 	 */
 	scan_all = TransactionIdPrecedesOrEquals(onerel->rd_rel->relfrozenxid,
 											 xidFullScanLimit);
@@ -253,7 +258,8 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	 * NB: We need to check this before truncating the relation, because that
 	 * will change ->rel_pages.
 	 */
-	if (vacrelstats->scanned_pages < vacrelstats->rel_pages)
+	if ((vacrelstats->scanned_pages + vacrelstats->vmskipped_frozen_pages)
+		< vacrelstats->rel_pages)
 	{
 		Assert(!scan_all);
 		scanned_all = false;
@@ -301,9 +307,13 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 		new_rel_tuples = vacrelstats->old_rel_tuples;
 	}
 
-	new_rel_allvisible = visibilitymap_count(onerel);
+	new_rel_allvisible = visibilitymap_count(onerel, VISIBILITYMAP_ALL_VISIBLE);
 	if (new_rel_allvisible > new_rel_pages)
 		new_rel_allvisible = new_rel_pages;
+
+	new_rel_allfrozen = visibilitymap_count(onerel, VISIBILITYMAP_ALL_FROZEN);
+	if (new_rel_allfrozen > new_rel_pages)
+		new_rel_allfrozen = new_rel_pages;
 
 	new_frozen_xid = scanned_all ? FreezeLimit : InvalidTransactionId;
 	new_min_multi = scanned_all ? MultiXactCutoff : InvalidMultiXactId;
@@ -312,6 +322,7 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 						new_rel_pages,
 						new_rel_tuples,
 						new_rel_allvisible,
+						new_rel_allfrozen,
 						vacrelstats->hasindex,
 						new_frozen_xid,
 						new_min_multi,
@@ -360,10 +371,11 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 							 get_namespace_name(RelationGetNamespace(onerel)),
 							 RelationGetRelationName(onerel),
 							 vacrelstats->num_index_scans);
-			appendStringInfo(&buf, _("pages: %u removed, %u remain, %u skipped due to pins\n"),
+			appendStringInfo(&buf, _("pages: %u removed, %u remain, %u skipped due to pins, %u skipped according to vm\n"),
 							 vacrelstats->pages_removed,
 							 vacrelstats->rel_pages,
-							 vacrelstats->pinskipped_pages);
+							 vacrelstats->pinskipped_pages,
+							 vacrelstats->vmskipped_frozen_pages);
 			appendStringInfo(&buf,
 							 _("tuples: %.0f removed, %.0f remain, %.0f are dead but not yet removable\n"),
 							 vacrelstats->tuples_deleted,
@@ -486,9 +498,12 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 	 * consecutive pages.  Since we're reading sequentially, the OS should be
 	 * doing readahead for us, so there's no gain in skipping a page now and
 	 * then; that's likely to disable readahead and so be counterproductive.
-	 * Also, skipping even a single page means that we can't update
-	 * relfrozenxid, so we only want to do it if we can skip a goodly number
-	 * of pages.
+	 * Also, skipping even a single page accorinding to all-visible bit of
+	 * visibility map means that we can't update relfrozenxid, so we only want
+	 * to do it if we can skip a goodly number. On the other hand, we count
+	 * both how many pages we skipped according to all-frozen bit of visibility
+	 * map and how many pages we freeze page, so we can update relfrozenxid if
+	 * the sum of them is as many as pages of table.
 	 *
 	 * Before entering the main loop, establish the invariant that
 	 * next_not_all_visible_block is the next block number >= blkno that's not
@@ -498,7 +513,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 	 * started skipping blocks, we may as well skip everything up to the next
 	 * not-all-visible block.
 	 *
-	 * Note: if scan_all is true, we won't actually skip any pages; but we
+	 * Note: if scan_all is true, we might not actually skip any pages; but we
 	 * maintain next_not_all_visible_block anyway, so as to set up the
 	 * all_visible_according_to_vm flag correctly for each page.
 	 *
@@ -515,7 +530,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		 next_not_all_visible_block < nblocks;
 		 next_not_all_visible_block++)
 	{
-		if (!visibilitymap_test(onerel, next_not_all_visible_block, &vmbuffer))
+		if (!visibilitymap_test(onerel, next_not_all_visible_block, &vmbuffer, VISIBILITYMAP_ALL_VISIBLE))
 			break;
 		vacuum_delay_point();
 	}
@@ -533,9 +548,13 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		bool		tupgone,
 					hastup;
 		int			prev_dead_count;
-		int			nfrozen;
+		int			nfrozen; /* # of tuples is frozen */
+		int			nalready_frozen; /* # of tuples is already frozen */
+		int			ntotal_frozen; /* # of frozen tuples in single page */
+		int			ntup_per_page;
 		Size		freespace;
 		bool		all_visible_according_to_vm;
+		bool		all_frozen_according_to_vm;
 		bool		all_visible;
 		bool		has_dead_tuples;
 		TransactionId visibility_cutoff_xid = InvalidTransactionId;
@@ -548,7 +567,8 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 				 next_not_all_visible_block++)
 			{
 				if (!visibilitymap_test(onerel, next_not_all_visible_block,
-										&vmbuffer))
+										&vmbuffer,
+										VISIBILITYMAP_ALL_VISIBLE))
 					break;
 				vacuum_delay_point();
 			}
@@ -563,13 +583,32 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 			else
 				skipping_all_visible_blocks = false;
 			all_visible_according_to_vm = false;
+			all_frozen_according_to_vm = false;
 		}
 		else
 		{
-			/* Current block is all-visible */
-			if (skipping_all_visible_blocks && !scan_all)
-				continue;
+			/*
+			 * This block is at least all-visible according to visibility map.
+			 * We check whehter this block is all-frozen to skip to vacuum this
+			 * page even if scanning whole page is required.
+			 */
+			bool	all_frozen = visibilitymap_test(onerel, blkno, &vmbuffer, VISIBILITYMAP_ALL_FROZEN);
+			if (scan_all)
+			{
+				if (all_frozen)
+				{
+					vacrelstats->vmskipped_frozen_pages++;
+					continue;
+				}
+			}
+			else
+			{
+				if (skipping_all_visible_blocks)
+					continue;
+			}
+
 			all_visible_according_to_vm = true;
+			all_frozen_according_to_vm = all_frozen;
 		}
 
 		vacuum_delay_point();
@@ -740,7 +779,8 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 
 				PageSetAllVisible(page);
 				visibilitymap_set(onerel, blkno, buf, InvalidXLogRecPtr,
-								  vmbuffer, InvalidTransactionId);
+								  vmbuffer, InvalidTransactionId,
+								  VISIBILITYMAP_ALL_VISIBLE);
 				END_CRIT_SECTION();
 			}
 
@@ -764,6 +804,8 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		all_visible = true;
 		has_dead_tuples = false;
 		nfrozen = 0;
+		nalready_frozen = 0;
+		ntup_per_page = 0;
 		hastup = false;
 		prev_dead_count = vacrelstats->num_dead_tuples;
 		maxoff = PageGetMaxOffsetNumber(page);
@@ -918,7 +960,12 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 			else
 			{
 				num_tuples += 1;
+				ntup_per_page += 1;;
 				hastup = true;
+
+				/* Check whether this tuple is alrady frozen or not */
+				if (HeapTupleHeaderXminFrozen(tuple.t_data))
+					nalready_frozen += 1;
 
 				/*
 				 * Each non-removable tuple must be checked to see if it needs
@@ -931,9 +978,10 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		}						/* scan along page */
 
 		/*
-		 * If we froze any tuples, mark the buffer dirty, and write a WAL
-		 * record recording the changes.  We must log the changes to be
-		 * crash-safe against future truncation of CLOG.
+		 * If we froze any tuples or any tuples are already frozen,
+		 * mark the buffer dirty, and write a WAL record recording the changes.
+		 * We must log the changes to be crash-safe against future truncation
+		 * of CLOG.
 		 */
 		if (nfrozen > 0)
 		{
@@ -966,6 +1014,9 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 			END_CRIT_SECTION();
 		}
 
+		/* Compute the number of frozen tuples in a page */
+		ntotal_frozen = nfrozen + nalready_frozen;
+
 		/*
 		 * If there are no indexes then we can vacuum the page right now
 		 * instead of doing a second scan.
@@ -988,26 +1039,46 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 
 		freespace = PageGetHeapFreeSpace(page);
 
-		/* mark page all-visible, if appropriate */
-		if (all_visible && !all_visible_according_to_vm)
+		/* This page is all visible */
+		if (all_visible)
 		{
-			/*
-			 * It should never be the case that the visibility map page is set
-			 * while the page-level bit is clear, but the reverse is allowed
-			 * (if checksums are not enabled).  Regardless, set the both bits
-			 * so that we get back in sync.
-			 *
-			 * NB: If the heap page is all-visible but the VM bit is not set,
-			 * we don't need to dirty the heap page.  However, if checksums
-			 * are enabled, we do need to make sure that the heap page is
-			 * dirtied before passing it to visibilitymap_set(), because it
-			 * may be logged.  Given that this situation should only happen in
-			 * rare cases after a crash, it is not worth optimizing.
-			 */
-			PageSetAllVisible(page);
-			MarkBufferDirty(buf);
-			visibilitymap_set(onerel, blkno, buf, InvalidXLogRecPtr,
-							  vmbuffer, visibility_cutoff_xid);
+			uint8 flags = 0;
+
+			/* mark page all-visible, if appropriate */
+			if (!all_visible_according_to_vm)
+			{
+				/*
+				 * It should never be the case that the visibility map page is set
+				 * while the page-level bit is clear, but the reverse is allowed
+				 * (if checksums are not enabled).  Regardless, set the both bits
+				 * so that we get back in sync.
+				 *
+				 * NB: If the heap page is all-visible but the VM bit is not set,
+				 * we don't need to dirty the heap page.  However, if checksums
+				 * are enabled, we do need to make sure that the heap page is
+				 * dirtied before passing it to visibilitymap_set(), because it
+				 * may be logged.  Given that this situation should only happen in
+				 * rare cases after a crash, it is not worth optimizing.
+				 */
+				PageSetAllVisible(page);
+				flags |= VISIBILITYMAP_ALL_VISIBLE;
+			}
+
+			/* mark page all-frozen, if all tuples are frozen and not marked yet */
+			if ((ntotal_frozen == ntup_per_page) &&	!all_frozen_according_to_vm)
+			{
+				Assert(PageIsAllVisible(page));
+
+				PageSetAllFrozen(page);
+				flags |= VISIBILITYMAP_ALL_FROZEN;
+			}
+
+			if (flags)
+			{
+				MarkBufferDirty(buf);
+				visibilitymap_set(onerel, blkno, buf, InvalidXLogRecPtr,
+								  vmbuffer, visibility_cutoff_xid, flags);
+			}
 		}
 
 		/*
@@ -1018,7 +1089,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		 * that something bad has happened.
 		 */
 		else if (all_visible_according_to_vm && !PageIsAllVisible(page)
-				 && visibilitymap_test(onerel, blkno, &vmbuffer))
+				 && visibilitymap_test(onerel, blkno, &vmbuffer, VISIBILITYMAP_ALL_VISIBLE))
 		{
 			elog(WARNING, "page is not marked all-visible but visibility map bit is set in relation \"%s\" page %u",
 				 relname, blkno);
@@ -1042,7 +1113,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		{
 			elog(WARNING, "page containing dead tuples is marked as all-visible in relation \"%s\" page %u",
 				 relname, blkno);
-			PageClearAllVisible(page);
+			PageClearAllVisibleFrozen(page);
 			MarkBufferDirty(buf);
 			visibilitymap_clear(onerel, blkno, vmbuffer);
 		}
@@ -1078,7 +1149,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 														 num_tuples);
 
 	/*
-	 * Release any remaining pin on visibility map page.
+	 * Release any remaining pin on visibility map and frozen map page.
 	 */
 	if (BufferIsValid(vmbuffer))
 	{
@@ -1113,6 +1184,11 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 				(errmsg("\"%s\": removed %.0f row versions in %u pages",
 						RelationGetRelationName(onerel),
 						tups_vacuumed, vacuumed_pages)));
+
+	/* Report how many frozen pages vacuum skipped according to visibility map */
+	ereport(elevel,
+			(errmsg("skipped %d frozen pages acoording to visibility map",
+					vacrelstats->vmskipped_frozen_pages)));
 
 	/*
 	 * This is pretty messy, but we split it up so that we can skip emitting
@@ -1226,6 +1302,7 @@ lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 	OffsetNumber unused[MaxOffsetNumber];
 	int			uncnt = 0;
 	TransactionId visibility_cutoff_xid;
+	bool		all_frozen;
 
 	START_CRIT_SECTION();
 
@@ -1277,19 +1354,31 @@ lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 	 * dirty, exclusively locked, and, if needed, a full page image has been
 	 * emitted in the log_heap_clean() above.
 	 */
-	if (heap_page_is_all_visible(onerel, buffer, &visibility_cutoff_xid))
+	if (heap_page_is_all_visible(onerel, buffer, &visibility_cutoff_xid, &all_frozen))
 		PageSetAllVisible(page);
 
 	/*
 	 * All the changes to the heap page have been done. If the all-visible
-	 * flag is now set, also set the VM bit.
+	 * flag is now set, also set the VM all-visible bit.
+	 * Also, if this page is all-frozen, set VM all-frozen bit and flag.
 	 */
-	if (PageIsAllVisible(page) &&
-		!visibilitymap_test(onerel, blkno, vmbuffer))
+	if (PageIsAllVisible(page))
 	{
-		Assert(BufferIsValid(*vmbuffer));
-		visibilitymap_set(onerel, blkno, buffer, InvalidXLogRecPtr, *vmbuffer,
-						  visibility_cutoff_xid);
+		uint8 flags = 0;
+
+		if (!visibilitymap_test(onerel, blkno, vmbuffer, VISIBILITYMAP_ALL_VISIBLE))
+			flags |= VISIBILITYMAP_ALL_VISIBLE;
+
+		/* mark page all-frozen, and set VM all-frozen bit */
+		if (all_frozen)
+		{
+			PageSetAllFrozen(page);
+			flags |= VISIBILITYMAP_ALL_FROZEN;
+		}
+
+		if (flags)
+			visibilitymap_set(onerel, blkno, buffer, InvalidXLogRecPtr, *vmbuffer,
+							  visibility_cutoff_xid, flags);
 	}
 
 	return tupindex;
@@ -1407,6 +1496,7 @@ lazy_cleanup_index(Relation indrel,
 		vac_update_relstats(indrel,
 							stats->num_pages,
 							stats->num_index_tuples,
+							0,
 							0,
 							false,
 							InvalidTransactionId,
@@ -1779,10 +1869,12 @@ vac_cmp_itemptr(const void *left, const void *right)
 /*
  * Check if every tuple in the given page is visible to all current and future
  * transactions. Also return the visibility_cutoff_xid which is the highest
- * xmin amongst the visible tuples.
+ * xmin amongst the visible tuples, and all_frozen which implies that all tuples
+ * of this page are frozen.
  */
 static bool
-heap_page_is_all_visible(Relation rel, Buffer buf, TransactionId *visibility_cutoff_xid)
+heap_page_is_all_visible(Relation rel, Buffer buf, TransactionId *visibility_cutoff_xid,
+						 bool *all_frozen)
 {
 	Page		page = BufferGetPage(buf);
 	BlockNumber blockno = BufferGetBlockNumber(buf);
@@ -1791,6 +1883,7 @@ heap_page_is_all_visible(Relation rel, Buffer buf, TransactionId *visibility_cut
 	bool		all_visible = true;
 
 	*visibility_cutoff_xid = InvalidTransactionId;
+	*all_frozen = true;
 
 	/*
 	 * This is a stripped down version of the line pointer scan in
@@ -1814,11 +1907,12 @@ heap_page_is_all_visible(Relation rel, Buffer buf, TransactionId *visibility_cut
 
 		/*
 		 * Dead line pointers can have index pointers pointing to them. So
-		 * they can't be treated as visible
+		 * they can't be treated as visible and frozen.
 		 */
 		if (ItemIdIsDead(itemid))
 		{
 			all_visible = false;
+			*all_frozen = false;
 			break;
 		}
 
@@ -1855,6 +1949,10 @@ heap_page_is_all_visible(Relation rel, Buffer buf, TransactionId *visibility_cut
 					/* Track newest xmin on page. */
 					if (TransactionIdFollows(xmin, *visibility_cutoff_xid))
 						*visibility_cutoff_xid = xmin;
+
+					/* Check whether this tuple is alrady frozen or not */
+					if (!HeapTupleHeaderXminFrozen(tuple.t_data))
+						*all_frozen = false;
 				}
 				break;
 
@@ -1863,6 +1961,7 @@ heap_page_is_all_visible(Relation rel, Buffer buf, TransactionId *visibility_cut
 			case HEAPTUPLE_INSERT_IN_PROGRESS:
 			case HEAPTUPLE_DELETE_IN_PROGRESS:
 				all_visible = false;
+				*all_frozen = false;
 				break;
 
 			default:
