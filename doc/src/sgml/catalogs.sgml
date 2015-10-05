@@ -1841,6 +1841,18 @@
      </row>
 
      <row>
+       <entry><structfield>relallfrozen</structfield></entry>
+       <entry><type>int4</type></entry>
+       <entry></entry>
+       <entry>
+        Number of pages that are marked all-frozen in the tables's
+        visibility map. It is updated by <command>VACUUM</command>.
+        <command>ANALYZE</command>, and a few DDL coomand such as
+        <command>CREATE INDEX</command>.
+       </entry>
+     </row>
+
+     <row>
       <entry><structfield>reltoastrelid</structfield></entry>
       <entry><type>oid</type></entry>
       <entry><literal><link linkend="catalog-pg-class"><structname>pg_class</structname></link>.oid</literal></entry>
