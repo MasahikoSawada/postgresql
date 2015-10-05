@@ -2193,10 +2193,7 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 	if (PageIsAllVisible(BufferGetPage(buffer)))
 	{
 		all_visible_cleared = true;
-
-		/* all-visible and all-frozen information are cleared at the same time */
 		PageClearAllVisible(BufferGetPage(buffer));
-
 		visibilitymap_clear(relation,
 							ItemPointerGetBlockNumber(&(heaptup->t_self)),
 							vmbuffer);
@@ -2497,10 +2494,7 @@ heap_multi_insert(Relation relation, HeapTuple *tuples, int ntuples,
 		if (PageIsAllVisible(page))
 		{
 			all_visible_cleared = true;
-
-			/* all-visible and all-frozen information are cleared at the same time */
 			PageClearAllVisible(page);
-
 			visibilitymap_clear(relation,
 								BufferGetBlockNumber(buffer),
 								vmbuffer);
@@ -2979,14 +2973,10 @@ l1:
 	 */
 	PageSetPrunable(page, xid);
 
-	/* clear PD_ALL_VISIBLE and PD_ALL_FROZEN flags */
 	if (PageIsAllVisible(page))
 	{
 		all_visible_cleared = true;
-
-		/* all-visible and all-frozen information are cleared at the same time */
 		PageClearAllVisible(page);
-
 		visibilitymap_clear(relation, BufferGetBlockNumber(buffer),
 							vmbuffer);
 	}
@@ -3861,8 +3851,6 @@ l2:
 	if (PageIsAllVisible(BufferGetPage(buffer)))
 	{
 		all_visible_cleared = true;
-
-		/* all-visible and all-frozen information are cleared at the same time */
 		PageClearAllVisible(BufferGetPage(buffer));
 		visibilitymap_clear(relation, BufferGetBlockNumber(buffer),
 							vmbuffer);
@@ -3870,8 +3858,6 @@ l2:
 	if (newbuf != buffer && PageIsAllVisible(BufferGetPage(newbuf)))
 	{
 		all_visible_cleared_new = true;
-
-		/* all-visible and all-frozen information are cleared at the same time */
 		PageClearAllVisible(BufferGetPage(newbuf));
 		visibilitymap_clear(relation, BufferGetBlockNumber(newbuf),
 							vmbuffer_new);
