@@ -368,7 +368,7 @@ bt_page_items(PG_FUNCTION_ARGS)
 		values[j++] = psprintf("(%u,%u)",
 							   BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)),
 							   itup->t_tid.ip_posid);
-		elog(WARNING, "tup_offset = %d, data =%d,  size = %d, (%u,%u)", uargs->offset, (int32) (* (uint16*) ((Item)itup + sizeof(IndexTupleData))), (int) IndexTupleSize(itup), BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)), itup->t_tid.ip_posid);
+		//elog(WARNING, "tup_offset = %d, data =%d,  size = %d, (%u,%u)", uargs->offset, (int32) (* (uint16*) ((Item)itup + sizeof(IndexTupleData))), (int) IndexTupleSize(itup), BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)), itup->t_tid.ip_posid);
 
 		values[j++] = psprintf("%d", (int) IndexTupleSize(itup));
 		values[j++] = psprintf("%c", IndexTupleHasNulls(itup) ? 't' : 'f');
@@ -514,7 +514,20 @@ bt2_page_items(PG_FUNCTION_ARGS)
 		values[j++] = psprintf("(%u,%u)",
 							   BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)),
 							   itup->t_tid.ip_posid);
-		elog(WARNING, "tup_offset = %d, abbrkey = %u, data =%d,  size = %d, (%u,%u)", uargs->offset, (uint16) ItemIdGetAbbrKey(id),  (int32) (* (uint16*) ((Item)itup + sizeof(IndexTupleData))), (int) IndexTupleSize(itup), BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)), itup->t_tid.ip_posid);
+		if (fctx->call_cntr == 0)
+			elog(NOTICE, "P_HIGH  : blk = %u, offset = %d, abbrkey = %u, data = \"%d\", -> (%u, %u)",
+				 blkno, uargs->offset, (uint16) ItemIdGetAbbrKey(id), (int32) (* (uint16*) ((Item)itup + sizeof(IndexTupleData))),
+				 BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)), itup->t_tid.ip_posid);
+		else if (fctx->call_cntr == 1)
+			elog(NOTICE, "P_FIRST : blk = %u, offset = %d, abbrkey = %u, data = \"%d\", -> (%u, %u)",
+				 blkno, uargs->offset, (uint16) ItemIdGetAbbrKey(id), (int32) (* (uint16*) ((Item)itup + sizeof(IndexTupleData))),
+				 BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)), itup->t_tid.ip_posid);
+		else if (fctx->call_cntr == fctx->max_calls - 1)
+			elog(NOTICE, "LAST    : blk = %u, offset = %d, abbrkey = %u, data = \"%d\", -> (%u, %u)",
+				 blkno, uargs->offset, (uint16) ItemIdGetAbbrKey(id), (int32) (* (uint16*) ((Item)itup + sizeof(IndexTupleData))),
+				 BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)), itup->t_tid.ip_posid);
+
+		//elog(WARNING, "tup_offset = %d, abbrkey = %u, data =%d,  size = %d, (%u,%u)", uargs->offset, (uint16) ItemIdGetAbbrKey(id),  (int32) (* (uint16*) ((Item)itup + sizeof(IndexTupleData))), (int) IndexTupleSize(itup), BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)), itup->t_tid.ip_posid);
 
 		values[j++] = psprintf("%d", (int) IndexTupleSize(itup));
 		values[j++] = psprintf("%u", ItemIdGetAbbrKey(id));
