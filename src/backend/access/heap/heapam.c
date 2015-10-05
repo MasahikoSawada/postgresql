@@ -2195,7 +2195,7 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 		all_visible_cleared = true;
 
 		/* all-visible and all-frozen information are cleared at the same time */
-		PageClearAllVisibleFrozen(BufferGetPage(buffer));
+		PageClearAllVisible(BufferGetPage(buffer));
 
 		visibilitymap_clear(relation,
 							ItemPointerGetBlockNumber(&(heaptup->t_self)),
@@ -2499,7 +2499,7 @@ heap_multi_insert(Relation relation, HeapTuple *tuples, int ntuples,
 			all_visible_cleared = true;
 
 			/* all-visible and all-frozen information are cleared at the same time */
-			PageClearAllVisibleFrozen(page);
+			PageClearAllVisible(page);
 
 			visibilitymap_clear(relation,
 								BufferGetBlockNumber(buffer),
@@ -2985,7 +2985,7 @@ l1:
 		all_visible_cleared = true;
 
 		/* all-visible and all-frozen information are cleared at the same time */
-		PageClearAllVisibleFrozen(page);
+		PageClearAllVisible(page);
 
 		visibilitymap_clear(relation, BufferGetBlockNumber(buffer),
 							vmbuffer);
@@ -3863,7 +3863,7 @@ l2:
 		all_visible_cleared = true;
 
 		/* all-visible and all-frozen information are cleared at the same time */
-		PageClearAllVisibleFrozen(BufferGetPage(buffer));
+		PageClearAllVisible(BufferGetPage(buffer));
 
 		visibilitymap_clear(relation, BufferGetBlockNumber(buffer),
 							vmbuffer);
@@ -3873,7 +3873,7 @@ l2:
 		all_visible_cleared_new = true;
 
 		/* all-visible and all-frozen information are cleared at the same time */
-		PageClearAllVisibleFrozen(BufferGetPage(newbuf));
+		PageClearAllVisible(BufferGetPage(newbuf));
 
 		visibilitymap_clear(relation, BufferGetBlockNumber(newbuf),
 							vmbuffer_new);
@@ -7766,7 +7766,7 @@ heap_xlog_delete(XLogReaderState *record)
 		PageSetPrunable(page, XLogRecGetXid(record));
 
 		if (xlrec->flags & XLH_DELETE_ALL_VISIBLE_CLEARED)
-			PageClearAllVisibleFrozen(page);
+			PageClearAllVisible(page);
 
 		/* Make sure there is no forward chain link in t_ctid */
 		htup->t_ctid = target_tid;
@@ -7870,7 +7870,7 @@ heap_xlog_insert(XLogReaderState *record)
 		PageSetLSN(page, lsn);
 
 		if (xlrec->flags & XLH_INSERT_ALL_VISIBLE_CLEARED)
-			PageClearAllVisibleFrozen(page);
+			PageClearAllVisible(page);
 
 		MarkBufferDirty(buffer);
 	}
@@ -8009,7 +8009,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
 		PageSetLSN(page, lsn);
 
 		if (xlrec->flags & XLH_INSERT_ALL_VISIBLE_CLEARED)
-			PageClearAllVisibleFrozen(page);
+			PageClearAllVisible(page);
 
 		MarkBufferDirty(buffer);
 	}
@@ -8137,7 +8137,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 		PageSetPrunable(page, XLogRecGetXid(record));
 
 		if (xlrec->flags & XLH_UPDATE_OLD_ALL_VISIBLE_CLEARED)
-			PageClearAllVisibleFrozen(page);
+			PageClearAllVisible(page);
 
 		PageSetLSN(page, lsn);
 		MarkBufferDirty(obuffer);
@@ -8272,7 +8272,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 			elog(PANIC, "heap_update_redo: failed to add tuple");
 
 		if (xlrec->flags & XLH_UPDATE_NEW_ALL_VISIBLE_CLEARED)
-			PageClearAllVisibleFrozen(page);
+			PageClearAllVisible(page);
 
 		freespace = PageGetHeapFreeSpace(page); /* needed to update FSM below */
 
