@@ -375,10 +375,6 @@ typedef PageHeaderData *PageHeader;
 	(((PageHeader) (page))->pd_flags & PD_ALL_FROZEN)
 #define PageSetAllFrozen(page) \
 	(((PageHeader) (page))->pd_flags |= PD_ALL_FROZEN)
-#define PageClearAllFrozen(page) \
-	(((PageHeader) (page))->pd_flags &= ~PD_ALL_FROZEN)
-#define PageClearAllVisibleFrozen(page) \
-	(((PageHeader) (page))->pd_flags &= ~(PD_ALL_VISIBLE | PD_ALL_FROZEN))
 
 #define PageIsPrunable(page, oldestxmin) \
 ( \
