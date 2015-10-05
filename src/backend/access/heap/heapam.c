@@ -2196,7 +2196,6 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 
 		/* all-visible and all-frozen information are cleared at the same time */
 		PageClearAllVisible(BufferGetPage(buffer));
-
 		visibilitymap_clear(relation,
 							ItemPointerGetBlockNumber(&(heaptup->t_self)),
 							vmbuffer);
@@ -2500,7 +2499,6 @@ heap_multi_insert(Relation relation, HeapTuple *tuples, int ntuples,
 
 			/* all-visible and all-frozen information are cleared at the same time */
 			PageClearAllVisible(page);
-
 			visibilitymap_clear(relation,
 								BufferGetBlockNumber(buffer),
 								vmbuffer);
@@ -2986,7 +2984,6 @@ l1:
 
 		/* all-visible and all-frozen information are cleared at the same time */
 		PageClearAllVisible(page);
-
 		visibilitymap_clear(relation, BufferGetBlockNumber(buffer),
 							vmbuffer);
 	}
@@ -3265,7 +3262,7 @@ heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 	 * in the middle of changing this, so we'll need to recheck after we have
 	 * the lock.
 	 */
-	if (PageIsAllVisible(page) || PageIsAllFrozen(page))
+	if (PageIsAllVisible(page))
 		visibilitymap_pin(relation, block, &vmbuffer);
 
 	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
@@ -3864,7 +3861,6 @@ l2:
 
 		/* all-visible and all-frozen information are cleared at the same time */
 		PageClearAllVisible(BufferGetPage(buffer));
-
 		visibilitymap_clear(relation, BufferGetBlockNumber(buffer),
 							vmbuffer);
 	}
@@ -3874,7 +3870,6 @@ l2:
 
 		/* all-visible and all-frozen information are cleared at the same time */
 		PageClearAllVisible(BufferGetPage(newbuf));
-
 		visibilitymap_clear(relation, BufferGetBlockNumber(newbuf),
 							vmbuffer_new);
 	}

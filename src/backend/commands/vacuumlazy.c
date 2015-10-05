@@ -1113,7 +1113,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		{
 			elog(WARNING, "page containing dead tuples is marked as all-visible in relation \"%s\" page %u",
 				 relname, blkno);
-			PageClearAllVisibleFrozen(page);
+			PageClearAllVisible(page);
 			MarkBufferDirty(buf);
 			visibilitymap_clear(onerel, blkno, vmbuffer);
 		}
