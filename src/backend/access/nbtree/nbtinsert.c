@@ -183,6 +183,8 @@ top:
 		xwait = _bt_check_unique(rel, itup, heapRel, buf, offset, itup_scankey,
 								 checkUnique, &is_unique, &speculativeToken);
 
+		elog(NOTICE, "_bt2_doinsert : after _bt2_binsrch() offset %d", offset);
+
 		if (TransactionIdIsValid(xwait))
 		{
 			/* Have to wait for the other guy ... */
@@ -216,14 +218,18 @@ top:
 		 */
 		CheckForSerializableConflictIn(rel, NULL, buf);
 		/* do the insertion */
-		_bt2_findinsertloc(rel, &buf, &offset, natts, itup_scankey, itup,
-						  stack, heapRel);
 
+		elog(NOTICE, "_bt2_doinsert : after _bt2_findinsertloc() offset %d", offset);
+
+		itup_scankey->sk_abbrkey = int32AbbrevConvert(DatumGetInt32(itup_scankey->sk_argument));
 		if (!stack)
 		{
-			abbrkey = DatumGetInt32(itup_scankey->sk_argument);
+			abbrkey = int32AbbrevConvert(DatumGetInt32(itup_scankey->sk_argument));
 			elog(NOTICE, "_bt2_doinsert : abbrkey = %d", abbrkey);
+			elog(NOTICE, "_bt2_doinsert : scankey->abbrkey = %d", itup_scankey->sk_abbrkey);
 		}
+		_bt2_findinsertloc(rel, &buf, &offset, natts, itup_scankey, itup,
+						  stack, heapRel);
 		if (!stack)
 			_bt2_insertonpg(rel, buf, InvalidBuffer, stack, itup, offset, false, &abbrkey);
 		else
@@ -910,6 +916,7 @@ _bt2_findinsertloc(Relation rel,
 	 */
 	movedright = false;
 	vacuumed = false;
+
 	while (PageGetFreeSpace(page) < itemsz)
 	{
 		Buffer		rbuf;

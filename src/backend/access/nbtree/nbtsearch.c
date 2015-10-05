@@ -792,14 +792,15 @@ _bt2_compare(Relation rel,
 	//elog(WARNING, "_bt2_compare abbrkey : %u, abbrkeyArgument : %u", abbrkey,
 	//abbrkeyArgument);
 
+	elog(NOTICE, "    _bt2_comapre : key = %u, dataAbbrKey = %u", abbrkeyArgument, abbrkey);
 	if (abbrkeyArgument < abbrkey)
 		return -1;
 	else if (abbrkeyArgument == abbrkey)
 	{
-#if 0
+#if 1
 		int			i;
 		IndexTuple	itup;
-		itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, offnum));
+		itup = (IndexTuple) PageGetItem(page, PageGetItemIdWithAbbrKey(page, offnum));
 
 		for (i = 1; i <= keysz; i++)
 		{

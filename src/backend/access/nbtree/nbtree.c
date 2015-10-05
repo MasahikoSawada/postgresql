@@ -383,8 +383,9 @@ bt2gettuple(PG_FUNCTION_ARGS)
 			res = _bt2_first(scan, dir);
 		else
 		{
-	scan->keyData->sk_abbrkey =
-		int32AbbrevConvert(DatumGetInt32(scan->keyData->sk_argument));
+			scan->keyData->sk_abbrkey =
+				int32AbbrevConvert(DatumGetInt32(scan->keyData->sk_argument));
+
 			/*
 			 * Check to see if we should kill the previously-fetched tuple.
 			 */

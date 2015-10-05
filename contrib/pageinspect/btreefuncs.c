@@ -368,6 +368,8 @@ bt_page_items(PG_FUNCTION_ARGS)
 		values[j++] = psprintf("(%u,%u)",
 							   BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)),
 							   itup->t_tid.ip_posid);
+		elog(WARNING, "tup_offset = %d, data =%d,  size = %d, (%u,%u)", uargs->offset, (int32) (* (uint16*) ((Item)itup + sizeof(IndexTupleData))), (int) IndexTupleSize(itup), BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)), itup->t_tid.ip_posid);
+
 		values[j++] = psprintf("%d", (int) IndexTupleSize(itup));
 		values[j++] = psprintf("%c", IndexTupleHasNulls(itup) ? 't' : 'f');
 		values[j++] = psprintf("%c", IndexTupleHasVarwidths(itup) ? 't' : 'f');
@@ -512,7 +514,7 @@ bt2_page_items(PG_FUNCTION_ARGS)
 		values[j++] = psprintf("(%u,%u)",
 							   BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)),
 							   itup->t_tid.ip_posid);
-		elog(WARNING, "tup_offset = %d, abbrkey = %u, data =%d,  size = %d, (%u,%u)", uargs->offset, (int) ItemIdGetAbbrKey(id),  (int32) (* (uint16*) ((Item)itup + sizeof(IndexTupleData))), (int) IndexTupleSize(itup), BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)), itup->t_tid.ip_posid);
+		elog(WARNING, "tup_offset = %d, abbrkey = %u, data =%d,  size = %d, (%u,%u)", uargs->offset, (uint16) ItemIdGetAbbrKey(id),  (int32) (* (uint16*) ((Item)itup + sizeof(IndexTupleData))), (int) IndexTupleSize(itup), BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)), itup->t_tid.ip_posid);
 
 		values[j++] = psprintf("%d", (int) IndexTupleSize(itup));
 		values[j++] = psprintf("%u", ItemIdGetAbbrKey(id));
@@ -525,7 +527,7 @@ bt2_page_items(PG_FUNCTION_ARGS)
 			values[j] = "HOGE";
 		else
 		{
-			dump = palloc0(dlen * 3 + 1);
+			dump = palloc0(dlen * 6 + 1);
 			values[j] = dump;
 		}
 		for (off = 0; off < dlen; off++)
@@ -533,6 +535,16 @@ bt2_page_items(PG_FUNCTION_ARGS)
 			if (off > 0)
 				*dump++ = ' ';
 			sprintf(dump, "%02x", *(ptr + off) & 0xff);
+			dump += 2;
+		}
+
+		*dump++ = ' ';
+
+		for (off = 0; off < dlen; off++)
+		{
+			if (off > 0)
+				*dump++ = ' ';
+			sprintf(dump, "%d", *(ptr + off));
 			dump += 2;
 		}
 
