@@ -224,7 +224,7 @@ top:
 		itup_scankey->sk_abbrkey = int32AbbrevConvert(DatumGetInt32(itup_scankey->sk_argument));
 		if (!stack)
 		{
-			abbrkey = int32AbbrevConvert(DatumGetInt32(itup_scankey->sk_argument));
+			abbrkey = DatumGetInt32(itup_scankey->sk_argument);
 			elog(NOTICE, "_bt2_doinsert : abbrkey = %d", abbrkey);
 			elog(NOTICE, "_bt2_doinsert : scankey->abbrkey = %d", itup_scankey->sk_abbrkey);
 		}
@@ -1294,8 +1294,9 @@ _bt2_insertonpg(Relation rel,
 	 * so this comparison is correct even though we appear to be accounting
 	 * only for the item and not for its line pointer.
 	 */
-	elog(NOTICE, "_bt2_insertonpg : FreeSpace = %d, itemsize = %d",
-		 PageGetFreeSpace(page), itemsz);
+	elog(NOTICE, "_bt2_insertonpg : FreeSpace = %d, itemsize = %d, abbrkey = %d",
+		 PageGetFreeSpace(page), itemsz, (abbrkey) ? *abbrkey : -9999);
+
 	if (PageGetFreeSpace(page) < itemsz)
 	{
 		bool		is_root = P_ISROOT(lpageop);

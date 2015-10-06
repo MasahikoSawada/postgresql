@@ -789,8 +789,7 @@ _bt2_compare(Relation rel,
 	scankey->sk_abbrkey =
 		int32AbbrevConvert(DatumGetInt32(scankey->sk_argument));
 	abbrkeyArgument = scankey->sk_abbrkey;
-	//elog(WARNING, "_bt2_compare abbrkey : %u, abbrkeyArgument : %u", abbrkey,
-	//abbrkeyArgument);
+	//elog(WARNING, "_bt2_compare abbrkey : %u, abbrkeyArgument : %u", abbrkey, abbrkeyArgument);
 
 	elog(NOTICE, "    _bt2_comapre : key = %u, dataAbbrKey = %u", abbrkeyArgument, abbrkey);
 	if (abbrkeyArgument < abbrkey)
