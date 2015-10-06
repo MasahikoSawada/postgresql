@@ -494,6 +494,7 @@ bt2_page_items(PG_FUNCTION_ARGS)
 	if (fctx->call_cntr < fctx->max_calls)
 	{
 		ItemIdWithAbbrKey		id;
+		BTPageOpaque opaque;
 		IndexTuple	itup;
 		int			j;
 		int			off;
@@ -501,7 +502,7 @@ bt2_page_items(PG_FUNCTION_ARGS)
 		char	   *dump;
 		char	   *ptr;
 
-
+		opaque = (BTPageOpaque) PageGetSpecialPointer(uargs->page);
 		id = PageGetItemIdWithAbbrKey(uargs->page, uargs->offset);
 
 		if (!ItemIdIsValid(id))
@@ -514,12 +515,8 @@ bt2_page_items(PG_FUNCTION_ARGS)
 		values[j++] = psprintf("(%u,%u)",
 							   BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)),
 							   itup->t_tid.ip_posid);
-		if (fctx->call_cntr == 0)
-			elog(NOTICE, "P_HIGH  : blk = %u, offset = %d, abbrkey = %u, data = \"%d\", -> (%u, %u)",
-				 blkno, uargs->offset, (uint16) ItemIdGetAbbrKey(id), (int32) (* (uint16*) ((Item)itup + sizeof(IndexTupleData))),
-				 BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)), itup->t_tid.ip_posid);
-		else if (fctx->call_cntr == 1)
-			elog(NOTICE, "P_FIRST : blk = %u, offset = %d, abbrkey = %u, data = \"%d\", -> (%u, %u)",
+		if (fctx->call_cntr == P_FIRSTDATAKEY(opaque))
+			elog(NOTICE, "P_FIRSTKEY  : blk = %u, offset = %d, abbrkey = %u, data = \"%d\", -> (%u, %u)",
 				 blkno, uargs->offset, (uint16) ItemIdGetAbbrKey(id), (int32) (* (uint16*) ((Item)itup + sizeof(IndexTupleData))),
 				 BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)), itup->t_tid.ip_posid);
 		else if (fctx->call_cntr == fctx->max_calls - 1)
