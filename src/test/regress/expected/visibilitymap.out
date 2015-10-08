@@ -20,10 +20,10 @@ SELECT relallfrozen  = (pg_relation_size('vmtest') / current_setting('block_size
  t
 (1 row)
 
--- All pages are skipped acoording to VM
+-- All pages are skipped according to VM
 VACUUM FREEZE VERBOSE vmtest;
 INFO:  vacuuming "public.vmtest"
 INFO:  index "vmtest_pkey" now contains 10000 row versions in 30 pages
-INFO:  skipped 45 frozen pages acoording to visibility map
+INFO:  skipped 45 frozen pages according to visibility map
 INFO:  "vmtest": found 0 removable, 0 nonremovable row versions in 0 out of 45 pages
 DROP TABLE vmtest;

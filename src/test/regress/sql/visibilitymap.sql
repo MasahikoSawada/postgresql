@@ -14,7 +14,7 @@ SELECT relallvisible  = (pg_relation_size('vmtest') / current_setting('block_siz
 VACUUM FREEZE vmtest;
 SELECT relallfrozen  = (pg_relation_size('vmtest') / current_setting('block_size')::int) FROM pg_class WHERE relname = 'vmtest';
 
--- All pages are skipped acoording to VM
+-- All pages are skipped according to VM
 VACUUM FREEZE VERBOSE vmtest;
 
 DROP TABLE vmtest;

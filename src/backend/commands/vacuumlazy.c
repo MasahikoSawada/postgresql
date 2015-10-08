@@ -1367,8 +1367,6 @@ lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 	{
 		uint8 flags = 0;
 
-		Assert(BufferIsValid(*vmbuffer));
-
 		if (!visibilitymap_test(onerel, blkno, vmbuffer, VISIBILITYMAP_ALL_VISIBLE))
 			flags |= VISIBILITYMAP_ALL_VISIBLE;
 
@@ -1379,6 +1377,8 @@ lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 			PageSetAllFrozen(page);
 			flags |= VISIBILITYMAP_ALL_FROZEN;
 		}
+
+		Assert(BufferIsValid(*vmbuffer));
 
 		if (flags)
 			visibilitymap_set(onerel, blkno, buffer, InvalidXLogRecPtr, *vmbuffer,
