@@ -307,11 +307,10 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 		new_rel_tuples = vacrelstats->old_rel_tuples;
 	}
 
-	new_rel_allvisible = visibilitymap_count(onerel, VISIBILITYMAP_ALL_VISIBLE);
+	visibilitymap_count(onerel, &new_rel_allvisible, &new_rel_allfrozen);
 	if (new_rel_allvisible > new_rel_pages)
 		new_rel_allvisible = new_rel_pages;
 
-	new_rel_allfrozen = visibilitymap_count(onerel, VISIBILITYMAP_ALL_FROZEN);
 	if (new_rel_allfrozen > new_rel_pages)
 		new_rel_allfrozen = new_rel_pages;
 
@@ -1187,8 +1186,10 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 
 	/* Report how many frozen pages vacuum skipped according to visibility map */
 	ereport(elevel,
-			(errmsg("skipped %d frozen pages acoording to visibility map",
-					vacrelstats->vmskipped_frozen_pages)));
+			(errmsg_plural("skipped %d frozen page according to visibility map",
+						   "skipped %d frozen pages according to visibility map",
+						   vacrelstats->vmskipped_frozen_pages,
+						   vacrelstats->vmskipped_frozen_pages)));
 
 	/*
 	 * This is pretty messy, but we split it up so that we can skip emitting
@@ -1360,17 +1361,20 @@ lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 	/*
 	 * All the changes to the heap page have been done. If the all-visible
 	 * flag is now set, also set the VM all-visible bit.
-	 * Also, if this page is all-frozen, set VM all-frozen bit and flag.
+	 * Also, if this page is all-frozen, set the VM all-frozen bit and flag.
 	 */
 	if (PageIsAllVisible(page))
 	{
 		uint8 flags = 0;
 
+		Assert(BufferIsValid(*vmbuffer));
+
 		if (!visibilitymap_test(onerel, blkno, vmbuffer, VISIBILITYMAP_ALL_VISIBLE))
 			flags |= VISIBILITYMAP_ALL_VISIBLE;
 
-		/* mark page all-frozen, and set VM all-frozen bit */
-		if (all_frozen)
+		/* Set the VM all-frozen bit to flag, if needed */
+		if (all_frozen &&
+			!visibilitymap_test(onerel, blkno, vmbuffer, VISIBILITYMAP_ALL_FROZEN))
 		{
 			PageSetAllFrozen(page);
 			flags |= VISIBILITYMAP_ALL_FROZEN;
@@ -1969,6 +1973,9 @@ heap_page_is_all_visible(Relation rel, Buffer buf, TransactionId *visibility_cut
 				break;
 		}
 	}							/* scan along page */
+
+	if (!all_visible)
+		*all_frozen = false;
 
 	return all_visible;
 }

@@ -1922,10 +1922,7 @@ index_update_stats(Relation rel,
 		BlockNumber relallfrozen;
 
 		if (rd_rel->relkind != RELKIND_INDEX)
-		{
-			relallvisible = visibilitymap_count(rel, VISIBILITYMAP_ALL_VISIBLE);
-			relallfrozen = visibilitymap_count(rel, VISIBILITYMAP_ALL_FROZEN);
-		}
+			visibilitymap_count(rel, &relallvisible, &relallfrozen);
 		else	/* don't bother for indexes */
 		{
 			relallvisible = 0;

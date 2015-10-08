@@ -314,6 +314,8 @@ do_analyze_rel(Relation onerel, int options, VacuumParams *params,
 	Oid			save_userid;
 	int			save_sec_context;
 	int			save_nestlevel;
+	BlockNumber	relallvisible,
+				relallfrozen;
 
 	if (inh)
 		ereport(elevel,
@@ -564,6 +566,9 @@ do_analyze_rel(Relation onerel, int options, VacuumParams *params,
 		}
 	}
 
+	/* Caluclate the number of all-visible and all-frozen bit */
+	visibilitymap_count(onerel, &relallvisible, &relallfrozen);
+
 	/*
 	 * Update pages/tuples stats in pg_class ... but not if we're doing
 	 * inherited stats.
@@ -572,8 +577,8 @@ do_analyze_rel(Relation onerel, int options, VacuumParams *params,
 		vac_update_relstats(onerel,
 							relpages,
 							totalrows,
-							visibilitymap_count(onerel, VISIBILITYMAP_ALL_VISIBLE),
-							visibilitymap_count(onerel, VISIBILITYMAP_ALL_FROZEN),
+							relallvisible,
+							relallfrozen,
 							hasindex,
 							InvalidTransactionId,
 							InvalidMultiXactId,

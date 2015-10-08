@@ -291,6 +291,8 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 
 	Assert(InRecovery || XLogRecPtrIsInvalid(recptr));
 	Assert(InRecovery || BufferIsValid(heapBuf));
+	Assert((flags & VISIBILITYMAP_ALL_VISIBLE) ||
+		   (flags & (VISIBILITYMAP_ALL_VISIBLE | VISIBILITYMAP_ALL_FROZEN)));
 
 	/* Check that we have the right heap page pinned, if present */
 	if (BufferIsValid(heapBuf) && BufferGetBlockNumber(heapBuf) != heapBlk)
@@ -328,10 +330,11 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 					Page		heapPage = BufferGetPage(heapBuf);
 
 					/*
-					 * caller is expected to set PD_ALL_VISIBLE or
+					 * Caller is expected to set PD_ALL_VISIBLE or
 					 * PD_ALL_FROZEN first.
 					 */
-					Assert(PageIsAllVisible(heapPage) || PageIsAllFrozen(heapPage));
+					Assert(((flags | VISIBILITYMAP_ALL_VISIBLE) && PageIsAllVisible(heapPage)) ||
+						   ((flags | VISIBILITYMAP_ALL_FROZEN) && PageIsAllFrozen(heapPage)));
 					PageSetLSN(heapPage, recptr);
 				}
 			}
@@ -415,11 +418,12 @@ visibilitymap_test(Relation rel, BlockNumber heapBlk, Buffer *buf, uint8 flags)
  * going to be marked all-visible or all-frozen, so they won't affect the result.
  * The caller must set the flags which indicates what flag we want to count.
  */
-BlockNumber
-visibilitymap_count(Relation rel, uint8 flags)
+void
+visibilitymap_count(Relation rel, BlockNumber *all_visible, BlockNumber *all_frozen)
 {
-	BlockNumber result = 0;
 	BlockNumber mapBlock;
+
+	*all_visible = *all_frozen = 0;
 
 	for (mapBlock = 0;; mapBlock++)
 	{
@@ -445,16 +449,12 @@ visibilitymap_count(Relation rel, uint8 flags)
 
 		for (i = 0; i < MAPSIZE; i++)
 		{
-			if (flags & VISIBILITYMAP_ALL_VISIBLE)
-				result += number_of_ones_for_visible[map[i]];
-			if (flags & VISIBILITYMAP_ALL_FROZEN)
-				result += number_of_ones_for_frozen[map[i]];
+			*all_visible += number_of_ones_for_visible[map[i]];
+			*all_frozen += number_of_ones_for_frozen[map[i]];
 		}
 
 		ReleaseBuffer(mapBuffer);
 	}
-
-	return result;
 }
 
 /*
