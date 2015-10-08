@@ -114,7 +114,7 @@ extern char *output_files[];
 /*
  * The format of visibility map changed with this 9.6 commit,
  */
-#define VISIBILITY_MAP_FROZEN_BIT_CAT_VER 201510051
+#define VISIBILITY_MAP_FROZEN_BIT_CAT_VER 201510081
 /*
  * pg_multixact format changed in 9.3 commit 0ac5ad5134f2769ccbaefec73844f85,
  * ("Improve concurrency of foreign key locking") which also updated catalog
