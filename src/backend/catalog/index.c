@@ -1918,8 +1918,7 @@ index_update_stats(Relation rel,
 	if (reltuples >= 0)
 	{
 		BlockNumber relpages = RelationGetNumberOfBlocks(rel);
-		BlockNumber relallvisible;
-		BlockNumber relallfrozen;
+		BlockNumber relallvisible, relallfrozen;
 
 		if (rd_rel->relkind != RELKIND_INDEX)
 			visibilitymap_count(rel, &relallvisible, &relallfrozen);
