@@ -2670,6 +2670,16 @@ static struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"synchronous_standby_num", PGC_SIGHUP, REPLICATION_MASTER,
+			gettext_noop("Number of potential synchronous standbys."),
+			NULL
+		},
+		&synchronous_standby_num,
+		-1, -1, INT_MAX,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, 0, 0, 0, NULL, NULL, NULL
@@ -3664,7 +3674,7 @@ static struct config_enum ConfigureNamesEnum[] =
 			gettext_noop("Method for multiple synchronous replication."),
 			NULL
 		},
-		&SyncRepMethod,
+		&synchronous_replication_method,
 		SYNC_REP_METHOD_PRIORITY, synchronous_replication_method_options,
 		NULL, NULL, NULL
 	},

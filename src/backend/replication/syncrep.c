@@ -59,7 +59,8 @@
 
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
-int			SyncRepMethod;
+int			synchronous_replication_method;
+int			synchronous_standby_num;
 
 #define SyncStandbysDefined() \
 	(SyncRepStandbyNames != NULL && SyncRepStandbyNames[0] != '\0')

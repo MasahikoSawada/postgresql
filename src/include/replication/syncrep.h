@@ -37,7 +37,8 @@
 
 /* user-settable parameters for synchronous replication */
 extern char *SyncRepStandbyNames;
-extern int	SyncRepMethod;
+extern int	synchronous_replication_method;
+extern int	synchronous_standby_num;
 
 /* called by user backend */
 extern void SyncRepWaitForLSN(XLogRecPtr XactCommitLSN);
