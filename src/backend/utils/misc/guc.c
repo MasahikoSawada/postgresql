@@ -2676,7 +2676,7 @@ static struct config_int ConfigureNamesInt[] =
 			NULL
 		},
 		&synchronous_standby_num,
-		-1, -1, INT_MAX,
+		0, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 

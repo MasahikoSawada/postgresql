@@ -57,6 +57,8 @@
 #include "utils/builtins.h"
 #include "utils/ps_status.h"
 
+#define DEBUG_QUORUM 1
+
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
 int			synchronous_replication_method;
@@ -64,6 +66,9 @@ int			synchronous_standby_num;
 
 #define SyncStandbysDefined() \
 	(SyncRepStandbyNames != NULL && SyncRepStandbyNames[0] != '\0')
+
+#define SyncRepMethodIsQuorum() \
+	synchronous_replication_method == SYNC_REP_METHOD_QUORUM
 
 static bool announce_next_takeover = true;
 
@@ -74,6 +79,8 @@ static void SyncRepCancelWait(void);
 static int	SyncRepWakeQueue(bool all, int mode);
 
 static int	SyncRepGetStandbyPriority(void);
+
+static int	comp_lsn(const void *a, const void *b);
 
 #ifdef USE_ASSERT_CHECKING
 static bool SyncRepQueueIsOrderedByLSN(int mode);
@@ -356,18 +363,28 @@ SyncRepInitConfig(void)
  * are multiple standbys with the same lowest priority value, the first one
  * found is selected. The caller must hold SyncRepLock.
  */
-WalSnd *
-SyncRepGetSynchronousStandby(void)
+int *
+SyncRepGetSynchronousStandbys(int *num_sync, XLogRecPtr **sync_nodes_lsn)
 {
 	WalSnd	   *result = NULL;
 	int			result_priority = 0;
+	int			priority = 0;
+	int			*sync_nodes;
 	int			i;
+
+	sync_nodes = (int *) palloc(sizeof(int) * synchronous_standby_num);
+
+	sync_nodes_lsn[SYNC_REP_WAIT_WRITE] = 
+		(XLogRecPtr *) palloc(sizeof(XLogRecPtr) * max_wal_senders);
+	sync_nodes_lsn[SYNC_REP_WAIT_FLUSH] =
+		(XLogRecPtr *) palloc(sizeof(XLogRecPtr) * max_wal_senders);
 
 	for (i = 0; i < max_wal_senders; i++)
 	{
 		/* Use volatile pointer to prevent code rearrangement */
 		volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
 		int			this_priority;
+		int			j;
 
 		/* Must be active */
 		if (walsnd->pid == 0)
@@ -390,18 +407,60 @@ SyncRepGetSynchronousStandby(void)
 		if (XLogRecPtrIsInvalid(walsnd->flush))
 			continue;
 
-		result = (WalSnd *) walsnd;
-		result_priority = this_priority;
+		if (SyncRepMethodIsQuorum())
+		{
+			/* Just append to list */
+			sync_nodes[*num_sync] = i;
+			SpinLockAcquire(&walsnd->mutex);
+			sync_nodes_lsn[SYNC_REP_WAIT_WRITE][*num_sync] = walsnd->write;
+			sync_nodes_lsn[SYNC_REP_WAIT_FLUSH][*num_sync] = walsnd->flush;
+			SpinLockRelease(&walsnd->mutex);
+			(*num_sync)++;
+		}
+		else /* PRIORITY method */
+		{
+			if (*num_sync == synchronous_standby_num)
+			{
+				int new_priority = 0;
 
-		/*
-		 * If priority is equal to 1, there cannot be any other WAL senders
-		 * with a lower priority, so we're done.
-		 */
-		if (this_priority == 1)
-			return result;
+				for (j = 0; j < *num_sync; j++)
+				{
+					volatile WalSnd *walsndloc = &WalSndCtl->walsnds[sync_nodes[j]];
+
+					if (walsndloc->sync_standby_priority == priority &&
+						walsnd->sync_standby_priority < priority)
+						sync_nodes[j] = i;
+
+					/* Update highest priority standby */
+					if (new_priority < walsndloc->sync_standby_priority)
+						new_priority = walsndloc->sync_standby_priority;
+				}
+
+				priority = new_priority;
+			}
+			else
+			{
+				sync_nodes[*num_sync] = i;
+				(*num_sync)++;
+				/* Keep track highest priority standby */
+				if (priority < walsnd->sync_standby_priority)
+					priority = walsnd->sync_standby_priority;
+			}
+		}
 	}
 
-	return result;
+#ifdef DEBUG_QUORUM
+	elog(NOTICE, "===== SYNC_NODES =====");
+
+	for (i = 0; i < *num_sync; i++)
+	{
+		volatile WalSnd *walsndloc = &WalSndCtl->walsnds[sync_nodes[i]];
+		elog(NOTICE, "(%d)(%d) sync_node[%d] : priority = %d", MyWalSnd->pid, sync_nodes[i], i,  walsndloc->sync_standby_priority);
+	}
+
+#endif   
+
+	return sync_nodes;
 }
 
 /*
@@ -415,10 +474,15 @@ void
 SyncRepReleaseWaiters(void)
 {
 	volatile WalSndCtlData *walsndctl = WalSndCtl;
-	WalSnd	   *syncWalSnd;
+	int			*sync_standbys;
+	XLogRecPtr	*sync_standbys_lsn[NUM_SYNC_REP_WAIT_MODE];
+	int			num_sync = 0;
 	int			numwrite = 0;
 	int			numflush = 0;
-
+	int			i;
+	XLogRecPtr	write_pos;
+	XLogRecPtr	flush_pos;
+	
 	/*
 	 * If this WALSender is serving a standby that is not on the list of
 	 * potential standbys then we have nothing to do. If we are still starting
@@ -435,33 +499,127 @@ SyncRepReleaseWaiters(void)
 	 * priority standby.
 	 */
 	LWLockAcquire(SyncRepLock, LW_EXCLUSIVE);
-	syncWalSnd = SyncRepGetSynchronousStandby();
+	sync_standbys = SyncRepGetSynchronousStandbys(&num_sync, sync_standbys_lsn);
 
 	/* We should have found ourselves at least */
-	Assert(syncWalSnd != NULL);
+	Assert(num_sync > 0);
 
 	/*
 	 * If we aren't managing the highest priority standby then just leave.
 	 */
-	if (syncWalSnd != MyWalSnd)
+
+	/* 
+	 * Even if we are one of the chosen standbys, leave if there
+	 * are less synchronous standbys in waiting state than what is
+	 * expected by the user.
+	 */
+	if (num_sync < synchronous_standby_num)
 	{
 		LWLockRelease(SyncRepLock);
 		announce_next_takeover = true;
 		return;
 	}
 
+	write_pos = MyWalSnd->write;
+	flush_pos = MyWalSnd->flush;
+
+	if (SyncRepMethodIsQuorum())
+	{
+
+		qsort((void *) sync_standbys_lsn[SYNC_REP_WAIT_WRITE],
+				  num_sync,
+				  sizeof(XLogRecPtr),
+				  comp_lsn);
+
+		qsort((void *) sync_standbys_lsn[SYNC_REP_WAIT_FLUSH],
+				  num_sync,
+				  sizeof(XLogRecPtr),
+			  comp_lsn);
+
+#ifdef DEBUG_QUORUM
+		elog(NOTICE, "WRITE LOCAITON");
+		for (i = 0; i < num_sync; i++)
+		{
+			elog(NOTICE, "    [%d] : %X/%X", i,
+				 (uint32) (sync_standbys_lsn[SYNC_REP_WAIT_WRITE][i] >> 32) ,
+				 (uint32) sync_standbys_lsn[SYNC_REP_WAIT_WRITE][i]
+				);
+		}
+		elog(NOTICE, "FLUSH LOCAITON");
+		for (i = 0; i < num_sync; i++)
+		{
+			elog(NOTICE, "    [%d] : %X/%X", i,
+				 (uint32) (sync_standbys_lsn[SYNC_REP_WAIT_FLUSH][i] >> 32) ,
+				 (uint32) sync_standbys_lsn[SYNC_REP_WAIT_FLUSH][i]
+				);
+		}
+#endif
+		
+		write_pos = sync_standbys_lsn[SYNC_REP_WAIT_WRITE][synchronous_standby_num - 1];
+		flush_pos = sync_standbys_lsn[SYNC_REP_WAIT_FLUSH][synchronous_standby_num - 1];
+	}
+	else /* PRIORITY Method */
+	{
+		for (i = 0; i < num_sync; i++)
+		{
+			volatile WalSnd *walsndloc = &WalSndCtl->walsnds[i];
+			SpinLockAcquire(&walsndloc->mutex);
+
+			/* Find lowest XLogRecPtr of both write and flush from sync_nodes */
+			if (write_pos > walsndloc->write)
+				write_pos = walsndloc->write;
+			if (flush_pos > walsndloc->flush)
+				flush_pos = walsndloc->flush;
+
+			SpinLockRelease(&walsndloc->mutex);
+		}
+
+#ifdef DEBUG_QUORUM
+		elog(NOTICE, "WRITE LOCAITON");
+		for (i = 0; i< num_sync; i++)
+		{
+			volatile WalSnd *walsndloc = &WalSndCtl->walsnds[sync_standbys[i]];
+
+			elog(NOTICE, "    [%d] : %X/%X, priority = %d", i,
+				 (uint32) (walsndloc->write >> 32) ,
+				 (uint32) walsndloc->write,
+				 walsndloc->sync_standby_priority
+				);
+		}
+		elog(NOTICE, "FLUSH LOCAITON");
+		for (i = 0; i< num_sync; i++)
+		{
+			volatile WalSnd *walsndloc = &WalSndCtl->walsnds[sync_standbys[i]];
+
+			elog(NOTICE, "    [%d] : %X/%X, priority = %d", i,
+				 (uint32) (walsndloc->flush >> 32) ,
+				 (uint32) walsndloc->flush,
+				 walsndloc->sync_standby_priority
+				);
+		}
+#endif
+
+	}
+
+#ifdef DEBUG_QUORUM
+	elog(NOTICE, "##### DECIDE (%d) write : %X/%X, flush : %X/%X #####",
+		 MyWalSnd->pid,
+		 (uint32) (write_pos >> 32), (uint32) write_pos,
+		 (uint32) (flush_pos >> 32), (uint32) flush_pos);
+#endif
+
 	/*
 	 * Set the lsn first so that when we wake backends they will release up to
 	 * this location.
 	 */
-	if (walsndctl->lsn[SYNC_REP_WAIT_WRITE] < MyWalSnd->write)
+	if (walsndctl->lsn[SYNC_REP_WAIT_WRITE] < write_pos)
 	{
-		walsndctl->lsn[SYNC_REP_WAIT_WRITE] = MyWalSnd->write;
+		walsndctl->lsn[SYNC_REP_WAIT_WRITE] = write_pos;
 		numwrite = SyncRepWakeQueue(false, SYNC_REP_WAIT_WRITE);
 	}
-	if (walsndctl->lsn[SYNC_REP_WAIT_FLUSH] < MyWalSnd->flush)
+	if (walsndctl->lsn[SYNC_REP_WAIT_FLUSH] < flush_pos)
 	{
-		walsndctl->lsn[SYNC_REP_WAIT_FLUSH] = MyWalSnd->flush;
+		walsndctl->lsn[SYNC_REP_WAIT_FLUSH] = flush_pos;
 		numflush = SyncRepWakeQueue(false, SYNC_REP_WAIT_FLUSH);
 	}
 
@@ -501,6 +659,9 @@ SyncRepGetStandbyPriority(void)
 	int			priority = 0;
 	bool		found = false;
 
+	//elog(NOTICE, "hogehoge");
+	//pg_usleep(30 * 1000L * 1000L);
+
 	/*
 	 * Since synchronous cascade replication is not allowed, we always set the
 	 * priority of cascading walsender to zero.
@@ -531,6 +692,11 @@ SyncRepGetStandbyPriority(void)
 			pg_strcasecmp(standby_name, "*") == 0)
 		{
 			found = true;
+
+			/* All standby's priority is 1, if quorum mothod */
+			if (SyncRepMethodIsQuorum())
+				priority = 1;
+
 			break;
 		}
 	}
@@ -538,6 +704,7 @@ SyncRepGetStandbyPriority(void)
 	pfree(rawstring);
 	list_free(elemlist);
 
+	elog(NOTICE, "(%d) priority = %d", MyWalSnd->pid, priority);
 	return (found ? priority : 0);
 }
 
@@ -643,6 +810,29 @@ SyncRepUpdateSyncStandbysDefined(void)
 
 		LWLockRelease(SyncRepLock);
 	}
+}
+
+static int
+comp_lsn(const void *a, const void *b)
+{
+	XLogRecPtr *lsn1 = (XLogRecPtr *) a;
+	XLogRecPtr *lsn2 = (XLogRecPtr *) b;
+	int	res;
+
+/*	
+	elog(NOTICE, " lsn1 = %X/%X, lsn2 = %X/%X",
+		 (uint32) (*lsn1 >> 32) ,
+		 (uint32) *lsn1,
+		 (uint32) (*lsn2 >> 32),
+		 (uint32) *lsn2
+		);
+*/
+	if (*lsn1 <= *lsn2)
+		res = 1;
+	else
+		res = -1;
+
+	return res;
 }
 
 #ifdef USE_ASSERT_CHECKING
