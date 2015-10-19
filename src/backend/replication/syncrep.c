@@ -57,8 +57,6 @@
 #include "utils/builtins.h"
 #include "utils/ps_status.h"
 
-#define DEBUG_QUORUM 1
-
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
 int			synchronous_replication_method;
@@ -555,29 +553,6 @@ SyncRepReleaseWaiters(void)
 		qsort((void *) write_pos_list, num_sync, sizeof(XLogRecPtr), comp_lsn);
 		qsort((void *) flush_pos_list, num_sync, sizeof(XLogRecPtr), comp_lsn);
 
-#ifdef DEBUG_QUORUM
-		elog(NOTICE, "SYNC LIST");
-		for (i = 0; i < num_sync; i++)
-			elog(NOTICE, "sync_standbys[%d] = %d", i, sync_standbys[i]);
-
-		elog(NOTICE, "WRITE LOCAITON LIST");
-		for (i = 0; i < num_sync; i++)
-		{
-			elog(NOTICE, "    [%d] : %X/%X", i,
-				 (uint32) (write_pos_list[i] >> 32) ,
-				 (uint32) write_pos_list[i]
-				);
-		}
-		elog(NOTICE, "FLUSH LOCAITON LIST");
-		for (i = 0; i < num_sync; i++)
-		{
-			elog(NOTICE, "    [%d] : %X/%X", i,
-				 (uint32) (flush_pos_list[i] >> 32) ,
-				 (uint32) flush_pos_list[i]
-				);
-		}
-#endif
-
 		write_pos = write_pos_list[synchronous_standby_num - 1];
 		flush_pos = flush_pos_list[synchronous_standby_num - 1];
 	}
@@ -599,40 +574,7 @@ SyncRepReleaseWaiters(void)
 
 			SpinLockRelease(&walsndloc->mutex);
 		}
-
-#ifdef DEBUG_QUORUM
-		elog(NOTICE, "WRITE LOCAITON");
-		for (i = 0; i< num_sync; i++)
-		{
-			volatile WalSnd *walsndloc = &WalSndCtl->walsnds[sync_standbys[i]];
-
-			elog(NOTICE, "    [%d] : %X/%X, priority = %d", i,
-				 (uint32) (walsndloc->write >> 32) ,
-				 (uint32) walsndloc->write,
-				 walsndloc->sync_standby_priority
-				);
-		}
-		elog(NOTICE, "FLUSH LOCAITON");
-		for (i = 0; i< num_sync; i++)
-		{
-			volatile WalSnd *walsndloc = &WalSndCtl->walsnds[sync_standbys[i]];
-
-			elog(NOTICE, "    [%d] : %X/%X, priority = %d", i,
-				 (uint32) (walsndloc->flush >> 32) ,
-				 (uint32) walsndloc->flush,
-				 walsndloc->sync_standby_priority
-				);
-		}
-#endif
-
 	}
-
-#ifdef DEBUG_QUORUM
-	elog(NOTICE, "======> DECIDE (%d) write : %X/%X, flush : %X/%X #####",
-		 MyWalSnd->pid,
-		 (uint32) (write_pos >> 32), (uint32) write_pos,
-		 (uint32) (flush_pos >> 32), (uint32) flush_pos);
-#endif
 
 	/*
 	 * Set the lsn first so that when we wake backends they will release up to
@@ -742,9 +684,6 @@ SyncRepGetStandbyPriority(void)
 	pfree(rawstring);
 	list_free(elemlist);
 
-#ifdef DEBUG_QUORUM
-	elog(NOTICE, "(%d) Got priority %d", MyWalSnd->pid, priority);
-#endif
 	return (found ? priority : 0);
 }
 
