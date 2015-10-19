@@ -635,9 +635,6 @@ SyncRepGetStandbyPriority(void)
 	int			priority = 0;
 	bool		found = false;
 
-	//elog(NOTICE, "hogehoge");
-	//pg_usleep(30 * 1000L * 1000L);
-
 	/*
 	 * Since synchronous cascade replication is not allowed, we always set the
 	 * priority of cascading walsender to zero.
@@ -798,14 +795,6 @@ comp_lsn(const void *a, const void *b)
 	XLogRecPtr *lsn2 = (XLogRecPtr *) b;
 	int	res;
 
-/*
-	elog(NOTICE, " lsn1 = %X/%X, lsn2 = %X/%X",
-		 (uint32) (*lsn1 >> 32) ,
-		 (uint32) *lsn1,
-		 (uint32) (*lsn2 >> 32),
-		 (uint32) *lsn2
-		);
-*/
 	if (*lsn1 <= *lsn2)
 		res = 1;
 	else
