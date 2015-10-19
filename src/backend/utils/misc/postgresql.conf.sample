@@ -241,6 +241,8 @@
 #synchronous_standby_names = ''	# standby servers that provide sync rep
 				# comma-separated list of application_name
 				# from standby(s); '*' = all
+#synchronous_standby_num = 0	# number of standby servers using sync rep
+#synchronous_replication_method = quorum	# quorum, priority
 #vacuum_defer_cleanup_age = 0	# number of xacts by which cleanup is delayed
 
 # - Standby Servers -

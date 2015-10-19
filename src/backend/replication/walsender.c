@@ -2729,8 +2729,12 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 	Tuplestorestate *tupstore;
 	MemoryContext per_query_ctx;
 	MemoryContext oldcontext;
-	WalSnd	   *sync_standby;
+	int			*sync_standbys;
+	XLogRecPtr	*write_pos_list;
+	XLogRecPtr	*flush_pos_list;
+	int			num_sync;
 	int			i;
+
 
 	/* check to see if caller supports us returning a tuplestore */
 	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
@@ -2757,11 +2761,15 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 
 	MemoryContextSwitchTo(oldcontext);
 
+	sync_standbys = (int *) palloc(sizeof(int) * synchronous_standby_num);
+	write_pos_list = (XLogRecPtr *) palloc(sizeof(XLogRecPtr) * max_wal_senders);
+	flush_pos_list = (XLogRecPtr *) palloc(sizeof(XLogRecPtr) * max_wal_senders);
+
 	/*
-	 * Get the currently active synchronous standby.
+	 * Get the currently active synchronous standbys.
 	 */
 	LWLockAcquire(SyncRepLock, LW_SHARED);
-	//sync_standby = SyncRepGetSynchronousStandby();
+	num_sync = SyncRepGetSynchronousStandbys(sync_standbys, write_pos_list, flush_pos_list);
 	LWLockRelease(SyncRepLock);
 
 	for (i = 0; i < max_wal_senders; i++)
@@ -2831,17 +2839,41 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 			 */
 			if (priority == 0)
 				values[7] = CStringGetTextDatum("async");
-			else if (walsnd == sync_standby)
-				values[7] = CStringGetTextDatum("sync");
 			else
-				values[7] = CStringGetTextDatum("potential");
+			{
+				int		j;
+				bool	found = false;
+
+				for (j = 0; j < num_sync; j++)
+				{
+					/* Found sync standby */
+					if (i == sync_standbys[j])
+					{
+						values[7] = CStringGetTextDatum("sync");
+						found = true;
+						break;
+					}
+				}
+				if (!found)
+					values[7] = CStringGetTextDatum("potential");
+			}
 		}
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 	}
 
+	/* Clean up */
+	if (!sync_standbys)
+		pfree(sync_standbys);
+	if (!write_pos_list)
+		pfree(write_pos_list);
+	if (!flush_pos_list)
+		pfree(flush_pos_list);
+
+
 	/* clean up and return the tuplestore */
 	tuplestore_donestoring(tupstore);
+
 
 	return (Datum) 0;
 }
