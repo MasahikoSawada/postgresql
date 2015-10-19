@@ -2863,11 +2863,11 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 	}
 
 	/* Clean up */
-	if (!sync_standbys)
+	if (sync_standbys)
 		pfree(sync_standbys);
-	if (!write_pos_list)
+	if (write_pos_list)
 		pfree(write_pos_list);
-	if (!flush_pos_list)
+	if (flush_pos_list)
 		pfree(flush_pos_list);
 
 
