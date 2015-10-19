@@ -1601,8 +1601,7 @@ ServerLoop(void)
 {
 	fd_set		readmask;
 	int			nSockets;
-	time_t		now,
-				last_lockfile_recheck_time,
+	time_t		last_lockfile_recheck_time,
 				last_touch_time;
 
 	last_lockfile_recheck_time = last_touch_time = time(NULL);
@@ -1613,6 +1612,7 @@ ServerLoop(void)
 	{
 		fd_set		rmask;
 		int			selres;
+		time_t		now;
 
 		/*
 		 * Wait for a connection request to arrive.
@@ -1765,6 +1765,16 @@ ServerLoop(void)
 #endif
 
 		/*
+		 * Lastly, check to see if it's time to do some things that we don't
+		 * want to do every single time through the loop, because they're a
+		 * bit expensive.  Note that there's up to a minute of slop in when
+		 * these tasks will be performed, since DetermineSleepTime() will let
+		 * us sleep at most that long; except for SIGKILL timeout which has
+		 * special-case logic there.
+		 */
+		now = time(NULL);
+
+		/*
 		 * If we already sent SIGQUIT to children and they are slow to shut
 		 * down, it's time to send them SIGKILL.  This doesn't happen
 		 * normally, but under certain conditions backends can get stuck while
@@ -1781,15 +1791,6 @@ ServerLoop(void)
 			/* reset flag so we don't SIGKILL again */
 			AbortStartTime = 0;
 		}
-
-		/*
-		 * Lastly, check to see if it's time to do some things that we don't
-		 * want to do every single time through the loop, because they're a
-		 * bit expensive.  Note that there's up to a minute of slop in when
-		 * these tasks will be performed, since DetermineSleepTime() will let
-		 * us sleep at most that long.
-		 */
-		now = time(NULL);
 
 		/*
 		 * Once a minute, verify that postmaster.pid hasn't been removed or
@@ -4627,7 +4628,8 @@ SubPostmasterMain(int argc, char *argv[])
 	/*
 	 * If appropriate, physically re-attach to shared memory segment. We want
 	 * to do this before going any further to ensure that we can attach at the
-	 * same address the postmaster used.
+	 * same address the postmaster used.  On the other hand, if we choose not
+	 * to re-attach, we may have other cleanup to do.
 	 */
 	if (strcmp(argv[1], "--forkbackend") == 0 ||
 		strcmp(argv[1], "--forkavlauncher") == 0 ||
@@ -4635,6 +4637,8 @@ SubPostmasterMain(int argc, char *argv[])
 		strcmp(argv[1], "--forkboot") == 0 ||
 		strncmp(argv[1], "--forkbgworker=", 15) == 0)
 		PGSharedMemoryReAttach();
+	else
+		PGSharedMemoryNoReAttach();
 
 	/* autovacuum needs this set before calling InitProcess */
 	if (strcmp(argv[1], "--forkavlauncher") == 0)

@@ -61,11 +61,11 @@ typedef enum					/* type categories for datum_to_jsonb */
 
 typedef struct JsonbAggState
 {
-   JsonbInState      *res;
-   JsonbTypeCategory  key_category;
-   Oid                key_output_func;
-   JsonbTypeCategory  val_category;
-   Oid                val_output_func;
+	JsonbInState *res;
+	JsonbTypeCategory key_category;
+	Oid			key_output_func;
+	JsonbTypeCategory val_category;
+	Oid			val_output_func;
 } JsonbAggState;
 
 static inline Datum jsonb_from_cstring(char *json, int len);
@@ -455,8 +455,8 @@ JsonbToCStringWorker(StringInfo out, JsonbContainer *in, int estimated_len, bool
 {
 	bool		first = true;
 	JsonbIterator *it;
-	JsonbIteratorToken type = WJB_DONE;
 	JsonbValue	v;
+	JsonbIteratorToken type = WJB_DONE;
 	int			level = 0;
 	bool		redo_switch = false;
 
@@ -714,6 +714,7 @@ datum_to_jsonb(Datum val, bool is_null, JsonbInState *result,
 
 	check_stack_depth();
 
+	/* Convert val to a JsonbValue in jb (in most cases) */
 	if (is_null)
 	{
 		Assert(!key_scalar);
@@ -899,7 +900,6 @@ datum_to_jsonb(Datum val, bool is_null, JsonbInState *result,
 			case JSONBTYPE_JSONB:
 				{
 					Jsonb	   *jsonb = DatumGetJsonb(val);
-					JsonbIteratorToken type;
 					JsonbIterator *it;
 
 					it = JsonbIteratorInit(&jsonb->root);
@@ -913,6 +913,8 @@ datum_to_jsonb(Datum val, bool is_null, JsonbInState *result,
 					}
 					else
 					{
+						JsonbIteratorToken type;
+
 						while ((type = JsonbIteratorNext(&it, &jb, false))
 							   != WJB_DONE)
 						{
@@ -935,8 +937,10 @@ datum_to_jsonb(Datum val, bool is_null, JsonbInState *result,
 				break;
 		}
 	}
-	if (tcategory >= JSONBTYPE_JSON && tcategory <= JSONBTYPE_JSONCAST &&
-		!scalar_jsonb)
+
+	/* Now insert jb into result, unless we did it recursively */
+	if (!is_null && !scalar_jsonb &&
+		tcategory >= JSONBTYPE_JSON && tcategory <= JSONBTYPE_JSONCAST)
 	{
 		/* work has been done recursively */
 		return;
@@ -1606,8 +1610,7 @@ jsonb_agg_transfn(PG_FUNCTION_ARGS)
 
 	if (PG_ARGISNULL(0))
 	{
-
-		Oid         arg_type = get_fn_expr_argtype(fcinfo->flinfo, 1);
+		Oid			arg_type = get_fn_expr_argtype(fcinfo->flinfo, 1);
 
 		if (arg_type == InvalidOid)
 			ereport(ERROR,
@@ -1761,7 +1764,7 @@ jsonb_object_agg_transfn(PG_FUNCTION_ARGS)
 
 	if (PG_ARGISNULL(0))
 	{
-		Oid         arg_type;
+		Oid			arg_type;
 
 		oldcontext = MemoryContextSwitchTo(aggcontext);
 		state = palloc(sizeof(JsonbAggState));
@@ -1949,8 +1952,9 @@ jsonb_object_agg_finalfn(PG_FUNCTION_ARGS)
 	/*
 	 * We need to do a shallow clone of the argument's res field in case the
 	 * final function is called more than once, so we avoid changing the
-	 * it. A shallow clone is sufficient as we aren't going to change any of
-	 * the values, just add the final object end marker.
+	 * aggregate state value.  A shallow clone is sufficient as we aren't
+	 * going to change any of the values, just add the final object end
+	 * marker.
 	 */
 
 	result.parseState = clone_parse_state(arg->res->parseState);
