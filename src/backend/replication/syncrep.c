@@ -359,7 +359,7 @@ SyncRepInitConfig(void)
 	}
 }
 
-/* 
+/*
  * Obtain three palloc'd arrays containing position of standbys currently
  * considered as synchronous, write/flush LSN position of each sync node.
  */
@@ -468,7 +468,7 @@ SyncRepReleaseWaiters(void)
 	int			numflush = 0;
 	int			i;
 	bool		found = false;
-	
+
 	/*
 	 * If this WALSender is serving a standby that is not on the list of
 	 * potential standbys then we have nothing to do. If we are still starting
@@ -528,7 +528,7 @@ SyncRepReleaseWaiters(void)
 		return;
 	}
 
-	/* 
+	/*
 	 * Even if we are one of the chosen standbys, leave if there
 	 * are less synchronous standbys in waiting state than what is
 	 * expected by the user.
@@ -540,7 +540,7 @@ SyncRepReleaseWaiters(void)
 		if (write_pos_list)
 			pfree(write_pos_list);
 		if (flush_pos_list)
-			pfree(flush_pos_list);	
+			pfree(flush_pos_list);
 		return;
 	}
 
@@ -577,7 +577,7 @@ SyncRepReleaseWaiters(void)
 				);
 		}
 #endif
-		
+
 		write_pos = write_pos_list[synchronous_standby_num - 1];
 		flush_pos = flush_pos_list[synchronous_standby_num - 1];
 	}
@@ -859,7 +859,7 @@ comp_lsn(const void *a, const void *b)
 	XLogRecPtr *lsn2 = (XLogRecPtr *) b;
 	int	res;
 
-/*	
+/*
 	elog(NOTICE, " lsn1 = %X/%X, lsn2 = %X/%X",
 		 (uint32) (*lsn1 >> 32) ,
 		 (uint32) *lsn1,
