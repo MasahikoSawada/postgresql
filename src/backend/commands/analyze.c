@@ -566,7 +566,7 @@ do_analyze_rel(Relation onerel, int options, VacuumParams *params,
 		}
 	}
 
-	/* Caluclate the number of all-visible and all-frozen bit */
+	/* Calculate the number of all-visible and all-frozen bit */
 	if (!inh)
 		visibilitymap_count(onerel, &relallvisible, &relallfrozen);
 

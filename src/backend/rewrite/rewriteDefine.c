@@ -604,6 +604,7 @@ DefineQueryRewrite(char *rulename,
 		classForm->relpages = 0;
 		classForm->reltuples = 0;
 		classForm->relallvisible = 0;
+		classForm->relallfrozen = 0;
 		classForm->reltoastrelid = InvalidOid;
 		classForm->relhasindex = false;
 		classForm->relkind = RELKIND_VIEW;
