@@ -1282,7 +1282,7 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 
 		swap_allfrozen = relform1->relallfrozen;
 		relform1->relallfrozen = relform2->relallfrozen;
-		relfrom2->relallfrozen = swap_allfrozen;
+		relform2->relallfrozen = swap_allfrozen;
 	}
 
 	/*
