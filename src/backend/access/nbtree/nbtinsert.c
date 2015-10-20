@@ -231,7 +231,13 @@ top:
 		_bt2_findinsertloc(rel, &buf, &offset, natts, itup_scankey, itup,
 						  stack, heapRel);
 		if (!stack)
+		{
+			/* 
+			 * When there is only one page, that page is LEAF and ROOT.
+			 * And, stack must be free.
+			 */
 			_bt2_insertonpg(rel, buf, InvalidBuffer, stack, itup, offset, false, &abbrkey);
+		}
 		else
 			_bt2_insertonpg(rel, buf, InvalidBuffer, stack, itup, offset, false, NULL);
 	}

@@ -544,7 +544,8 @@ bt2_page_items(PG_FUNCTION_ARGS)
 		{
 			if (off > 0)
 				*dump++ = ' ';
-			sprintf(dump, "%u", *(ptr + off));
+			sprintf(dump, "%02x", *(ptr + off) & 0xff);
+
 			dump += 2;
 		}
 
