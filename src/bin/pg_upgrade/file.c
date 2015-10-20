@@ -253,17 +253,15 @@ rewriteVisibilitymap(const char *fromfile, const char *tofile, bool force)
 #define REWRITE_BUF_SIZE (50 * BLCKSZ)
 #define BITS_PER_HEAPBLOCK 2
 
-	int			src_fd, dst_fd;
+	int			src_fd = 0;
+	int			dst_fd = 0;
 	uint16 		vm_bits;
 	ssize_t 	nbytes;
-	char 		*buffer;
+	char 		*buffer = NULL;
 	int			ret = 0;
 
 	if ((fromfile == NULL) || (tofile == NULL))
-	{
-		errno = EINVAL;
-		goto err;
-	}
+		return getErrorText(EINVAL);
 
 	if ((src_fd = open(fromfile, O_RDONLY, 0)) < 0)
 		goto err;
