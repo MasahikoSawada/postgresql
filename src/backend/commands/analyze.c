@@ -567,7 +567,8 @@ do_analyze_rel(Relation onerel, int options, VacuumParams *params,
 	}
 
 	/* Caluclate the number of all-visible and all-frozen bit */
-	visibilitymap_count(onerel, &relallvisible, &relallfrozen);
+	if (!inh)
+		visibilitymap_count(onerel, &relallvisible, &relallfrozen);
 
 	/*
 	 * Update pages/tuples stats in pg_class ... but not if we're doing
