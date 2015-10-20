@@ -41,9 +41,9 @@
  *
  * When we *set* a visibility map during VACUUM, we must write WAL.  This may
  * seem counterintuitive, since the bit is basically a hint: if it is clear,
- * it may still be the case that every tuple on the page is visible or frozen
- * to all transactions; we just don't know that for certain.  The difficulty is
- * that there are two bits which are typically set together: the PD_ALL_VISIBLE
+ * it may still be the case that every tuple on the page is all-visible or
+ * all-frozen we just don't know that for certain.  The difficulty is that
+ * there are two bits which are typically set together: the PD_ALL_VISIBLE
  * or PD_ALL_FROZEN bit on the page itself, and the corresponding visibility map
  * bit.  If a crash occurs after the visibility map page makes it to disk and before
  * the updated heap page makes it to disk, redo must set the bit on the heap page.
