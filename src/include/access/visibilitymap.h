@@ -23,7 +23,8 @@
 #define VISIBILITYMAP_ALL_VISIBLE	0x01
 #define VISIBILITYMAP_ALL_FROZEN	0x02
 
-extern void visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer vmbuf);
+extern void visibilitymap_clear(Relation rel, BlockNumber heapBlk,
+					Buffer vmbuf);
 extern void visibilitymap_pin(Relation rel, BlockNumber heapBlk,
 				  Buffer *vmbuf);
 extern bool visibilitymap_pin_ok(BlockNumber heapBlk, Buffer vmbuf);

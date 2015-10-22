@@ -233,7 +233,7 @@ check_cluster_versions(void)
 
 	/*
 	 * We cant't allow upgrading with link mode between 9.5 or before and 9.6 or later,
-	 * because the format of visibility map has changed on version 9.6.
+	 * because the format of visibility map has been changed on version 9.6.
 	 */
 	if (user_opts.transfer_mode == TRANSFER_MODE_LINK &&
 		GET_MAJOR_VERSION(old_cluster.major_version) < 906 &&

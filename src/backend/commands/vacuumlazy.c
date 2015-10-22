@@ -292,9 +292,9 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	 * density") with nonzero relpages and reltuples=0 (which means "zero
 	 * tuple density") unless there's some actual evidence for the latter.
 	 *
-	 * We do update relallvisible even in the corner case, since if the table
-	 * is all-visible we'd definitely like to know that.  But clamp the value
-	 * to be not more than what we're setting relpages to.
+	 * We do update relallvisible and relallfrozen even in the corner case,
+	 * since if the table is all-visible we'd definitely like to know that.
+	 * But clamp the value to be not more than what we're setting relpages to.
 	 *
 	 * Also, don't change relfrozenxid/relminmxid if we skipped any pages,
 	 * since then we don't know for certain that all tuples have a newer xmin.
@@ -519,17 +519,18 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 	 * Note: The value returned by visibilitymap_test could be slightly
 	 * out-of-date, since we make this test before reading the corresponding
 	 * heap page or locking the buffer.  This is OK.  If we mistakenly think
-	 * that the page is all-visible when in fact the flag's just been cleared,
-	 * we might fail to vacuum the page.  But it's OK to skip pages when
-	 * scan_all is not set, so no great harm done; the next vacuum will find
-	 * them.  If we make the reverse mistake and vacuum a page unnecessarily,
-	 * it'll just be a no-op.
+	 * that the page is all-visible/all-frozen when in fact the flag's just
+	 * been cleared, we might fail to vacuum the page.  But it's OK to skip
+	 * pages when scan_all is not set, so no great harm done; the next vacuum
+	 * will find them.  If we make the reverse mistake and vacuum a page
+	 * unnecessarily, it'll just be a no-op.
 	 */
 	for (next_not_all_visible_block = 0;
 		 next_not_all_visible_block < nblocks;
 		 next_not_all_visible_block++)
 	{
-		if (!visibilitymap_test(onerel, next_not_all_visible_block, &vmbuffer, VISIBILITYMAP_ALL_VISIBLE))
+		if (!visibilitymap_test(onerel, next_not_all_visible_block, &vmbuffer,
+								VISIBILITYMAP_ALL_VISIBLE))
 			break;
 		vacuum_delay_point();
 	}
@@ -588,10 +589,11 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		{
 			/*
 			 * This block is at least all-visible according to visibility map.
-			 * We check whehter this block is all-frozen to skip to vacuum this
-			 * page even if scanning whole page is required.
+			 * We check whehter this block is all-frozen or not, to skip to
+			 * vacuum this page even if scan_all is true.
 			 */
-			bool	all_frozen = visibilitymap_test(onerel, blkno, &vmbuffer, VISIBILITYMAP_ALL_FROZEN);
+			bool	all_frozen = visibilitymap_test(onerel, blkno, &vmbuffer,
+													VISIBILITYMAP_ALL_FROZEN);
 			if (scan_all)
 			{
 				if (all_frozen)
@@ -600,11 +602,8 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 					continue;
 				}
 			}
-			else
-			{
-				if (skipping_all_visible_blocks)
+			else if (skipping_all_visible_blocks)
 					continue;
-			}
 
 			all_visible_according_to_vm = true;
 			all_frozen_according_to_vm = all_frozen;
