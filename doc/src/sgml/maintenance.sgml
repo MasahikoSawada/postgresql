@@ -559,7 +559,7 @@ SELECT datname, age(datfrozenxid) FROM pg_database;
     transcations old, where <command>VACUUM</>'s <literal>FREEZE</> option is used,
     <command>VACUUM</> can skip the pages that all tuples on the page itself are
     marked as frozen.
-    When the all pages of table are eventually marked as frozen by <command>VACUUM</>,
+    When all pages of table are eventually marked as frozen by <command>VACUUM</>,
     after it's finished <literal>age(relfrozenxid)</> should be a little more
     than the <varname>vacuum_freeze_min_age</> setting that was used (more by
     the number of transcations started since the <command>VACUUM</> started).

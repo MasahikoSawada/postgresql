@@ -1845,9 +1845,9 @@
        <entry><type>int4</type></entry>
        <entry></entry>
        <entry>
-        Number of pages that are marked all-frozen in the tables's
+        Number of pages that are marked all-frozen in the table's
         visibility map. It is updated by <command>VACUUM</command>.
-        <command>ANALYZE</command>, and a few DDL coomand such as
+        <command>ANALYZE</command>, and a few DDL command such as
         <command>CREATE INDEX</command>.
        </entry>
      </row>
