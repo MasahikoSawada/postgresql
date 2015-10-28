@@ -46,6 +46,7 @@ extern Datum pg_stat_get_vacuum_count(PG_FUNCTION_ARGS);
 extern Datum pg_stat_get_autovacuum_count(PG_FUNCTION_ARGS);
 extern Datum pg_stat_get_analyze_count(PG_FUNCTION_ARGS);
 extern Datum pg_stat_get_autoanalyze_count(PG_FUNCTION_ARGS);
+extern Datum pg_stat_get_frozen_pages(PG_FUNCTION_ARGS);
 
 extern Datum pg_stat_get_function_calls(PG_FUNCTION_ARGS);
 extern Datum pg_stat_get_function_total_time(PG_FUNCTION_ARGS);
@@ -447,6 +448,21 @@ pg_stat_get_autoanalyze_count(PG_FUNCTION_ARGS)
 		result = (int64) (tabentry->autovac_analyze_count);
 
 	PG_RETURN_INT64(result);
+}
+
+Datum
+pg_stat_get_frozen_pages(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	int32		result;
+	PgStat_StatTabEntry *tabentry;
+
+	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
+		result = 0;
+	else
+		result = (int32) (tabentry->n_frozen_pages);
+
+	PG_RETURN_INT32(result);
 }
 
 Datum

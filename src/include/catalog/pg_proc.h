@@ -2777,6 +2777,8 @@ DATA(insert OID = 3056 ( pg_stat_get_analyze_count PGNSP PGUID 12 1 0 0 0 f f f 
 DESCR("statistics: number of manual analyzes for a table");
 DATA(insert OID = 3057 ( pg_stat_get_autoanalyze_count PGNSP PGUID 12 1 0 0 0 f f f f t f s r 1 0 20 "26" _null_ _null_ _null_ _null_ _null_ pg_stat_get_autoanalyze_count _null_ _null_ _null_ ));
 DESCR("statistics: number of auto analyzes for a table");
+DATA(insert OID = 6015 ( pg_stat_get_frozen_pages PGNSP PGUID 12 1 0 0 0 f f f f t f s r 1 0 23 "26" _null_ _null_ _null_ _null_ _null_ pg_stat_get_frozen_pages _null_ _null_ _null_ ));
+DESCR("statistics: number of frozen pages of table");
 DATA(insert OID = 1936 (  pg_stat_get_backend_idset		PGNSP PGUID 12 1 100 0 0 f f f f t t s r 0 0 23 "" _null_ _null_ _null_ _null_ _null_ pg_stat_get_backend_idset _null_ _null_ _null_ ));
 DESCR("statistics: currently active backend IDs");
 DATA(insert OID = 2022 (  pg_stat_get_activity			PGNSP PGUID 12 1 100 0 0 f f f f f t s r 1 0 2249 "23" "{23,26,23,26,25,25,25,16,1184,1184,1184,1184,869,25,23,28,28,16,25,25,23,16,25}" "{i,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o}" "{pid,datid,pid,usesysid,application_name,state,query,waiting,xact_start,query_start,backend_start,state_change,client_addr,client_hostname,client_port,backend_xid,backend_xmin,ssl,sslversion,sslcipher,sslbits,sslcompression,sslclientdn}" _null_ _null_ pg_stat_get_activity _null_ _null_ _null_ ));

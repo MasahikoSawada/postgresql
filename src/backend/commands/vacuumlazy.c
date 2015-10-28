@@ -321,7 +321,6 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 						new_rel_pages,
 						new_rel_tuples,
 						new_rel_allvisible,
-						new_rel_allfrozen,
 						vacrelstats->hasindex,
 						new_frozen_xid,
 						new_min_multi,
@@ -335,7 +334,8 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	pgstat_report_vacuum(RelationGetRelid(onerel),
 						 onerel->rd_rel->relisshared,
 						 new_live_tuples,
-						 vacrelstats->new_dead_tuples);
+						 vacrelstats->new_dead_tuples,
+						 new_rel_allfrozen);
 
 	/* and log the action if appropriate */
 	if (IsAutoVacuumWorkerProcess() && params->log_min_duration >= 0)
@@ -1498,7 +1498,6 @@ lazy_cleanup_index(Relation indrel,
 		vac_update_relstats(indrel,
 							stats->num_pages,
 							stats->num_index_tuples,
-							0,
 							0,
 							false,
 							InvalidTransactionId,

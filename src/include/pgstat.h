@@ -355,6 +355,7 @@ typedef struct PgStat_MsgVacuum
 	TimestampTz m_vacuumtime;
 	PgStat_Counter m_live_tuples;
 	PgStat_Counter m_dead_tuples;
+	int32		m_frozen_pages;
 } PgStat_MsgVacuum;
 
 
@@ -372,6 +373,7 @@ typedef struct PgStat_MsgAnalyze
 	TimestampTz m_analyzetime;
 	PgStat_Counter m_live_tuples;
 	PgStat_Counter m_dead_tuples;
+	int32		m_frozen_pages;
 } PgStat_MsgAnalyze;
 
 
@@ -626,6 +628,8 @@ typedef struct PgStat_StatTabEntry
 	PgStat_Counter analyze_count;
 	TimestampTz autovac_analyze_timestamp;		/* autovacuum initiated */
 	PgStat_Counter autovac_analyze_count;
+
+	int32 n_frozen_pages;
 } PgStat_StatTabEntry;
 
 
@@ -917,9 +921,11 @@ extern void pgstat_reset_single_counter(Oid objectid, PgStat_Single_Reset_Type t
 
 extern void pgstat_report_autovac(Oid dboid);
 extern void pgstat_report_vacuum(Oid tableoid, bool shared,
-					 PgStat_Counter livetuples, PgStat_Counter deadtuples);
+					 PgStat_Counter livetuples, PgStat_Counter deadtuples,
+					 int32 frozenpages);
 extern void pgstat_report_analyze(Relation rel,
-					  PgStat_Counter livetuples, PgStat_Counter deadtuples);
+					  PgStat_Counter livetuples, PgStat_Counter deadtuples,
+					  int32 frozenpages);
 
 extern void pgstat_report_recovery_conflict(int reason);
 extern void pgstat_report_deadlock(void);

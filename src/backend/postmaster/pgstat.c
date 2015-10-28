@@ -1329,7 +1329,8 @@ pgstat_report_autovac(Oid dboid)
  */
 void
 pgstat_report_vacuum(Oid tableoid, bool shared,
-					 PgStat_Counter livetuples, PgStat_Counter deadtuples)
+					 PgStat_Counter livetuples, PgStat_Counter deadtuples,
+					 int32 frozenpages)
 {
 	PgStat_MsgVacuum msg;
 
@@ -1343,6 +1344,7 @@ pgstat_report_vacuum(Oid tableoid, bool shared,
 	msg.m_vacuumtime = GetCurrentTimestamp();
 	msg.m_live_tuples = livetuples;
 	msg.m_dead_tuples = deadtuples;
+	msg.m_frozen_pages = frozenpages;
 	pgstat_send(&msg, sizeof(msg));
 }
 
@@ -1354,7 +1356,8 @@ pgstat_report_vacuum(Oid tableoid, bool shared,
  */
 void
 pgstat_report_analyze(Relation rel,
-					  PgStat_Counter livetuples, PgStat_Counter deadtuples)
+					  PgStat_Counter livetuples, PgStat_Counter deadtuples,
+					  int32 frozenpages)
 {
 	PgStat_MsgAnalyze msg;
 
@@ -1394,6 +1397,7 @@ pgstat_report_analyze(Relation rel,
 	msg.m_analyzetime = GetCurrentTimestamp();
 	msg.m_live_tuples = livetuples;
 	msg.m_dead_tuples = deadtuples;
+	msg.m_frozen_pages = frozenpages;
 	pgstat_send(&msg, sizeof(msg));
 }
 
@@ -5069,6 +5073,7 @@ pgstat_recv_vacuum(PgStat_MsgVacuum *msg, int len)
 
 	tabentry->n_live_tuples = msg->m_live_tuples;
 	tabentry->n_dead_tuples = msg->m_dead_tuples;
+	tabentry->n_frozen_pages = msg->m_frozen_pages;
 
 	if (msg->m_autovacuum)
 	{
@@ -5103,6 +5108,7 @@ pgstat_recv_analyze(PgStat_MsgAnalyze *msg, int len)
 
 	tabentry->n_live_tuples = msg->m_live_tuples;
 	tabentry->n_dead_tuples = msg->m_dead_tuples;
+	tabentry->n_frozen_pages = msg->m_frozen_pages;
 
 	/*
 	 * We reset changes_since_analyze to zero, forgetting any changes that

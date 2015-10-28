@@ -579,7 +579,6 @@ do_analyze_rel(Relation onerel, int options, VacuumParams *params,
 							relpages,
 							totalrows,
 							relallvisible,
-							relallfrozen,
 							hasindex,
 							InvalidTransactionId,
 							InvalidMultiXactId,
@@ -602,7 +601,6 @@ do_analyze_rel(Relation onerel, int options, VacuumParams *params,
 								RelationGetNumberOfBlocks(Irel[ind]),
 								totalindexrows,
 								0,
-								0,
 								false,
 								InvalidTransactionId,
 								InvalidMultiXactId,
@@ -616,7 +614,7 @@ do_analyze_rel(Relation onerel, int options, VacuumParams *params,
 	 * tracks per-table stats.
 	 */
 	if (!inh)
-		pgstat_report_analyze(onerel, totalrows, totaldeadrows);
+		pgstat_report_analyze(onerel, totalrows, totaldeadrows, relallfrozen);
 
 	/* If this isn't part of VACUUM ANALYZE, let index AMs do cleanup */
 	if (!(options & VACOPT_VACUUM))
