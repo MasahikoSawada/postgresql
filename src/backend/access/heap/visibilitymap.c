@@ -53,9 +53,9 @@
  *
  * VACUUM will normally skip pages for which the visibility map bit is set;
  * such pages can't contain any dead tuples and therefore don't need vacuuming.
- * The visibility map has the all-frozen bit which indicates all tuple on
+ * The visibility map has the all-frozen bit which indicates all tuples on
  * corresponding page has been completely frozen, so the visibility map is also
- * used for anti-wraparound vacuum, even if freezing tuples is required.
+ * used for anti-wraparound vacuum, even if freezing of tuples is required.
  *
  * LOCKING
  *
@@ -351,14 +351,15 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 /*
  *	visibilitymap_test - test if bit(s) is set
  *
- * Are all tuples on heapBlk visible or frozen to all, according to the visibility map?
+ * Are all tuples on heapBlk visible to all or are marked frozen, according
+ * to the visibility map?
  *
  * On entry, *buf should be InvalidBuffer or a valid buffer returned by an
  * earlier call to visibilitymap_pin or visibilitymap_test on the same
  * relation. On return, *buf is a valid buffer with the map page containing
  * the bit for heapBlk, or InvalidBuffer. The caller is responsible for
- * releasing *buf after it's done testing and setting bits, and must set flags
- * which indicates what flag we want to test.
+ * releasing *buf after it's done testing and setting bits, and must pass flags
+ * for which it needs to check the value in visibility map.
  *
  * NOTE: This function is typically called without a lock on the heap page,
  * so somebody else could change the bit just after we look at it.  In fact,

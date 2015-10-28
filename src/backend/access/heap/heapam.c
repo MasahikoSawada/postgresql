@@ -2401,8 +2401,7 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 
 	/*
 	 * Find buffer to insert this tuple into.  If the page is all visible
-	 * or all frozen, this will also pin the requisite visibility map and
-	 * frozen map page.
+	 * or all frozen, this will also pin the requisite visibility map.
 	 */
 	buffer = RelationGetBufferForTuple(relation, heaptup->t_len,
 									   InvalidBuffer, options, bistate,

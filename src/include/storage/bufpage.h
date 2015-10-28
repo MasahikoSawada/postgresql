@@ -369,7 +369,7 @@ typedef PageHeaderData *PageHeader;
 #define PageSetAllVisible(page) \
 	(((PageHeader) (page))->pd_flags |= PD_ALL_VISIBLE)
 #define PageClearAllVisible(page) \
-	(((PageHeader) (page))->pd_flags &= ~PD_ALL_VISIBLE)
+	(((PageHeader) (page))->pd_flags &= ~(PD_ALL_VISIBLE | PD_ALL_FROZEN))
 
 #define PageIsAllFrozen(page) \
 	(((PageHeader) (page))->pd_flags & PD_ALL_FROZEN)

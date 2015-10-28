@@ -226,7 +226,7 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	 * table's minimum MultiXactId is older than or equal to the requested
 	 * mxid full-table scan limit.
 	 * Even if scan_all is set so far, we could skip to scan some pages
-	 * according by frozen map.
+	 * according by all-frozen bit of visibility amp.
 	 */
 	scan_all = TransactionIdPrecedesOrEquals(onerel->rd_rel->relfrozenxid,
 											 xidFullScanLimit);
@@ -501,8 +501,8 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 	 * visibility map means that we can't update relfrozenxid, so we only want
 	 * to do it if we can skip a goodly number. On the other hand, we count
 	 * both how many pages we skipped according to all-frozen bit of visibility
-	 * map and how many pages we freeze page, so we can update relfrozenxid if
-	 * the sum of them is as many as pages of table.
+	 * map and how many pages we freeze, so we can update relfrozenxid if
+	 * the sum of two is as many as pages of table.
 	 *
 	 * Before entering the main loop, establish the invariant that
 	 * next_not_all_visible_block is the next block number >= blkno that's not
@@ -589,7 +589,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		{
 			/*
 			 * This block is at least all-visible according to visibility map.
-			 * We check whehter this block is all-frozen or not, to skip to
+			 * We check whether this block is all-frozen or not, to skip to
 			 * vacuum this page even if scan_all is true.
 			 */
 			bool	all_frozen = visibilitymap_test(onerel, blkno, &vmbuffer,
@@ -976,10 +976,9 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		}						/* scan along page */
 
 		/*
-		 * If we froze any tuples or any tuples are already frozen,
-		 * mark the buffer dirty, and write a WAL record recording the changes.
-		 * We must log the changes to be crash-safe against future truncation
-		 * of CLOG.
+		 * If we froze any tuples then we mark the buffer dirty, and write a WAL
+		 * record recording the changes. We must log the changes to be crash-safe
+		 * against future truncation of CLOG.
 		 */
 		if (nfrozen > 0)
 		{
@@ -1147,7 +1146,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 														 num_tuples);
 
 	/*
-	 * Release any remaining pin on visibility map and frozen map page.
+	 * Release any remaining pin on visibility map.
 	 */
 	if (BufferIsValid(vmbuffer))
 	{
