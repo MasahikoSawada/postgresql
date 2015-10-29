@@ -1332,6 +1332,11 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
      <entry>Estimated number of rows modified since this table was last analyzed</entry>
     </row>
     <row>
+     <entry><structfield>n_frozen_page</></entry>
+     <entry><type>bigint</></entry>
+     <entry>Number fo frozen pages</entry>
+    </row>
+    <row>
      <entry><structfield>last_vacuum</></entry>
      <entry><type>timestamp with time zone</></entry>
      <entry>Last time at which this table was manually vacuumed
