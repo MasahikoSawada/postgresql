@@ -47,8 +47,6 @@ CATALOG(pg_class,1259) BKI_BOOTSTRAP BKI_ROWTYPE_OID(83) BKI_SCHEMA_MACRO
 	float4		reltuples;		/* # of tuples (not always up-to-date) */
 	int32		relallvisible;	/* # of all-visible blocks (not always
 								 * up-to-date) */
-	int32		relallfrozen;	/* # of all-frozen blocks (not always
-								   up-to-date) */
 	Oid			reltoastrelid;	/* OID of toast table; 0 if none */
 	bool		relhasindex;	/* T if has (or has had) any indexes */
 	bool		relisshared;	/* T if shared across databases */
@@ -98,7 +96,7 @@ typedef FormData_pg_class *Form_pg_class;
  * ----------------
  */
 
-#define Natts_pg_class						32
+#define Natts_pg_class						31
 #define Anum_pg_class_relname				1
 #define Anum_pg_class_relnamespace			2
 #define Anum_pg_class_reltype				3
@@ -110,27 +108,26 @@ typedef FormData_pg_class *Form_pg_class;
 #define Anum_pg_class_relpages				9
 #define Anum_pg_class_reltuples				10
 #define Anum_pg_class_relallvisible			11
-#define Anum_pg_class_relallfrozen			12
-#define Anum_pg_class_reltoastrelid			13
-#define Anum_pg_class_relhasindex			14
-#define Anum_pg_class_relisshared			15
-#define Anum_pg_class_relpersistence		16
-#define Anum_pg_class_relkind				17
-#define Anum_pg_class_relnatts				18
-#define Anum_pg_class_relchecks				19
-#define Anum_pg_class_relhasoids			20
-#define Anum_pg_class_relhaspkey			21
-#define Anum_pg_class_relhasrules			22
-#define Anum_pg_class_relhastriggers		23
-#define Anum_pg_class_relhassubclass		24
-#define Anum_pg_class_relrowsecurity		25
-#define Anum_pg_class_relforcerowsecurity	26
-#define Anum_pg_class_relispopulated		27
-#define Anum_pg_class_relreplident			28
-#define Anum_pg_class_relfrozenxid			29
-#define Anum_pg_class_relminmxid			30
-#define Anum_pg_class_relacl				31
-#define Anum_pg_class_reloptions			32
+#define Anum_pg_class_reltoastrelid			12
+#define Anum_pg_class_relhasindex			13
+#define Anum_pg_class_relisshared			14
+#define Anum_pg_class_relpersistence		15
+#define Anum_pg_class_relkind				16
+#define Anum_pg_class_relnatts				17
+#define Anum_pg_class_relchecks				18
+#define Anum_pg_class_relhasoids			19
+#define Anum_pg_class_relhaspkey			20
+#define Anum_pg_class_relhasrules			21
+#define Anum_pg_class_relhastriggers		22
+#define Anum_pg_class_relhassubclass		23
+#define Anum_pg_class_relrowsecurity		24
+#define Anum_pg_class_relforcerowsecurity	25
+#define Anum_pg_class_relispopulated		26
+#define Anum_pg_class_relreplident			27
+#define Anum_pg_class_relfrozenxid			28
+#define Anum_pg_class_relminmxid			29
+#define Anum_pg_class_relacl				30
+#define Anum_pg_class_reloptions			31
 
 /* ----------------
  *		initial contents of pg_class
@@ -145,13 +142,13 @@ typedef FormData_pg_class *Form_pg_class;
  * Note: "3" in the relfrozenxid column stands for FirstNormalTransactionId;
  * similarly, "1" in relminmxid stands for FirstMultiXactId
  */
-DATA(insert OID = 1247 (  pg_type		PGNSP 71 0 PGUID 0 0 0 0 0 0 0 0 f f p r 30 0 t f f f f f f t n 3 1 _null_ _null_ ));
+DATA(insert OID = 1247 (  pg_type		PGNSP 71 0 PGUID 0 0 0 0 0 0 0 f f p r 30 0 t f f f f f f t n 3 1 _null_ _null_ ));
 DESCR("");
-DATA(insert OID = 1249 (  pg_attribute	PGNSP 75 0 PGUID 0 0 0 0 0 0 0 0 f f p r 21 0 f f f f f f f t n 3 1 _null_ _null_ ));
+DATA(insert OID = 1249 (  pg_attribute	PGNSP 75 0 PGUID 0 0 0 0 0 0 0 f f p r 21 0 f f f f f f f t n 3 1 _null_ _null_ ));
 DESCR("");
-DATA(insert OID = 1255 (  pg_proc		PGNSP 81 0 PGUID 0 0 0 0 0 0 0 0 f f p r 29 0 t f f f f f f t n 3 1 _null_ _null_ ));
+DATA(insert OID = 1255 (  pg_proc		PGNSP 81 0 PGUID 0 0 0 0 0 0 0 f f p r 29 0 t f f f f f f t n 3 1 _null_ _null_ ));
 DESCR("");
-DATA(insert OID = 1259 (  pg_class		PGNSP 83 0 PGUID 0 0 0 0 0 0 0 0 f f p r 32 0 t f f f f f f t n 3 1 _null_ _null_ ));
+DATA(insert OID = 1259 (  pg_class		PGNSP 83 0 PGUID 0 0 0 0 0 0 0 f f p r 31 0 t f f f f f f t n 3 1 _null_ _null_ ));
 DESCR("");
 
 

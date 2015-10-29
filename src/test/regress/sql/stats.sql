@@ -120,6 +120,8 @@ ROLLBACK;
 SELECT count(*) FROM tenk2;
 -- do an indexscan
 SELECT count(*) FROM tenk2 WHERE unique1 = 1;
+-- do VACUUM FREEZE
+VACUUM FREEZE tenk2;
 
 -- force the rate-limiting logic in pgstat_report_tabstat() to time out
 -- and send a message
@@ -144,6 +146,10 @@ SELECT st.heap_blks_read + st.heap_blks_hit >= pr.heap_blks + cl.relpages,
        st.idx_blks_read + st.idx_blks_hit >= pr.idx_blks + 1
   FROM pg_statio_user_tables AS st, pg_class AS cl, prevstats AS pr
  WHERE st.relname='tenk2' AND cl.relname='tenk2';
+
+SELECT n_frozen_page = (pg_relation_size('tenk2') / current_setting('block_size')::int)
+  FROM pg_stat_user_tables
+  WHERE relname ='tenk2';
 
 SELECT pr.snap_ts < pg_stat_get_snapshot_timestamp() as snapshot_newer
 FROM prevstats AS pr;

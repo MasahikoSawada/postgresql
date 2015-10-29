@@ -292,8 +292,8 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	 * density") with nonzero relpages and reltuples=0 (which means "zero
 	 * tuple density") unless there's some actual evidence for the latter.
 	 *
-	 * We do update relallvisible and relallfrozen even in the corner case,
-	 * since if the table is all-visible we'd definitely like to know that.
+	 * We do update relallvisible even in the corner case, since if the table
+	 * is all-visible we'd definitely like to know that.
 	 * But clamp the value to be not more than what we're setting relpages to.
 	 *
 	 * Also, don't change relfrozenxid/relminmxid if we skipped any pages,

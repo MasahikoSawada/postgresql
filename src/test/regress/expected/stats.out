@@ -127,6 +127,8 @@ SELECT count(*) FROM tenk2 WHERE unique1 = 1;
      1
 (1 row)
 
+-- do VACUUM FREEZE
+VACUUM FREEZE tenk2;
 -- force the rate-limiting logic in pgstat_report_tabstat() to time out
 -- and send a message
 SELECT pg_sleep(1.0);
@@ -173,6 +175,14 @@ SELECT st.heap_blks_read + st.heap_blks_hit >= pr.heap_blks + cl.relpages,
  ?column? | ?column? 
 ----------+----------
  t        | t
+(1 row)
+
+SELECT n_frozen_page = (pg_relation_size('tenk2') / current_setting('block_size')::int)
+  FROM pg_stat_user_tables
+  WHERE relname ='tenk2';
+ ?column? 
+----------
+ t
 (1 row)
 
 SELECT pr.snap_ts < pg_stat_get_snapshot_timestamp() as snapshot_newer
