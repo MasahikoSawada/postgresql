@@ -28,7 +28,6 @@
  * completely frozen, and therefore the page doesn't need to be vacuumed even
  * if whole table scanning vacuum is required (e.g. anti-wraparound vacuum).
  * The all-frozen bit must be set only when the page is already all-visible.
- * That is, all-frozen bit is always set with all-visible bit.
  *
  * The map is conservative in the sense that we make sure that whenever a bit
  * is set, we know the condition is true, but if a bit is not set, it might or
@@ -405,8 +404,7 @@ visibilitymap_test(Relation rel, BlockNumber heapBlk, Buffer *buf, uint8 flags)
 	 * here, but for performance reasons we make it the caller's job to worry
 	 * about that.
 	 */
-	result = (map[mapByte] & (flags << (BITS_PER_HEAPBLOCK * mapBit))) ?
-		true : false;
+	result = (map[mapByte] & (flags << (BITS_PER_HEAPBLOCK * mapBit))) ? true : false;
 
 	return result;
 }

@@ -617,6 +617,8 @@ typedef struct PgStat_StatTabEntry
 	PgStat_Counter n_dead_tuples;
 	PgStat_Counter changes_since_analyze;
 
+	int32 n_frozen_pages;
+
 	PgStat_Counter blocks_fetched;
 	PgStat_Counter blocks_hit;
 
@@ -628,8 +630,6 @@ typedef struct PgStat_StatTabEntry
 	PgStat_Counter analyze_count;
 	TimestampTz autovac_analyze_timestamp;		/* autovacuum initiated */
 	PgStat_Counter autovac_analyze_count;
-
-	int32 n_frozen_pages;
 } PgStat_StatTabEntry;
 
 

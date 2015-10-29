@@ -1333,8 +1333,8 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
     </row>
     <row>
      <entry><structfield>n_frozen_page</></entry>
-     <entry><type>bigint</></entry>
-     <entry>Number fo frozen pages</entry>
+     <entry><type>integer</></entry>
+     <entry>Number of frozen pages</entry>
     </row>
     <row>
      <entry><structfield>last_vacuum</></entry>

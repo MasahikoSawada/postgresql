@@ -1813,8 +1813,8 @@ FormIndexDatum(IndexInfo *indexInfo,
  * isprimary: if true, set relhaspkey true; else no change
  * reltuples: if >= 0, set reltuples to this value; else no change
  *
- * If reltuples >= 0, relpages, relallvisible are also updated
- * (using RelationGetNumberOfBlocks() and visibilitymap_count()).
+ * If reltuples >= 0, relpages, relallvisible are also updated (using
+ * RelationGetNumberOfBlocks() and visibilitymap_count()).
  *
  * NOTE: an important side-effect of this operation is that an SI invalidation
  * message is sent out to all backends --- including me --- causing relcache
@@ -1859,8 +1859,8 @@ index_update_stats(Relation rel,
 	 * true is safe even if there are no indexes (VACUUM will eventually fix
 	 * it), likewise for relhaspkey.  And of course the new relpages and
 	 * reltuples counts are correct regardless.  However, we don't want to
-	 * change relpages (or relallvisible) if the caller isn't
-	 * providing an updated reltuples count, because that would bollix the
+	 * change relpages (or relallvisible) if the caller isn't providing an
+	 * updated reltuples count, because that would bollix the
 	 * reltuples/relpages ratio which is what's really important.
 	 */
 
@@ -1918,14 +1918,13 @@ index_update_stats(Relation rel,
 	if (reltuples >= 0)
 	{
 		BlockNumber relpages = RelationGetNumberOfBlocks(rel);
-		BlockNumber relallvisible, relallfrozen;
+		BlockNumber relallvisible;
+		BlockNumber relallfrozen; /* not used */
 
 		if (rd_rel->relkind != RELKIND_INDEX)
 			visibilitymap_count(rel, &relallvisible, &relallfrozen);
 		else	/* don't bother for indexes */
-		{
 			relallvisible = 0;
-		}
 
 		if (rd_rel->relpages != (int32) relpages)
 		{
