@@ -15,8 +15,8 @@ SELECT relallvisible  = (pg_relation_size('vmtest') / current_setting('block_siz
 \set VERBOSITY terse
 VACUUM FREEZE VERBOSE vmtest;
 INFO:  vacuuming "public.vmtest"
-INFO:  index "vmtest_pkey" now contains 10000 row versions in 24 pages
-INFO:  skipped 40 frozen pages according to visibility map
-INFO:  "vmtest": found 0 removable, 0 nonremovable row versions in 0 out of 40 pages
+INFO:  index "vmtest_pkey" now contains 10000 row versions in 30 pages
+INFO:  skipped 45 frozen pages according to visibility map
+INFO:  "vmtest": found 0 removable, 0 nonremovable row versions in 0 out of 45 pages
 \set VERBOSITY default
 DROP TABLE vmtest;
