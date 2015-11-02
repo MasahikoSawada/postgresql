@@ -2055,7 +2055,7 @@ _bt2_split_leaf(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 
 	if (!P_RIGHTMOST(oopaque))
 	{
-		if (!P_ISROOT(oopaque))
+		if (P_ISROOT(oopaque))
 		{
 			itemidabbr = PageGetItemIdWithAbbrKey(origpage, P_HIKEY);
 			itemsz = ItemIdGetLength(itemidabbr);

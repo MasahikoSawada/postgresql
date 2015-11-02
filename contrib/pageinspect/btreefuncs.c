@@ -475,7 +475,10 @@ bt2_page_items(PG_FUNCTION_ARGS)
 		if (P_ISDELETED(opaque))
 			elog(NOTICE, "page is deleted");
 
-        fctx->max_calls = PageWithAbbrKeyGetMaxOffsetNumber(uargs->page);
+		if (P_ISROOT(opaque))
+			fctx->max_calls = PageWithAbbrKeyGetMaxOffsetNumber(uargs->page);
+		else
+			fctx->max_calls = PageGetMaxOffsetNumber(uargs->page);
 
 		/* Build a tuple descriptor for our result type */
 		if (get_call_result_type(fcinfo, NULL, &tupleDesc) != TYPEFUNC_COMPOSITE)
@@ -494,6 +497,7 @@ bt2_page_items(PG_FUNCTION_ARGS)
 	if (fctx->call_cntr < fctx->max_calls)
 	{
 		ItemIdWithAbbrKey		id;
+		ItemId					item;
 		BTPageOpaque opaque;
 		IndexTuple	itup;
 		int			j;
@@ -503,12 +507,18 @@ bt2_page_items(PG_FUNCTION_ARGS)
 		char	   *ptr;
 
 		opaque = (BTPageOpaque) PageGetSpecialPointer(uargs->page);
-		id = PageGetItemIdWithAbbrKey(uargs->page, uargs->offset);
+		if (P_ISROOT(opaque))
+			id = PageGetItemIdWithAbbrKey(uargs->page, uargs->offset);
+		else
+			item = PageGetItemId(uargs->page, uargs->offset);
 
 		if (!ItemIdIsValid(id))
 			elog(ERROR, "invalid ItemId");
 
-		itup = (IndexTuple) PageGetItem(uargs->page, id);
+		if (P_ISROOT(opaque))
+			itup = (IndexTuple) PageGetItem(uargs->page, id);
+		else
+			itup = (IndexTuple) PageGetItem(uargs->page, item);
 
 		j = 0;
 		values[j++] = psprintf("%d", uargs->offset);

@@ -199,3 +199,42 @@ CREATE FUNCTION gin_leafpage_items(IN page bytea,
 RETURNS SETOF record
 AS 'MODULE_PATHNAME', 'gin_leafpage_items'
 LANGUAGE C STRICT;
+
+--
+-- Btree2 functions
+-- 
+CREATE FUNCTION bt2_page_counts(relname text, blkno OUT bigint, count OUT int) RETURNS setof record as 
+$$
+DECLARE
+  blkno bigint;
+BEGIN
+  SELECT pg_relation_size(relname) / current_setting('block_size')::int INTO blkno;
+
+  FOR i IN 1 .. blkno-1
+  LOOP
+    RETURN QUERY SELECT i::bigint, count(*)::int FROM bt2_page_items(relname, i::int);
+  END LOOP;
+  RETURN;
+END
+$$
+LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION bt2_summary(
+relname text,
+blkno bigint,
+itemoffset OUT smallint,
+ctid OUT tid,
+itemlen OUT smallint,
+abbrkey OUT integer,
+nulls OUT boolean,
+vars OUT boolean,
+data OUT text
+) returns setof record as $$
+  SELECT * FROM bt2_page_items(relname, blkno::int)
+  WHERE
+     itemoffset = 1 or
+     itemoffset = 2 or
+     itemoffset = 3 or
+     itemoffset = (select max(itemoffset) from bt2_page_items(relname, blkno::int));
+$$
+language sql;
