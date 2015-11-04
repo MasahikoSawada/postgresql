@@ -581,7 +581,7 @@ _bt2_binsrch(Relation rel,
 	opaque = (BTPageOpaque) PageWithAbbrKeyGetSpecialPointer(page);
 
 	low = P_FIRSTDATAKEY(opaque);
-	if (!P_ISLEAF(opaque) || P_ISROOT(opaque))
+	if (!P_ISLEAF(opaque))
 		high = PageWithAbbrKeyGetMaxOffsetNumber(page);
 	else
 		high = PageGetMaxOffsetNumber(page);
@@ -618,7 +618,7 @@ _bt2_binsrch(Relation rel,
 
 		/* We have low <= mid < high, so mid points at a real slot */
 
-		if (!P_ISLEAF(opaque) || P_ISROOT(opaque))
+		if (!P_ISLEAF(opaque))
 			result = _bt2_compare(rel, keysz, scankey, page, mid);
 		else
 			result = _bt_compare(rel, keysz, scankey, page, mid);

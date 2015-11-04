@@ -230,16 +230,7 @@ top:
 		}
 		_bt2_findinsertloc(rel, &buf, &offset, natts, itup_scankey, itup,
 						  stack, heapRel);
-		if (!stack)
-		{
-			/* 
-			 * When there is only one page, that page is LEAF and ROOT.
-			 * And, stack must be free.
-			 */
-			_bt2_insertonpg(rel, buf, InvalidBuffer, stack, itup, offset, false, &abbrkey);
-		}
-		else
-			_bt2_insertonpg(rel, buf, InvalidBuffer, stack, itup, offset, false, NULL);
+		_bt2_insertonpg(rel, buf, InvalidBuffer, stack, itup, offset, false, NULL);
 	}
 	else
 	{
@@ -1310,14 +1301,22 @@ _bt2_insertonpg(Relation rel,
 		bool		newitemonleft;
 		Buffer		rbuf;
 
+		elog(NOTICE, "SPLIT!");
+
 		/* Choose the split point */
-		firstright = _bt2_findsplitloc(rel, page,
-									  newitemoff, itemsz,
-									  &newitemonleft);
+		if (!P_ISLEAF(lpageop))
+			firstright = _bt2_findsplitloc(rel, page,
+										   newitemoff, itemsz,
+										   &newitemonleft);
+		else
+			firstright = _bt_findsplitloc(rel, page,
+										  newitemoff, itemsz,
+										  &newitemonleft);
 
 		/* split the buffer into left and right halves */
 		rbuf = _bt2_split(rel, buf, cbuf, firstright,
-						 newitemoff, itemsz, itup, abbrkey, newitemonleft);
+							  newitemoff, itemsz, itup, abbrkey, newitemonleft);
+
 		PredicateLockPageSplit(rel,
 							   BufferGetBlockNumber(buf),
 							   BufferGetBlockNumber(rbuf));
@@ -1980,7 +1979,6 @@ _bt2_split_leaf(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 	BTPageOpaque sopaque = NULL;
 	Size		itemsz;
 	ItemId		itemid;
-	ItemIdWithAbbrKey itemidabbr;
 	IndexTuple	item;
 	OffsetNumber leftoff,
 				rightoff;
@@ -2055,35 +2053,18 @@ _bt2_split_leaf(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 
 	if (!P_RIGHTMOST(oopaque))
 	{
-		if (P_ISROOT(oopaque))
-		{
-			itemidabbr = PageGetItemIdWithAbbrKey(origpage, P_HIKEY);
-			itemsz = ItemIdGetLength(itemidabbr);
-			item = (IndexTuple) PageGetItem(origpage, itemidabbr);
-			if (PageAddItem(rightpage, (Item) item, itemsz, rightoff,
+		itemid = PageGetItemId(origpage, P_HIKEY);
+		itemsz = ItemIdGetLength(itemid);
+		item = (IndexTuple) PageGetItem(origpage, itemid);
+		if (PageAddItem(rightpage, (Item) item, itemsz, rightoff,
 						false, false) == InvalidOffsetNumber)
-			{
-				memset(rightpage, 0, BufferGetPageSize(rbuf));
-				elog(ERROR, "failed to add hikey to the right sibling"
-					 " while splitting block %u of index \"%s\"",
-					 origpagenumber, RelationGetRelationName(rel));
-			}
-		}
-		else
 		{
-			itemid = PageGetItemId(origpage, P_HIKEY);
-			itemsz = ItemIdGetLength(itemid);
-			item = (IndexTuple) PageGetItem(origpage, itemid);
-			if (PageAddItem(rightpage, (Item) item, itemsz, rightoff,
-							false, false) == InvalidOffsetNumber)
-			{
-				memset(rightpage, 0, BufferGetPageSize(rbuf));
-				elog(ERROR, "failed to add hikey to the right sibling"
-					 " while splitting block %u of index \"%s\"",
-					 origpagenumber, RelationGetRelationName(rel));
-			}
+			memset(rightpage, 0, BufferGetPageSize(rbuf));
+			elog(ERROR, "failed to add hikey to the right sibling"
+				 " while splitting block %u of index \"%s\"",
+				 origpagenumber, RelationGetRelationName(rel));
 		}
-			rightoff = OffsetNumberNext(rightoff);
+		rightoff = OffsetNumberNext(rightoff);
 	}
 
 	/*
@@ -2101,18 +2082,9 @@ _bt2_split_leaf(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 	else
 	{
 		/* existing item at firstright will become first on right page */
-		if (P_ISROOT(oopaque))
-		{
-			itemidabbr = PageGetItemIdWithAbbrKey(origpage, firstright);
-			itemsz = ItemIdGetLength(itemidabbr);
-			item = (IndexTuple) PageGetItem(origpage, itemidabbr);
-		}
-		else
-		{
-			itemid = PageGetItemId(origpage, firstright);
-			itemsz = ItemIdGetLength(itemid);
-			item = (IndexTuple) PageGetItem(origpage, itemid);
-		}
+		itemid = PageGetItemId(origpage, firstright);
+		itemsz = ItemIdGetLength(itemid);
+		item = (IndexTuple) PageGetItem(origpage, itemid);
 	}
 	if (PageAddItem(leftpage, (Item) item, itemsz, leftoff,
 					false, false) == InvalidOffsetNumber)
@@ -2131,25 +2103,13 @@ _bt2_split_leaf(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 	 * Note: we *must* insert at least the right page's items in item-number
 	 * order, for the benefit of _bt_restore_page().
 	 */
-	if (P_ISROOT(oopaque))
-		maxoff = PageWithAbbrKeyGetMaxOffsetNumber(origpage);
-	else
-		maxoff = PageGetMaxOffsetNumber(origpage);
+	maxoff = PageGetMaxOffsetNumber(origpage);
 
 	for (i = P_FIRSTDATAKEY(oopaque); i <= maxoff; i = OffsetNumberNext(i))
 	{
-		if (P_ISROOT(oopaque))
-		{
-			itemidabbr = PageGetItemIdWithAbbrKey(origpage, i);
-			itemsz = ItemIdGetLength(itemidabbr);
-			item = (IndexTuple) PageGetItem(origpage, itemidabbr);
-		}
-		else
-		{
-			itemid = PageGetItemId(origpage, i);
-			itemsz = ItemIdGetLength(itemid);
-			item = (IndexTuple) PageGetItem(origpage, itemid);
-		}
+		itemid = PageGetItemId(origpage, i);
+		itemsz = ItemIdGetLength(itemid);
+		item = (IndexTuple) PageGetItem(origpage, itemid);
 
 		/* does new item belong before this one? */
 		if (i == newitemoff)
@@ -2181,7 +2141,7 @@ _bt2_split_leaf(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 		/* decide which page to put it on */
 		if (i < firstright)
 		{
-			elog(NOTICE, "_bt2_split_leaf : Move left %d to %d", i, leftoff);
+			//elog(NOTICE, "_bt2_split_leaf : Move left %d to %d", i, leftoff);
 			if (!_bt_pgaddtup(leftpage, itemsz, item, leftoff))
 			{
 				memset(rightpage, 0, BufferGetPageSize(rbuf));
@@ -2193,7 +2153,7 @@ _bt2_split_leaf(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 		}
 		else
 		{
-			elog(NOTICE, "_bt2_split_leaf : Move right %d to %d", i, rightoff);
+			//elog(NOTICE, "_bt2_split_leaf : Move right %d to %d", i, rightoff);
 			if (!_bt_pgaddtup(rightpage, itemsz, item, rightoff))
 			{
 				memset(rightpage, 0, BufferGetPageSize(rbuf));
@@ -2974,6 +2934,8 @@ _bt_findsplitloc(Relation rel,
 			 RelationGetRelationName(rel));
 
 	*newitemonleft = state.newitemonleft;
+
+	elog(NOTICE, "    [_bt_findsplitloc]: firstright = %u", state.firstright);
 	return state.firstright;
 }
 
@@ -3109,6 +3071,8 @@ _bt2_findsplitloc(Relation rel,
 			 RelationGetRelationName(rel));
 
 	*newitemonleft = state.newitemonleft;
+
+	elog(NOTICE, "    [_bt2_findsplitloc]: firstright = %u", state.firstright);
 	return state.firstright;
 }
 
@@ -3321,7 +3285,13 @@ _bt2_insert_parent(Relation rel,
 
 			datum = index_getattr(new_item, 1, itupdesc, &isNull);
 
-			abbrev = DatumGetInt32(datum);
+			/*
+			 * in case where insert parent from leaf page,
+			 * we need to convert abbreviated key into int16,
+			 * becuase the datum variable is real leading value
+			 * of indexTuple.
+			 */
+			abbrev = int32AbbrevConvert(DatumGetInt32(datum));
 			/* Recursively update the parent */
 			_bt2_insertonpg(rel, pbuf, buf, stack->bts_parent,
 						   new_item, stack->bts_offset + 1,
@@ -3817,6 +3787,7 @@ _bt2_newroot_internal(Relation rel, Buffer lbuf, Buffer rbuf)
 {
 	Buffer		rootbuf;
 	Page		lpage,
+				rpage,
 				rootpage;
 	BlockNumber lbkno,
 				rbkno;
@@ -3838,6 +3809,7 @@ _bt2_newroot_internal(Relation rel, Buffer lbuf, Buffer rbuf)
 	lbkno = BufferGetBlockNumber(lbuf);
 	rbkno = BufferGetBlockNumber(rbuf);
 	lpage = BufferGetPage(lbuf);
+	rpage = BufferGetPage(rbuf);
 	lopaque = (BTPageOpaque) PageGetSpecialPointer(lpage);
 
 	/* get a new root page */
@@ -3871,8 +3843,10 @@ _bt2_newroot_internal(Relation rel, Buffer lbuf, Buffer rbuf)
 	ItemPointerSet(&(right_item->t_tid), rbkno, P_HIKEY);
 
 	/* Set Abbreviate keys */
-	labbrkey = 0;
-	rabbrkey = ItemIdGetAbbrKey(itemid);
+	labbrkey = ItemIdGetAbbrKey(
+		PageGetItemIdWithAbbrKey(lpage, P_HIKEY));
+	rabbrkey = ItemIdGetAbbrKey(
+		PageGetItemIdWithAbbrKey(rpage, P_HIKEY));
 
 	/* NO EREPORT(ERROR) from here till newroot op is logged */
 	START_CRIT_SECTION();
@@ -3996,6 +3970,7 @@ _bt2_newroot_leaf(Relation rel, Buffer lbuf, Buffer rbuf)
 {
 	Buffer		rootbuf;
 	Page		lpage,
+				rpage,
 				rootpage;
 	BlockNumber lbkno,
 				rbkno;
@@ -4012,10 +3987,14 @@ _bt2_newroot_leaf(Relation rel, Buffer lbuf, Buffer rbuf)
 	Page		metapg;
 	BTMetaPageData *metad;
 	int32		labbrkey, rabbrkey;
+	TupleDesc itupdesc = RelationGetDescr(rel);
+	bool		isNull;
+	Datum		rdatum, ldatum;
 
 	lbkno = BufferGetBlockNumber(lbuf);
 	rbkno = BufferGetBlockNumber(rbuf);
 	lpage = BufferGetPage(lbuf);
+	rpage = BufferGetPage(rbuf);
 	lopaque = (BTPageOpaque) PageGetSpecialPointer(lpage);
 
 	/* get a new root page */
@@ -4065,10 +4044,18 @@ _bt2_newroot_leaf(Relation rel, Buffer lbuf, Buffer rbuf)
 	metad->btm_fastroot = rootblknum;
 	metad->btm_fastlevel = rootopaque->btpo.level;
 
-	/* Set abbreviate key */
-	labbrkey = 0;
-	rabbrkey = *(int32 *) ((Item) item + sizeof(IndexTupleData));
-	//elog(WARNING, "    [_bt2_newroot_leaf] Right ABBR KEY : %d", rabbrkey);
+	/* Set abbreviate key. Need to be converted. */
+	ldatum = index_getattr((IndexTuple) PageGetItem(lpage, PageGetItemId(lpage, P_HIKEY)),
+						   1,
+						   itupdesc,
+						   &isNull);
+	rdatum = index_getattr((IndexTuple) PageGetItem(rpage, PageGetItemId(rpage, P_HIKEY)),
+						   1,
+						   itupdesc,
+						   &isNull);
+	labbrkey = int32AbbrevConvert(DatumGetInt32(ldatum));
+	rabbrkey = int32AbbrevConvert(DatumGetInt32(rdatum));
+	elog(NOTICE, "    [_bt2_newroot_leaf] Right ABBR KEY : %d", rabbrkey);
 
 	/*
 	 * Insert the left page pointer into the new root page.  The root page is
@@ -4325,8 +4312,8 @@ _bt2_pgaddtup_internal(Page page,
 		itemsize = sizeof(IndexTupleData);
 	}
 
-	elog(NOTICE, "_bt2_pgaddtup_internal : page = %d, offset = %u, abbrkey = %u",
-		 page, itup_off, abbrkey);
+	elog(NOTICE, "_bt2_pgaddtup_internal : offset = %u, abbrkey = %u",
+		 itup_off, abbrkey);
 
 /*
  * DEBUG : output all items in single page.

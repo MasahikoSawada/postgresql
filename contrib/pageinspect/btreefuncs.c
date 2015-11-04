@@ -475,7 +475,7 @@ bt2_page_items(PG_FUNCTION_ARGS)
 		if (P_ISDELETED(opaque))
 			elog(NOTICE, "page is deleted");
 
-		if (P_ISROOT(opaque))
+		if (!P_ISLEAF(opaque))
 			fctx->max_calls = PageWithAbbrKeyGetMaxOffsetNumber(uargs->page);
 		else
 			fctx->max_calls = PageGetMaxOffsetNumber(uargs->page);
@@ -505,9 +505,14 @@ bt2_page_items(PG_FUNCTION_ARGS)
 		int			dlen;
 		char	   *dump;
 		char	   *ptr;
+		int			data;
+		RangeVar	*relrv;
+		Relation	rel;
+		TupleDesc tupledesc;
+		bool		isNull;
 
 		opaque = (BTPageOpaque) PageGetSpecialPointer(uargs->page);
-		if (P_ISROOT(opaque))
+		if (!P_ISLEAF(opaque))
 			id = PageGetItemIdWithAbbrKey(uargs->page, uargs->offset);
 		else
 			item = PageGetItemId(uargs->page, uargs->offset);
@@ -515,7 +520,7 @@ bt2_page_items(PG_FUNCTION_ARGS)
 		if (!ItemIdIsValid(id))
 			elog(ERROR, "invalid ItemId");
 
-		if (P_ISROOT(opaque))
+		if (!P_ISLEAF(opaque))
 			itup = (IndexTuple) PageGetItem(uargs->page, id);
 		else
 			itup = (IndexTuple) PageGetItem(uargs->page, item);
@@ -559,8 +564,16 @@ bt2_page_items(PG_FUNCTION_ARGS)
 			dump += 2;
 		}
 
-		*dump++ = ' ';
+		relrv = makeRangeVarFromNameList(textToQualifiedNameList(relname));
+		rel = relation_openrv(relrv, AccessShareLock);
+		tupledesc = RelationGetDescr(rel);
+		data = DatumGetInt32(index_getattr(itup, 1, tupledesc, &isNull));
 
+		sprintf(dump, " <-> %d", data);
+		
+		relation_close(rel, AccessShareLock);
+
+		/*
 		for (off = 0; off < dlen; off++)
 		{
 			if (off > 0)
@@ -568,6 +581,7 @@ bt2_page_items(PG_FUNCTION_ARGS)
 			sprintf(dump, "%d", *(ptr + off));
 			dump += 2;
 		}
+		*/
 
 		tuple = BuildTupleFromCStrings(fctx->attinmeta, values);
 		result = HeapTupleGetDatum(tuple);
