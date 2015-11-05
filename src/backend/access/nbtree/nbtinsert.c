@@ -183,7 +183,7 @@ top:
 		xwait = _bt_check_unique(rel, itup, heapRel, buf, offset, itup_scankey,
 								 checkUnique, &is_unique, &speculativeToken);
 
-		elog(NOTICE, "_bt2_doinsert : after _bt2_binsrch() offset %d", offset);
+		//elog(NOTICE, "_bt2_doinsert : after _bt2_binsrch() offset %d", offset);
 
 		if (TransactionIdIsValid(xwait))
 		{
@@ -219,7 +219,7 @@ top:
 		CheckForSerializableConflictIn(rel, NULL, buf);
 		/* do the insertion */
 
-		elog(NOTICE, "_bt2_doinsert : after _bt2_findinsertloc() offset %d", offset);
+		//elog(NOTICE, "_bt2_doinsert : after _bt2_findinsertloc() offset %d", offset);
 
 		itup_scankey->sk_abbrkey = int32AbbrevConvert(DatumGetInt32(itup_scankey->sk_argument));
 		if (!stack)
@@ -1291,9 +1291,10 @@ _bt2_insertonpg(Relation rel,
 	 * so this comparison is correct even though we appear to be accounting
 	 * only for the item and not for its line pointer.
 	 */
+	/*
 	elog(NOTICE, "_bt2_insertonpg : FreeSpace = %d, itemsize = %d, abbrkey = %d",
 		 PageGetFreeSpace(page), itemsz, (abbrkey) ? *abbrkey : -9999);
-
+	*/
 	if (PageGetFreeSpace(page) < itemsz)
 	{
 		bool		is_root = P_ISROOT(lpageop);
@@ -2935,7 +2936,7 @@ _bt_findsplitloc(Relation rel,
 
 	*newitemonleft = state.newitemonleft;
 
-	elog(NOTICE, "    [_bt_findsplitloc]: firstright = %u", state.firstright);
+	elog(NOTICE, "    _bt_findsplitloc: firstright = %u", state.firstright);
 	return state.firstright;
 }
 
@@ -4055,7 +4056,7 @@ _bt2_newroot_leaf(Relation rel, Buffer lbuf, Buffer rbuf)
 						   &isNull);
 	labbrkey = int32AbbrevConvert(DatumGetInt32(ldatum));
 	rabbrkey = int32AbbrevConvert(DatumGetInt32(rdatum));
-	elog(NOTICE, "    [_bt2_newroot_leaf] Right ABBR KEY : %d", rabbrkey);
+	elog(NOTICE, "    _bt2_newroot_leaf Right ABBR KEY : %d", rabbrkey);
 
 	/*
 	 * Insert the left page pointer into the new root page.  The root page is

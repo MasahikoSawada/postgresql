@@ -791,7 +791,7 @@ _bt2_compare(Relation rel,
 	abbrkeyArgument = scankey->sk_abbrkey;
 	//elog(WARNING, "_bt2_compare abbrkey : %u, abbrkeyArgument : %u", abbrkey, abbrkeyArgument);
 
-	elog(NOTICE, "    _bt2_comapre : key = %u, dataAbbrKey = %u", abbrkeyArgument, abbrkey);
+	//elog(NOTICE, "    _bt2_comapre : key = %u, dataAbbrKey = %u", abbrkeyArgument, abbrkey);
 	if (abbrkeyArgument < abbrkey)
 		return -1;
 	else if (abbrkeyArgument == abbrkey)
@@ -810,6 +810,8 @@ _bt2_compare(Relation rel,
 			TupleDesc	itupdesc = RelationGetDescr(rel);
 			datum = index_getattr(itup, scankey->sk_attno, itupdesc, &isNull);
 
+			elog(NOTICE, "    _bt2_compare : compare real value, level = %d, abbrev = %d",
+				 opaque->btpo.level, abbrkey);
 			//elog(WARNING, "   _bt_compare: item = %d, key = %d", (int)datum, scankey->sk_argument);
 
 			/* see comments about NULLs handling in btbuild */
