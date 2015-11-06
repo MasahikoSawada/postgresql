@@ -1266,6 +1266,7 @@ _bt2_insertonpg(Relation rel,
 	BTPageOpaque lpageop;
 	OffsetNumber firstright = InvalidOffsetNumber;
 	Size		itemsz;
+	bool		need_split;
 
 	page = BufferGetPage(buf);
 	lpageop = (BTPageOpaque) PageGetSpecialPointer(page);
@@ -1295,14 +1296,19 @@ _bt2_insertonpg(Relation rel,
 	elog(NOTICE, "_bt2_insertonpg : FreeSpace = %d, itemsize = %d, abbrkey = %d",
 		 PageGetFreeSpace(page), itemsz, (abbrkey) ? *abbrkey : -9999);
 	*/
-	if (PageGetFreeSpace(page) < itemsz)
+
+	need_split = (P_ISLEAF(lpageop)) ?
+		(PageGetFreeSpace(page) < itemsz) :
+		(PageGetFreeSpaceWithAbbrKey(page) < itemsz) ;
+
+	if (need_split)
 	{
 		bool		is_root = P_ISROOT(lpageop);
 		bool		is_only = P_LEFTMOST(lpageop) && P_RIGHTMOST(lpageop);
 		bool		newitemonleft;
 		Buffer		rbuf;
 
-		elog(NOTICE, "SPLIT!");
+		//elog(NOTICE, "SPLIT!");
 
 		/* Choose the split point */
 		if (!P_ISLEAF(lpageop))
@@ -1382,8 +1388,9 @@ _bt2_insertonpg(Relation rel,
 
 		if (abbrkey)
 		{
-			uint16		realAbbrev = int32AbbrevConvert(*abbrkey);
-			res = _bt2_pgaddtup_internal(page, itemsz, itup, newitemoff, realAbbrev);
+			//uint16		realAbbrev = int32AbbrevConvert(*abbrkey);
+			//res = _bt2_pgaddtup_internal(page, itemsz, itup, newitemoff, realAbbrev);
+			res = _bt2_pgaddtup_internal(page, itemsz, itup, newitemoff, *abbrkey);
 		}
 		else
 			res = _bt_pgaddtup(page, itemsz, itup, newitemoff);
@@ -2936,7 +2943,7 @@ _bt_findsplitloc(Relation rel,
 
 	*newitemonleft = state.newitemonleft;
 
-	elog(NOTICE, "    _bt_findsplitloc: firstright = %u", state.firstright);
+	//elog(NOTICE, "    _bt_findsplitloc: firstright = %u", state.firstright);
 	return state.firstright;
 }
 
@@ -3073,7 +3080,7 @@ _bt2_findsplitloc(Relation rel,
 
 	*newitemonleft = state.newitemonleft;
 
-	elog(NOTICE, "    [_bt2_findsplitloc]: firstright = %u", state.firstright);
+	//elog(NOTICE, "    [_bt2_findsplitloc]: firstright = %u", state.firstright);
 	return state.firstright;
 }
 
@@ -4313,8 +4320,10 @@ _bt2_pgaddtup_internal(Page page,
 		itemsize = sizeof(IndexTupleData);
 	}
 
+	/*
 	elog(NOTICE, "_bt2_pgaddtup_internal : offset = %u, abbrkey = %u",
 		 itup_off, abbrkey);
+	*/
 
 /*
  * DEBUG : output all items in single page.

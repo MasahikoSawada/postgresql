@@ -810,8 +810,10 @@ _bt2_compare(Relation rel,
 			TupleDesc	itupdesc = RelationGetDescr(rel);
 			datum = index_getattr(itup, scankey->sk_attno, itupdesc, &isNull);
 
-			elog(NOTICE, "    _bt2_compare : compare real value, level = %d, abbrev = %d",
-				 opaque->btpo.level, abbrkey);
+			/*
+			elog(NOTICE, "    _bt2_compare : compare real value, level = %d, abbrev = %d, real = %d",
+				 opaque->btpo.level, abbrkey, DatumGetInt32(datum));
+			*/
 			//elog(WARNING, "   _bt_compare: item = %d, key = %d", (int)datum, scankey->sk_argument);
 
 			/* see comments about NULLs handling in btbuild */

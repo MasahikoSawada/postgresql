@@ -438,6 +438,7 @@ extern Page PageGetTempPageCopySpecial(Page page);
 extern void PageRestoreTempPage(Page tempPage, Page oldPage);
 extern void PageRepairFragmentation(Page page);
 extern Size PageGetFreeSpace(Page page);
+extern Size PageGetFreeSpaceWithAbbrKey(Page page);
 extern Size PageGetExactFreeSpace(Page page);
 extern Size PageGetHeapFreeSpace(Page page);
 extern void PageIndexTupleDelete(Page page, OffsetNumber offset);

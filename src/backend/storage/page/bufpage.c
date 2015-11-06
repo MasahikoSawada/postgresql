@@ -747,6 +747,25 @@ PageGetFreeSpace(Page page)
 	return (Size) space;
 }
 
+Size
+PageGetFreeSpaceWithAbbrKey(Page page)
+{
+	int			space;
+
+	/*
+	 * Use signed arithmetic here so that we behave sensibly if pd_lower >
+	 * pd_upper.
+	 */
+	space = (int) ((PageHeader) page)->pd_upper -
+		(int) ((PageHeader) page)->pd_lower;
+
+	if (space < (int) sizeof(ItemIdDataWithAbbrKey))
+		return 0;
+	space -= sizeof(ItemIdDataWithAbbrKey);
+
+	return (Size) space;
+}
+
 /*
  * PageGetExactFreeSpace
  *		Returns the size of the free (allocatable) space on a page,
