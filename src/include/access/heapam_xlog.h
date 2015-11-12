@@ -312,9 +312,9 @@ typedef struct xl_heap_freeze_page
 #define SizeOfHeapFreezePage (offsetof(xl_heap_freeze_page, ntuples) + sizeof(uint16))
 
 /*
- * This is what we need to know about setting a visibility map bit
+ * This is what we need to know about setting a page information map bit
  *
- * Backup blk 0: visibility map buffer
+ * Backup blk 0: page information map buffer
  * Backup blk 1: heap buffer
  */
 typedef struct xl_heap_visible
@@ -390,6 +390,6 @@ extern bool heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 extern void heap_execute_freeze_tuple(HeapTupleHeader tuple,
 						  xl_heap_freeze_tuple *xlrec_tp);
 extern XLogRecPtr log_heap_visible(RelFileNode rnode, Buffer heap_buffer,
-			     Buffer vm_buffer, TransactionId cutoff_xid, uint8 flags);
+			     Buffer pim_buffer, TransactionId cutoff_xid, uint8 flags);
 
 #endif   /* HEAPAM_XLOG_H */

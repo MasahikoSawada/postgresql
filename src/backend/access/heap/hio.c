@@ -18,7 +18,7 @@
 #include "access/heapam.h"
 #include "access/hio.h"
 #include "access/htup_details.h"
-#include "access/visibilitymap.h"
+#include "access/pageinfomap.h"
 #include "storage/bufmgr.h"
 #include "storage/freespace.h"
 #include "storage/lmgr.h"
@@ -112,16 +112,16 @@ ReadBufferBI(Relation relation, BlockNumber targetBlock,
 
 /*
  * For each heap page which is all-visible, acquire a pin on the appropriate
- * visibility map page, if we haven't already got one.
+ * page information map page, if we haven't already got one.
  *
  * buffer2 may be InvalidBuffer, if only one buffer is involved.  buffer1
  * must not be InvalidBuffer.  If both buffers are specified, buffer1 must
  * be less than buffer2.
  */
 static void
-GetVisibilityMapPins(Relation relation, Buffer buffer1, Buffer buffer2,
+GetPageInfoMapPins(Relation relation, Buffer buffer1, Buffer buffer2,
 					 BlockNumber block1, BlockNumber block2,
-					 Buffer *vmbuffer1, Buffer *vmbuffer2)
+					 Buffer *pimbuffer1, Buffer *pimbuffer2)
 {
 	bool		need_to_pin_buffer1;
 	bool		need_to_pin_buffer2;
@@ -133,10 +133,10 @@ GetVisibilityMapPins(Relation relation, Buffer buffer1, Buffer buffer2,
 	{
 		/* Figure out which pins we need but don't have. */
 		need_to_pin_buffer1 = PageIsAllVisible(BufferGetPage(buffer1))
-			&& !visibilitymap_pin_ok(block1, *vmbuffer1);
+			&& !pageinfomap_pin_ok(block1, *pimbuffer1);
 		need_to_pin_buffer2 = buffer2 != InvalidBuffer
 			&& PageIsAllVisible(BufferGetPage(buffer2))
-			&& !visibilitymap_pin_ok(block2, *vmbuffer2);
+			&& !pageinfomap_pin_ok(block2, *pimbuffer2);
 		if (!need_to_pin_buffer1 && !need_to_pin_buffer2)
 			return;
 
@@ -147,9 +147,9 @@ GetVisibilityMapPins(Relation relation, Buffer buffer1, Buffer buffer2,
 
 		/* Get pins. */
 		if (need_to_pin_buffer1)
-			visibilitymap_pin(relation, block1, vmbuffer1);
+			pageinfomap_pin(relation, block1, pimbuffer1);
 		if (need_to_pin_buffer2)
-			visibilitymap_pin(relation, block2, vmbuffer2);
+			pageinfomap_pin(relation, block2, pimbuffer2);
 
 		/* Relock buffers. */
 		LockBuffer(buffer1, BUFFER_LOCK_EXCLUSIVE);
@@ -192,7 +192,7 @@ GetVisibilityMapPins(Relation relation, Buffer buffer1, Buffer buffer2,
  *	happen if space is freed in that page after heap_update finds there's not
  *	enough there).  In that case, the page will be pinned and locked only once.
  *
- *	For the vmbuffer and vmbuffer_other arguments, we avoid deadlock by
+ *	For the pimbuffer and pimbuffer_other arguments, we avoid deadlock by
  *	locking them only after locking the corresponding heap page, and taking
  *	no further lwlocks while they are locked.
  *
@@ -228,7 +228,7 @@ Buffer
 RelationGetBufferForTuple(Relation relation, Size len,
 						  Buffer otherBuffer, int options,
 						  BulkInsertState bistate,
-						  Buffer *vmbuffer, Buffer *vmbuffer_other)
+						  Buffer *pimbuffer, Buffer *pimbuffer_other)
 {
 	bool		use_fsm = !(options & HEAP_INSERT_SKIP_FSM);
 	Buffer		buffer = InvalidBuffer;
@@ -316,7 +316,7 @@ RelationGetBufferForTuple(Relation relation, Size len,
 		 * the possibility they are the same block.
 		 *
 		 * If the page-level all-visible flag is set, caller will need to
-		 * clear both that and the corresponding visibility map bit.  However,
+		 * clear both that and the corresponding page information map bit.  However,
 		 * by the time we return, we'll have x-locked the buffer, and we don't
 		 * want to do any I/O while in that state.  So we check the bit here
 		 * before taking the lock, and pin the page if it appears necessary.
@@ -328,7 +328,7 @@ RelationGetBufferForTuple(Relation relation, Size len,
 			/* easy case */
 			buffer = ReadBufferBI(relation, targetBlock, bistate);
 			if (PageIsAllVisible(BufferGetPage(buffer)))
-				visibilitymap_pin(relation, targetBlock, vmbuffer);
+				pageinfomap_pin(relation, targetBlock, pimbuffer);
 			LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 		}
 		else if (otherBlock == targetBlock)
@@ -336,7 +336,7 @@ RelationGetBufferForTuple(Relation relation, Size len,
 			/* also easy case */
 			buffer = otherBuffer;
 			if (PageIsAllVisible(BufferGetPage(buffer)))
-				visibilitymap_pin(relation, targetBlock, vmbuffer);
+				pageinfomap_pin(relation, targetBlock, pimbuffer);
 			LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 		}
 		else if (otherBlock < targetBlock)
@@ -344,7 +344,7 @@ RelationGetBufferForTuple(Relation relation, Size len,
 			/* lock other buffer first */
 			buffer = ReadBuffer(relation, targetBlock);
 			if (PageIsAllVisible(BufferGetPage(buffer)))
-				visibilitymap_pin(relation, targetBlock, vmbuffer);
+				pageinfomap_pin(relation, targetBlock, pimbuffer);
 			LockBuffer(otherBuffer, BUFFER_LOCK_EXCLUSIVE);
 			LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 		}
@@ -353,7 +353,7 @@ RelationGetBufferForTuple(Relation relation, Size len,
 			/* lock target buffer first */
 			buffer = ReadBuffer(relation, targetBlock);
 			if (PageIsAllVisible(BufferGetPage(buffer)))
-				visibilitymap_pin(relation, targetBlock, vmbuffer);
+				pageinfomap_pin(relation, targetBlock, pimbuffer);
 			LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 			LockBuffer(otherBuffer, BUFFER_LOCK_EXCLUSIVE);
 		}
@@ -374,19 +374,19 @@ RelationGetBufferForTuple(Relation relation, Size len,
 		 * caller passed us the right page anyway.
 		 *
 		 * Note also that it's possible that by the time we get the pin and
-		 * retake the buffer locks, the visibility map bit will have been
+		 * retake the buffer locks, the page information map bit will have been
 		 * cleared by some other backend anyway.  In that case, we'll have
 		 * done a bit of extra work for no gain, but there's no real harm
 		 * done.
 		 */
 		if (otherBuffer == InvalidBuffer || buffer <= otherBuffer)
-			GetVisibilityMapPins(relation, buffer, otherBuffer,
-								 targetBlock, otherBlock, vmbuffer,
-								 vmbuffer_other);
+			GetPageInfoMapPins(relation, buffer, otherBuffer,
+								 targetBlock, otherBlock, pimbuffer,
+								 pimbuffer_other);
 		else
-			GetVisibilityMapPins(relation, otherBuffer, buffer,
-								 otherBlock, targetBlock, vmbuffer_other,
-								 vmbuffer);
+			GetPageInfoMapPins(relation, otherBuffer, buffer,
+								 otherBlock, targetBlock, pimbuffer_other,
+								 pimbuffer);
 
 		/*
 		 * Now we can check to see if there's enough free space here. If so,

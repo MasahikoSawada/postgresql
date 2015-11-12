@@ -25,7 +25,7 @@
 #include "postgres.h"
 
 #include "access/relscan.h"
-#include "access/visibilitymap.h"
+#include "access/pageinfomap.h"
 #include "executor/execdebug.h"
 #include "executor/nodeIndexonlyscan.h"
 #include "executor/nodeIndexscan.h"
@@ -85,37 +85,37 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 * which all tuples are known visible to everybody.  In any case,
 		 * we'll use the index tuple not the heap tuple as the data source.
 		 *
-		 * Note on Memory Ordering Effects: visibilitymap_get_stattus does not lock
-		 * the visibility map buffer, and therefore the result we read here
+		 * Note on Memory Ordering Effects: pageinfomap_get_stattus does not lock
+		 * the page information map buffer, and therefore the result we read here
 		 * could be slightly stale.  However, it can't be stale enough to
 		 * matter.
 		 *
-		 * We need to detect clearing a VM bit due to an insert right away,
+		 * We need to detect clearing a PIM bit due to an insert right away,
 		 * because the tuple is present in the index page but not visible. The
 		 * reading of the TID by this scan (using a shared lock on the index
 		 * buffer) is serialized with the insert of the TID into the index
-		 * (using an exclusive lock on the index buffer). Because the VM bit
+		 * (using an exclusive lock on the index buffer). Because the PIM bit
 		 * is cleared before updating the index, and locking/unlocking of the
 		 * index page acts as a full memory barrier, we are sure to see the
 		 * cleared bit if we see a recently-inserted TID.
 		 *
 		 * Deletes do not update the index page (only VACUUM will clear out
-		 * the TID), so the clearing of the VM bit by a delete is not
+		 * the TID), so the clearing of the PIM bit by a delete is not
 		 * serialized with this test below, and we may see a value that is
 		 * significantly stale. However, we don't care about the delete right
 		 * away, because the tuple is still visible until the deleting
 		 * transaction commits or the statement ends (if it's our
-		 * transaction). In either case, the lock on the VM buffer will have
+		 * transaction). In either case, the lock on the PIM buffer will have
 		 * been released (acting as a write barrier) after clearing the bit.
 		 * And for us to have a snapshot that includes the deleting
 		 * transaction (making the tuple invisible), we must have acquired
 		 * ProcArrayLock after that time, acting as a read barrier.
 		 *
 		 * It's worth going through this complexity to avoid needing to lock
-		 * the VM buffer, which could cause significant contention.
+		 * the PIM buffer, which could cause significant contention.
 		 */
-		if (!VM_ALL_VISIBLE(scandesc->heapRelation, ItemPointerGetBlockNumber(tid),
-							&node->ioss_VMBuffer))
+		if (!PIM_ALL_VISIBLE(scandesc->heapRelation, ItemPointerGetBlockNumber(tid),
+							&node->ioss_PIMBuffer))
 		{
 			/*
 			 * Rats, we have to visit the heap to check visibility.
@@ -321,11 +321,11 @@ ExecEndIndexOnlyScan(IndexOnlyScanState *node)
 	indexScanDesc = node->ioss_ScanDesc;
 	relation = node->ss.ss_currentRelation;
 
-	/* Release VM buffer pin, if any. */
-	if (node->ioss_VMBuffer != InvalidBuffer)
+	/* Release PIM buffer pin, if any. */
+	if (node->ioss_PIMBuffer != InvalidBuffer)
 	{
-		ReleaseBuffer(node->ioss_VMBuffer);
-		node->ioss_VMBuffer = InvalidBuffer;
+		ReleaseBuffer(node->ioss_PIMBuffer);
+		node->ioss_PIMBuffer = InvalidBuffer;
 	}
 
 	/*
@@ -545,7 +545,7 @@ ExecInitIndexOnlyScan(IndexOnlyScan *node, EState *estate, int eflags)
 
 	/* Set it up for index-only scan */
 	indexstate->ioss_ScanDesc->xs_want_itup = true;
-	indexstate->ioss_VMBuffer = InvalidBuffer;
+	indexstate->ioss_PIMBuffer = InvalidBuffer;
 
 	/*
 	 * If no run-time keys to calculate, go ahead and pass the scankeys to the

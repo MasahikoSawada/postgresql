@@ -167,7 +167,7 @@ smgropen(RelFileNode rnode, BackendId backend)
 		reln->smgr_owner = NULL;
 		reln->smgr_targblock = InvalidBlockNumber;
 		reln->smgr_fsm_nblocks = InvalidBlockNumber;
-		reln->smgr_vm_nblocks = InvalidBlockNumber;
+		reln->smgr_pim_nblocks = InvalidBlockNumber;
 		reln->smgr_which = 0;	/* we only have md.c at present */
 
 		/* mark it not open */

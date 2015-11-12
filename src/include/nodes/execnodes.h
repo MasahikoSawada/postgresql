@@ -1359,7 +1359,7 @@ typedef struct IndexScanState
  *		RuntimeContext	   expr context for evaling runtime Skeys
  *		RelationDesc	   index relation descriptor
  *		ScanDesc		   index scan descriptor
- *		VMBuffer		   buffer in use for visibility map testing, if any
+ *		PIMBuffer		   buffer in use for page information map testing, if any
  *		HeapFetches		   number of tuples we were forced to fetch from heap
  * ----------------
  */
@@ -1377,7 +1377,7 @@ typedef struct IndexOnlyScanState
 	ExprContext *ioss_RuntimeContext;
 	Relation	ioss_RelationDesc;
 	IndexScanDesc ioss_ScanDesc;
-	Buffer		ioss_VMBuffer;
+	Buffer		ioss_PIMBuffer;
 	long		ioss_HeapFetches;
 } IndexOnlyScanState;
 

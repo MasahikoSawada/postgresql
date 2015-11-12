@@ -26,9 +26,9 @@
 #define PAGEINFOMAP_ALL_FLAGS		0x03
 
 /* Macros for pageinfomap test */
-#define VM_ALL_VISIBLE(r, b, v) \
+#define PIM_ALL_VISIBLE(r, b, v) \
 	((pageinfomap_get_status((r), (b), (v)) & PAGEINFOMAP_ALL_VISIBLE) != 0)
-#define VM_ALL_FROZEN(r, b, v) \
+#define PIM_ALL_FROZEN(r, b, v) \
 	((pageinfomap_get_status((r), (b), (v)) & PAGEINFOMAP_ALL_FROZEN) != 0)
 
 extern void pageinfomap_clear(Relation rel, BlockNumber heapBlk,

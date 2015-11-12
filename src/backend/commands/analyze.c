@@ -20,7 +20,7 @@
 #include "access/transam.h"
 #include "access/tupconvert.h"
 #include "access/tuptoaster.h"
-#include "access/visibilitymap.h"
+#include "access/pageinfomap.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
 #include "catalog/index.h"
@@ -568,7 +568,7 @@ do_analyze_rel(Relation onerel, int options, VacuumParams *params,
 
 	/* Calculate the number of all-visible and all-frozen bit */
 	if (!inh)
-		relallvisible = visibilitymap_count(onerel, &relallfrozen);
+		relallvisible = pageinfomap_count(onerel, &relallfrozen);
 
 	/*
 	 * Update pages/tuples stats in pg_class ... but not if we're doing

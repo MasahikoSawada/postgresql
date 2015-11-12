@@ -19,7 +19,7 @@
 
 #include "postgres.h"
 
-#include "access/visibilitymap.h"
+#include "access/pageinfomap.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
@@ -237,17 +237,17 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	 */
 	rel->rd_smgr->smgr_targblock = InvalidBlockNumber;
 	rel->rd_smgr->smgr_fsm_nblocks = InvalidBlockNumber;
-	rel->rd_smgr->smgr_vm_nblocks = InvalidBlockNumber;
+	rel->rd_smgr->smgr_pim_nblocks = InvalidBlockNumber;
 
 	/* Truncate the FSM first if it exists */
 	fsm = smgrexists(rel->rd_smgr, FSM_FORKNUM);
 	if (fsm)
 		FreeSpaceMapTruncateRel(rel, nblocks);
 
-	/* Truncate the visibility map too if it exists. */
+	/* Truncate the page information map too if it exists. */
 	vm = smgrexists(rel->rd_smgr, PAGEINFOMAP_FORKNUM);
 	if (vm)
-		visibilitymap_truncate(rel, nblocks);
+		pageinfomap_truncate(rel, nblocks);
 
 	/*
 	 * We WAL-log the truncation before actually truncating, which means
@@ -278,8 +278,8 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 		/*
 		 * Flush, because otherwise the truncation of the main relation might
 		 * hit the disk before the WAL record, and the truncation of the FSM
-		 * or visibility map. If we crashed during that window, we'd be left
-		 * with a truncated heap, but the FSM or visibility map would still
+		 * or page information map. If we crashed during that window, we'd be left
+		 * with a truncated heap, but the FSM or page information map would still
 		 * contain entries for the non-existent heap pages.
 		 */
 		if (fsm || vm)
@@ -533,7 +533,7 @@ smgr_redo(XLogReaderState *record)
 		if (smgrexists(reln, FSM_FORKNUM))
 			FreeSpaceMapTruncateRel(rel, xlrec->blkno);
 		if (smgrexists(reln, PAGEINFOMAP_FORKNUM))
-			visibilitymap_truncate(rel, xlrec->blkno);
+			pageinfomap_truncate(rel, xlrec->blkno);
 
 		FreeFakeRelcacheEntry(rel);
 	}
