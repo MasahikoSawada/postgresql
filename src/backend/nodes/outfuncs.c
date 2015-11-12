@@ -271,6 +271,7 @@ _outPlanInfo(StringInfo str, const Plan *node)
 	WRITE_FLOAT_FIELD(total_cost, "%.2f");
 	WRITE_FLOAT_FIELD(plan_rows, "%.0f");
 	WRITE_INT_FIELD(plan_width);
+	WRITE_BOOL_FIELD(parallel_aware);
 	WRITE_INT_FIELD(plan_node_id);
 	WRITE_NODE_FIELD(targetlist);
 	WRITE_NODE_FIELD(qual);
@@ -1585,6 +1586,7 @@ _outPathInfo(StringInfo str, const Path *node)
 		_outBitmapset(str, node->param_info->ppi_req_outer);
 	else
 		_outBitmapset(str, NULL);
+	WRITE_BOOL_FIELD(parallel_aware);
 	WRITE_FLOAT_FIELD(rows, "%.0f");
 	WRITE_FLOAT_FIELD(startup_cost, "%.2f");
 	WRITE_FLOAT_FIELD(total_cost, "%.2f");
@@ -1754,6 +1756,18 @@ _outUniquePath(StringInfo str, const UniquePath *node)
 }
 
 static void
+_outGatherPath(StringInfo str, const GatherPath *node)
+{
+	WRITE_NODE_TYPE("GATHERPATH");
+
+	_outPathInfo(str, (const Path *) node);
+
+	WRITE_NODE_FIELD(subpath);
+	WRITE_INT_FIELD(num_workers);
+	WRITE_BOOL_FIELD(single_copy);
+}
+
+static void
 _outNestPath(StringInfo str, const NestPath *node)
 {
 	WRITE_NODE_TYPE("NESTPATH");
@@ -1868,6 +1882,7 @@ _outRelOptInfo(StringInfo str, const RelOptInfo *node)
 	WRITE_INT_FIELD(width);
 	WRITE_BOOL_FIELD(consider_startup);
 	WRITE_BOOL_FIELD(consider_param_startup);
+	WRITE_BOOL_FIELD(consider_parallel);
 	WRITE_NODE_FIELD(reltargetlist);
 	WRITE_NODE_FIELD(pathlist);
 	WRITE_NODE_FIELD(ppilist);
@@ -3292,6 +3307,9 @@ _outNode(StringInfo str, const void *obj)
 				break;
 			case T_UniquePath:
 				_outUniquePath(str, obj);
+				break;
+			case T_GatherPath:
+				_outGatherPath(str, obj);
 				break;
 			case T_NestPath:
 				_outNestPath(str, obj);

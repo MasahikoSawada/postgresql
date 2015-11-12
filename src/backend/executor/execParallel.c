@@ -25,6 +25,7 @@
 
 #include "executor/execParallel.h"
 #include "executor/executor.h"
+#include "executor/nodeSeqscan.h"
 #include "executor/tqueue.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/planmain.h"
@@ -84,7 +85,8 @@ static bool ExecParallelEstimate(PlanState *node,
 					 ExecParallelEstimateContext *e);
 static bool ExecParallelInitializeDSM(PlanState *node,
 					 ExecParallelInitializeDSMContext *d);
-static shm_mq_handle **ExecParallelSetupTupleQueues(ParallelContext *pcxt);
+static shm_mq_handle **ExecParallelSetupTupleQueues(ParallelContext *pcxt,
+							 bool reinitialize);
 static bool ExecParallelRetrieveInstrumentation(PlanState *planstate,
 						  SharedExecutorInstrumentation *instrumentation);
 
@@ -166,10 +168,16 @@ ExecParallelEstimate(PlanState *planstate, ExecParallelEstimateContext *e)
 	/* Count this node. */
 	e->nnodes++;
 
-	/*
-	 * XXX. Call estimators for parallel-aware nodes here, when we have
-	 * some.
-	 */
+	/* Call estimators for parallel-aware nodes. */
+	switch (nodeTag(planstate))
+	{
+		case T_SeqScanState:
+			ExecSeqScanEstimate((SeqScanState *) planstate,
+								e->pcxt);
+			break;
+		default:
+			break;
+	}
 
 	return planstate_tree_walker(planstate, ExecParallelEstimate, e);
 }
@@ -204,10 +212,16 @@ ExecParallelInitializeDSM(PlanState *planstate,
 	/* Count this node. */
 	d->nnodes++;
 
-	/*
-	 * XXX. Call initializers for parallel-aware plan nodes, when we have
-	 * some.
-	 */
+	/* Call initializers for parallel-aware plan nodes. */
+	switch (nodeTag(planstate))
+	{
+		case T_SeqScanState:
+			ExecSeqScanInitializeDSM((SeqScanState *) planstate,
+									 d->pcxt);
+			break;
+		default:
+			break;
+	}
 
 	return planstate_tree_walker(planstate, ExecParallelInitializeDSM, d);
 }
@@ -217,7 +231,7 @@ ExecParallelInitializeDSM(PlanState *planstate,
  * to the main backend and start the workers.
  */
 static shm_mq_handle **
-ExecParallelSetupTupleQueues(ParallelContext *pcxt)
+ExecParallelSetupTupleQueues(ParallelContext *pcxt, bool reinitialize)
 {
 	shm_mq_handle **responseq;
 	char	   *tqueuespace;
@@ -231,9 +245,16 @@ ExecParallelSetupTupleQueues(ParallelContext *pcxt)
 	responseq = (shm_mq_handle **)
 		palloc(pcxt->nworkers * sizeof(shm_mq_handle *));
 
-	/* Allocate space from the DSM for the queues themselves. */
-	tqueuespace = shm_toc_allocate(pcxt->toc,
-								 PARALLEL_TUPLE_QUEUE_SIZE * pcxt->nworkers);
+	/*
+	 * If not reinitializing, allocate space from the DSM for the queues;
+	 * otherwise, find the already allocated space.
+	 */
+	if (!reinitialize)
+		tqueuespace =
+			shm_toc_allocate(pcxt->toc,
+							 PARALLEL_TUPLE_QUEUE_SIZE * pcxt->nworkers);
+	else
+		tqueuespace = shm_toc_lookup(pcxt->toc, PARALLEL_KEY_TUPLE_QUEUE);
 
 	/* Create the queues, and become the receiver for each. */
 	for (i = 0; i < pcxt->nworkers; ++i)
@@ -248,10 +269,21 @@ ExecParallelSetupTupleQueues(ParallelContext *pcxt)
 	}
 
 	/* Add array of queues to shm_toc, so others can find it. */
-	shm_toc_insert(pcxt->toc, PARALLEL_KEY_TUPLE_QUEUE, tqueuespace);
+	if (!reinitialize)
+		shm_toc_insert(pcxt->toc, PARALLEL_KEY_TUPLE_QUEUE, tqueuespace);
 
 	/* Return array of handles. */
 	return responseq;
+}
+
+/*
+ * Re-initialize the response queues for backend workers to return tuples
+ * to the main backend and start the workers.
+ */
+shm_mq_handle **
+ExecParallelReinitializeTupleQueues(ParallelContext *pcxt)
+{
+	return ExecParallelSetupTupleQueues(pcxt, true);
 }
 
 /*
@@ -363,7 +395,7 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate, int nworkers)
 	pei->buffer_usage = bufusage_space;
 
 	/* Set up tuple queues. */
-	pei->tqueue = ExecParallelSetupTupleQueues(pcxt);
+	pei->tqueue = ExecParallelSetupTupleQueues(pcxt, false);
 
 	/*
 	 * If instrumentation options were supplied, allocate space for the
@@ -556,6 +588,30 @@ ExecParallelReportInstrumentation(PlanState *planstate,
 }
 
 /*
+ * Initialize the PlanState and its descendents with the information
+ * retrieved from shared memory.  This has to be done once the PlanState
+ * is allocated and initialized by executor; that is, after ExecutorStart().
+ */
+static bool
+ExecParallelInitializeWorker(PlanState *planstate, shm_toc *toc)
+{
+	if (planstate == NULL)
+		return false;
+
+	/* Call initializers for parallel-aware plan nodes. */
+	switch (nodeTag(planstate))
+	{
+		case T_SeqScanState:
+			ExecSeqScanInitializeWorker((SeqScanState *) planstate, toc);
+			break;
+		default:
+			break;
+	}
+
+	return planstate_tree_walker(planstate, ExecParallelInitializeWorker, toc);
+}
+
+/*
  * Main entrypoint for parallel query worker processes.
  *
  * We reach this function from ParallelMain, so the setup necessary to create
@@ -591,6 +647,7 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 
 	/* Start up the executor, have it run the plan, and then shut it down. */
 	ExecutorStart(queryDesc, 0);
+	ExecParallelInitializeWorker(queryDesc->planstate, toc);
 	ExecutorRun(queryDesc, ForwardScanDirection, 0L);
 	ExecutorFinish(queryDesc);
 
