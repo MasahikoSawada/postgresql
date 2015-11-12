@@ -18,7 +18,7 @@
 static void transfer_single_new_db(pageCnvCtx *pageConverter,
 					   FileNameMap *maps, int size, char *old_tablespace);
 static void transfer_relfile(pageCnvCtx *pageConverter, FileNameMap *map,
-				 const char *suffix, bool vm_need_rewrite);
+				 const char *old_type_suffix, const char *new_type_suffix);
 
 
 /*
@@ -184,8 +184,8 @@ transfer_single_new_db(pageCnvCtx *pageConverter,
 	/*
 	 * Do we need to rewrite visibilitymap?
 	 */
-	if (old_cluster.controldata.cat_ver < VISIBILITY_MAP_FROZEN_BIT_CAT_VER &&
-		new_cluster.controldata.cat_ver >= VISIBILITY_MAP_FROZEN_BIT_CAT_VER)
+	if (old_cluster.controldata.cat_ver < VISIBILITY_MAP_CHANGE_TO_PAGEINFOMAP_CAT_VER &&
+		new_cluster.controldata.cat_ver >= VISIBILITY_MAP_CHANGE_TO_PAGEINFOMAP_CAT_VER)
 		vm_need_rewrite = true;
 
 	for (mapnum = 0; mapnum < size; mapnum++)
@@ -194,7 +194,7 @@ transfer_single_new_db(pageCnvCtx *pageConverter,
 			strcmp(maps[mapnum].old_tablespace, old_tablespace) == 0)
 		{
 			/* transfer primary file */
-			transfer_relfile(pageConverter, &maps[mapnum], "", false);
+			transfer_relfile(pageConverter, &maps[mapnum], "", "");
 
 			/* fsm/vm files added in PG 8.4 */
 			if (GET_MAJOR_VERSION(old_cluster.major_version) >= 804)
@@ -202,9 +202,14 @@ transfer_single_new_db(pageCnvCtx *pageConverter,
 				/*
 				 * Copy/link any fsm and vm files, if they exist
 				 */
-				transfer_relfile(pageConverter, &maps[mapnum], "_fsm", false);
-				if (vm_crashsafe_match || vm_need_rewrite)
-					transfer_relfile(pageConverter, &maps[mapnum], "_vm", vm_need_rewrite);
+				transfer_relfile(pageConverter, &maps[mapnum], "_fsm", "_fsm");
+				if (vm_crashsafe_match)
+				{
+					if (vm_need_rewrite)
+						transfer_relfile(pageConverter, &maps[mapnum], "_vm", "_pim");
+					else
+						transfer_relfile(pageConverter, &maps[mapnum], "_vm", "_vm");
+				}
 			}
 		}
 	}
@@ -218,7 +223,7 @@ transfer_single_new_db(pageCnvCtx *pageConverter,
  */
 static void
 transfer_relfile(pageCnvCtx *pageConverter, FileNameMap *map,
-				 const char *type_suffix, bool vm_need_rewrite)
+				 const char *old_type_suffix, const char *new_type_suffix)
 {
 	const char *msg;
 	char		old_file[MAXPGPATH];
@@ -245,18 +250,18 @@ transfer_relfile(pageCnvCtx *pageConverter, FileNameMap *map,
 				 map->old_tablespace_suffix,
 				 map->old_db_oid,
 				 map->old_relfilenode,
-				 type_suffix,
+				 old_type_suffix,
 				 extent_suffix);
 		snprintf(new_file, sizeof(new_file), "%s%s/%u/%u%s%s",
 				 map->new_tablespace,
 				 map->new_tablespace_suffix,
 				 map->new_db_oid,
 				 map->new_relfilenode,
-				 type_suffix,
+				 new_type_suffix,
 				 extent_suffix);
 
 		/* Is it an extent, fsm, or vm file? */
-		if (type_suffix[0] != '\0' || segno != 0)
+		if (old_type_suffix[0] != '\0' || segno != 0)
 		{
 			/* Did file open fail? */
 			if ((fd = open(old_file, O_RDONLY, 0)) == -1)
@@ -288,7 +293,7 @@ transfer_relfile(pageCnvCtx *pageConverter, FileNameMap *map,
 			/*
 			 * Do we need to rewrite visibilitymap?
 			 */
-			if (strcmp(type_suffix, "_vm") == 0 && vm_need_rewrite)
+			if (strcmp(old_type_suffix, "_vm") == 0 && strcmp(old_type_suffix, new_type_suffix) != 0)
 				rewrite_vm = true;
 
 			if ((msg = copyOrRewriteFile(pageConverter, old_file, new_file, true, rewrite_vm)) != NULL)
