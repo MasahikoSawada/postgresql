@@ -1083,7 +1083,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		else if (all_visible_according_to_pim && !PageIsAllVisible(page)
 				 && PIM_ALL_VISIBLE(onerel, blkno, &pimbuffer))
 		{
-			elog(WARNING, "page is not marked all-visible but page info map bit is set in relation \"%s\" page %u",
+			elog(WARNING, "page is not marked all-visible (and all-frozen) but page info map bit(s) is set in relation \"%s\" page %u",
 				 relname, blkno);
 			pageinfomap_clear(onerel, blkno, pimbuffer);
 		}
@@ -1103,7 +1103,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		 */
 		else if (PageIsAllVisible(page) && has_dead_tuples)
 		{
-			elog(WARNING, "page containing dead tuples is marked as all-visible in relation \"%s\" page %u",
+			elog(WARNING, "page containing dead tuples is marked as all-visible (and all-frozen) in relation \"%s\" page %u",
 				 relname, blkno);
 			PageClearAllVisible(page);
 			MarkBufferDirty(buf);
