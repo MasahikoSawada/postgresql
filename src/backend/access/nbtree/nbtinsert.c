@@ -3300,6 +3300,8 @@ _bt2_insert_parent(Relation rel,
 			 * of indexTuple.
 			 */
 			abbrev = int32AbbrevConvert(DatumGetInt32(datum));
+			elog(NOTICE, "    _bt2_insert_parent : abbrkey = %d, child = %d, parent = %d",
+				 abbrev, BufferGetBlockNumber(buf), BufferGetBlockNumber(pbuf));
 			/* Recursively update the parent */
 			_bt2_insertonpg(rel, pbuf, buf, stack->bts_parent,
 						   new_item, stack->bts_offset + 1,
