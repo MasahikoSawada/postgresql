@@ -1833,7 +1833,7 @@
       <entry></entry>
       <entry>
        Number of pages that are marked all-visible in the table's
-       visibility map.  This is only an estimate used by the
+       page information map.  This is only an estimate used by the
        planner.  It is updated by <command>VACUUM</command>,
        <command>ANALYZE</command>, and a few DDL commands such as
        <command>CREATE INDEX</command>.

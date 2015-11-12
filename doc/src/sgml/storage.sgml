@@ -194,9 +194,9 @@ main fork), each table and index has a <firstterm>free space map</> (see <xref
 linkend="storage-fsm">), which stores information about free space available in
 the relation.  The free space map is stored in a file named with the filenode
 number plus the suffix <literal>_fsm</>.  Tables also have a
-<firstterm>visibility map</>, stored in a fork with the suffix <literal>_vm</>,
-to track which pages are known to have no dead tuples.  The visibility map is
-described further in <xref linkend="storage-vm">.  Unlogged tables and indexes
+<firstterm>Page information map</>, stored in a fork with the suffix <literal>_pim</>,
+to track which pages are known to have no dead tuples.  The Page information map is
+described further in <xref linkend="storage-pim">.  Unlogged tables and indexes
 have a third fork, known as the initialization fork, which is stored in a fork
 with the suffix <literal>_init</literal> (see <xref linkend="storage-init">).
 </para>
@@ -224,7 +224,7 @@ This arrangement avoids problems on platforms that have file size limitations.
 (Actually, 1 GB is just the default segment size.  The segment size can be
 adjusted using the configuration option <option>--with-segsize</option>
 when building <productname>PostgreSQL</>.)
-In principle, free space map and visibility map forks could require multiple
+In principle, free space map and page information map forks could require multiple
 segments as well, though this is unlikely to happen in practice.
 </para>
 
@@ -270,7 +270,7 @@ The <function>pg_relation_filepath()</> function shows the entire path
 as a substitute for remembering many of the above rules.  But keep in
 mind that this function just gives the name of the first segment of the
 main fork of the relation &mdash; you may need to append a segment number
-and/or <literal>_fsm</>, <literal>_vm</>, or <literal>_init</> to find all
+and/or <literal>_fsm</>, <literal>_pim</>, or <literal>_init</> to find all
 the files associated with the relation.
 </para>
 
@@ -611,28 +611,28 @@ can be used to examine the information stored in free space maps.
 
 </sect1>
 
-<sect1 id="storage-vm">
+<sect1 id="storage-pim">
 
-<title>Visibility Map</title>
+<title>Page Information Map</title>
 
 <indexterm>
- <primary>Visibility Map</primary>
+ <primary>Page Information Map</primary>
 </indexterm>
-<indexterm><primary>VM</><see>Visibility Map</></indexterm>
+<indexterm><primary>PIM</><see>Page Information Map</></indexterm>
 
 <para>
-Each heap relation has a Visibility Map
-(VM) to keep track of which pages contain only tuples that are known to be
+Each heap relation has a Page Information Map
+(PIM) to keep track of which pages contain only tuples that are known to be
 visible to all active transactions, and pages contain only unfrozen tuples.
 It's stored alongside the main relation data in a separate relation fork,
-named after the filenode number of the relation, plus a <literal>_vm</> suffix.
-For example, if the filenode of a relation is 12345, the VM is stored in a file
-called <filename>12345_vm</>, in the same directory as the main relation file.
-Note that indexes do not have VMs.
+named after the filenode number of the relation, plus a <literal>_pim</> suffix.
+For example, if the filenode of a relation is 12345, the PIM is stored in a file
+called <filename>12345_pim</>, in the same directory as the main relation file.
+Note that indexes do not have PIMs.
 </para>
 
 <para>
-The visibility map stores two bits per heap page: all-visible, all-frozen.
+The page information map stores two bits per heap page: all-visible, all-frozen.
 A set all-visible bit means that all tuples on the page are known to be visible
 to all transactions. A set all-frozen bit means that all tuples on the page are
 completely marked as frozen. This means that the page does not contain any tuples
@@ -644,7 +644,7 @@ queries using only the index tuple.
 <para>
 The map is conservative in the sense that we make sure that whenever a bit is
 set, we know the condition is true, but if a bit is not set, it might or
-might not be true. Visibility map bits are only set by vacuum, but are
+might not be true. Page information map bits are only set by vacuum, but are
 cleared by any data-modifying operations on a page.
 </para>
 

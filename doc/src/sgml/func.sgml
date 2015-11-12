@@ -17663,7 +17663,7 @@ postgres=# SELECT * FROM pg_xlogfile_name_offset(pg_stop_backup());
        <entry><type>bigint</type></entry>
        <entry>
         Disk space used by the specified fork (<literal>'main'</literal>,
-        <literal>'fsm'</literal>, <literal>'vm'</>, or <literal>'init'</>)
+        <literal>'fsm'</literal>, <literal>'pim'</>, or <literal>'init'</>)
         of the specified table or index
        </entry>
       </row>
@@ -17703,7 +17703,7 @@ postgres=# SELECT * FROM pg_xlogfile_name_offset(pg_stop_backup());
        <entry><type>bigint</type></entry>
        <entry>
         Disk space used by the specified table, excluding indexes
-        (but including TOAST, free space map, and visibility map)
+        (but including TOAST, free space map, and page information map)
        </entry>
       </row>
       <row>
@@ -17750,7 +17750,7 @@ postgres=# SELECT * FROM pg_xlogfile_name_offset(pg_stop_backup());
    <para>
     <function>pg_table_size</> accepts the OID or name of a table and
     returns the disk space needed for that table, exclusive of indexes.
-    (TOAST space, free space map, and visibility map are included.)
+    (TOAST space, free space map, and page information map are included.)
    </para>
 
    <para>
@@ -17793,8 +17793,8 @@ postgres=# SELECT * FROM pg_xlogfile_name_offset(pg_stop_backup());
      </listitem>
      <listitem>
       <para>
-       <literal>'vm'</literal> returns the size of the Visibility Map
-       (see <xref linkend="storage-vm">) associated with the relation.
+       <literal>'pim'</literal> returns the size of the Page Information Map
+       (see <xref linkend="storage-pim">) associated with the relation.
       </para>
      </listitem>
      <listitem>
