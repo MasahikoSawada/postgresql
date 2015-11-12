@@ -352,8 +352,8 @@
     Vacuum maintains a <link linkend="storage-pim">page info map</> for each
     table to keep track of which pages contain only tuples that are known to be
     visible to all active transactions (and all future transactions, until the
-    page is again modified), and pages contain only tuples that are marked as
-    frozen.  This has two purposes.  First, vacuum itself can skip such pages
+    page is again modified), and pages contain only frozen tuples.
+    This has two purposes.  First, vacuum itself can skip such pages
     on the next run, since there is nothing to clean up.
    </para>
 
@@ -440,8 +440,8 @@
    <para>
     <command>VACUUM</> skips pages that don't have any dead row
     versions, and pages that have only frozen rows.
-    To ensure all old row versions have been frozen, a scan of all pages that
-    are not marked as frozen is needed.
+    To ensure all old row versions have been frozen, a scan of all unfrozen pages
+    is needed.
     <xref linkend="guc-vacuum-freeze-table-age"> controls when
     <command>VACUUM</> does that: a whole-table freezing is forced if
     the table hasn't been ensured all row versions are frozen for
@@ -452,7 +452,7 @@
    <para>
     The maximum time that a table can go unvacuumed is two billion
     transactions minus the <varname>vacuum_freeze_min_age</> value at
-    the time <command>VACUUM</> last scanned pages that are not marked as frozen
+    the time <command>VACUUM</> last scanned unfrozen pages.
     If it were to go unvacuumed for longer than
     that, data loss could result.  To ensure that this does not happen,
     autovacuum is invoked on any table that might contain unfrozen rows with
@@ -648,8 +648,8 @@ HINT:  Stop the postmaster and vacuum that database in single-user mode.
     </para>
 
     <para>
-     When <command>VACUUM</> scans all pages that are not marked as frozen,
-     regardless of what causes them, enable advancing the value for that table.
+     When <command>VACUUM</> scans all unfrozen pages, regardless of what causes
+     them, enable advancing the value for that table.
      Eventually, as all tables in all databases are scanned and their
      oldest multixact values are advanced, on-disk storage for older
      multixacts can be removed.

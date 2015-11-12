@@ -579,27 +579,25 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 				skipping_all_visible_blocks = true;
 			else
 				skipping_all_visible_blocks = false;
+
 			all_visible_according_to_pim = false;
 			all_frozen_according_to_pim = false;
 		}
 		else
 		{
 			/*
-			 * This block is at least all-visible according to page info map.
+			 * This block is at least all-visible according to the page info map.
 			 * We check whether this block is all-frozen or not, to skip to
 			 * vacuum this page even if scan_all is true.
 			 */
 			bool	all_frozen = PIM_ALL_FROZEN(onerel, blkno, &pimbuffer);
 
-			if (scan_all)
+			if (scan_all && all_frozen)
 			{
-				if (all_frozen)
-				{
 					vacrelstats->pimskipped_frozen_pages++;
 					continue;
-				}
 			}
-			else if (skipping_all_visible_blocks)
+			else if (!scan_all && skipping_all_visible_blocks)
 					continue;
 
 			all_visible_according_to_pim = true;
