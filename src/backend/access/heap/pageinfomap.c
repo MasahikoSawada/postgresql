@@ -11,17 +11,17 @@
  *	  src/backend/access/heap/pageinfomap.c
  *
  * INTERFACE ROUTINES
- *		pageinfomap_clear  - clear a bit in the page information map
+ *		pageinfomap_clear  - clear a bit in the page info map
  *		pageinfomap_pin	 - pin a map page for setting a bit
  *		pageinfomap_pin_ok - check whether correct map page is already pinned
  *		pageinfomap_set	 - set a bit in a previously pinned page
  *		pageinfomap_get_status - get status of bits
- *		pageinfomap_count  - count number of bits set in page information map
- *		pageinfomap_truncate	- truncate the page information map
+ *		pageinfomap_count  - count number of bits set in page info map
+ *		pageinfomap_truncate	- truncate the page info map
  *
  * NOTES
  *
- * The page information map is a bitmap with two bits (all-visible and all-frozen)
+ * The page info map is a bitmap with two bits (all-visible and all-frozen)
  * per heap page. A set all-visible bit means that all tuples on the page are
  * known visible to all transactions, and therefore the page doesn't need to
  * be vacuumed. A set all-frozen bit means that all tuples on the page are
@@ -33,54 +33,54 @@
  * is set, we know the condition is true, but if a bit is not set, it might or
  * might not be true.
  *
- * Clearing a page information map bit is not separately WAL-logged.  The callers
+ * Clearing a page info map bit is not separately WAL-logged.  The callers
  * must make sure that whenever a bit is cleared, the bit is cleared on WAL
  * replay of the updating operation as well.  And all-frozen bit must be
  * cleared with all-visible at the same time.
  *
- * When we *set* a page information map during VACUUM, we must write WAL.  This may
+ * When we *set* a page info map during VACUUM, we must write WAL.  This may
  * seem counterintuitive, since the bit is basically a hint: if it is clear,
  * it may still be the case that every tuple on the page is all-visible or
  * all-frozen we just don't know that for certain.  The difficulty is that
  * there are two bits which are typically set together: the PD_ALL_VISIBLE
- * or PD_ALL_FROZEN bit on the page itself, and the corresponding page information map
- * bit.  If a crash occurs after the page information map page makes it to disk and before
+ * or PD_ALL_FROZEN bit on the page itself, and the corresponding page info map
+ * bit.  If a crash occurs after the page info map page makes it to disk and before
  * the updated heap page makes it to disk, redo must set the bit on the heap page.
  * Otherwise, the next insert, update, or delete on the heap page will fail to
- * realize that the page information map bit must be cleared, possibly causing index-only
+ * realize that the page info map bit must be cleared, possibly causing index-only
  * scans to return wrong answers.
  *
- * VACUUM will normally skip pages for which the page information map bit is set;
+ * VACUUM will normally skip pages for which the page info map bit is set;
  * such pages can't contain any dead tuples and therefore don't need vacuuming.
- * The page information map has the all-frozen bit which indicates all tuples on
- * corresponding page has been completely frozen, so the page information map is also
+ * The page info map has the all-frozen bit which indicates all tuples on
+ * corresponding page has been completely frozen, so the page info map is also
  * used for anti-wraparound vacuum, even if freezing of tuples is required.
  *
  * LOCKING
  *
  * In heapam.c, whenever a page is modified so that not all tuples on the
  * page are visible to everyone anymore, the corresponding bit in the
- * page information map is cleared. In order to be crash-safe, we need to do this
+ * page info map is cleared. In order to be crash-safe, we need to do this
  * while still holding a lock on the heap page and in the same critical
  * section that logs the page modification. However, we don't want to hold
  * the buffer lock over any I/O that may be required to read in the page information
  * map page.  To avoid this, we examine the heap page before locking it;
  * if the page-level PD_ALL_VISIBLE or PD_ALL_FROZEN bit is set, we pin the
- * page information map bit.  Then, we lock the buffer.  But this creates a race
+ * page info map bit.  Then, we lock the buffer.  But this creates a race
  * condition: there is a possibility that in the time it takes to lock the
  * buffer, the PD_ALL_VISIBLE or PD_ALL_FROZEN bit gets set.  If that happens,
- * we have to unlock the buffer, pin the page information map page, and relock the
+ * we have to unlock the buffer, pin the page info map page, and relock the
  * buffer.  This shouldn't happen often, because only VACUUM currently sets
- * page information map bits, and the race will only occur if VACUUM processes a given
+ * page info map bits, and the race will only occur if VACUUM processes a given
  * page at almost exactly the same time that someone tries to further modify it.
  *
  * To set a bit, you need to hold a lock on the heap page. That prevents
  * the race condition where VACUUM sees that all tuples on the page are
  * visible to everyone, but another backend modifies the page before VACUUM
- * sets the bit in the page information map.
+ * sets the bit in the page info map.
  *
- * When a bit is set, the LSN of the page information map page is updated to make
- * sure that the page information map update doesn't get written to disk before the
+ * When a bit is set, the LSN of the page info map page is updated to make
+ * sure that the page info map update doesn't get written to disk before the
  * WAL record of the changes that made it possible to set the bit is flushed.
  * But when a bit is cleared, we don't have to do that because it's always
  * safe to clear a bit in the map from correctness point of view.
@@ -102,7 +102,7 @@
 /*#define TRACE_PAGEINFOMAP */
 
 /*
- * Size of the bitmap on each page information map page, in bytes. There's no
+ * Size of the bitmap on each page info map page, in bytes. There's no
  * extra headers, so the whole page minus the standard page header is
  * used for the bitmap.
  */
@@ -117,10 +117,10 @@
 /* Number of heap blocks we can represent in one byte. */
 #define HEAPBLOCKS_PER_BYTE 4
 
-/* Number of heap blocks we can represent in one page information map page. */
+/* Number of heap blocks we can represent in one page info map page. */
 #define HEAPBLOCKS_PER_PAGE (MAPSIZE * HEAPBLOCKS_PER_BYTE)
 
-/* Mapping from heap block number to the right bit in the page information map */
+/* Mapping from heap block number to the right bit in the page info map */
 #define HEAPBLK_TO_MAPBLOCK(x) ((x) / HEAPBLOCKS_PER_PAGE)
 #define HEAPBLK_TO_MAPBYTE(x) (((x) % HEAPBLOCKS_PER_PAGE) / HEAPBLOCKS_PER_BYTE)
 #define HEAPBLK_TO_MAPBIT(x) (((x) % HEAPBLOCKS_PER_BYTE) * BITS_PER_HEAPBLOCK)
@@ -169,7 +169,7 @@ static void pim_extend(Relation rel, BlockNumber npimblocks);
 
 
 /*
- *	pageinfomap_clear - clear all bits in page information map
+ *	pageinfomap_clear - clear all bits in page info map
  *
  * You must pass a buffer containing the correct map page to this function.
  * Call pageinfomap_pin first to pin the right one. This function doesn't do
@@ -207,8 +207,8 @@ pageinfomap_clear(Relation rel, BlockNumber heapBlk, Buffer buf)
 /*
  *	pageinfomap_pin - pin a map page for setting a bit
  *
- * Setting a bit in the page information map is a two-phase operation. First, call
- * pageinfomap_pin, to pin the page information map page containing the bit for
+ * Setting a bit in the page info map is a two-phase operation. First, call
+ * pageinfomap_pin, to pin the page info map page containing the bit for
  * the heap page. Because that can require I/O to read the map page, you
  * shouldn't hold a lock on the heap page while doing that. Then, call
  * pageinfomap_set to actually set the bit.
@@ -350,18 +350,18 @@ pageinfomap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
  *	pageinfomap_get_status - get status of bits
  *
  * Are all tuples on heapBlk visible to all or are marked frozen, according
- * to the page information map?
+ * to the page info map?
  *
  * On entry, *buf should be InvalidBuffer or a valid buffer returned by an
  * earlier call to pageinfomap_pin or pageinfomap_get_status on the same
  * relation. On return, *buf is a valid buffer with the map page containing
  * the bit for heapBlk, or InvalidBuffer. The caller is responsible for
  * releasing *buf after it's done testing and setting bits, and must pass flags
- * for which it needs to check the value in page information map.
+ * for which it needs to check the value in page info map.
  *
  * NOTE: This function is typically called without a lock on the heap page,
  * so somebody else could change the bit just after we look at it.  In fact,
- * since we don't lock the page information map page either, it's even possible that
+ * since we don't lock the page info map page either, it's even possible that
  * someone else could have changed the bit just before we look at it, but yet
  * we might see the old value.  It is the caller's responsibility to deal with
  * all concurrency issues!
@@ -406,7 +406,7 @@ pageinfomap_get_status(Relation rel, BlockNumber heapBlk, Buffer *buf)
 }
 
 /*
- *	pageinfomap_count  - count number of bits set in page information map
+ *	pageinfomap_count  - count number of bits set in page info map
  *
  * Note: we ignore the possibility of race conditions when the table is being
  * extended concurrently with the call.  New pages added to the table aren't
@@ -455,7 +455,7 @@ pageinfomap_count(Relation rel, BlockNumber *all_frozen)
 }
 
 /*
- *	pageinfomap_truncate - truncate the page information map
+ *	pageinfomap_truncate - truncate the page info map
  *
  * The caller must hold AccessExclusiveLock on the relation, to ensure that
  * other backends receive the smgr invalidation event that this function sends
@@ -480,14 +480,14 @@ pageinfomap_truncate(Relation rel, BlockNumber nheapblocks)
 	RelationOpenSmgr(rel);
 
 	/*
-	 * If no page information map has been created yet for this relation, there's
+	 * If no page info map has been created yet for this relation, there's
 	 * nothing to truncate.
 	 */
 	if (!smgrexists(rel->rd_smgr, PAGEINFOMAP_FORKNUM))
 		return;
 
 	/*
-	 * Unless the new size is exactly at a page information map page boundary, the
+	 * Unless the new size is exactly at a page info map page boundary, the
 	 * tail bits in the last remaining map page, representing truncated heap
 	 * blocks, need to be cleared. This is not only tidy, but also necessary
 	 * because we don't get a chance to clear the bits if the heap is extended
@@ -554,10 +554,10 @@ pageinfomap_truncate(Relation rel, BlockNumber nheapblocks)
 }
 
 /*
- * Read a page information map page.
+ * Read a page info map page.
  *
  * If the page doesn't exist, InvalidBuffer is returned, or if 'extend' is
- * true, the page information map file is extended.
+ * true, the page info map file is extended.
  */
 static Buffer
 pim_readbuf(Relation rel, BlockNumber blkno, bool extend)
@@ -574,7 +574,7 @@ pim_readbuf(Relation rel, BlockNumber blkno, bool extend)
 	RelationOpenSmgr(rel);
 
 	/*
-	 * If we haven't cached the size of the page information map fork yet, check it
+	 * If we haven't cached the size of the page info map fork yet, check it
 	 * first.
 	 */
 	if (rel->rd_smgr->smgr_pim_nblocks == InvalidBlockNumber)
@@ -608,7 +608,7 @@ pim_readbuf(Relation rel, BlockNumber blkno, bool extend)
 }
 
 /*
- * Ensure that the page information map fork is at least pim_nblocks long, extending
+ * Ensure that the page info map fork is at least pim_nblocks long, extending
  * it if necessary with zeroed pages.
  */
 static void
@@ -622,8 +622,8 @@ pim_extend(Relation rel, BlockNumber pim_nblocks)
 
 	/*
 	 * We use the relation extension lock to lock out other backends trying to
-	 * extend the page information map at the same time. It also locks out extension
-	 * of the main fork, unnecessarily, but extending the page information map
+	 * extend the page info map at the same time. It also locks out extension
+	 * of the main fork, unnecessarily, but extending the page info map
 	 * happens seldom enough that it doesn't seem worthwhile to have a
 	 * separate lock tag type for it.
 	 *

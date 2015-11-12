@@ -780,7 +780,7 @@ infer_collation_opclass_match(InferenceElem *elem, Relation idxRel,
  * estimate_rel_size - estimate # pages and # tuples in a table or index
  *
  * We also estimate the fraction of the pages that are marked all-visible in
- * the page information map, for use in estimation of index-only scans.
+ * the page info map, for use in estimation of index-only scans.
  *
  * If attr_widths isn't NULL, it points to the zero-index entry of the
  * relation's attr_widths[] cache; we fill this in if we have need to compute

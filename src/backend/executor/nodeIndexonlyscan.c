@@ -86,7 +86,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 * we'll use the index tuple not the heap tuple as the data source.
 		 *
 		 * Note on Memory Ordering Effects: pageinfomap_get_stattus does not lock
-		 * the page information map buffer, and therefore the result we read here
+		 * the page info map buffer, and therefore the result we read here
 		 * could be slightly stale.  However, it can't be stale enough to
 		 * matter.
 		 *

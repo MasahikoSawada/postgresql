@@ -93,7 +93,7 @@
 
 /*
  * Before we consider skipping a page that's marked as clean in
- * page information map, we must've seen at least this many clean pages.
+ * page info map, we must've seen at least this many clean pages.
  */
 #define SKIP_PAGES_THRESHOLD	((BlockNumber) 32)
 
@@ -107,7 +107,7 @@ typedef struct LVRelStats
 	BlockNumber scanned_pages;	/* number of pages we examined */
 	BlockNumber pinskipped_pages;		/* # of pages we skipped due to a pin */
 	BlockNumber pimskipped_frozen_pages; /* # of pages we skipped by all-frozen bit
-									of page information map */
+									of page info map */
 	double		scanned_tuples; /* counts only tuples on scanned pages */
 	double		old_rel_tuples; /* previous value of pg_class.reltuples */
 	double		new_rel_tuples; /* new estimated total # of tuples */
@@ -493,12 +493,12 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 
 	/*
 	 * We want to skip pages that don't require vacuuming according to the
-	 * page information map, but only when we can skip at least SKIP_PAGES_THRESHOLD
+	 * page info map, but only when we can skip at least SKIP_PAGES_THRESHOLD
 	 * consecutive pages.  Since we're reading sequentially, the OS should be
 	 * doing readahead for us, so there's no gain in skipping a page now and
 	 * then; that's likely to disable readahead and so be counterproductive.
 	 * Also, skipping even a single page accorinding to all-visible bit of
-	 * page information map means that we can't update relfrozenxid, so we only want
+	 * page info map means that we can't update relfrozenxid, so we only want
 	 * to do it if we can skip a goodly number. On the other hand, we count
 	 * both how many pages we skipped according to all-frozen bit of page information
 	 * map and how many pages we freeze, so we can update relfrozenxid if
@@ -506,7 +506,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 	 *
 	 * Before entering the main loop, establish the invariant that
 	 * next_not_all_visible_block is the next block number >= blkno that's not
-	 * all-visible according to the page information map, or nblocks if there's no
+	 * all-visible according to the page info map, or nblocks if there's no
 	 * such block.  Also, we set up the skipping_all_visible_blocks flag,
 	 * which is needed because we need hysteresis in the decision: once we've
 	 * started skipping blocks, we may as well skip everything up to the next
@@ -585,7 +585,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		else
 		{
 			/*
-			 * This block is at least all-visible according to page information map.
+			 * This block is at least all-visible according to page info map.
 			 * We check whether this block is all-frozen or not, to skip to
 			 * vacuum this page even if scan_all is true.
 			 */
@@ -617,7 +617,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		{
 			/*
 			 * Before beginning index vacuuming, we release any pin we may
-			 * hold on the page information map page.  This isn't necessary for
+			 * hold on the page info map page.  This isn't necessary for
 			 * correctness, but we do it anyway to avoid holding the pin
 			 * across a lengthy, unrelated operation.
 			 */
@@ -648,7 +648,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		}
 
 		/*
-		 * Pin the page information map page in case we need to mark the page
+		 * Pin the page info map page in case we need to mark the page
 		 * all-visible.  In most cases this will be very cheap, because we'll
 		 * already have the correct page pinned anyway.  However, it's
 		 * possible that (a) next_not_all_visible_block is covered by a
@@ -1042,7 +1042,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 			if (!all_visible_according_to_pim)
 			{
 				/*
-				 * It should never be the case that the page information map page is set
+				 * It should never be the case that the page info map page is set
 				 * while the page-level bit is clear, but the reverse is allowed
 				 * (if checksums are not enabled).  Regardless, set the both bits
 				 * so that we get back in sync.
@@ -1076,7 +1076,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		}
 
 		/*
-		 * As of PostgreSQL 9.2, the page information map bit should never be set if
+		 * As of PostgreSQL 9.2, the page info map bit should never be set if
 		 * the page-level bit is clear.  However, it's possible that the bit
 		 * got cleared after we checked it and before we took the buffer
 		 * content lock, so we must recheck before jumping to the conclusion
@@ -1085,7 +1085,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		else if (all_visible_according_to_pim && !PageIsAllVisible(page)
 				 && PIM_ALL_VISIBLE(onerel, blkno, &pimbuffer))
 		{
-			elog(WARNING, "page is not marked all-visible but page information map bit is set in relation \"%s\" page %u",
+			elog(WARNING, "page is not marked all-visible but page info map bit is set in relation \"%s\" page %u",
 				 relname, blkno);
 			pageinfomap_clear(onerel, blkno, pimbuffer);
 		}
@@ -1143,7 +1143,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 														 num_tuples);
 
 	/*
-	 * Release any remaining pin on page information map.
+	 * Release any remaining pin on page info map.
 	 */
 	if (BufferIsValid(pimbuffer))
 	{
@@ -1179,10 +1179,10 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 						RelationGetRelationName(onerel),
 						tups_vacuumed, vacuumed_pages)));
 
-	/* Report how many frozen pages vacuum skipped according to page information map */
+	/* Report how many frozen pages vacuum skipped according to page info map */
 	ereport(elevel,
-			(errmsg_plural("skipped %d frozen page according to page information map",
-						   "skipped %d frozen pages according to page information map",
+			(errmsg_plural("skipped %d frozen page according to page info map",
+						   "skipped %d frozen pages according to page info map",
 						   vacrelstats->pimskipped_frozen_pages,
 						   vacrelstats->pimskipped_frozen_pages)));
 

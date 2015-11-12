@@ -657,7 +657,7 @@ psql --username postgres --file script.sql postgres
   </para>
 
   <para>
-   Since the format of page information map has been changed in version 9.6,
+   Since the format of page info map has been changed in version 9.6,
    <application>pg_upgrade</> does not support upgrading of databases
    from 9.5 or before to 9.6 or later with link mode (-k).
   </para>

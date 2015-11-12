@@ -112,7 +112,7 @@ ReadBufferBI(Relation relation, BlockNumber targetBlock,
 
 /*
  * For each heap page which is all-visible, acquire a pin on the appropriate
- * page information map page, if we haven't already got one.
+ * page info map page, if we haven't already got one.
  *
  * buffer2 may be InvalidBuffer, if only one buffer is involved.  buffer1
  * must not be InvalidBuffer.  If both buffers are specified, buffer1 must
@@ -316,7 +316,7 @@ RelationGetBufferForTuple(Relation relation, Size len,
 		 * the possibility they are the same block.
 		 *
 		 * If the page-level all-visible flag is set, caller will need to
-		 * clear both that and the corresponding page information map bit.  However,
+		 * clear both that and the corresponding page info map bit.  However,
 		 * by the time we return, we'll have x-locked the buffer, and we don't
 		 * want to do any I/O while in that state.  So we check the bit here
 		 * before taking the lock, and pin the page if it appears necessary.
@@ -374,7 +374,7 @@ RelationGetBufferForTuple(Relation relation, Size len,
 		 * caller passed us the right page anyway.
 		 *
 		 * Note also that it's possible that by the time we get the pin and
-		 * retake the buffer locks, the page information map bit will have been
+		 * retake the buffer locks, the page info map bit will have been
 		 * cleared by some other backend anyway.  In that case, we'll have
 		 * done a bit of extra work for no gain, but there's no real harm
 		 * done.

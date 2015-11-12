@@ -244,7 +244,7 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	if (fsm)
 		FreeSpaceMapTruncateRel(rel, nblocks);
 
-	/* Truncate the page information map too if it exists. */
+	/* Truncate the page info map too if it exists. */
 	vm = smgrexists(rel->rd_smgr, PAGEINFOMAP_FORKNUM);
 	if (vm)
 		pageinfomap_truncate(rel, nblocks);
@@ -278,8 +278,8 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 		/*
 		 * Flush, because otherwise the truncation of the main relation might
 		 * hit the disk before the WAL record, and the truncation of the FSM
-		 * or page information map. If we crashed during that window, we'd be left
-		 * with a truncated heap, but the FSM or page information map would still
+		 * or page info map. If we crashed during that window, we'd be left
+		 * with a truncated heap, but the FSM or page info map would still
 		 * contain entries for the non-existent heap pages.
 		 */
 		if (fsm || vm)

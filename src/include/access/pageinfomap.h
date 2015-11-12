@@ -1,7 +1,7 @@
 /*-------------------------------------------------------------------------
  *
  * pageinfomap.h
- *		page information map interface
+ *		page info map interface
  *
  *
  * Portions Copyright (c) 2007-2015, PostgreSQL Global Development Group

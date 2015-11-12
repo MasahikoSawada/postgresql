@@ -112,7 +112,7 @@ extern char *output_files[];
 #define VISIBILITY_MAP_CRASHSAFE_CAT_VER 201107031
 
 /*
- * The visibility map changed to page information map with this 9.6 commit,
+ * The visibility map changed to page info map with this 9.6 commit,
  */
 #define VISIBILITY_MAP_CHANGE_TO_PAGEINFOMAP_CAT_VER 201511131
 /*

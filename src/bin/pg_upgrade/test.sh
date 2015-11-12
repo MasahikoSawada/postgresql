@@ -194,11 +194,11 @@ if [ -n "$pg_dumpall1_status" ]; then
 	exit 1
 fi
 if [ -n "$visibilitymap_vacuum1_status" ];then
-	echo "VACUUM of pre-upgrade database cluster for page information map test failed"
+	echo "VACUUM of pre-upgrade database cluster for page info map test failed"
 	exit 1
 fi
 if [ -n "$visibilitymap_test1_status" ];then
-	echo "SELECT of pre-upgrade database cluster for page information map test failed"
+	echo "SELECT of pre-upgrade database cluster for page info map test failed"
 	exit 1
 fi
 

@@ -400,7 +400,7 @@ approx_free_percent  | 2.09
 
      <para>
       It does this by skipping pages that have only visible tuples
-      according to the page information map (if a page has the corresponding PIM
+      according to the page info map (if a page has the corresponding PIM
       bit set, then it is assumed to contain no dead tuples). For such
       pages, it derives the free space value from the free space map, and
       assumes that the rest of the space on the page is taken up by live

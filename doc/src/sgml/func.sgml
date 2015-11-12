@@ -17703,7 +17703,7 @@ postgres=# SELECT * FROM pg_xlogfile_name_offset(pg_stop_backup());
        <entry><type>bigint</type></entry>
        <entry>
         Disk space used by the specified table, excluding indexes
-        (but including TOAST, free space map, and page information map)
+        (but including TOAST, free space map, and page info map)
        </entry>
       </row>
       <row>
@@ -17750,7 +17750,7 @@ postgres=# SELECT * FROM pg_xlogfile_name_offset(pg_stop_backup());
    <para>
     <function>pg_table_size</> accepts the OID or name of a table and
     returns the disk space needed for that table, exclusive of indexes.
-    (TOAST space, free space map, and page information map are included.)
+    (TOAST space, free space map, and page info map are included.)
    </para>
 
    <para>
@@ -17793,7 +17793,7 @@ postgres=# SELECT * FROM pg_xlogfile_name_offset(pg_stop_backup());
      </listitem>
      <listitem>
       <para>
-       <literal>'pim'</literal> returns the size of the Page Information Map
+       <literal>'pim'</literal> returns the size of the Page Info Map
        (see <xref linkend="storage-pim">) associated with the relation.
       </para>
      </listitem>

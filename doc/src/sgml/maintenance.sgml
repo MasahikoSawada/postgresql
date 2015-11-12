@@ -102,7 +102,7 @@
      </listitem>
 
      <listitem>
-      <simpara>To update the page information map, which speeds up index-only
+      <simpara>To update the page info map, which speeds up index-only
       scans.</simpara>
      </listitem>
 
@@ -345,11 +345,11 @@
    </tip>
   </sect2>
 
-  <sect2 id="vacuum-for-page-information-map">
-   <title>Updating The Page Information Page</title>
+  <sect2 id="vacuum-for-page-info-map">
+   <title>Updating The Page Info Map</title>
 
    <para>
-    Vacuum maintains a <link linkend="storage-pim">page information map</> for each
+    Vacuum maintains a <link linkend="storage-pim">page info map</> for each
     table to keep track of which pages contain only tuples that are known to be
     visible to all active transactions (and all future transactions, until the
     page is again modified), and pages contain only tuples that are marked as
@@ -364,10 +364,10 @@
     visibility information, a normal index scan fetches the heap tuple for each
     matching index entry, to check whether it should be seen by the current
     transaction.  An <firstterm>index-only scan</>, on the other hand, checks
-    the page information map first.  If it's known that all tuples on the page are
+    the page info map first.  If it's known that all tuples on the page are
     visible, the heap fetch can be skipped.  This is most noticeable on
-    large data sets where the page information map can prevent disk accesses.
-    The page information map is vastly smaller than the heap, so it can easily be
+    large data sets where the page info map can prevent disk accesses.
+    The page info map is vastly smaller than the heap, so it can easily be
     cached even when the heap is very large.
    </para>
   </sect2>

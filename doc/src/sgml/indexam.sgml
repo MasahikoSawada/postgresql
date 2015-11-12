@@ -611,7 +611,7 @@ amrestrpos (IndexScanDesc scan);
    If the index stores the original indexed data values (and not some lossy
    representation of them), it is useful to support index-only scans, in
    which the index returns the actual data not just the TID of the heap tuple.
-   This will only work if the page information map shows that the TID is on an
+   This will only work if the page info map shows that the TID is on an
    all-visible page; else the heap tuple must be visited anyway to check
    MVCC visibility.  But that is no concern of the access method's.
   </para>

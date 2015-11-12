@@ -468,7 +468,7 @@ cost_index(IndexPath *path, PlannerInfo *root, double loop_count)
 	 * estimates based on the correlation squared (XXX is that appropriate?).
 	 *
 	 * If it's an index-only scan, then we will not need to fetch any heap
-	 * pages for which the page information map shows all tuples are visible.
+	 * pages for which the page info map shows all tuples are visible.
 	 * Hence, reduce the estimated number of heap fetches accordingly.
 	 * We use the measured fraction of the entire heap that is all-visible,
 	 * which might not be particularly relevant to the subset of the heap
