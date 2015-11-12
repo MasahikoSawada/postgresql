@@ -3706,6 +3706,7 @@ pgstat_get_tab_entry(PgStat_StatDBEntry *dbentry, Oid tableoid, bool create)
 		result->n_live_tuples = 0;
 		result->n_dead_tuples = 0;
 		result->changes_since_analyze = 0;
+		result->n_frozen_pages = 0;
 		result->blocks_fetched = 0;
 		result->blocks_hit = 0;
 		result->vacuum_timestamp = 0;

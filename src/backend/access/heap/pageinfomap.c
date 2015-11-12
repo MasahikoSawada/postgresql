@@ -1,7 +1,7 @@
 /*-------------------------------------------------------------------------
  *
  * pageinfomap.c
- *	  bitmap for tracking informatio of heap tuples
+ *	  bitmap for tracking information of heap tuples
  *
  * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California

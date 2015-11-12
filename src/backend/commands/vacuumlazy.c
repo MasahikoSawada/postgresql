@@ -224,9 +224,8 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	 * We request a full scan if either the table's frozen Xid is now older
 	 * than or equal to the requested Xid full-table scan limit; or if the
 	 * table's minimum MultiXactId is older than or equal to the requested
-	 * mxid full-table scan limit.
-	 * Even if scan_all is set so far, we could skip to scan some pages
-	 * according by all-frozen bit of page information amp.
+	 * mxid full-table scan limit. During full scan, we could skip some pags
+	 * according to all-frozen bit of page info map.
 	 */
 	scan_all = TransactionIdPrecedesOrEquals(onerel->rd_rel->relfrozenxid,
 											 xidFullScanLimit);
@@ -293,8 +292,8 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	 * tuple density") unless there's some actual evidence for the latter.
 	 *
 	 * We do update relallvisible even in the corner case, since if the table
-	 * is all-visible we'd definitely like to know that.
-	 * But clamp the value to be not more than what we're setting relpages to.
+	 * is all-visible we'd definitely like to know that.  But clamp the value
+	 * to be not more than what we're setting relpages to.
 	 *
 	 * Also, don't change relfrozenxid/relminmxid if we skipped any pages,
 	 * since then we don't know for certain that all tuples have a newer xmin.
@@ -748,7 +747,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 			empty_pages++;
 			freespace = PageGetHeapFreeSpace(page);
 
-			/* empty pages are always all-visible */
+			/* empty pages are always all-visible and all-frozen */
 			if (!PageIsAllVisible(page))
 			{
 				START_CRIT_SECTION();
@@ -771,9 +770,10 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 					log_newpage_buffer(buf, true);
 
 				PageSetAllVisible(page);
+				PageSetAllFrozen(page);
 				pageinfomap_set(onerel, blkno, buf, InvalidXLogRecPtr,
 								  pimbuffer, InvalidTransactionId,
-								  PAGEINFOMAP_ALL_VISIBLE);
+								  PAGEINFOMAP_ALL_VISIBLE | PAGEINFOMAP_ALL_FROZEN);
 				END_CRIT_SECTION();
 			}
 
@@ -971,7 +971,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		}						/* scan along page */
 
 		/*
-		 * If we froze any tuples then we mark the buffer dirty, and write a WAL
+		 * If we freeze any tuples, mark the buffer dirty, and write a WAL
 		 * record recording the changes. We must log the changes to be crash-safe
 		 * against future truncation of CLOG.
 		 */
@@ -1141,7 +1141,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 														 num_tuples);
 
 	/*
-	 * Release any remaining pin on page info map.
+	 * Release any remaining pin on page info map page.
 	 */
 	if (BufferIsValid(pimbuffer))
 	{
