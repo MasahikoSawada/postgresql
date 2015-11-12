@@ -182,7 +182,7 @@ transfer_single_new_db(pageCnvCtx *pageConverter,
 		vm_crashsafe_match = false;
 
 	/*
-	 * Do we need to rewrite visibilitymap?
+	 * Do we need to rewrite visibilitymap to pageinfomap?
 	 */
 	if (old_cluster.controldata.cat_ver < VISIBILITY_MAP_CHANGE_TO_PAGEINFOMAP_CAT_VER &&
 		new_cluster.controldata.cat_ver >= VISIBILITY_MAP_CHANGE_TO_PAGEINFOMAP_CAT_VER)
@@ -290,9 +290,7 @@ transfer_relfile(pageCnvCtx *pageConverter, FileNameMap *map,
 		{
 			pg_log(PG_VERBOSE, "copying \"%s\" to \"%s\"\n", old_file, new_file);
 
-			/*
-			 * Do we need to rewrite visibilitymap?
-			 */
+			/* Is it an vm file needs to be rewritten? */
 			if (strcmp(old_type_suffix, "_vm") == 0 && strcmp(old_type_suffix, new_type_suffix) != 0)
 				rewrite_vm = true;
 

@@ -289,8 +289,7 @@ pageinfomap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 
 	Assert(InRecovery || XLogRecPtrIsInvalid(recptr));
 	Assert(InRecovery || BufferIsValid(heapBuf));
-	Assert((flags & PAGEINFOMAP_ALL_VISIBLE) ||
-		   (flags & (PAGEINFOMAP_ALL_VISIBLE | PAGEINFOMAP_ALL_FROZEN)));
+	Assert(flags & PAGEINFOMAP_ALL_FLAGS);
 
 	/* Check that we have the right heap page pinned, if present */
 	if (BufferIsValid(heapBuf) && BufferGetBlockNumber(heapBuf) != heapBlk)
