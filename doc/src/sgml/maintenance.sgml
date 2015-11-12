@@ -443,7 +443,7 @@
     To ensure all old row versions have been frozen, a scan of all pages that
     are not marked as frozen is needed.
     <xref linkend="guc-vacuum-freeze-table-age"> controls when
-    <command>VACUUM</> does that: a table sweep is forced if
+    <command>VACUUM</> does that: a whole-table freezing is forced if
     the table hasn't been ensured all row versions are frozen for
     <varname>vacuum_freeze_table_age</> minus <varname>vacuum_freeze_min_age</>
     transcations.
@@ -553,8 +553,8 @@ SELECT datname, age(datfrozenxid) FROM pg_database;
     <command>VACUUM</> normally
     only scans pages that have been modified since the last vacuum, but
     <structfield>relfrozenxid</> can only be advanced when the whole table is
-    frozen. The whole table is scanned only when all pages happen to require
-    vacuuming to remove dead row versions. In other cases such as where
+    frozen. The whole-table freezing is occuerred only when all pages happen to
+    require freezing to freeze rows. In other cases such as where
     <structfield>relfrozenxid</> is more than <varname>vacuum_freeze_table_age</>
     transcations old, where <command>VACUUM</>'s <literal>FREEZE</> option is used,
     <command>VACUUM</> can skip the pages that all tuples on the page itself are
