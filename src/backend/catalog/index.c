@@ -1919,10 +1919,9 @@ index_update_stats(Relation rel,
 	{
 		BlockNumber relpages = RelationGetNumberOfBlocks(rel);
 		BlockNumber relallvisible;
-		BlockNumber relallfrozen; /* not used */
 
 		if (rd_rel->relkind != RELKIND_INDEX)
-			visibilitymap_count(rel, &relallvisible, &relallfrozen);
+			relallvisible = visibilitymap_count(rel, NULL);
 		else	/* don't bother for indexes */
 			relallvisible = 0;
 

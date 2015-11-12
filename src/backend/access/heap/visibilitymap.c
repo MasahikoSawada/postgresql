@@ -123,7 +123,7 @@
 /* Mapping from heap block number to the right bit in the visibility map */
 #define HEAPBLK_TO_MAPBLOCK(x) ((x) / HEAPBLOCKS_PER_PAGE)
 #define HEAPBLK_TO_MAPBYTE(x) (((x) % HEAPBLOCKS_PER_PAGE) / HEAPBLOCKS_PER_BYTE)
-#define HEAPBLK_TO_MAPBIT(x) ((x) % HEAPBLOCKS_PER_BYTE)
+#define HEAPBLK_TO_MAPBIT(x) (((x) % HEAPBLOCKS_PER_BYTE) * BITS_PER_HEAPBLOCK)
 
 /* tables for fast counting of set bits for visible and freeze */
 static const uint8 number_of_ones_for_visible[256] = {
@@ -181,8 +181,7 @@ visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer buf)
 	BlockNumber mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
 	int			mapByte = HEAPBLK_TO_MAPBYTE(heapBlk);
 	int			mapBit = HEAPBLK_TO_MAPBIT(heapBlk);
-	uint8		mask = (VISIBILITYMAP_ALL_VISIBLE | VISIBILITYMAP_ALL_FROZEN) <<
-		(BITS_PER_HEAPBLOCK * mapBit);
+	uint8		mask = VISIBILITYMAP_ALL_FLAGS << mapBit;
 	char	   *map;
 
 #ifdef TRACE_VISIBILITYMAP
@@ -305,11 +304,11 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 	map = PageGetContents(page);
 	LockBuffer(vmBuf, BUFFER_LOCK_EXCLUSIVE);
 
-	if (flags != (map[mapByte] & (flags << (BITS_PER_HEAPBLOCK * mapBit))))
+	if (flags != (map[mapByte] & (flags << mapBit)))
 	{
 		START_CRIT_SECTION();
 
-		map[mapByte] |= (flags << (BITS_PER_HEAPBLOCK * mapBit));
+		map[mapByte] |= (flags << mapBit);
 		MarkBufferDirty(vmBuf);
 
 		if (RelationNeedsWAL(rel))
@@ -375,8 +374,6 @@ visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer *buf)
 	uint8		mapBit = HEAPBLK_TO_MAPBIT(heapBlk);
 	char	   *map;
 
-#define VISIBILITYMAP_ALL_FLAGS (VISIBILITYMAP_ALL_VISIBLE | VISIBILITYMAP_ALL_FROZEN)
-
 #ifdef TRACE_VISIBILITYMAP
 	elog(DEBUG1, "vm_get_status %s, block %d", RelationGetRelationName(rel), heapBlk);
 #endif
@@ -405,7 +402,7 @@ visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer *buf)
 	 * here, but for performance reasons we make it the caller's job to worry
 	 * about that.
 	 */
-	return ((map[mapByte] >> (BITS_PER_HEAPBLOCK * mapBit)) & VISIBILITYMAP_ALL_FLAGS);
+	return ((map[mapByte] >> mapBit) & VISIBILITYMAP_ALL_FLAGS);
 }
 
 /*
@@ -416,12 +413,11 @@ visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer *buf)
  * going to be marked all-visible or all-frozen, so they won't affect the result.
  * The caller must set the flags which indicates what flag we want to count.
  */
-void
-visibilitymap_count(Relation rel, BlockNumber *all_visible, BlockNumber *all_frozen)
+BlockNumber
+visibilitymap_count(Relation rel, BlockNumber *all_frozen)
 {
 	BlockNumber mapBlock;
-
-	*all_visible = *all_frozen = 0;
+	BlockNumber all_visible = 0;
 
 	for (mapBlock = 0;; mapBlock++)
 	{
@@ -447,12 +443,15 @@ visibilitymap_count(Relation rel, BlockNumber *all_visible, BlockNumber *all_fro
 
 		for (i = 0; i < MAPSIZE; i++)
 		{
-			*all_visible += number_of_ones_for_visible[map[i]];
-			*all_frozen += number_of_ones_for_frozen[map[i]];
+			all_visible += number_of_ones_for_visible[map[i]];
+			if (all_frozen)
+				*all_frozen += number_of_ones_for_frozen[map[i]];
 		}
 
 		ReleaseBuffer(mapBuffer);
 	}
+
+	return all_visible;
 }
 
 /*

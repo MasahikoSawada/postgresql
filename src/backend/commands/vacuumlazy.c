@@ -307,7 +307,7 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 		new_rel_tuples = vacrelstats->old_rel_tuples;
 	}
 
-	visibilitymap_count(onerel, &new_rel_allvisible, &new_rel_allfrozen);
+	new_rel_allvisible = visibilitymap_count(onerel, &new_rel_allfrozen);
 	if (new_rel_allvisible > new_rel_pages)
 		new_rel_allvisible = new_rel_pages;
 
