@@ -111,5 +111,5 @@ test: event_trigger
 # run stats by itself because its delay may be insufficient under heavy load
 test: stats
 
-# visibility map and vacuum test cannot run concurrently with any test that runs SQL
-test: visibilitymap
+# page information map and vacuum test cannot run concurrently with any test that runs SQL
+test: pageinfomap
