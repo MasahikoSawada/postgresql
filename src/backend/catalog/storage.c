@@ -527,7 +527,7 @@ smgr_redo(XLogReaderState *record)
 		/* Also tell xlogutils.c about it */
 		XLogTruncateRelation(xlrec->rnode, MAIN_FORKNUM, xlrec->blkno);
 
-		/* Truncate FSM and VM too */
+		/* Truncate FSM and PIM too */
 		rel = CreateFakeRelcacheEntry(xlrec->rnode);
 
 		if (smgrexists(reln, FSM_FORKNUM))
