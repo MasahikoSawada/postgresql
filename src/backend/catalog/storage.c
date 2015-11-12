@@ -245,7 +245,7 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 		FreeSpaceMapTruncateRel(rel, nblocks);
 
 	/* Truncate the visibility map too if it exists. */
-	vm = smgrexists(rel->rd_smgr, VISIBILITYMAP_FORKNUM);
+	vm = smgrexists(rel->rd_smgr, PAGEINFOMAP_FORKNUM);
 	if (vm)
 		visibilitymap_truncate(rel, nblocks);
 
@@ -532,7 +532,7 @@ smgr_redo(XLogReaderState *record)
 
 		if (smgrexists(reln, FSM_FORKNUM))
 			FreeSpaceMapTruncateRel(rel, xlrec->blkno);
-		if (smgrexists(reln, VISIBILITYMAP_FORKNUM))
+		if (smgrexists(reln, PAGEINFOMAP_FORKNUM))
 			visibilitymap_truncate(rel, xlrec->blkno);
 
 		FreeFakeRelcacheEntry(rel);

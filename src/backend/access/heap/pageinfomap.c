@@ -1,27 +1,27 @@
 /*-------------------------------------------------------------------------
  *
- * visibilitymap.c
- *	  bitmap for tracking visibility of heap tuples
+ * pageinfomap.c
+ *	  bitmap for tracking informatio of heap tuples
  *
  * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
  * IDENTIFICATION
- *	  src/backend/access/heap/visibilitymap.c
+ *	  src/backend/access/heap/pageinfomap.c
  *
  * INTERFACE ROUTINES
- *		visibilitymap_clear  - clear a bit in the visibility map
- *		visibilitymap_pin	 - pin a map page for setting a bit
- *		visibilitymap_pin_ok - check whether correct map page is already pinned
- *		visibilitymap_set	 - set a bit in a previously pinned page
- *		visibilitymap_get_status - get status of bits
- *		visibilitymap_count  - count number of bits set in visibility map
- *		visibilitymap_truncate	- truncate the visibility map
+ *		pageinfomap_clear  - clear a bit in the page information map
+ *		pageinfomap_pin	 - pin a map page for setting a bit
+ *		pageinfomap_pin_ok - check whether correct map page is already pinned
+ *		pageinfomap_set	 - set a bit in a previously pinned page
+ *		pageinfomap_get_status - get status of bits
+ *		pageinfomap_count  - count number of bits set in page information map
+ *		pageinfomap_truncate	- truncate the page information map
  *
  * NOTES
  *
- * The visibility map is a bitmap with two bits (all-visible and all-frozen)
+ * The page information map is a bitmap with two bits (all-visible and all-frozen)
  * per heap page. A set all-visible bit means that all tuples on the page are
  * known visible to all transactions, and therefore the page doesn't need to
  * be vacuumed. A set all-frozen bit means that all tuples on the page are
@@ -33,54 +33,54 @@
  * is set, we know the condition is true, but if a bit is not set, it might or
  * might not be true.
  *
- * Clearing a visibility map bit is not separately WAL-logged.  The callers
+ * Clearing a page information map bit is not separately WAL-logged.  The callers
  * must make sure that whenever a bit is cleared, the bit is cleared on WAL
  * replay of the updating operation as well.  And all-frozen bit must be
  * cleared with all-visible at the same time.
  *
- * When we *set* a visibility map during VACUUM, we must write WAL.  This may
+ * When we *set* a page information map during VACUUM, we must write WAL.  This may
  * seem counterintuitive, since the bit is basically a hint: if it is clear,
  * it may still be the case that every tuple on the page is all-visible or
  * all-frozen we just don't know that for certain.  The difficulty is that
  * there are two bits which are typically set together: the PD_ALL_VISIBLE
- * or PD_ALL_FROZEN bit on the page itself, and the corresponding visibility map
- * bit.  If a crash occurs after the visibility map page makes it to disk and before
+ * or PD_ALL_FROZEN bit on the page itself, and the corresponding page information map
+ * bit.  If a crash occurs after the page information map page makes it to disk and before
  * the updated heap page makes it to disk, redo must set the bit on the heap page.
  * Otherwise, the next insert, update, or delete on the heap page will fail to
- * realize that the visibility map bit must be cleared, possibly causing index-only
+ * realize that the page information map bit must be cleared, possibly causing index-only
  * scans to return wrong answers.
  *
- * VACUUM will normally skip pages for which the visibility map bit is set;
+ * VACUUM will normally skip pages for which the page information map bit is set;
  * such pages can't contain any dead tuples and therefore don't need vacuuming.
- * The visibility map has the all-frozen bit which indicates all tuples on
- * corresponding page has been completely frozen, so the visibility map is also
+ * The page information map has the all-frozen bit which indicates all tuples on
+ * corresponding page has been completely frozen, so the page information map is also
  * used for anti-wraparound vacuum, even if freezing of tuples is required.
  *
  * LOCKING
  *
  * In heapam.c, whenever a page is modified so that not all tuples on the
  * page are visible to everyone anymore, the corresponding bit in the
- * visibility map is cleared. In order to be crash-safe, we need to do this
+ * page information map is cleared. In order to be crash-safe, we need to do this
  * while still holding a lock on the heap page and in the same critical
  * section that logs the page modification. However, we don't want to hold
- * the buffer lock over any I/O that may be required to read in the visibility
+ * the buffer lock over any I/O that may be required to read in the page information
  * map page.  To avoid this, we examine the heap page before locking it;
  * if the page-level PD_ALL_VISIBLE or PD_ALL_FROZEN bit is set, we pin the
- * visibility map bit.  Then, we lock the buffer.  But this creates a race
+ * page information map bit.  Then, we lock the buffer.  But this creates a race
  * condition: there is a possibility that in the time it takes to lock the
  * buffer, the PD_ALL_VISIBLE or PD_ALL_FROZEN bit gets set.  If that happens,
- * we have to unlock the buffer, pin the visibility map page, and relock the
+ * we have to unlock the buffer, pin the page information map page, and relock the
  * buffer.  This shouldn't happen often, because only VACUUM currently sets
- * visibility map bits, and the race will only occur if VACUUM processes a given
+ * page information map bits, and the race will only occur if VACUUM processes a given
  * page at almost exactly the same time that someone tries to further modify it.
  *
  * To set a bit, you need to hold a lock on the heap page. That prevents
  * the race condition where VACUUM sees that all tuples on the page are
  * visible to everyone, but another backend modifies the page before VACUUM
- * sets the bit in the visibility map.
+ * sets the bit in the page information map.
  *
- * When a bit is set, the LSN of the visibility map page is updated to make
- * sure that the visibility map update doesn't get written to disk before the
+ * When a bit is set, the LSN of the page information map page is updated to make
+ * sure that the page information map update doesn't get written to disk before the
  * WAL record of the changes that made it possible to set the bit is flushed.
  * But when a bit is cleared, we don't have to do that because it's always
  * safe to clear a bit in the map from correctness point of view.
@@ -90,7 +90,7 @@
 #include "postgres.h"
 
 #include "access/heapam_xlog.h"
-#include "access/visibilitymap.h"
+#include "access/pageinfomap.h"
 #include "access/xlog.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
@@ -99,10 +99,10 @@
 #include "utils/inval.h"
 
 
-/*#define TRACE_VISIBILITYMAP */
+/*#define TRACE_PAGEINFOMAP */
 
 /*
- * Size of the bitmap on each visibility map page, in bytes. There's no
+ * Size of the bitmap on each page information map page, in bytes. There's no
  * extra headers, so the whole page minus the standard page header is
  * used for the bitmap.
  */
@@ -117,10 +117,10 @@
 /* Number of heap blocks we can represent in one byte. */
 #define HEAPBLOCKS_PER_BYTE 4
 
-/* Number of heap blocks we can represent in one visibility map page. */
+/* Number of heap blocks we can represent in one page information map page. */
 #define HEAPBLOCKS_PER_PAGE (MAPSIZE * HEAPBLOCKS_PER_BYTE)
 
-/* Mapping from heap block number to the right bit in the visibility map */
+/* Mapping from heap block number to the right bit in the page information map */
 #define HEAPBLK_TO_MAPBLOCK(x) ((x) / HEAPBLOCKS_PER_PAGE)
 #define HEAPBLK_TO_MAPBYTE(x) (((x) % HEAPBLOCKS_PER_PAGE) / HEAPBLOCKS_PER_BYTE)
 #define HEAPBLK_TO_MAPBIT(x) (((x) % HEAPBLOCKS_PER_BYTE) * BITS_PER_HEAPBLOCK)
@@ -164,32 +164,32 @@ static const uint8 number_of_ones_for_frozen[256] = {
 };
 
 /* prototypes for internal routines */
-static Buffer vm_readbuf(Relation rel, BlockNumber blkno, bool extend);
-static void vm_extend(Relation rel, BlockNumber nvmblocks);
+static Buffer pim_readbuf(Relation rel, BlockNumber blkno, bool extend);
+static void pim_extend(Relation rel, BlockNumber npimblocks);
 
 
 /*
- *	visibilitymap_clear - clear all bits in visibility map
+ *	pageinfomap_clear - clear all bits in page information map
  *
  * You must pass a buffer containing the correct map page to this function.
- * Call visibilitymap_pin first to pin the right one. This function doesn't do
+ * Call pageinfomap_pin first to pin the right one. This function doesn't do
  * any I/O.
  */
 void
-visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer buf)
+pageinfomap_clear(Relation rel, BlockNumber heapBlk, Buffer buf)
 {
 	BlockNumber mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
 	int			mapByte = HEAPBLK_TO_MAPBYTE(heapBlk);
 	int			mapBit = HEAPBLK_TO_MAPBIT(heapBlk);
-	uint8		mask = VISIBILITYMAP_ALL_FLAGS << mapBit;
+	uint8		mask = PAGEINFOMAP_ALL_FLAGS << mapBit;
 	char	   *map;
 
-#ifdef TRACE_VISIBILITYMAP
-	elog(DEBUG1, "vm_clear %s block %d", RelationGetRelationName(rel), heapBlk);
+#ifdef TRACE_PAGEINFOMAP
+	elog(DEBUG1, "pim_clear %s block %d", RelationGetRelationName(rel), heapBlk);
 #endif
 
 	if (!BufferIsValid(buf) || BufferGetBlockNumber(buf) != mapBlock)
-		elog(ERROR, "wrong buffer passed to visibilitymap_clear");
+		elog(ERROR, "wrong buffer passed to pageinfomap_clear");
 
 	LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
 	map = PageGetContents(BufferGetPage(buf));
@@ -205,23 +205,23 @@ visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer buf)
 }
 
 /*
- *	visibilitymap_pin - pin a map page for setting a bit
+ *	pageinfomap_pin - pin a map page for setting a bit
  *
- * Setting a bit in the visibility map is a two-phase operation. First, call
- * visibilitymap_pin, to pin the visibility map page containing the bit for
+ * Setting a bit in the page information map is a two-phase operation. First, call
+ * pageinfomap_pin, to pin the page information map page containing the bit for
  * the heap page. Because that can require I/O to read the map page, you
  * shouldn't hold a lock on the heap page while doing that. Then, call
- * visibilitymap_set to actually set the bit.
+ * pageinfomap_set to actually set the bit.
  *
  * On entry, *buf should be InvalidBuffer or a valid buffer returned by
- * an earlier call to visibilitymap_pin or visibilitymap_get_status on the same
+ * an earlier call to pageinfomap_pin or pageinfomap_get_status on the same
  * relation. On return, *buf is a valid buffer with the map page containing
  * the bit for heapBlk.
  *
  * If the page doesn't exist in the map file yet, it is extended.
  */
 void
-visibilitymap_pin(Relation rel, BlockNumber heapBlk, Buffer *buf)
+pageinfomap_pin(Relation rel, BlockNumber heapBlk, Buffer *buf)
 {
 	BlockNumber mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
 
@@ -233,19 +233,19 @@ visibilitymap_pin(Relation rel, BlockNumber heapBlk, Buffer *buf)
 
 		ReleaseBuffer(*buf);
 	}
-	*buf = vm_readbuf(rel, mapBlock, true);
+	*buf = pim_readbuf(rel, mapBlock, true);
 }
 
 /*
- *	visibilitymap_pin_ok - do we already have the correct page pinned?
+ *	pageinfomap_pin_ok - do we already have the correct page pinned?
  *
  * On entry, buf should be InvalidBuffer or a valid buffer returned by
- * an earlier call to visibilitymap_pin or visibilitymap_get_status on the same
+ * an earlier call to pageinfomap_pin or pageinfomap_get_status on the same
  * relation.  The return value indicates whether the buffer covers the
  * given heapBlk.
  */
 bool
-visibilitymap_pin_ok(BlockNumber heapBlk, Buffer buf)
+pageinfomap_pin_ok(BlockNumber heapBlk, Buffer buf)
 {
 	BlockNumber mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
 
@@ -253,7 +253,7 @@ visibilitymap_pin_ok(BlockNumber heapBlk, Buffer buf)
 }
 
 /*
- *	visibilitymap_set - set bit(s) on a previously pinned page
+ *	pageinfomap_set - set bit(s) on a previously pinned page
  *
  * recptr is the LSN of the XLOG record we're replaying, if we're in recovery,
  * or InvalidXLogRecPtr in normal running.  The page LSN is advanced to the
@@ -269,12 +269,12 @@ visibilitymap_pin_ok(BlockNumber heapBlk, Buffer buf)
  * buffer to the WAL chain to protect it from being torn.
  *
  * You must pass a buffer containing the correct map page to this function.
- * Call visibilitymap_pin first to pin the right one. This function doesn't do
+ * Call pageinfomap_pin first to pin the right one. This function doesn't do
  * any I/O.
  */
 void
-visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
-				  XLogRecPtr recptr, Buffer vmBuf, TransactionId cutoff_xid,
+pageinfomap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
+				  XLogRecPtr recptr, Buffer pimBuf, TransactionId cutoff_xid,
 				  uint8 flags)
 {
 	BlockNumber mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
@@ -283,40 +283,40 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 	Page		page;
 	char	   *map;
 
-#ifdef TRACE_VISIBILITYMAP
-	elog(WARNING, "vm_set %s block %d, flag %u", RelationGetRelationName(rel), heapBlk, flags);
+#ifdef TRACE_PAGEINFOMAP
+	elog(WARNING, "pim_set %s block %d, flag %u", RelationGetRelationName(rel), heapBlk, flags);
 #endif
 
 	Assert(InRecovery || XLogRecPtrIsInvalid(recptr));
 	Assert(InRecovery || BufferIsValid(heapBuf));
-	Assert((flags & VISIBILITYMAP_ALL_VISIBLE) ||
-		   (flags & (VISIBILITYMAP_ALL_VISIBLE | VISIBILITYMAP_ALL_FROZEN)));
+	Assert((flags & PAGEINFOMAP_ALL_VISIBLE) ||
+		   (flags & (PAGEINFOMAP_ALL_VISIBLE | PAGEINFOMAP_ALL_FROZEN)));
 
 	/* Check that we have the right heap page pinned, if present */
 	if (BufferIsValid(heapBuf) && BufferGetBlockNumber(heapBuf) != heapBlk)
-		elog(ERROR, "wrong heap buffer passed to visibilitymap_set");
+		elog(ERROR, "wrong heap buffer passed to pageinfomap_set");
 
-	/* Check that we have the right VM page pinned */
-	if (!BufferIsValid(vmBuf) || BufferGetBlockNumber(vmBuf) != mapBlock)
-		elog(ERROR, "wrong VM buffer passed to visibilitymap_set");
+	/* Check that we have the right PIM page pinned */
+	if (!BufferIsValid(pimBuf) || BufferGetBlockNumber(pimBuf) != mapBlock)
+		elog(ERROR, "wrong PIM buffer passed to pageinfomap_set");
 
-	page = BufferGetPage(vmBuf);
+	page = BufferGetPage(pimBuf);
 	map = PageGetContents(page);
-	LockBuffer(vmBuf, BUFFER_LOCK_EXCLUSIVE);
+	LockBuffer(pimBuf, BUFFER_LOCK_EXCLUSIVE);
 
 	if (flags != (map[mapByte] & (flags << mapBit)))
 	{
 		START_CRIT_SECTION();
 
 		map[mapByte] |= (flags << mapBit);
-		MarkBufferDirty(vmBuf);
+		MarkBufferDirty(pimBuf);
 
 		if (RelationNeedsWAL(rel))
 		{
 			if (XLogRecPtrIsInvalid(recptr))
 			{
 				Assert(!InRecovery);
-				recptr = log_heap_visible(rel->rd_node, heapBuf, vmBuf,
+				recptr = log_heap_visible(rel->rd_node, heapBuf, pimBuf,
 										  cutoff_xid, flags);
 
 				/*
@@ -331,8 +331,8 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 					 * Caller is expected to set PD_ALL_VISIBLE or
 					 * PD_ALL_FROZEN first.
 					 */
-					Assert(((flags | VISIBILITYMAP_ALL_VISIBLE) && PageIsAllVisible(heapPage)) ||
-						   ((flags | VISIBILITYMAP_ALL_FROZEN) && PageIsAllFrozen(heapPage)));
+					Assert(((flags | PAGEINFOMAP_ALL_VISIBLE) && PageIsAllVisible(heapPage)) ||
+						   ((flags | PAGEINFOMAP_ALL_FROZEN) && PageIsAllFrozen(heapPage)));
 					PageSetLSN(heapPage, recptr);
 				}
 			}
@@ -343,39 +343,39 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 		END_CRIT_SECTION();
 	}
 
-	LockBuffer(vmBuf, BUFFER_LOCK_UNLOCK);
+	LockBuffer(pimBuf, BUFFER_LOCK_UNLOCK);
 }
 
 /*
- *	visibilitymap_get_status - get status of bits
+ *	pageinfomap_get_status - get status of bits
  *
  * Are all tuples on heapBlk visible to all or are marked frozen, according
- * to the visibility map?
+ * to the page information map?
  *
  * On entry, *buf should be InvalidBuffer or a valid buffer returned by an
- * earlier call to visibilitymap_pin or visibilitymap_get_status on the same
+ * earlier call to pageinfomap_pin or pageinfomap_get_status on the same
  * relation. On return, *buf is a valid buffer with the map page containing
  * the bit for heapBlk, or InvalidBuffer. The caller is responsible for
  * releasing *buf after it's done testing and setting bits, and must pass flags
- * for which it needs to check the value in visibility map.
+ * for which it needs to check the value in page information map.
  *
  * NOTE: This function is typically called without a lock on the heap page,
  * so somebody else could change the bit just after we look at it.  In fact,
- * since we don't lock the visibility map page either, it's even possible that
+ * since we don't lock the page information map page either, it's even possible that
  * someone else could have changed the bit just before we look at it, but yet
  * we might see the old value.  It is the caller's responsibility to deal with
  * all concurrency issues!
  */
 uint8
-visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer *buf)
+pageinfomap_get_status(Relation rel, BlockNumber heapBlk, Buffer *buf)
 {
 	BlockNumber mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
 	uint32		mapByte = HEAPBLK_TO_MAPBYTE(heapBlk);
 	uint8		mapBit = HEAPBLK_TO_MAPBIT(heapBlk);
 	char	   *map;
 
-#ifdef TRACE_VISIBILITYMAP
-	elog(DEBUG1, "vm_get_status %s, block %d", RelationGetRelationName(rel), heapBlk);
+#ifdef TRACE_PAGEINFOMAP
+	elog(DEBUG1, "pim_get_status %s, block %d", RelationGetRelationName(rel), heapBlk);
 #endif
 
 	/* Reuse the old pinned buffer if possible */
@@ -390,7 +390,7 @@ visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer *buf)
 
 	if (!BufferIsValid(*buf))
 	{
-		*buf = vm_readbuf(rel, mapBlock, false);
+		*buf = pim_readbuf(rel, mapBlock, false);
 		if (!BufferIsValid(*buf))
 			return false;
 	}
@@ -402,11 +402,11 @@ visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer *buf)
 	 * here, but for performance reasons we make it the caller's job to worry
 	 * about that.
 	 */
-	return ((map[mapByte] >> mapBit) & VISIBILITYMAP_ALL_FLAGS);
+	return ((map[mapByte] >> mapBit) & PAGEINFOMAP_ALL_FLAGS);
 }
 
 /*
- *	visibilitymap_count  - count number of bits set in visibility map
+ *	pageinfomap_count  - count number of bits set in page information map
  *
  * Note: we ignore the possibility of race conditions when the table is being
  * extended concurrently with the call.  New pages added to the table aren't
@@ -414,7 +414,7 @@ visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer *buf)
  * The caller must set the flags which indicates what flag we want to count.
  */
 BlockNumber
-visibilitymap_count(Relation rel, BlockNumber *all_frozen)
+pageinfomap_count(Relation rel, BlockNumber *all_frozen)
 {
 	BlockNumber mapBlock;
 	BlockNumber all_visible = 0;
@@ -430,7 +430,7 @@ visibilitymap_count(Relation rel, BlockNumber *all_frozen)
 		 * bytes in the last page are zeroed, so we don't bother excluding
 		 * them from the count.
 		 */
-		mapBuffer = vm_readbuf(rel, mapBlock, false);
+		mapBuffer = pim_readbuf(rel, mapBlock, false);
 		if (!BufferIsValid(mapBuffer))
 			break;
 
@@ -455,16 +455,16 @@ visibilitymap_count(Relation rel, BlockNumber *all_frozen)
 }
 
 /*
- *	visibilitymap_truncate - truncate the visibility map
+ *	pageinfomap_truncate - truncate the page information map
  *
  * The caller must hold AccessExclusiveLock on the relation, to ensure that
  * other backends receive the smgr invalidation event that this function sends
- * before they access the VM again.
+ * before they access the PIM again.
  *
  * nheapblocks is the new size of the heap.
  */
 void
-visibilitymap_truncate(Relation rel, BlockNumber nheapblocks)
+pageinfomap_truncate(Relation rel, BlockNumber nheapblocks)
 {
 	BlockNumber newnblocks;
 
@@ -473,21 +473,21 @@ visibilitymap_truncate(Relation rel, BlockNumber nheapblocks)
 	uint32		truncByte = HEAPBLK_TO_MAPBYTE(nheapblocks);
 	uint8		truncBit = HEAPBLK_TO_MAPBIT(nheapblocks);
 
-#ifdef TRACE_VISIBILITYMAP
-	elog(DEBUG1, "vm_truncate %s block %d", RelationGetRelationName(rel), nheapblocks);
+#ifdef TRACE_PAGEINFOMAP
+	elog(DEBUG1, "pim_truncate %s block %d", RelationGetRelationName(rel), nheapblocks);
 #endif
 
 	RelationOpenSmgr(rel);
 
 	/*
-	 * If no visibility map has been created yet for this relation, there's
+	 * If no page information map has been created yet for this relation, there's
 	 * nothing to truncate.
 	 */
-	if (!smgrexists(rel->rd_smgr, VISIBILITYMAP_FORKNUM))
+	if (!smgrexists(rel->rd_smgr, PAGEINFOMAP_FORKNUM))
 		return;
 
 	/*
-	 * Unless the new size is exactly at a visibility map page boundary, the
+	 * Unless the new size is exactly at a page information map page boundary, the
 	 * tail bits in the last remaining map page, representing truncated heap
 	 * blocks, need to be cleared. This is not only tidy, but also necessary
 	 * because we don't get a chance to clear the bits if the heap is extended
@@ -501,7 +501,7 @@ visibilitymap_truncate(Relation rel, BlockNumber nheapblocks)
 
 		newnblocks = truncBlock + 1;
 
-		mapBuffer = vm_readbuf(rel, truncBlock, false);
+		mapBuffer = pim_readbuf(rel, truncBlock, false);
 		if (!BufferIsValid(mapBuffer))
 		{
 			/* nothing to do, the file was already smaller */
@@ -534,33 +534,33 @@ visibilitymap_truncate(Relation rel, BlockNumber nheapblocks)
 	else
 		newnblocks = truncBlock;
 
-	if (smgrnblocks(rel->rd_smgr, VISIBILITYMAP_FORKNUM) <= newnblocks)
+	if (smgrnblocks(rel->rd_smgr, PAGEINFOMAP_FORKNUM) <= newnblocks)
 	{
 		/* nothing to do, the file was already smaller than requested size */
 		return;
 	}
 
-	/* Truncate the unused VM pages, and send smgr inval message */
-	smgrtruncate(rel->rd_smgr, VISIBILITYMAP_FORKNUM, newnblocks);
+	/* Truncate the unused PIM pages, and send smgr inval message */
+	smgrtruncate(rel->rd_smgr, PAGEINFOMAP_FORKNUM, newnblocks);
 
 	/*
-	 * We might as well update the local smgr_vm_nblocks setting. smgrtruncate
+	 * We might as well update the local smgr_pim_nblocks setting. smgrtruncate
 	 * sent an smgr cache inval message, which will cause other backends to
-	 * invalidate their copy of smgr_vm_nblocks, and this one too at the next
+	 * invalidate their copy of smgr_pim_nblocks, and this one too at the next
 	 * command boundary.  But this ensures it isn't outright wrong until then.
 	 */
 	if (rel->rd_smgr)
-		rel->rd_smgr->smgr_vm_nblocks = newnblocks;
+		rel->rd_smgr->smgr_pim_nblocks = newnblocks;
 }
 
 /*
- * Read a visibility map page.
+ * Read a page information map page.
  *
  * If the page doesn't exist, InvalidBuffer is returned, or if 'extend' is
- * true, the visibility map file is extended.
+ * true, the page information map file is extended.
  */
 static Buffer
-vm_readbuf(Relation rel, BlockNumber blkno, bool extend)
+pim_readbuf(Relation rel, BlockNumber blkno, bool extend)
 {
 	Buffer		buf;
 
@@ -574,23 +574,23 @@ vm_readbuf(Relation rel, BlockNumber blkno, bool extend)
 	RelationOpenSmgr(rel);
 
 	/*
-	 * If we haven't cached the size of the visibility map fork yet, check it
+	 * If we haven't cached the size of the page information map fork yet, check it
 	 * first.
 	 */
-	if (rel->rd_smgr->smgr_vm_nblocks == InvalidBlockNumber)
+	if (rel->rd_smgr->smgr_pim_nblocks == InvalidBlockNumber)
 	{
-		if (smgrexists(rel->rd_smgr, VISIBILITYMAP_FORKNUM))
-			rel->rd_smgr->smgr_vm_nblocks = smgrnblocks(rel->rd_smgr,
-													  VISIBILITYMAP_FORKNUM);
+		if (smgrexists(rel->rd_smgr, PAGEINFOMAP_FORKNUM))
+			rel->rd_smgr->smgr_pim_nblocks = smgrnblocks(rel->rd_smgr,
+													  PAGEINFOMAP_FORKNUM);
 		else
-			rel->rd_smgr->smgr_vm_nblocks = 0;
+			rel->rd_smgr->smgr_pim_nblocks = 0;
 	}
 
 	/* Handle requests beyond EOF */
-	if (blkno >= rel->rd_smgr->smgr_vm_nblocks)
+	if (blkno >= rel->rd_smgr->smgr_pim_nblocks)
 	{
 		if (extend)
-			vm_extend(rel, blkno + 1);
+			pim_extend(rel, blkno + 1);
 		else
 			return InvalidBuffer;
 	}
@@ -600,7 +600,7 @@ vm_readbuf(Relation rel, BlockNumber blkno, bool extend)
 	 * always safe to clear bits, so it's better to clear corrupt pages than
 	 * error out.
 	 */
-	buf = ReadBufferExtended(rel, VISIBILITYMAP_FORKNUM, blkno,
+	buf = ReadBufferExtended(rel, PAGEINFOMAP_FORKNUM, blkno,
 							 RBM_ZERO_ON_ERROR, NULL);
 	if (PageIsNew(BufferGetPage(buf)))
 		PageInit(BufferGetPage(buf), BLCKSZ, 0);
@@ -608,13 +608,13 @@ vm_readbuf(Relation rel, BlockNumber blkno, bool extend)
 }
 
 /*
- * Ensure that the visibility map fork is at least vm_nblocks long, extending
+ * Ensure that the page information map fork is at least pim_nblocks long, extending
  * it if necessary with zeroed pages.
  */
 static void
-vm_extend(Relation rel, BlockNumber vm_nblocks)
+pim_extend(Relation rel, BlockNumber pim_nblocks)
 {
-	BlockNumber vm_nblocks_now;
+	BlockNumber pim_nblocks_now;
 	Page		pg;
 
 	pg = (Page) palloc(BLCKSZ);
@@ -622,8 +622,8 @@ vm_extend(Relation rel, BlockNumber vm_nblocks)
 
 	/*
 	 * We use the relation extension lock to lock out other backends trying to
-	 * extend the visibility map at the same time. It also locks out extension
-	 * of the main fork, unnecessarily, but extending the visibility map
+	 * extend the page information map at the same time. It also locks out extension
+	 * of the main fork, unnecessarily, but extending the page information map
 	 * happens seldom enough that it doesn't seem worthwhile to have a
 	 * separate lock tag type for it.
 	 *
@@ -636,24 +636,24 @@ vm_extend(Relation rel, BlockNumber vm_nblocks)
 	RelationOpenSmgr(rel);
 
 	/*
-	 * Create the file first if it doesn't exist.  If smgr_vm_nblocks is
+	 * Create the file first if it doesn't exist.  If smgr_pim_nblocks is
 	 * positive then it must exist, no need for an smgrexists call.
 	 */
-	if ((rel->rd_smgr->smgr_vm_nblocks == 0 ||
-		 rel->rd_smgr->smgr_vm_nblocks == InvalidBlockNumber) &&
-		!smgrexists(rel->rd_smgr, VISIBILITYMAP_FORKNUM))
-		smgrcreate(rel->rd_smgr, VISIBILITYMAP_FORKNUM, false);
+	if ((rel->rd_smgr->smgr_pim_nblocks == 0 ||
+		 rel->rd_smgr->smgr_pim_nblocks == InvalidBlockNumber) &&
+		!smgrexists(rel->rd_smgr, PAGEINFOMAP_FORKNUM))
+		smgrcreate(rel->rd_smgr, PAGEINFOMAP_FORKNUM, false);
 
-	vm_nblocks_now = smgrnblocks(rel->rd_smgr, VISIBILITYMAP_FORKNUM);
+	pim_nblocks_now = smgrnblocks(rel->rd_smgr, PAGEINFOMAP_FORKNUM);
 
 	/* Now extend the file */
-	while (vm_nblocks_now < vm_nblocks)
+	while (pim_nblocks_now < pim_nblocks)
 	{
-		PageSetChecksumInplace(pg, vm_nblocks_now);
+		PageSetChecksumInplace(pg, pim_nblocks_now);
 
-		smgrextend(rel->rd_smgr, VISIBILITYMAP_FORKNUM, vm_nblocks_now,
+		smgrextend(rel->rd_smgr, PAGEINFOMAP_FORKNUM, pim_nblocks_now,
 				   (char *) pg, false);
-		vm_nblocks_now++;
+		pim_nblocks_now++;
 	}
 
 	/*
@@ -666,7 +666,7 @@ vm_extend(Relation rel, BlockNumber vm_nblocks)
 	CacheInvalidateSmgr(rel->rd_smgr->smgr_rnode);
 
 	/* Update local cache with the up-to-date size */
-	rel->rd_smgr->smgr_vm_nblocks = vm_nblocks_now;
+	rel->rd_smgr->smgr_pim_nblocks = pim_nblocks_now;
 
 	UnlockRelationForExtension(rel, ExclusiveLock);
 
