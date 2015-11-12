@@ -1,5 +1,5 @@
 --
--- Visibility map
+-- Page Info Map
 --
 CREATE TABLE vmtest (i INT primary key);
 INSERT INTO vmtest SELECT generate_series(1,10000);
