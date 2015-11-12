@@ -15,7 +15,7 @@
  *		visibilitymap_pin	 - pin a map page for setting a bit
  *		visibilitymap_pin_ok - check whether correct map page is already pinned
  *		visibilitymap_set	 - set a bit in a previously pinned page
- *		visibilitymap_test	 - test if a bit is set
+ *		visibilitymap_get_status - get status of bits
  *		visibilitymap_count  - count number of bits set in visibility map
  *		visibilitymap_truncate	- truncate the visibility map
  *
@@ -215,7 +215,7 @@ visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer buf)
  * visibilitymap_set to actually set the bit.
  *
  * On entry, *buf should be InvalidBuffer or a valid buffer returned by
- * an earlier call to visibilitymap_pin or visibilitymap_test on the same
+ * an earlier call to visibilitymap_pin or visibilitymap_get_status on the same
  * relation. On return, *buf is a valid buffer with the map page containing
  * the bit for heapBlk.
  *
@@ -241,7 +241,7 @@ visibilitymap_pin(Relation rel, BlockNumber heapBlk, Buffer *buf)
  *	visibilitymap_pin_ok - do we already have the correct page pinned?
  *
  * On entry, buf should be InvalidBuffer or a valid buffer returned by
- * an earlier call to visibilitymap_pin or visibilitymap_test on the same
+ * an earlier call to visibilitymap_pin or visibilitymap_get_status on the same
  * relation.  The return value indicates whether the buffer covers the
  * given heapBlk.
  */
@@ -285,7 +285,7 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 	char	   *map;
 
 #ifdef TRACE_VISIBILITYMAP
-	elog(DEBUG1, "vm_set %s block %d, flag %u", RelationGetRelationName(rel), heapBlk, flags);
+	elog(WARNING, "vm_set %s block %d, flag %u", RelationGetRelationName(rel), heapBlk, flags);
 #endif
 
 	Assert(InRecovery || XLogRecPtrIsInvalid(recptr));
@@ -348,13 +348,13 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 }
 
 /*
- *	visibilitymap_test - test if bit(s) is set
+ *	visibilitymap_get_status - get status of bits
  *
  * Are all tuples on heapBlk visible to all or are marked frozen, according
  * to the visibility map?
  *
  * On entry, *buf should be InvalidBuffer or a valid buffer returned by an
- * earlier call to visibilitymap_pin or visibilitymap_test on the same
+ * earlier call to visibilitymap_pin or visibilitymap_get_status on the same
  * relation. On return, *buf is a valid buffer with the map page containing
  * the bit for heapBlk, or InvalidBuffer. The caller is responsible for
  * releasing *buf after it's done testing and setting bits, and must pass flags
@@ -367,17 +367,18 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
  * we might see the old value.  It is the caller's responsibility to deal with
  * all concurrency issues!
  */
-bool
-visibilitymap_test(Relation rel, BlockNumber heapBlk, Buffer *buf, uint8 flags)
+uint8
+visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer *buf)
 {
 	BlockNumber mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
 	uint32		mapByte = HEAPBLK_TO_MAPBYTE(heapBlk);
 	uint8		mapBit = HEAPBLK_TO_MAPBIT(heapBlk);
-	bool		result;
 	char	   *map;
 
+#define VISIBILITYMAP_ALL_FLAGS (VISIBILITYMAP_ALL_VISIBLE | VISIBILITYMAP_ALL_FROZEN)
+
 #ifdef TRACE_VISIBILITYMAP
-	elog(DEBUG1, "vm_test %s block %d, flag %u", RelationGetRelationName(rel), heapBlk, flags);
+	elog(DEBUG1, "vm_get_status %s, block %d", RelationGetRelationName(rel), heapBlk);
 #endif
 
 	/* Reuse the old pinned buffer if possible */
@@ -400,13 +401,11 @@ visibilitymap_test(Relation rel, BlockNumber heapBlk, Buffer *buf, uint8 flags)
 	map = PageGetContents(BufferGetPage(*buf));
 
 	/*
-	 * A single or double bit read is atomic.  There could be memory-ordering effects
+	 * The double bits read is atomic.  There could be memory-ordering effects
 	 * here, but for performance reasons we make it the caller's job to worry
 	 * about that.
 	 */
-	result = (map[mapByte] & (flags << (BITS_PER_HEAPBLOCK * mapBit))) ? true : false;
-
-	return result;
+	return ((map[mapByte] >> (BITS_PER_HEAPBLOCK * mapBit)) & VISIBILITYMAP_ALL_FLAGS);
 }
 
 /*

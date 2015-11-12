@@ -85,7 +85,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 * which all tuples are known visible to everybody.  In any case,
 		 * we'll use the index tuple not the heap tuple as the data source.
 		 *
-		 * Note on Memory Ordering Effects: visibilitymap_test does not lock
+		 * Note on Memory Ordering Effects: visibilitymap_get_stattus does not lock
 		 * the visibility map buffer, and therefore the result we read here
 		 * could be slightly stale.  However, it can't be stale enough to
 		 * matter.
@@ -114,9 +114,8 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 * It's worth going through this complexity to avoid needing to lock
 		 * the VM buffer, which could cause significant contention.
 		 */
-		if (!visibilitymap_test(scandesc->heapRelation,
-								ItemPointerGetBlockNumber(tid),
-								&node->ioss_VMBuffer, VISIBILITYMAP_ALL_VISIBLE))
+		if (!VM_ALL_VISIBLE(scandesc->heapRelation, ItemPointerGetBlockNumber(tid),
+							&node->ioss_VMBuffer))
 		{
 			/*
 			 * Rats, we have to visit the heap to check visibility.
