@@ -48,7 +48,7 @@ typedef struct output_type
 
 /*
  * This function takes an already open relation and scans its pages,
- * skipping those that have the corresponding visibility map bit set.
+ * skipping those that have the corresponding page information map bit set.
  * For pages we skip, we find the free space from the free space map
  * and approximate tuple_len on that basis. For the others, we count
  * the exact number of dead tuples etc.
@@ -242,7 +242,7 @@ pgstattuple_approx(PG_FUNCTION_ARGS)
 
 	/*
 	 * We support only ordinary relations and materialised views, because we
-	 * depend on the visibility map and free space map for our estimates about
+	 * depend on the page information map and free space map for our estimates about
 	 * unscanned pages.
 	 */
 	if (!(rel->rd_rel->relkind == RELKIND_RELATION ||
