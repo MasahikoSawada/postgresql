@@ -284,7 +284,7 @@ pageinfomap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 	char	   *map;
 
 #ifdef TRACE_PAGEINFOMAP
-	elog(WARNING, "pim_set %s block %d, flag %u", RelationGetRelationName(rel), heapBlk, flags);
+	elog(DEBUG1, "pim_set %s block %d, flag %u", RelationGetRelationName(rel), heapBlk, flags);
 #endif
 
 	Assert(InRecovery || XLogRecPtrIsInvalid(recptr));
@@ -418,6 +418,9 @@ pageinfomap_count(Relation rel, BlockNumber *all_frozen)
 {
 	BlockNumber mapBlock;
 	BlockNumber all_visible = 0;
+
+	if (all_frozen)
+		*all_frozen = 0;
 
 	for (mapBlock = 0;; mapBlock++)
 	{
