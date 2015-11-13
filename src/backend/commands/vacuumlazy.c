@@ -1083,6 +1083,11 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		else if (all_visible_according_to_pim && !PageIsAllVisible(page)
 				 && PIM_ALL_VISIBLE(onerel, blkno, &pimbuffer))
 		{
+			/* If the all-frozen is set then all-visible must be set */
+			if (all_frozen_according_to_pim)
+				Assert(PIM_ALL_FROZEN(onerel, blkno, &pimbuffer) &&
+					   PIM_ALL_VISIBLE(onerel, blkno, &pimbuffer));
+
 			elog(WARNING, "page is not marked all-visible (and all-frozen) but page info map bit(s) is set in relation \"%s\" page %u",
 				 relname, blkno);
 			pageinfomap_clear(onerel, blkno, pimbuffer);
@@ -1091,18 +1096,24 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		/*
 		 * It's possible for the value returned by GetOldestXmin() to move
 		 * backwards, so it's not wrong for us to see tuples that appear to
-		 * not be visible to everyone yet, while PD_ALL_VISIBLE is already
-		 * set. The real safe xmin value never moves backwards, but
-		 * GetOldestXmin() is conservative and sometimes returns a value
+		 * not be visible to everyone yet, while PD_ALL_VISIBLE (and PD_ALL_FROZEN)
+		 * are already set. The real safe xmin value never moves backwards,
+		 * but GetOldestXmin() is conservative and sometimes returns a value
 		 * that's unnecessarily small, so if we see that contradiction it just
 		 * means that the tuples that we think are not visible to everyone yet
-		 * actually are, and the PD_ALL_VISIBLE flag is correct.
+		 * actually are, and the PD_ALL_VISIBLE (and PD_ALL_FROZEN) flags are
+		 * correct.
 		 *
 		 * There should never be dead tuples on a page with PD_ALL_VISIBLE
 		 * set, however.
 		 */
 		else if (PageIsAllVisible(page) && has_dead_tuples)
 		{
+			/* If the all-frozen is set then all-visible must be set */
+			if (PageIsAllFrozen(page))
+				Assert(PIM_ALL_FROZEN(onerel, blkno, &pimbuffer) &&
+					   PIM_ALL_VISIBLE(onerel, blkno, &pimbuffer));
+
 			elog(WARNING, "page containing dead tuples is marked as all-visible (and all-frozen) in relation \"%s\" page %u",
 				 relname, blkno);
 			PageClearAllVisible(page);
