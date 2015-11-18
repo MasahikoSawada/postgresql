@@ -194,8 +194,8 @@ main fork), each table and index has a <firstterm>free space map</> (see <xref
 linkend="storage-fsm">), which stores information about free space available in
 the relation.  The free space map is stored in a file named with the filenode
 number plus the suffix <literal>_fsm</>.  Tables also have a
-<firstterm>page info map</>, stored in a fork with the suffix <literal>_pim</>,
-to track which pages are known to have no dead tuples.  The page info map is
+<firstterm>visibility map</>, stored in a fork with the suffix <literal>_pim</>,
+to track which pages are known to have no dead tuples.  The visibility map is
 described further in <xref linkend="storage-pim">.  Unlogged tables and indexes
 have a third fork, known as the initialization fork, which is stored in a fork
 with the suffix <literal>_init</literal> (see <xref linkend="storage-init">).
@@ -224,7 +224,7 @@ This arrangement avoids problems on platforms that have file size limitations.
 (Actually, 1 GB is just the default segment size.  The segment size can be
 adjusted using the configuration option <option>--with-segsize</option>
 when building <productname>PostgreSQL</>.)
-In principle, free space map and page info map forks could require multiple
+In principle, free space map and visibility map forks could require multiple
 segments as well, though this is unlikely to happen in practice.
 </para>
 
@@ -613,15 +613,15 @@ can be used to examine the information stored in free space maps.
 
 <sect1 id="storage-pim">
 
-<title>Page Info Map</title>
+<title>Visibility Map</title>
 
 <indexterm>
- <primary>Page Info Map</primary>
+ <primary>Visibility Map</primary>
 </indexterm>
-<indexterm><primary>PIM</><see>Page Info Map</></indexterm>
+<indexterm><primary>PIM</><see>Visibility Map</></indexterm>
 
 <para>
-Each heap relation has a Page Info Map
+Each heap relation has a Visibility Map
 (PIM) to keep track of which pages contain only tuples that are known to be
 visible to all active transactions, and pages contain only unfrozen tuples.
 It's stored alongside the main relation data in a separate relation fork,
@@ -632,7 +632,7 @@ Note that indexes do not have PIMs.
 </para>
 
 <para>
-The page info map stores two bits per heap page: all-visible, all-frozen.
+The visibility map stores two bits per heap page: all-visible, all-frozen.
 A set all-visible bit means that all tuples on the page are known to be visible
 to all transactions. A set all-frozen bit means that all tuples on the page are
 completely marked as frozen. This means that the page does not contain any tuples
@@ -644,7 +644,7 @@ queries using only the index tuple.
 <para>
 The map is conservative in the sense that we make sure that whenever a bit is
 set, we know the condition is true, but if a bit is not set, it might or
-might not be true. page info map bits are only set by vacuum, but are
+might not be true. visibility map bits are only set by vacuum, but are
 cleared by any data-modifying operations on a page.
 </para>
 

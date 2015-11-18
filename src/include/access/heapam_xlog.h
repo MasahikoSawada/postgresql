@@ -312,9 +312,9 @@ typedef struct xl_heap_freeze_page
 #define SizeOfHeapFreezePage (offsetof(xl_heap_freeze_page, ntuples) + sizeof(uint16))
 
 /*
- * This is what we need to know about setting a page info map bit
+ * This is what we need to know about setting a visibility map bit
  *
- * Backup blk 0: page info map buffer
+ * Backup blk 0: visibility map buffer
  * Backup blk 1: heap buffer
  */
 typedef struct xl_heap_visible

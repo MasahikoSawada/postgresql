@@ -27,7 +27,7 @@
 #include "access/relscan.h"
 #include "access/sysattr.h"
 #include "access/transam.h"
-#include "access/pageinfomap.h"
+#include "access/visibilitymap.h"
 #include "access/xact.h"
 #include "bootstrap/bootstrap.h"
 #include "catalog/binary_upgrade.h"
@@ -1814,7 +1814,7 @@ FormIndexDatum(IndexInfo *indexInfo,
  * reltuples: if >= 0, set reltuples to this value; else no change
  *
  * If reltuples >= 0, relpages, relallvisible are also updated (using
- * RelationGetNumberOfBlocks() and pageinfomap_count()).
+ * RelationGetNumberOfBlocks() and visibilitymap_count()).
  *
  * NOTE: an important side-effect of this operation is that an SI invalidation
  * message is sent out to all backends --- including me --- causing relcache
@@ -1921,7 +1921,7 @@ index_update_stats(Relation rel,
 		BlockNumber relallvisible;
 
 		if (rd_rel->relkind != RELKIND_INDEX)
-			relallvisible = pageinfomap_count(rel, NULL);
+			relallvisible = visibilitymap_count(rel, NULL);
 		else	/* don't bother for indexes */
 			relallvisible = 0;
 

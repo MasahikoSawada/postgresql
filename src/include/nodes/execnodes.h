@@ -1363,7 +1363,7 @@ typedef struct IndexScanState
  *		RuntimeContext	   expr context for evaling runtime Skeys
  *		RelationDesc	   index relation descriptor
  *		ScanDesc		   index scan descriptor
- *		PIMBuffer		   buffer in use for page info map testing, if any
+ *		PIMBuffer		   buffer in use for visibility map testing, if any
  *		HeapFetches		   number of tuples we were forced to fetch from heap
  * ----------------
  */

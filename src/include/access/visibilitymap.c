@@ -1,18 +1,18 @@
 /*-------------------------------------------------------------------------
  *
- * pageinfomap.h
- *		page info map interface
+ * visibilitymap.h
+ *		visibility map interface
  *
  *
  * Portions Copyright (c) 2007-2015, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
- * src/include/access/pageinfomap.h
+ * src/include/access/visibilitymap.h
  *
  *-------------------------------------------------------------------------
  */
-#ifndef PAGEINFOMAP_H
-#define PAGEINFOMAP_H
+#ifndef VISIBILITYMAP_H
+#define VISIBILITYMAP_H
 
 #include "access/xlogdefs.h"
 #include "storage/block.h"
@@ -20,27 +20,27 @@
 #include "utils/relcache.h"
 
 /* Flags for bit map */
-#define PAGEINFOMAP_ALL_VISIBLE	0x01
-#define PAGEINFOMAP_ALL_FROZEN	0x02
+#define VISIBILITYMAP_ALL_VISIBLE	0x01
+#define VISIBILITYMAP_ALL_FROZEN	0x02
 
-#define PAGEINFOMAP_ALL_FLAGS		0x03
+#define VISIBILITYMAP_ALL_FLAGS		0x03
 
-/* Macros for pageinfomap test */
-#define PIM_ALL_VISIBLE(r, b, v) \
-	((pageinfomap_get_status((r), (b), (v)) & PAGEINFOMAP_ALL_VISIBLE) != 0)
-#define PIM_ALL_FROZEN(r, b, v) \
-	((pageinfomap_get_status((r), (b), (v)) & PAGEINFOMAP_ALL_FROZEN) != 0)
+/* Macros for visibilitymap test */
+#define VM_ALL_VISIBLE(r, b, v) \
+	((visibilitymap_get_status((r), (b), (v)) & VISIBILITYMAP_ALL_VISIBLE) != 0)
+#define VM_ALL_FROZEN(r, b, v) \
+	((visibilitymap_get_status((r), (b), (v)) & VISIBILITYMAP_ALL_FROZEN) != 0)
 
-extern void pageinfomap_clear(Relation rel, BlockNumber heapBlk,
+extern void visibilitymap_clear(Relation rel, BlockNumber heapBlk,
 					Buffer vmbuf);
-extern void pageinfomap_pin(Relation rel, BlockNumber heapBlk,
+extern void visibilitymap_pin(Relation rel, BlockNumber heapBlk,
 				  Buffer *vmbuf);
-extern bool pageinfomap_pin_ok(BlockNumber heapBlk, Buffer vmbuf);
-extern void pageinfomap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
+extern bool visibilitymap_pin_ok(BlockNumber heapBlk, Buffer vmbuf);
+extern void visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 							  XLogRecPtr recptr, Buffer vmBuf, TransactionId cutoff_xid,
 							  uint8 flags);
-extern uint8 pageinfomap_get_status(Relation rel, BlockNumber heapBlk, Buffer *vmbuf);
-extern BlockNumber pageinfomap_count(Relation rel, BlockNumber *all_frozen);
-extern void pageinfomap_truncate(Relation rel, BlockNumber nheapblocks);
+extern uint8 visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer *vmbuf);
+extern BlockNumber visibilitymap_count(Relation rel, BlockNumber *all_frozen);
+extern void visibilitymap_truncate(Relation rel, BlockNumber nheapblocks);
 
-#endif   /* PAGEINFOMAP_H */
+#endif   /* VISIBILITYMAP_H */

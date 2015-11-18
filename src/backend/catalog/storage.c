@@ -19,7 +19,7 @@
 
 #include "postgres.h"
 
-#include "access/pageinfomap.h"
+#include "access/visibilitymap.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
@@ -237,17 +237,17 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	 */
 	rel->rd_smgr->smgr_targblock = InvalidBlockNumber;
 	rel->rd_smgr->smgr_fsm_nblocks = InvalidBlockNumber;
-	rel->rd_smgr->smgr_pim_nblocks = InvalidBlockNumber;
+	rel->rd_smgr->smgr_vm_nblocks = InvalidBlockNumber;
 
 	/* Truncate the FSM first if it exists */
 	fsm = smgrexists(rel->rd_smgr, FSM_FORKNUM);
 	if (fsm)
 		FreeSpaceMapTruncateRel(rel, nblocks);
 
-	/* Truncate the page info map too if it exists. */
-	vm = smgrexists(rel->rd_smgr, PAGEINFOMAP_FORKNUM);
+	/* Truncate the visibility map too if it exists. */
+	vm = smgrexists(rel->rd_smgr, VISIBILITYMAP_FORKNUM);
 	if (vm)
-		pageinfomap_truncate(rel, nblocks);
+		visibilitymap_truncate(rel, nblocks);
 
 	/*
 	 * We WAL-log the truncation before actually truncating, which means
@@ -278,8 +278,8 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 		/*
 		 * Flush, because otherwise the truncation of the main relation might
 		 * hit the disk before the WAL record, and the truncation of the FSM
-		 * or page info map. If we crashed during that window, we'd be left
-		 * with a truncated heap, but the FSM or page info map would still
+		 * or visibility map. If we crashed during that window, we'd be left
+		 * with a truncated heap, but the FSM or visibility map would still
 		 * contain entries for the non-existent heap pages.
 		 */
 		if (fsm || vm)
@@ -527,13 +527,13 @@ smgr_redo(XLogReaderState *record)
 		/* Also tell xlogutils.c about it */
 		XLogTruncateRelation(xlrec->rnode, MAIN_FORKNUM, xlrec->blkno);
 
-		/* Truncate FSM and PIM too */
+		/* Truncate FSM and VM too */
 		rel = CreateFakeRelcacheEntry(xlrec->rnode);
 
 		if (smgrexists(reln, FSM_FORKNUM))
 			FreeSpaceMapTruncateRel(rel, xlrec->blkno);
-		if (smgrexists(reln, PAGEINFOMAP_FORKNUM))
-			pageinfomap_truncate(rel, xlrec->blkno);
+		if (smgrexists(reln, VISIBILITYMAP_FORKNUM))
+			visibilitymap_truncate(rel, xlrec->blkno);
 
 		FreeFakeRelcacheEntry(rel);
 	}

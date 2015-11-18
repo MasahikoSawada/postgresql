@@ -494,7 +494,7 @@ calculate_total_relation_size(Relation rel)
 
 	/*
 	 * Aggregate the table size, this includes size of the heap, toast and
-	 * toast index with free space and page info map
+	 * toast index with free space and visibility map
 	 */
 	size = calculate_table_size(rel);
 
