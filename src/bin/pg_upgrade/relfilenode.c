@@ -223,7 +223,7 @@ transfer_single_new_db(pageCnvCtx *pageConverter,
  */
 static void
 transfer_relfile(pageCnvCtx *pageConverter, FileNameMap *map,
-				 const char *type_suffix, bool vm_need_rewrite);
+				 const char *type_suffix, bool vm_need_rewrite)
 {
 	const char *msg;
 	char		old_file[MAXPGPATH];
@@ -231,7 +231,6 @@ transfer_relfile(pageCnvCtx *pageConverter, FileNameMap *map,
 	int			fd;
 	int			segno;
 	char		extent_suffix[65];
-	bool		rewrite_vm = false;
 
 	/*
 	 * Now copy/link any related segments as well. Remember, PG breaks large
@@ -257,11 +256,11 @@ transfer_relfile(pageCnvCtx *pageConverter, FileNameMap *map,
 				 map->new_tablespace_suffix,
 				 map->new_db_oid,
 				 map->new_relfilenode,
-				 new_type_suffix,
+				 type_suffix,
 				 extent_suffix);
 
 		/* Is it an extent, fsm, or vm file? */
-		if (old_type_suffix[0] != '\0' || segno != 0)
+		if (type_suffix[0] != '\0' || segno != 0)
 		{
 			/* Did file open fail? */
 			if ((fd = open(old_file, O_RDONLY, 0)) == -1)

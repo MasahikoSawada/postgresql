@@ -26,7 +26,7 @@ typedef enum ForkNumber
 	InvalidForkNumber = -1,
 	MAIN_FORKNUM = 0,
 	FSM_FORKNUM,
-	VM_FORKNUM,
+	VISIBILITYMAP_FORKNUM,
 	INIT_FORKNUM
 
 	/*

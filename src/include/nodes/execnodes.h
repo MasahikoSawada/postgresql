@@ -1381,7 +1381,7 @@ typedef struct IndexOnlyScanState
 	ExprContext *ioss_RuntimeContext;
 	Relation	ioss_RelationDesc;
 	IndexScanDesc ioss_ScanDesc;
-	Buffer		ioss_PIMBuffer;
+	Buffer		ioss_VMBuffer;
 	long		ioss_HeapFetches;
 } IndexOnlyScanState;
 
