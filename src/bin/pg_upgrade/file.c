@@ -47,7 +47,7 @@ static const uint16 rewrite_vm_table[256] = {
 
 /*
  * copyOrRewriteFile()
- * This function copies file or rewrite visibility map file to page info map file.
+ * This function copies file or rewrite visibility map file.
  * If rewrite_vm is true, we have to rewrite visibility map regardless value of pageConverter.
  */
 const char *
@@ -242,9 +242,10 @@ copy_file(const char *srcfile, const char *dstfile, bool force)
 /*
  * rewriteVisibilitymap()
  *
- * Since a additional bit which indicates that all tuples on page is completely
- * frozen is added into visibilitymap, the visibility map become the page info map.
- * Rewrite a visibility map file while adding all-frozen bit(0) into each bit.
+ * A additional bit that indicates that all tuples on page is complety
+ * frozen is added into visibility map. So the format of visibility map
+ * has been changed.
+ * Copies a visibility map file while adding all-frozen bit(0) into each bit.
  */
 static const char *
 rewriteVisibilitymap(const char *fromfile, const char *tofile, bool force)
