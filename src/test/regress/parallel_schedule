@@ -112,4 +112,4 @@ test: event_trigger
 test: stats
 
 # page info map and vacuum test cannot run concurrently with any test that runs SQL
-test: pageinfomap
+test: visibilitymap
