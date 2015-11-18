@@ -1,7 +1,7 @@
 /*-------------------------------------------------------------------------
  *
  * visibilitymap.c
- *	  bitmap for tracking information of heap tuples
+ *	  bitmap for tracking visibility of heap tuples
  *
  * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -63,7 +63,7 @@
  * visibility map is cleared. In order to be crash-safe, we need to do this
  * while still holding a lock on the heap page and in the same critical
  * section that logs the page modification. However, we don't want to hold
- * the buffer lock over any I/O that may be required to read in the page information
+ * the buffer lock over any I/O that may be required to read in the visibility
  * map page.  To avoid this, we examine the heap page before locking it;
  * if the page-level PD_ALL_VISIBLE or PD_ALL_FROZEN bit is set, we pin the
  * visibility map bit.  Then, we lock the buffer.  But this creates a race
@@ -181,7 +181,7 @@ visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer buf)
 	BlockNumber mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
 	int			mapByte = HEAPBLK_TO_MAPBYTE(heapBlk);
 	int			mapBit = HEAPBLK_TO_MAPBIT(heapBlk);
-	uint8		mask = VISIBILITYMAP_ALL_FLAGS << mapBit;
+	uint8		mask = VISIBILITYMAP_VALID_BITS << mapBit;
 	char	   *map;
 
 #ifdef TRACE_VISIBILITYMAP
@@ -289,7 +289,7 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 
 	Assert(InRecovery || XLogRecPtrIsInvalid(recptr));
 	Assert(InRecovery || BufferIsValid(heapBuf));
-	Assert(flags & VISIBILITYMAP_ALL_FLAGS);
+	Assert(flags & VISIBILITYMAP_VALID_BITS);
 
 	/* Check that we have the right heap page pinned, if present */
 	if (BufferIsValid(heapBuf) && BufferGetBlockNumber(heapBuf) != heapBlk)
@@ -401,7 +401,7 @@ visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer *buf)
 	 * here, but for performance reasons we make it the caller's job to worry
 	 * about that.
 	 */
-	return ((map[mapByte] >> mapBit) & VISIBILITYMAP_ALL_FLAGS);
+	return ((map[mapByte] >> mapBit) & VISIBILITYMAP_VALID_BITS);
 }
 
 /*

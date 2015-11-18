@@ -17663,7 +17663,7 @@ postgres=# SELECT * FROM pg_xlogfile_name_offset(pg_stop_backup());
        <entry><type>bigint</type></entry>
        <entry>
         Disk space used by the specified fork (<literal>'main'</literal>,
-        <literal>'fsm'</literal>, <literal>'pim'</>, or <literal>'init'</>)
+        <literal>'fsm'</literal>, <literal>'vm'</>, or <literal>'init'</>)
         of the specified table or index
        </entry>
       </row>
@@ -17793,8 +17793,8 @@ postgres=# SELECT * FROM pg_xlogfile_name_offset(pg_stop_backup());
      </listitem>
      <listitem>
       <para>
-       <literal>'pim'</literal> returns the size of the Visibility Map
-       (see <xref linkend="storage-pim">) associated with the relation.
+       <literal>'vm'</literal> returns the size of the Visibility Map
+       (see <xref linkend="storage-vm">) associated with the relation.
       </para>
      </listitem>
      <listitem>

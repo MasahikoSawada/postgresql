@@ -32,7 +32,7 @@
       single time-consistent copy of the block to be obtained.
       <replaceable>fork</replaceable> should be <literal>'main'</literal> for
       the main data fork, <literal>'fsm'</literal> for the free space map,
-      <literal>'pim'</literal> for the visibility map, or <literal>'init'</literal>
+      <literal>'vm'</literal> for the visibility map, or <literal>'init'</literal>
       for the initialization fork.
      </para>
     </listitem>

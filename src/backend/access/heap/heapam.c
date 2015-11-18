@@ -406,12 +406,12 @@ heapgetpage(HeapScanDesc scan, BlockNumber page)
 	 * transactions in the master might still be invisible to a read-only
 	 * transaction in the standby. We partly handle this problem by tracking
 	 * the minimum xmin of visible tuples as the cut-off XID while marking a
-	 * page all-visible on master and WAL log that along with the page information
+	 * page all-visible on master and WAL log that along with the visibility
 	 * map SET operation. In hot standby, we wait for (or abort) all
 	 * transactions that can potentially may not see one or more tuples on the
 	 * page. That's how index-only scans work fine in hot standby. A crucial
 	 * difference between index-only scans and heap scans is that the
-	 * index-only scan completely relies on the visibilitymap where as heap
+	 * index-only scan completely relies on the visibility map where as heap
 	 * scan looks at the page-level PD_ALL_VISIBLE flag. We are not sure if
 	 * the page-level flag can be trusted in the same way, because it might
 	 * get propagated somehow without being explicitly WAL-logged, e.g. via a
@@ -2700,7 +2700,7 @@ heap_multi_insert(Relation relation, HeapTuple *tuples, int ntuples,
 
 		/*
 		 * Find buffer where at least the next tuple will fit.  If the page is
-		 * all-visible, this will also pin the requisite visibilitymap page.
+		 * all-visible, this will also pin the requisite visibility map page.
 		 */
 		buffer = RelationGetBufferForTuple(relation, heaptuples[ndone]->t_len,
 										   InvalidBuffer, options, bistate,
@@ -3022,7 +3022,7 @@ heap_delete(Relation relation, ItemPointer tid,
 	page = BufferGetPage(buffer);
 
 	/*
-	 * Before locking the buffer, pin the visibilitymap page if it appears to
+	 * Before locking the buffer, pin the visibility map page if it appears to
 	 * be necessary.  Since we haven't got the lock yet, someone else might be
 	 * in the middle of changing this, so we'll need to recheck after we have
 	 * the lock.
@@ -3033,7 +3033,7 @@ heap_delete(Relation relation, ItemPointer tid,
 	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 
 	/*
-	 * If we didn't pin the visibilitymap page and the page has become all
+	 * If we didn't pin the visibility map page and the page has become all
 	 * visible or all frozen while we were busy locking the buffer, we'll
 	 * have to unlock and re-lock, to avoid holding the buffer lock across an
 	 * I/O.  That's a bit unfortunate, but hopefully shouldn't happen often.
@@ -3512,7 +3512,7 @@ heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 	page = BufferGetPage(buffer);
 
 	/*
-	 * Before locking the buffer, pin the visibilitymap page if it appears to
+	 * Before locking the buffer, pin the visibility map page if it appears to
 	 * be necessary.  Since we haven't got the lock yet, someone else might be
 	 * in the middle of changing this, so we'll need to recheck after we have
 	 * the lock.
@@ -3808,7 +3808,7 @@ l2:
 	}
 
 	/*
-	 * If we didn't pin the visibilitymap page and the page has become all
+	 * If we didn't pin the visibility map page and the page has become all
 	 * visible while we were busy locking the buffer, or during some
 	 * subsequent window during which we had it unlocked, we'll have to unlock
 	 * and re-lock, to avoid holding the buffer lock across an I/O.  That's a
@@ -5074,7 +5074,7 @@ failed:
 	LockBuffer(*buffer, BUFFER_LOCK_UNLOCK);
 
 	/*
-	 * Don't update the visibilitymap here. Locking a tuple doesn't change
+	 * Don't update the visibility map here. Locking a tuple doesn't change
 	 * visibility info.
 	 */
 
@@ -7197,7 +7197,7 @@ log_heap_freeze(Relation reln, Buffer buffer, TransactionId cutoff_xid,
 /*
  * Perform XLogInsert for a heap-visible operation.  'block' is the block
  * being marked all-visible, and vm_buffer is the buffer containing the
- * corresponding visibilitymap block.  Both should have already been modified
+ * corresponding visibility map block.  Both should have already been modified
  * and dirtied.
  *
  * If checksums are enabled, we also generate a full-page image of
@@ -7752,9 +7752,9 @@ heap_xlog_clean(XLogReaderState *record)
  * Replay XLOG_HEAP2_VISIBLE record.
  *
  * The critical integrity requirement here is that we must never end up with
- * a situation where the visibilitymap bit is set, and the page-level
+ * a situation where the visibility map bit is set, and the page-level
  * PD_ALL_VISIBLE bit is clear.  If that were to occur, then a subsequent
- * page modification would fail to clear the visibilitymap bit.
+ * page modification would fail to clear the visibility map bit.
  */
 static void
 heap_xlog_visible(XLogReaderState *record)
@@ -7785,7 +7785,7 @@ heap_xlog_visible(XLogReaderState *record)
 	/*
 	 * Read the heap page, if it still exists. If the heap file has dropped or
 	 * truncated later in recovery, we don't need to update the page, but we'd
-	 * better still update the visibilitymap.
+	 * better still update the visibility map.
 	 */
 	action = XLogReadBufferForRedo(record, 1, &buffer);
 	if (action == BLK_NEEDS_REDO)
@@ -7798,7 +7798,7 @@ heap_xlog_visible(XLogReaderState *record)
 		 * we're not inspecting the existing page contents in any way, we
 		 * don't care.
 		 *
-		 * However, all operations that clear the visibilitymap bit *do* bump
+		 * However, all operations that clear the visibility map bit *do* bump
 		 * the LSN, and those operations will only be replayed if the XLOG LSN
 		 * follows the page LSN.  Thus, if the page LSN has advanced past our
 		 * XLOG record's LSN, we mustn't mark the page all-visible, because
@@ -7826,8 +7826,8 @@ heap_xlog_visible(XLogReaderState *record)
 
 	/*
 	 * Even if we skipped the heap page update due to the LSN interlock, it's
-	 * still safe to update the visibilitymap.  Any WAL record that clears
-	 * the visibilitymap bit does so before checking the page LSN, so any
+	 * still safe to update the visibility map.  Any WAL record that clears
+	 * the visibility map bit does so before checking the page LSN, so any
 	 * bits that need to be cleared will still be cleared.
 	 */
 	if (XLogReadBufferForRedoExtended(record, 0, RBM_ZERO_ON_ERROR, false,
@@ -7971,7 +7971,7 @@ heap_xlog_delete(XLogReaderState *record)
 	ItemPointerSetOffsetNumber(&target_tid, xlrec->offnum);
 
 	/*
-	 * The visibilitymap may need to be fixed even if the heap page is
+	 * The visibility map may need to be fixed even if the heap page is
 	 * already up-to-date.
 	 */
 	if (xlrec->flags & XLH_DELETE_ALL_VISIBLE_CLEARED)
@@ -8049,7 +8049,7 @@ heap_xlog_insert(XLogReaderState *record)
 	ItemPointerSetOffsetNumber(&target_tid, xlrec->offnum);
 
 	/*
-	 * The visibilitymap may need to be fixed even if the heap page is
+	 * The visibility map may need to be fixed even if the heap page is
 	 * already up-to-date.
 	 */
 	if (xlrec->flags & XLH_INSERT_ALL_VISIBLE_CLEARED)
@@ -8169,7 +8169,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
 	XLogRecGetBlockTag(record, 0, &rnode, NULL, &blkno);
 
 	/*
-	 * The visibilitymap may need to be fixed even if the heap page is
+	 * The visibility map may need to be fixed even if the heap page is
 	 * already up-to-date.
 	 */
 	if (xlrec->flags & XLH_INSERT_ALL_VISIBLE_CLEARED)
@@ -8324,7 +8324,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 	ItemPointerSet(&newtid, newblk, xlrec->new_offnum);
 
 	/*
-	 * The visibilitymap may need to be fixed even if the heap page is
+	 * The visibility map may need to be fixed even if the heap page is
 	 * already up-to-date.
 	 */
 	if (xlrec->flags & XLH_UPDATE_OLD_ALL_VISIBLE_CLEARED)
@@ -8408,7 +8408,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 		newaction = XLogReadBufferForRedo(record, 0, &nbuffer);
 
 	/*
-	 * The visibilitymap may need to be fixed even if the heap page is
+	 * The visibility map may need to be fixed even if the heap page is
 	 * already up-to-date.
 	 */
 	if (xlrec->flags & XLH_UPDATE_NEW_ALL_VISIBLE_CLEARED)

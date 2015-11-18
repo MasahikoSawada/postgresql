@@ -345,11 +345,11 @@
    </tip>
   </sect2>
 
-  <sect2 id="vacuum-for-page-info-map">
+  <sect2 id="vacuum-for-visibility-map">
    <title>Updating The Visibility Map</title>
 
    <para>
-    Vacuum maintains a <link linkend="storage-pim">visibility map</> for each
+    Vacuum maintains a <link linkend="storage-vm">visibility map</> for each
     table to keep track of which pages contain only tuples that are known to be
     visible to all active transactions (and all future transactions, until the
     page is again modified), and pages contain only frozen tuples.
@@ -439,9 +439,8 @@
 
    <para>
     <command>VACUUM</> skips pages that don't have any dead row
-    versions, and pages that have only frozen rows.
-    To ensure all old row versions have been frozen, a scan of all unfrozen pages
-    is needed.
+    versions, and pages that have only frozen rows. To ensure all old
+    row versions have been frozen, a scan of all unfrozen pages is needed.
     <xref linkend="guc-vacuum-freeze-table-age"> controls when
     <command>VACUUM</> does that: a whole-table freezing is forced if
     the table hasn't been ensured all row versions are frozen for
@@ -452,13 +451,12 @@
    <para>
     The maximum time that a table can go unvacuumed is two billion
     transactions minus the <varname>vacuum_freeze_min_age</> value at
-    the time <command>VACUUM</> last scanned unfrozen pages.
-    If it were to go unvacuumed for longer than
-    that, data loss could result.  To ensure that this does not happen,
-    autovacuum is invoked on any table that might contain unfrozen rows with
-    XIDs older than the age specified by the configuration parameter <xref
-    linkend="guc-autovacuum-freeze-max-age">.  (This will happen even if
-    autovacuum is disabled.)
+    the time <command>VACUUM</> last scanned unfrozen pages. If it were to go
+    unvacuumed for longer than that, data loss could result.  To ensure
+    that this does not happen, autovacuum is invoked on any table that might
+    contain unfrozen rows with XIDs older than the age specified by the
+    configuration parameter <xref linkend="guc-autovacuum-freeze-max-age">.
+    (This will happen even if autovacuum is disabled.)
    </para>
 
    <para>

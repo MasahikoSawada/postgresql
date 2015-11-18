@@ -194,9 +194,9 @@ main fork), each table and index has a <firstterm>free space map</> (see <xref
 linkend="storage-fsm">), which stores information about free space available in
 the relation.  The free space map is stored in a file named with the filenode
 number plus the suffix <literal>_fsm</>.  Tables also have a
-<firstterm>visibility map</>, stored in a fork with the suffix <literal>_pim</>,
+<firstterm>visibility map</>, stored in a fork with the suffix <literal>_vm</>,
 to track which pages are known to have no dead tuples.  The visibility map is
-described further in <xref linkend="storage-pim">.  Unlogged tables and indexes
+described further in <xref linkend="storage-vm">.  Unlogged tables and indexes
 have a third fork, known as the initialization fork, which is stored in a fork
 with the suffix <literal>_init</literal> (see <xref linkend="storage-init">).
 </para>
@@ -270,7 +270,7 @@ The <function>pg_relation_filepath()</> function shows the entire path
 as a substitute for remembering many of the above rules.  But keep in
 mind that this function just gives the name of the first segment of the
 main fork of the relation &mdash; you may need to append a segment number
-and/or <literal>_fsm</>, <literal>_pim</>, or <literal>_init</> to find all
+and/or <literal>_fsm</>, <literal>_vm</>, or <literal>_init</> to find all
 the files associated with the relation.
 </para>
 
@@ -611,24 +611,24 @@ can be used to examine the information stored in free space maps.
 
 </sect1>
 
-<sect1 id="storage-pim">
+<sect1 id="storage-vm">
 
 <title>Visibility Map</title>
 
 <indexterm>
  <primary>Visibility Map</primary>
 </indexterm>
-<indexterm><primary>PIM</><see>Visibility Map</></indexterm>
+<indexterm><primary>VM</><see>Visibility Map</></indexterm>
 
 <para>
 Each heap relation has a Visibility Map
-(PIM) to keep track of which pages contain only tuples that are known to be
+(VM) to keep track of which pages contain only tuples that are known to be
 visible to all active transactions, and pages contain only unfrozen tuples.
 It's stored alongside the main relation data in a separate relation fork,
-named after the filenode number of the relation, plus a <literal>_pim</> suffix.
-For example, if the filenode of a relation is 12345, the PIM is stored in a file
-called <filename>12345_pim</>, in the same directory as the main relation file.
-Note that indexes do not have PIMs.
+named after the filenode number of the relation, plus a <literal>_vm</> suffix.
+For example, if the filenode of a relation is 12345, the VM is stored in a file
+called <filename>12345_vm</>, in the same directory as the main relation file.
+Note that indexes do not have VMs.
 </para>
 
 <para>
@@ -644,7 +644,7 @@ queries using only the index tuple.
 <para>
 The map is conservative in the sense that we make sure that whenever a bit is
 set, we know the condition is true, but if a bit is not set, it might or
-might not be true. visibility map bits are only set by vacuum, but are
+might not be true. Visibility map bits are only set by vacuum, but are
 cleared by any data-modifying operations on a page.
 </para>
 
