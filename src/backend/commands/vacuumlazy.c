@@ -499,7 +499,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 	 * Also, skipping even a single page accorinding to all-visible bit of
 	 * visibility map means that we can't update relfrozenxid, so we only want
 	 * to do it if we can skip a goodly number. On the other hand, we count
-	 * both how many pages we skipped according to all-frozen bit of page information
+	 * both how many pages we skipped according to all-frozen bit of visibility
 	 * map and how many pages we freeze, so we can update relfrozenxid if
 	 * the sum of two is as many as pages of table.
 	 *
