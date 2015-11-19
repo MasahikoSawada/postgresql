@@ -297,7 +297,7 @@ transfer_relfile(pageCnvCtx *pageConverter, FileNameMap *map,
 		{
 			pg_log(PG_VERBOSE, "linking \"%s\" to \"%s\"\n", old_file, new_file);
 
-			if ((msg = linkAndUpdateFile(pageConverter, old_file, new_file)) != NULL)
+			if ((msg = linkAndUpdateFile(pageConverter, old_file, new_file, vm_need_rewrite)) != NULL)
 				pg_fatal("error while creating link for relation \"%s.%s\" (\"%s\" to \"%s\"): %s\n",
 						 map->nspname, map->relname, old_file, new_file, msg);
 		}

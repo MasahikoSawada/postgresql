@@ -153,12 +153,14 @@ copyAndUpdateFile(pageCnvCtx *pageConverter,
  */
 const char *
 linkAndUpdateFile(pageCnvCtx *pageConverter,
-				  const char *src, const char *dst)
+				  const char *src, const char *dst, bool rewrite_vm)
 {
 	if (pageConverter != NULL)
 		return "Cannot in-place update this cluster, page-by-page conversion is required";
 
-	if (pg_link_file(src, dst) == -1)
+	if (rewrite_vm)
+		return rewriteVisibilitymap(src, dst, true);
+	else if (pg_link_file(src, dst) == -1)
 		return getErrorText(errno);
 	else
 		return NULL;

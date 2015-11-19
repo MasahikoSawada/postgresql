@@ -658,8 +658,8 @@ psql --username postgres --file script.sql postgres
 
   <para>
    Since the format of visibility map has been changed in version 9.6,
-   <application>pg_upgrade</> does not support upgrading of database
-   from 9.5 or before to 9.6 or later with link mode (-k).
+   <application>pg_upgrade</> creates and rewrite new <literal>'_vm'</literal>
+   file even if upgrading from 9.5 or before to 9.6 or later with link mode (-k).
   </para>
 
   <para>

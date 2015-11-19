@@ -231,15 +231,6 @@ check_cluster_versions(void)
 	if (old_cluster.major_version > new_cluster.major_version)
 		pg_fatal("This utility cannot be used to downgrade to older major PostgreSQL versions.\n");
 
-	/*
-	 * We can't allow upgrading with link mode between 9.5 or before and 9.6 or later,
-	 * because the format of visibility map has been changed in version 9.6.
-	 */
-	if (user_opts.transfer_mode == TRANSFER_MODE_LINK &&
-		GET_MAJOR_VERSION(old_cluster.major_version) < 906 &&
-		GET_MAJOR_VERSION(new_cluster.major_version) >= 906)
-		pg_fatal("This utility cannot upgrade from PostgreSQL version from 9.5 or before to 9.6 or later with link mode.\n");
-
 	/* get old and new binary versions */
 	get_bin_version(&old_cluster);
 	get_bin_version(&new_cluster);

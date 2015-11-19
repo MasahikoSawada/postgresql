@@ -112,7 +112,7 @@ extern char *output_files[];
 /*
  * The format of visibility map is changed with this 9.6 commit,
  */
-#define VISIBILITY_MAP_FROZEN_BIT_CAT_VER 201511181
+#define VISIBILITY_MAP_FROZEN_BIT_CAT_VER 201511191
 /*
  * pg_multixact format changed in 9.3 commit 0ac5ad5134f2769ccbaefec73844f85,
  * ("Improve concurrency of foreign key locking") which also updated catalog
@@ -403,7 +403,7 @@ const char *copyOrRewriteFile(pageCnvCtx *pageConverter, const char *src,
 const char *copyAndUpdateFile(pageCnvCtx *pageConverter, const char *src,
 				  const char *dst, bool force);
 const char *linkAndUpdateFile(pageCnvCtx *pageConverter, const char *src,
-				  const char *dst);
+				  const char *dst, bool rewrite_vm);
 
 void		check_hard_link(void);
 FILE	   *fopen_priv(const char *path, const char *mode);
