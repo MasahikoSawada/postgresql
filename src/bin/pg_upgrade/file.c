@@ -264,6 +264,9 @@ rewriteVisibilitymap(const char *fromfile, const char *tofile, bool force)
 	char 		*buffer = NULL;
 	int			ret = 0;
 
+	/* Reset errno */
+	errno = 0;
+
 	if ((fromfile == NULL) || (tofile == NULL))
 		return getErrorText(EINVAL);
 
