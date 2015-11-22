@@ -248,23 +248,22 @@ copy_file(const char *srcfile, const char *dstfile, bool force)
 /*
  * rewriteVisibilitymap()
  *
- * A additional bit that indicates that all tuples on page is complety
- * frozen is added into visibility map. So the format of visibility map
- * has been changed.
  * Copies a visibility map file while adding all-frozen bit(0) into each bit.
  */
 static const char *
+
 rewriteVisibilitymap(const char *fromfile, const char *tofile, bool force)
 {
-#define REWRITE_BUF_SIZE (50 * BLCKSZ)
 #define BITS_PER_HEAPBLOCK 2
 
 	int			src_fd = 0;
 	int			dst_fd = 0;
-	uint16 		vm_bits;
-	ssize_t 	nbytes;
-	char 		*buffer = NULL;
-	int			ret = 0;
+	char		buffer[BLCKSZ];
+	ssize_t 	bytesRead;
+	int			rewriteVmBytesPerPage = (BLCKSZ - SizeOfPageHeaderData) / 2;
+
+	fprintf(stderr, "in rewriteVisibilityMap from : %s, to : %s\n",
+			fromfile, tofile);
 
 	/* Reset errno */
 	errno = 0;
@@ -278,52 +277,54 @@ rewriteVisibilitymap(const char *fromfile, const char *tofile, bool force)
 	if ((dst_fd = open(tofile, O_RDWR | O_CREAT | (force ? 0 : O_EXCL), S_IRUSR | S_IWUSR)) < 0)
 		goto err;
 
-	buffer = (char *) pg_malloc(REWRITE_BUF_SIZE);
-
-	/* Copy page header data in advance */
-	if ((nbytes = read(src_fd, buffer, MAXALIGN(SizeOfPageHeaderData))) <= 0)
-		goto err;
-
-	if (write(dst_fd, buffer, nbytes) != nbytes)
+	/* Perform data rewriting per page */
+	while ((bytesRead = read(src_fd, buffer, BLCKSZ)) == BLCKSZ)
 	{
-		/* if write didn't set errno, assume problem is no disk space */
-		if (errno == 0)
-			errno = ENOSPC;
-		goto err;
-	}
+		char	*cur, *end, *blkend;
+		char	pageheader[SizeOfPageHeaderData];
+		uint16	vm_bits;
 
-	/* perform data rewriting i.e read src srouce, write to destination */
-	while (true)
-	{
-		ssize_t nbytes = read(src_fd, buffer, REWRITE_BUF_SIZE);
-		char *cur, *end;
+		fprintf(stderr, " hoge : %d, perPage : %d, %d\n", bytesRead, rewriteVmBytesPerPage, BLCKSZ / 2);
 
-		if (nbytes < 0)
-		{
-			ret = -1;
-			break;
-		}
-
-		if (nbytes == 0)
-			break;
+		/* Save the page header data */
+		memcpy(pageheader, buffer, SizeOfPageHeaderData);
 
 		cur = buffer;
-		end = buffer + nbytes;
+		end = buffer + SizeOfPageHeaderData + rewriteVmBytesPerPage;
+		blkend = buffer + bytesRead;
 
-		/* Rewrite a byte and write dest_fd per BITS_PER_HEAPBLOCK bytes */
-		while (end > cur)
+		while (blkend > end)
 		{
-			/* Get rewritten bit from table and its string representation */
-			vm_bits = rewrite_vm_table[(uint8) *cur];
-
-			if (write(dst_fd, &vm_bits, BITS_PER_HEAPBLOCK) != BITS_PER_HEAPBLOCK)
+			/* Copy page header data in advance */
+			if (write(dst_fd, pageheader, SizeOfPageHeaderData) != SizeOfPageHeaderData)
 			{
-				ret = -1;
-				break;
+				/* If write didn't set errno, assume problem is no disk space */
+				if (errno == 0)
+					errno = ENOSPC;
+				goto err;
 			}
-			cur++;
+
+			cur += SizeOfPageHeaderData;
+
+			/* Rewrite visibility map bit one by one */
+			while (end > cur)
+			{
+				/* Get rewritten bit from table and its string representation */
+				vm_bits = rewrite_vm_table[(uint8) *cur];
+
+				if (write(dst_fd, &vm_bits, BITS_PER_HEAPBLOCK) != BITS_PER_HEAPBLOCK)
+				{
+					if (errno == 0)
+					errno = ENOSPC;
+					goto err;
+				}
+				cur++;
+			}
+			end += rewriteVmBytesPerPage;
 		}
 	}
+
+	fprintf(stderr, "    End nbytes = %d\n", bytesRead);
 
 err:
 
