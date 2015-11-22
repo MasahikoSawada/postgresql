@@ -262,9 +262,6 @@ rewriteVisibilitymap(const char *fromfile, const char *tofile, bool force)
 	ssize_t 	bytesRead;
 	int			rewriteVmBytesPerPage = (BLCKSZ - SizeOfPageHeaderData) / 2;
 
-	fprintf(stderr, "in rewriteVisibilityMap from : %s, to : %s\n",
-			fromfile, tofile);
-
 	/* Reset errno */
 	errno = 0;
 
@@ -283,8 +280,6 @@ rewriteVisibilitymap(const char *fromfile, const char *tofile, bool force)
 		char	*cur, *end, *blkend;
 		char	pageheader[SizeOfPageHeaderData];
 		uint16	vm_bits;
-
-		fprintf(stderr, " hoge : %d, perPage : %d, %d\n", bytesRead, rewriteVmBytesPerPage, BLCKSZ / 2);
 
 		/* Save the page header data */
 		memcpy(pageheader, buffer, SizeOfPageHeaderData);
@@ -324,8 +319,6 @@ rewriteVisibilitymap(const char *fromfile, const char *tofile, bool force)
 			end += rewriteVmBytesPerPage;
 		}
 	}
-
-	fprintf(stderr, "    End nbytes = %d\n", bytesRead);
 
 err:
 
