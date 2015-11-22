@@ -315,11 +315,12 @@ rewriteVisibilitymap(const char *fromfile, const char *tofile, bool force)
 				if (write(dst_fd, &vm_bits, BITS_PER_HEAPBLOCK) != BITS_PER_HEAPBLOCK)
 				{
 					if (errno == 0)
-					errno = ENOSPC;
+						errno = ENOSPC;
 					goto err;
 				}
 				cur++;
 			}
+
 			end += rewriteVmBytesPerPage;
 		}
 	}
