@@ -11,6 +11,8 @@
 
 #include "pg_upgrade.h"
 #include "storage/bufpage.h"
+#include "storage/checksum.h"
+#include "storage/checksum_impl.h"
 
 #include <fcntl.h>
 
@@ -261,6 +263,7 @@ rewriteVisibilitymap(const char *fromfile, const char *tofile, bool force)
 	char		buffer[BLCKSZ];
 	ssize_t 	bytesRead;
 	int			rewriteVmBytesPerPage = (BLCKSZ - SizeOfPageHeaderData) / 2;
+	BlockNumber	blkno = 0;
 
 	/* Reset errno */
 	errno = 0;
@@ -278,53 +281,56 @@ rewriteVisibilitymap(const char *fromfile, const char *tofile, bool force)
 	while ((bytesRead = read(src_fd, buffer, BLCKSZ)) == BLCKSZ)
 	{
 		char	*cur, *end, *blkend;
-		char	pageheader[SizeOfPageHeaderData];
+		PageHeaderData	pageheader;
 		uint16	vm_bits;
 
 		/* Save the page header data */
-		memcpy(pageheader, buffer, SizeOfPageHeaderData);
+		memcpy(&pageheader, buffer, SizeOfPageHeaderData);
 
 		cur = buffer;
 		end = buffer + SizeOfPageHeaderData + rewriteVmBytesPerPage;
 		blkend = buffer + bytesRead;
 
-		while (blkend > end)
+		while (blkend >= end)
 		{
-			/* Copy page header data in advance */
-			if (write(dst_fd, pageheader, SizeOfPageHeaderData) != SizeOfPageHeaderData)
-			{
-				/* If write didn't set errno, assume problem is no disk space */
-				if (errno == 0)
-					errno = ENOSPC;
-				goto err;
-			}
+			char	vmbuf[BLCKSZ];
+			char	*vmtmp = vmbuf;
+
+			/* Copy page header in advance */
+			memcpy(vmbuf, &pageheader, SizeOfPageHeaderData);
 
 			cur += SizeOfPageHeaderData;
+			vmtmp += SizeOfPageHeaderData;
 
 			/* Rewrite visibility map bit one by one */
 			while (end > cur)
 			{
-				/* Get rewritten bit from table and its string representation */
+				/* Write rewritten bit from table and its string representation */
 				vm_bits = rewrite_vm_table[(uint8) *cur];
+				memcpy(vmtmp, &vm_bits, BITS_PER_HEAPBLOCK);
 
-				if (write(dst_fd, &vm_bits, BITS_PER_HEAPBLOCK) != BITS_PER_HEAPBLOCK)
-				{
+				cur++;
+				vmtmp += BITS_PER_HEAPBLOCK;
+			}
+
+			/* Set new checksum for a visibility map page, If enabled */
+			if (old_cluster.controldata.data_checksum_version != 0 &&
+				new_cluster.controldata.data_checksum_version != 0)
+				((PageHeader) vmbuf)->pd_checksum = pg_checksum_page(vmbuf, blkno);
+
+			if (write(dst_fd, vmbuf, BLCKSZ) != BLCKSZ)
+			{
 					if (errno == 0)
 						errno = ENOSPC;
 					goto err;
-				}
-				cur++;
 			}
 
 			end += rewriteVmBytesPerPage;
+			blkno++;
 		}
 	}
 
 err:
-
-	if (!buffer)
-		pg_free(buffer);
-
 	if (src_fd != 0)
 		close(src_fd);
 
