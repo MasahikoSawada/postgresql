@@ -269,7 +269,7 @@ rewriteVisibilitymap(const char *fromfile, const char *tofile, bool force)
 	errno = 0;
 
 	if ((fromfile == NULL) || (tofile == NULL))
-		return getErrorText(EINVAL);
+		return getErrorText();
 
 	if ((src_fd = open(fromfile, O_RDONLY, 0)) < 0)
 		goto err;
@@ -337,7 +337,7 @@ err:
 	if (dst_fd != 0)
 		close(dst_fd);
 
-	return (errno == 0) ? NULL : getErrorText(errno);
+	return (errno == 0) ? NULL : getErrorText();
 }
 
 void
