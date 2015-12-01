@@ -287,7 +287,7 @@ rewriteVisibilitymap(const char *fromfile, const char *tofile, bool force)
 		/* Save the page header data */
 		memcpy(&pageheader, buffer, SizeOfPageHeaderData);
 
-		cur = buffer;
+		cur = buffer + SizeOfPageHeaderData;
 		end = buffer + SizeOfPageHeaderData + rewriteVmBytesPerPage;
 		blkend = buffer + bytesRead;
 
@@ -299,7 +299,6 @@ rewriteVisibilitymap(const char *fromfile, const char *tofile, bool force)
 			/* Copy page header in advance */
 			memcpy(vmbuf, &pageheader, SizeOfPageHeaderData);
 
-			cur += SizeOfPageHeaderData;
 			vmtmp += SizeOfPageHeaderData;
 
 			/* Rewrite visibility map bit one by one */
