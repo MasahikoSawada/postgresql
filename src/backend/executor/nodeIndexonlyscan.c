@@ -85,9 +85,9 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 * which all tuples are known visible to everybody.  In any case,
 		 * we'll use the index tuple not the heap tuple as the data source.
 		 *
-		 * Note on Memory Ordering Effects: visibilitymap_get_stattus does not lock
-		 * the visibility map buffer, and therefore the result we read here
-		 * could be slightly stale.  However, it can't be stale enough to
+		 * Note on Memory Ordering Effects: visibilitymap_get_status does not
+		 * lock. The visibility map buffer, and therefore the result we read
+		 * here could be slightly stale.  However, it can't be stale enough to
 		 * matter.
 		 *
 		 * We need to detect clearing a VM bit due to an insert right away,
@@ -114,7 +114,8 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 * It's worth going through this complexity to avoid needing to lock
 		 * the VM buffer, which could cause significant contention.
 		 */
-		if (!VM_ALL_VISIBLE(scandesc->heapRelation, ItemPointerGetBlockNumber(tid),
+		if (!VM_ALL_VISIBLE(scandesc->heapRelation,
+							ItemPointerGetBlockNumber(tid),
 							&node->ioss_VMBuffer))
 		{
 			/*

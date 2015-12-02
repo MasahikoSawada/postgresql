@@ -566,15 +566,15 @@ do_analyze_rel(Relation onerel, int options, VacuumParams *params,
 		}
 	}
 
-	/* Calculate the number of all-visible and all-frozen bit */
 	if (!inh)
+	{
+		/* Calculate the number of all-visible and all-frozen bit */
 		relallvisible = visibilitymap_count(onerel, &relallfrozen);
 
-	/*
-	 * Update pages/tuples stats in pg_class ... but not if we're doing
-	 * inherited stats.
-	 */
-	if (!inh)
+		/*
+		 * Update pages/tuples stats in pg_class ... but not if we're doing
+		 * inherited stats.
+		 */
 		vac_update_relstats(onerel,
 							relpages,
 							totalrows,
@@ -584,37 +584,39 @@ do_analyze_rel(Relation onerel, int options, VacuumParams *params,
 							InvalidMultiXactId,
 							in_outer_xact);
 
-	/*
-	 * Same for indexes. Vacuum always scans all indexes, so if we're part of
-	 * VACUUM ANALYZE, don't overwrite the accurate count already inserted by
-	 * VACUUM.
-	 */
-	if (!inh && !(options & VACOPT_VACUUM))
-	{
-		for (ind = 0; ind < nindexes; ind++)
+		/*
+		 * Same for indexes. Vacuum always scans all indexes, so if we're part of
+		 * VACUUM ANALYZE, don't overwrite the accurate count already inserted by
+		 * VACUUM.
+		 */
+		if (!(options & VACOPT_VACUUM))
 		{
-			AnlIndexData *thisdata = &indexdata[ind];
-			double		totalindexrows;
+			for (ind = 0; ind < nindexes; ind++)
+			{
+				AnlIndexData *thisdata = &indexdata[ind];
+				double		totalindexrows;
 
-			totalindexrows = ceil(thisdata->tupleFract * totalrows);
-			vac_update_relstats(Irel[ind],
-								RelationGetNumberOfBlocks(Irel[ind]),
-								totalindexrows,
-								0,
-								false,
-								InvalidTransactionId,
-								InvalidMultiXactId,
-								in_outer_xact);
+				totalindexrows = ceil(thisdata->tupleFract * totalrows);
+				vac_update_relstats(Irel[ind],
+									RelationGetNumberOfBlocks(Irel[ind]),
+									totalindexrows,
+									0,
+									false,
+									InvalidTransactionId,
+									InvalidMultiXactId,
+									in_outer_xact);
+			}
 		}
-	}
 
-	/*
-	 * Report ANALYZE to the stats collector, too.  However, if doing
-	 * inherited stats we shouldn't report, because the stats collector only
-	 * tracks per-table stats.
-	 */
-	if (!inh)
-		pgstat_report_analyze(onerel, totalrows, totaldeadrows, relallfrozen);
+		/*
+		 * Report ANALYZE to the stats collector, too.  However, if doing
+		 * inherited stats we shouldn't report, because the stats collector only
+		 * tracks per-table stats.
+		 */
+		if (!inh)
+			pgstat_report_analyze(onerel, totalrows, totaldeadrows, relallfrozen);
+
+	}
 
 	/* If this isn't part of VACUUM ANALYZE, let index AMs do cleanup */
 	if (!(options & VACOPT_VACUUM))

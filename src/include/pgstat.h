@@ -17,6 +17,7 @@
 #include "portability/instr_time.h"
 #include "postmaster/pgarch.h"
 #include "storage/barrier.h"
+#include "storage/block.h"
 #include "utils/hsearch.h"
 #include "utils/relcache.h"
 
@@ -355,7 +356,7 @@ typedef struct PgStat_MsgVacuum
 	TimestampTz m_vacuumtime;
 	PgStat_Counter m_live_tuples;
 	PgStat_Counter m_dead_tuples;
-	int32		m_frozen_pages;
+	BlockNumber	m_frozen_pages;
 } PgStat_MsgVacuum;
 
 

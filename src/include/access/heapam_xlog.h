@@ -390,6 +390,6 @@ extern bool heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 extern void heap_execute_freeze_tuple(HeapTupleHeader tuple,
 						  xl_heap_freeze_tuple *xlrec_tp);
 extern XLogRecPtr log_heap_visible(RelFileNode rnode, Buffer heap_buffer,
-			     Buffer pim_buffer, TransactionId cutoff_xid, uint8 flags);
+			     Buffer vm_buffer, TransactionId cutoff_xid, uint8 flags);
 
 #endif   /* HEAPAM_XLOG_H */

@@ -9,6 +9,7 @@
 
 #include "postgres_fe.h"
 
+#include "access/visibilitymap.h"
 #include "pg_upgrade.h"
 #include "storage/bufpage.h"
 #include "storage/checksum.h"
@@ -256,8 +257,6 @@ static const char *
 
 rewriteVisibilitymap(const char *fromfile, const char *tofile, bool force)
 {
-#define BITS_PER_HEAPBLOCK 2
-
 	int			src_fd = 0;
 	int			dst_fd = 0;
 	char		buffer[BLCKSZ];

@@ -19,10 +19,18 @@
 #include "storage/buf.h"
 #include "utils/relcache.h"
 
+/*
+ * Number of bits allocated for each heap block.
+ * One for all-visible, other for all-frozen.
+*/
+#define BITS_PER_HEAPBLOCK 2
+
+/* Number of heap blocks we can represent in one byte. */
+#define HEAPBLOCKS_PER_BYTE 4
+
 /* Flags for bit map */
 #define VISIBILITYMAP_ALL_VISIBLE	0x01
 #define VISIBILITYMAP_ALL_FROZEN	0x02
-
 #define VISIBILITYMAP_VALID_BITS	0x03 /* OR of all valid visiblitymap flags bits */
 
 /* Macros for visibilitymap test */

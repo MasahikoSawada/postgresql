@@ -108,22 +108,13 @@
  */
 #define MAPSIZE (BLCKSZ - MAXALIGN(SizeOfPageHeaderData))
 
-/*
- * Number of bits allocated for each heap block.
- * One for all-visible, other for all-frozen.
-*/
-#define BITS_PER_HEAPBLOCK 2
-
-/* Number of heap blocks we can represent in one byte. */
-#define HEAPBLOCKS_PER_BYTE 4
-
-/* Number of heap blocks we can represent in one visibility map page. */
-#define HEAPBLOCKS_PER_PAGE (MAPSIZE * HEAPBLOCKS_PER_BYTE)
-
 /* Mapping from heap block number to the right bit in the visibility map */
 #define HEAPBLK_TO_MAPBLOCK(x) ((x) / HEAPBLOCKS_PER_PAGE)
 #define HEAPBLK_TO_MAPBYTE(x) (((x) % HEAPBLOCKS_PER_PAGE) / HEAPBLOCKS_PER_BYTE)
 #define HEAPBLK_TO_MAPBIT(x) (((x) % HEAPBLOCKS_PER_BYTE) * BITS_PER_HEAPBLOCK)
+
+/* Number of heap blocks we can represent in one visibility map page. */
+#define HEAPBLOCKS_PER_PAGE (MAPSIZE * HEAPBLOCKS_PER_BYTE)
 
 /* tables for fast counting of set bits for visible and freeze */
 static const uint8 number_of_ones_for_visible[256] = {
@@ -281,7 +272,7 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 	uint32		mapByte = HEAPBLK_TO_MAPBYTE(heapBlk);
 	uint8		mapBit = HEAPBLK_TO_MAPBIT(heapBlk);
 	Page		page;
-	char	   *map;
+	uint8		*map;
 
 #ifdef TRACE_VISIBILITYMAP
 	elog(DEBUG1, "vm_set %s block %d, flag %u", RelationGetRelationName(rel), heapBlk, flags);
@@ -300,10 +291,10 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 		elog(ERROR, "wrong VM buffer passed to visibilitymap_set");
 
 	page = BufferGetPage(vmBuf);
-	map = PageGetContents(page);
+	map = (uint8 *)PageGetContents(page);
 	LockBuffer(vmBuf, BUFFER_LOCK_EXCLUSIVE);
 
-	if (flags != (map[mapByte] & (flags << mapBit)))
+	if (flags != (map[mapByte] >> mapBit & VISIBILITYMAP_VALID_BITS))
 	{
 		START_CRIT_SECTION();
 
