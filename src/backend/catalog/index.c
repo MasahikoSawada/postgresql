@@ -1813,7 +1813,7 @@ FormIndexDatum(IndexInfo *indexInfo,
  * isprimary: if true, set relhaspkey true; else no change
  * reltuples: if >= 0, set reltuples to this value; else no change
  *
- * If reltuples >= 0, relpages, relallvisible are also updated (using
+ * If reltuples >= 0, relpages and relallvisible are also updated (using
  * RelationGetNumberOfBlocks() and visibilitymap_count()).
  *
  * NOTE: an important side-effect of this operation is that an SI invalidation

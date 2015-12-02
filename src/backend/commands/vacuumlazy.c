@@ -971,9 +971,9 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		}						/* scan along page */
 
 		/*
-		 * If we freeze any tuples, mark the buffer dirty, and write a WAL
-		 * record recording the changes. We must log the changes to be crash-safe
-		 * against future truncation of CLOG.
+		 * If we froze any tuples, mark the buffer dirty, and write a WAL
+		 * record recording the changes.  We must log the changes to be
+		 * crash-safe against future truncation of CLOG.
 		 */
 		if (nfrozen > 0)
 		{
