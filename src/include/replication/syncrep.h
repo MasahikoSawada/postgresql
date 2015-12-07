@@ -55,10 +55,18 @@ extern void SyncRepUpdateSyncStandbysDefined(void);
 
 /* forward declaration to avoid pulling in walsender_private.h */
 struct WalSnd;
-extern int SyncRepGetSynchronousStandbys(int *sync_standbys, XLogRecPtr *write_pos_list,
-										  XLogRecPtr *flush_pos_list);
+extern int SyncRepGetSynchronousStandbys(int *sync_standbys);
+extern int SyncRepGetSynchronousStandbysPriority(int *sync_standbys);
+extern int SyncRepGetSynchronousStandbysQuorum(int *sync_standbys);
+extern bool SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
+extern bool	SyncRepGetSyncLsnsQuorum(XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
+extern bool	SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
+
+extern bool SyncRepActiveWalSender(int num);
 
 extern bool check_synchronous_standby_names(char **newval, void **extra, GucSource source);
+extern void assign_synchronous_standby_names(char *newva, void *extra);
+
 extern void assign_synchronous_commit(int newval, void *extra);
 
 #endif   /* _SYNCREP_H */

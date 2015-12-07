@@ -2670,16 +2670,6 @@ static struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
-	{
-		{"synchronous_standby_num", PGC_SIGHUP, REPLICATION_MASTER,
-			gettext_noop("Number of potential synchronous standbys."),
-			NULL
-		},
-		&synchronous_standby_num,
-		0, 0, INT_MAX,
-		NULL, NULL, NULL
-	},
-
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, 0, 0, 0, NULL, NULL, NULL
@@ -3358,7 +3348,7 @@ static struct config_string ConfigureNamesString[] =
 		},
 		&SyncRepStandbyNames,
 		"",
-		check_synchronous_standby_names, NULL, NULL
+		check_synchronous_standby_names, assign_synchronous_standby_names, NULL
 	},
 
 	{

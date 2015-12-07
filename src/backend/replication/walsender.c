@@ -2769,7 +2769,7 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 	 * Get the currently active synchronous standbys.
 	 */
 	LWLockAcquire(SyncRepLock, LW_SHARED);
-	num_sync = SyncRepGetSynchronousStandbys(sync_standbys, write_pos_list, flush_pos_list);
+	num_sync = SyncRepGetSynchronousStandbys(sync_standbys);
 	LWLockRelease(SyncRepLock);
 
 	for (i = 0; i < max_wal_senders; i++)
