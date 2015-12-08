@@ -2299,7 +2299,7 @@ select t1.x from t1 join t3 on (t1.a = t3.x);
 ERROR:  column t1.x does not exist
 LINE 1: select t1.x from t1 join t3 on (t1.a = t3.x);
                ^
-HINT:  Perhaps you meant to reference the column "t3"."x".
+HINT:  Perhaps you meant to reference the column "t3.x".
 --
 -- regression test for 8.1 merge right join bug
 --
@@ -3580,6 +3580,47 @@ select * from
 (2 rows)
 
 --
+-- test for appropriate join order in the presence of lateral references
+--
+explain (verbose, costs off)
+select * from
+  text_tbl t1
+  left join int8_tbl i8
+  on i8.q2 = 123,
+  lateral (select i8.q1, t2.f1 from text_tbl t2 limit 1) as ss
+where t1.f1 = ss.f1;
+                    QUERY PLAN                    
+--------------------------------------------------
+ Nested Loop
+   Output: t1.f1, i8.q1, i8.q2, (i8.q1), t2.f1
+   Join Filter: (t1.f1 = t2.f1)
+   ->  Nested Loop Left Join
+         Output: t1.f1, i8.q1, i8.q2
+         ->  Seq Scan on public.text_tbl t1
+               Output: t1.f1
+         ->  Materialize
+               Output: i8.q1, i8.q2
+               ->  Seq Scan on public.int8_tbl i8
+                     Output: i8.q1, i8.q2
+                     Filter: (i8.q2 = 123)
+   ->  Limit
+         Output: (i8.q1), t2.f1
+         ->  Seq Scan on public.text_tbl t2
+               Output: i8.q1, t2.f1
+(16 rows)
+
+select * from
+  text_tbl t1
+  left join int8_tbl i8
+  on i8.q2 = 123,
+  lateral (select i8.q1, t2.f1 from text_tbl t2 limit 1) as ss
+where t1.f1 = ss.f1;
+  f1  |        q1        | q2  |        q1        |  f1  
+------+------------------+-----+------------------+------
+ doh! | 4567890123456789 | 123 | 4567890123456789 | doh!
+(1 row)
+
+--
 -- test ability to push constants through outer join clauses
 --
 explain (costs off)
@@ -3982,19 +4023,19 @@ select t1.uunique1 from
 ERROR:  column t1.uunique1 does not exist
 LINE 1: select t1.uunique1 from
                ^
-HINT:  Perhaps you meant to reference the column "t1"."unique1".
+HINT:  Perhaps you meant to reference the column "t1.unique1".
 select t2.uunique1 from
   tenk1 t1 join tenk2 t2 on t1.two = t2.two; -- error, prefer "t2" suggestion
 ERROR:  column t2.uunique1 does not exist
 LINE 1: select t2.uunique1 from
                ^
-HINT:  Perhaps you meant to reference the column "t2"."unique1".
+HINT:  Perhaps you meant to reference the column "t2.unique1".
 select uunique1 from
   tenk1 t1 join tenk2 t2 on t1.two = t2.two; -- error, suggest both at once
 ERROR:  column "uunique1" does not exist
 LINE 1: select uunique1 from
                ^
-HINT:  Perhaps you meant to reference the column "t1"."unique1" or the column "t2"."unique1".
+HINT:  Perhaps you meant to reference the column "t1.unique1" or the column "t2.unique1".
 --
 -- Take care to reference the correct RTE
 --

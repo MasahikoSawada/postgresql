@@ -117,6 +117,7 @@
 #include <unistd.h>
 #include <signal.h>
 
+#include "access/parallel.h"
 #include "access/slru.h"
 #include "access/transam.h"
 #include "access/xact.h"
@@ -478,7 +479,7 @@ AsyncShmemInit(void)
 	 * Set up SLRU management of the pg_notify data.
 	 */
 	AsyncCtl->PagePrecedes = asyncQueuePagePrecedes;
-	SimpleLruInit(AsyncCtl, "Async Ctl", NUM_ASYNC_BUFFERS, 0,
+	SimpleLruInit(AsyncCtl, "async", NUM_ASYNC_BUFFERS, 0,
 				  AsyncCtlLock, "pg_notify");
 	/* Override default assumption that writes should be fsync'd */
 	AsyncCtl->do_fsync = false;
@@ -543,6 +544,9 @@ Async_Notify(const char *channel, const char *payload)
 {
 	Notification *n;
 	MemoryContext oldcontext;
+
+	if (IsParallelWorker())
+		elog(ERROR, "cannot send notifications from a parallel worker");
 
 	if (Trace_notify)
 		elog(DEBUG1, "Async_Notify(%s)", channel);

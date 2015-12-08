@@ -212,6 +212,7 @@ DATA(insert OID =  65 (  int4eq			   PGNSP PGUID 12 1 0 0 0 f f f t t f i s 2 0 
 DATA(insert OID =  66 (  int4lt			   PGNSP PGUID 12 1 0 0 0 f f f t t f i s 2 0 16 "23 23" _null_ _null_ _null_ _null_ _null_ int4lt _null_ _null_ _null_ ));
 DATA(insert OID =  67 (  texteq			   PGNSP PGUID 12 1 0 0 0 f f f t t f i s 2 0 16 "25 25" _null_ _null_ _null_ _null_ _null_ texteq _null_ _null_ _null_ ));
 DATA(insert OID =  68 (  xideq			   PGNSP PGUID 12 1 0 0 0 f f f t t f i s 2 0 16 "28 28" _null_ _null_ _null_ _null_ _null_ xideq _null_ _null_ _null_ ));
+DATA(insert OID = 3308 (  xidneq		   PGNSP PGUID 12 1 0 0 0 f f f t t f i s 2 0 16 "28 28" _null_ _null_ _null_ _null_ _null_ xidneq _null_ _null_ _null_ ));
 DATA(insert OID =  69 (  cideq			   PGNSP PGUID 12 1 0 0 0 f f f t t f i s 2 0 16 "29 29" _null_ _null_ _null_ _null_ _null_ cideq _null_ _null_ _null_ ));
 DATA(insert OID =  70 (  charne			   PGNSP PGUID 12 1 0 0 0 f f f t t f i s 2 0 16 "18 18" _null_ _null_ _null_ _null_ _null_ charne _null_ _null_ _null_ ));
 DATA(insert OID = 1246 (  charlt		   PGNSP PGUID 12 1 0 0 0 f f f t t f i s 2 0 16 "18 18" _null_ _null_ _null_ _null_ _null_ charlt _null_ _null_ _null_ ));
@@ -1515,6 +1516,7 @@ DATA(insert OID = 1318 (  length			 PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1 0 2
 DESCR("character length");
 
 DATA(insert OID = 1319 (  xideqint4			 PGNSP PGUID 12 1 0 0 0 f f f t t f i s 2 0 16 "28 23" _null_ _null_ _null_ _null_ _null_ xideq _null_ _null_ _null_ ));
+DATA(insert OID = 3309 (  xidneqint4		 PGNSP PGUID 12 1 0 0 0 f f f t t f i s 2 0 16 "28 23" _null_ _null_ _null_ _null_ _null_ xidneq _null_ _null_ _null_ ));
 
 DATA(insert OID = 1326 (  interval_div		 PGNSP PGUID 12 1 0 0 0 f f f f t f i s 2 0 1186 "1186 701" _null_ _null_ _null_ _null_ _null_	interval_div _null_ _null_ _null_ ));
 
@@ -2032,9 +2034,9 @@ DATA(insert OID = 1639 (  oidge				   PGNSP PGUID 12 1 0 0 0 f f f t t f i s 2 0
 /* System-view support functions */
 DATA(insert OID = 1573 (  pg_get_ruledef	   PGNSP PGUID 12 1 0 0 0 f f f f t f s s 1 0 25 "26" _null_ _null_ _null_ _null_ _null_ pg_get_ruledef _null_ _null_ _null_ ));
 DESCR("source text of a rule");
-DATA(insert OID = 1640 (  pg_get_viewdef	   PGNSP PGUID 12 1 0 0 0 f f f f t f s s 1 0 25 "25" _null_ _null_ _null_ _null_ _null_ pg_get_viewdef_name _null_ _null_ _null_ ));
+DATA(insert OID = 1640 (  pg_get_viewdef	   PGNSP PGUID 12 1 0 0 0 f f f f t f s r 1 0 25 "25" _null_ _null_ _null_ _null_ _null_ pg_get_viewdef_name _null_ _null_ _null_ ));
 DESCR("select statement of a view");
-DATA(insert OID = 1641 (  pg_get_viewdef	   PGNSP PGUID 12 1 0 0 0 f f f f t f s s 1 0 25 "26" _null_ _null_ _null_ _null_ _null_ pg_get_viewdef _null_ _null_ _null_ ));
+DATA(insert OID = 1641 (  pg_get_viewdef	   PGNSP PGUID 12 1 0 0 0 f f f f t f s r 1 0 25 "26" _null_ _null_ _null_ _null_ _null_ pg_get_viewdef _null_ _null_ _null_ ));
 DESCR("select statement of a view");
 DATA(insert OID = 1642 (  pg_get_userbyid	   PGNSP PGUID 12 1 0 0 0 f f f f t f s s 1 0 19 "26" _null_ _null_ _null_ _null_ _null_ pg_get_userbyid _null_ _null_ _null_ ));
 DESCR("role name by OID (with fallback)");
@@ -4036,11 +4038,11 @@ DESCR("I/O");
 /* System-view support functions with pretty-print option */
 DATA(insert OID = 2504 (  pg_get_ruledef	   PGNSP PGUID 12 1 0 0 0 f f f f t f s s 2 0 25 "26 16" _null_ _null_ _null_ _null_ _null_	pg_get_ruledef_ext _null_ _null_ _null_ ));
 DESCR("source text of a rule with pretty-print option");
-DATA(insert OID = 2505 (  pg_get_viewdef	   PGNSP PGUID 12 1 0 0 0 f f f f t f s s 2 0 25 "25 16" _null_ _null_ _null_ _null_ _null_	pg_get_viewdef_name_ext _null_ _null_ _null_ ));
+DATA(insert OID = 2505 (  pg_get_viewdef	   PGNSP PGUID 12 1 0 0 0 f f f f t f s r 2 0 25 "25 16" _null_ _null_ _null_ _null_ _null_	pg_get_viewdef_name_ext _null_ _null_ _null_ ));
 DESCR("select statement of a view with pretty-print option");
-DATA(insert OID = 2506 (  pg_get_viewdef	   PGNSP PGUID 12 1 0 0 0 f f f f t f s s 2 0 25 "26 16" _null_ _null_ _null_ _null_ _null_	pg_get_viewdef_ext _null_ _null_ _null_ ));
+DATA(insert OID = 2506 (  pg_get_viewdef	   PGNSP PGUID 12 1 0 0 0 f f f f t f s r 2 0 25 "26 16" _null_ _null_ _null_ _null_ _null_	pg_get_viewdef_ext _null_ _null_ _null_ ));
 DESCR("select statement of a view with pretty-print option");
-DATA(insert OID = 3159 (  pg_get_viewdef	   PGNSP PGUID 12 1 0 0 0 f f f f t f s s 2 0 25 "26 23" _null_ _null_ _null_ _null_ _null_	pg_get_viewdef_wrap _null_ _null_ _null_ ));
+DATA(insert OID = 3159 (  pg_get_viewdef	   PGNSP PGUID 12 1 0 0 0 f f f f t f s r 2 0 25 "26 23" _null_ _null_ _null_ _null_ _null_	pg_get_viewdef_wrap _null_ _null_ _null_ ));
 DESCR("select statement of a view with pretty-printing and specified line wrapping");
 DATA(insert OID = 2507 (  pg_get_indexdef	   PGNSP PGUID 12 1 0 0 0 f f f f t f s s 3 0 25 "26 23 16" _null_ _null_ _null_ _null_ _null_	pg_get_indexdef_ext _null_ _null_ _null_ ));
 DESCR("index description (full create statement or single expression) with pretty-print option");
@@ -4062,7 +4064,7 @@ DESCR("trigger description with pretty-print option");
 /* asynchronous notifications */
 DATA(insert OID = 3035 (  pg_listening_channels PGNSP PGUID 12 1 10 0 0 f f f f t t s r 0 0 25 "" _null_ _null_ _null_ _null_ _null_ pg_listening_channels _null_ _null_ _null_ ));
 DESCR("get the channels that the current backend listens to");
-DATA(insert OID = 3036 (  pg_notify				PGNSP PGUID 12 1 0 0 0 f f f f f f v s 2 0 2278 "25 25" _null_ _null_ _null_ _null_ _null_ pg_notify _null_ _null_ _null_ ));
+DATA(insert OID = 3036 (  pg_notify				PGNSP PGUID 12 1 0 0 0 f f f f f f v r 2 0 2278 "25 25" _null_ _null_ _null_ _null_ _null_ pg_notify _null_ _null_ _null_ ));
 DESCR("send a notification event");
 DATA(insert OID = 3296 (  pg_notification_queue_usage	PGNSP PGUID 12 1 0 0 0 f f f f t f v s 0 0 701 "" _null_ _null_ _null_ _null_ _null_ pg_notification_queue_usage _null_ _null_ _null_ ));
 DESCR("get the fraction of the asynchronous notification queue currently in use");
@@ -4327,35 +4329,35 @@ DESCR("concatenate XML values");
 DATA(insert OID = 2922 (  text			   PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1 0 25 "142" _null_ _null_ _null_ _null_ _null_ xmltotext _null_ _null_ _null_ ));
 DESCR("serialize an XML value to a character string");
 
-DATA(insert OID = 2923 (  table_to_xml				  PGNSP PGUID 12 100 0 0 0 f f f f t f s s 4 0 142 "2205 16 16 25" _null_ _null_ "{tbl,nulls,tableforest,targetns}" _null_ _null_ table_to_xml _null_ _null_ _null_ ));
+DATA(insert OID = 2923 (  table_to_xml				  PGNSP PGUID 12 100 0 0 0 f f f f t f s r 4 0 142 "2205 16 16 25" _null_ _null_ "{tbl,nulls,tableforest,targetns}" _null_ _null_ table_to_xml _null_ _null_ _null_ ));
 DESCR("map table contents to XML");
-DATA(insert OID = 2924 (  query_to_xml				  PGNSP PGUID 12 100 0 0 0 f f f f t f s s 4 0 142 "25 16 16 25" _null_ _null_ "{query,nulls,tableforest,targetns}" _null_ _null_ query_to_xml _null_ _null_ _null_ ));
+DATA(insert OID = 2924 (  query_to_xml				  PGNSP PGUID 12 100 0 0 0 f f f f t f s u 4 0 142 "25 16 16 25" _null_ _null_ "{query,nulls,tableforest,targetns}" _null_ _null_ query_to_xml _null_ _null_ _null_ ));
 DESCR("map query result to XML");
-DATA(insert OID = 2925 (  cursor_to_xml				  PGNSP PGUID 12 100 0 0 0 f f f f t f s s 5 0 142 "1790 23 16 16 25" _null_ _null_ "{cursor,count,nulls,tableforest,targetns}" _null_ _null_ cursor_to_xml _null_ _null_ _null_ ));
+DATA(insert OID = 2925 (  cursor_to_xml				  PGNSP PGUID 12 100 0 0 0 f f f f t f s r 5 0 142 "1790 23 16 16 25" _null_ _null_ "{cursor,count,nulls,tableforest,targetns}" _null_ _null_ cursor_to_xml _null_ _null_ _null_ ));
 DESCR("map rows from cursor to XML");
-DATA(insert OID = 2926 (  table_to_xmlschema		  PGNSP PGUID 12 100 0 0 0 f f f f t f s s 4 0 142 "2205 16 16 25" _null_ _null_ "{tbl,nulls,tableforest,targetns}" _null_ _null_ table_to_xmlschema _null_ _null_ _null_ ));
+DATA(insert OID = 2926 (  table_to_xmlschema		  PGNSP PGUID 12 100 0 0 0 f f f f t f s r 4 0 142 "2205 16 16 25" _null_ _null_ "{tbl,nulls,tableforest,targetns}" _null_ _null_ table_to_xmlschema _null_ _null_ _null_ ));
 DESCR("map table structure to XML Schema");
-DATA(insert OID = 2927 (  query_to_xmlschema		  PGNSP PGUID 12 100 0 0 0 f f f f t f s s 4 0 142 "25 16 16 25" _null_ _null_ "{query,nulls,tableforest,targetns}" _null_ _null_ query_to_xmlschema _null_ _null_ _null_ ));
+DATA(insert OID = 2927 (  query_to_xmlschema		  PGNSP PGUID 12 100 0 0 0 f f f f t f s u 4 0 142 "25 16 16 25" _null_ _null_ "{query,nulls,tableforest,targetns}" _null_ _null_ query_to_xmlschema _null_ _null_ _null_ ));
 DESCR("map query result structure to XML Schema");
-DATA(insert OID = 2928 (  cursor_to_xmlschema		  PGNSP PGUID 12 100 0 0 0 f f f f t f s s 4 0 142 "1790 16 16 25" _null_ _null_ "{cursor,nulls,tableforest,targetns}" _null_ _null_ cursor_to_xmlschema _null_ _null_ _null_ ));
+DATA(insert OID = 2928 (  cursor_to_xmlschema		  PGNSP PGUID 12 100 0 0 0 f f f f t f s r 4 0 142 "1790 16 16 25" _null_ _null_ "{cursor,nulls,tableforest,targetns}" _null_ _null_ cursor_to_xmlschema _null_ _null_ _null_ ));
 DESCR("map cursor structure to XML Schema");
-DATA(insert OID = 2929 (  table_to_xml_and_xmlschema  PGNSP PGUID 12 100 0 0 0 f f f f t f s s 4 0 142 "2205 16 16 25" _null_ _null_ "{tbl,nulls,tableforest,targetns}" _null_ _null_ table_to_xml_and_xmlschema _null_ _null_ _null_ ));
+DATA(insert OID = 2929 (  table_to_xml_and_xmlschema  PGNSP PGUID 12 100 0 0 0 f f f f t f s r 4 0 142 "2205 16 16 25" _null_ _null_ "{tbl,nulls,tableforest,targetns}" _null_ _null_ table_to_xml_and_xmlschema _null_ _null_ _null_ ));
 DESCR("map table contents and structure to XML and XML Schema");
-DATA(insert OID = 2930 (  query_to_xml_and_xmlschema  PGNSP PGUID 12 100 0 0 0 f f f f t f s s 4 0 142 "25 16 16 25" _null_ _null_ "{query,nulls,tableforest,targetns}" _null_ _null_ query_to_xml_and_xmlschema _null_ _null_ _null_ ));
+DATA(insert OID = 2930 (  query_to_xml_and_xmlschema  PGNSP PGUID 12 100 0 0 0 f f f f t f s u 4 0 142 "25 16 16 25" _null_ _null_ "{query,nulls,tableforest,targetns}" _null_ _null_ query_to_xml_and_xmlschema _null_ _null_ _null_ ));
 DESCR("map query result and structure to XML and XML Schema");
 
-DATA(insert OID = 2933 (  schema_to_xml				  PGNSP PGUID 12 100 0 0 0 f f f f t f s s 4 0 142 "19 16 16 25" _null_ _null_ "{schema,nulls,tableforest,targetns}" _null_ _null_ schema_to_xml _null_ _null_ _null_ ));
+DATA(insert OID = 2933 (  schema_to_xml				  PGNSP PGUID 12 100 0 0 0 f f f f t f s r 4 0 142 "19 16 16 25" _null_ _null_ "{schema,nulls,tableforest,targetns}" _null_ _null_ schema_to_xml _null_ _null_ _null_ ));
 DESCR("map schema contents to XML");
-DATA(insert OID = 2934 (  schema_to_xmlschema		  PGNSP PGUID 12 100 0 0 0 f f f f t f s s 4 0 142 "19 16 16 25" _null_ _null_ "{schema,nulls,tableforest,targetns}" _null_ _null_ schema_to_xmlschema _null_ _null_ _null_ ));
+DATA(insert OID = 2934 (  schema_to_xmlschema		  PGNSP PGUID 12 100 0 0 0 f f f f t f s r 4 0 142 "19 16 16 25" _null_ _null_ "{schema,nulls,tableforest,targetns}" _null_ _null_ schema_to_xmlschema _null_ _null_ _null_ ));
 DESCR("map schema structure to XML Schema");
-DATA(insert OID = 2935 (  schema_to_xml_and_xmlschema PGNSP PGUID 12 100 0 0 0 f f f f t f s s 4 0 142 "19 16 16 25" _null_ _null_ "{schema,nulls,tableforest,targetns}" _null_ _null_ schema_to_xml_and_xmlschema _null_ _null_ _null_ ));
+DATA(insert OID = 2935 (  schema_to_xml_and_xmlschema PGNSP PGUID 12 100 0 0 0 f f f f t f s r 4 0 142 "19 16 16 25" _null_ _null_ "{schema,nulls,tableforest,targetns}" _null_ _null_ schema_to_xml_and_xmlschema _null_ _null_ _null_ ));
 DESCR("map schema contents and structure to XML and XML Schema");
 
-DATA(insert OID = 2936 (  database_to_xml			  PGNSP PGUID 12 100 0 0 0 f f f f t f s s 3 0 142 "16 16 25" _null_ _null_ "{nulls,tableforest,targetns}" _null_ _null_ database_to_xml _null_ _null_ _null_ ));
+DATA(insert OID = 2936 (  database_to_xml			  PGNSP PGUID 12 100 0 0 0 f f f f t f s r 3 0 142 "16 16 25" _null_ _null_ "{nulls,tableforest,targetns}" _null_ _null_ database_to_xml _null_ _null_ _null_ ));
 DESCR("map database contents to XML");
-DATA(insert OID = 2937 (  database_to_xmlschema		  PGNSP PGUID 12 100 0 0 0 f f f f t f s s 3 0 142 "16 16 25" _null_ _null_ "{nulls,tableforest,targetns}" _null_ _null_ database_to_xmlschema _null_ _null_ _null_ ));
+DATA(insert OID = 2937 (  database_to_xmlschema		  PGNSP PGUID 12 100 0 0 0 f f f f t f s r 3 0 142 "16 16 25" _null_ _null_ "{nulls,tableforest,targetns}" _null_ _null_ database_to_xmlschema _null_ _null_ _null_ ));
 DESCR("map database structure to XML Schema");
-DATA(insert OID = 2938 (  database_to_xml_and_xmlschema PGNSP PGUID 12 100 0 0 0 f f f f t f s s 3 0 142 "16 16 25" _null_ _null_ "{nulls,tableforest,targetns}" _null_ _null_ database_to_xml_and_xmlschema _null_ _null_ _null_ ));
+DATA(insert OID = 2938 (  database_to_xml_and_xmlschema PGNSP PGUID 12 100 0 0 0 f f f f t f s r 3 0 142 "16 16 25" _null_ _null_ "{nulls,tableforest,targetns}" _null_ _null_ database_to_xml_and_xmlschema _null_ _null_ _null_ ));
 DESCR("map database contents and structure to XML and XML Schema");
 
 DATA(insert OID = 2931 (  xpath		 PGNSP PGUID 12 1 0 0 0 f f f f t f i s 3 0 143 "25 142 1009" _null_ _null_ _null_ _null_ _null_ xpath _null_ _null_ _null_ ));
@@ -4467,6 +4469,8 @@ DATA(insert OID = 2958 (  uuid_gt		   PGNSP PGUID 12 1 0 0 0 f f f t t f i s 2 0
 DATA(insert OID = 2959 (  uuid_ne		   PGNSP PGUID 12 1 0 0 0 f f f t t f i s 2 0 16 "2950 2950" _null_ _null_ _null_ _null_ _null_ uuid_ne _null_ _null_ _null_ ));
 DATA(insert OID = 2960 (  uuid_cmp		   PGNSP PGUID 12 1 0 0 0 f f f f t f i s 2 0 23 "2950 2950" _null_ _null_ _null_ _null_ _null_ uuid_cmp _null_ _null_ _null_ ));
 DESCR("less-equal-greater");
+DATA(insert OID = 3300 (  uuid_sortsupport PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1 0 2278 "2281" _null_ _null_ _null_ _null_ _null_ uuid_sortsupport _null_ _null_ _null_ ));
+DESCR("sort support");
 DATA(insert OID = 2961 (  uuid_recv		   PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1 0 2950 "2281" _null_ _null_ _null_ _null_ _null_ uuid_recv _null_ _null_ _null_ ));
 DESCR("I/O");
 DATA(insert OID = 2962 (  uuid_send		   PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1 0 17 "2950" _null_ _null_ _null_ _null_ _null_ uuid_send _null_ _null_ _null_ ));

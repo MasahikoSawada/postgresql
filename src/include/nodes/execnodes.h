@@ -1248,11 +1248,15 @@ typedef struct ScanState
 	TupleTableSlot *ss_ScanTupleSlot;
 } ScanState;
 
-/*
- * SeqScan uses a bare ScanState as its state node, since it needs
- * no additional fields.
+/* ----------------
+ *	 SeqScanState information
+ * ----------------
  */
-typedef ScanState SeqScanState;
+typedef struct SeqScanState
+{
+	ScanState	ss;				/* its first field is NodeTag */
+	Size		pscan_len;		/* size of parallel heap scan descriptor */
+} SeqScanState;
 
 /* ----------------
  *	 SampleScanState information
@@ -1579,6 +1583,7 @@ typedef struct WorkTableScanState
 typedef struct ForeignScanState
 {
 	ScanState	ss;				/* its first field is NodeTag */
+	List	   *fdw_recheck_quals;	/* original quals not in ss.ps.qual */
 	/* use struct pointer to avoid including fdwapi.h here */
 	struct FdwRoutine *fdwroutine;
 	void	   *fdw_state;		/* foreign-data wrapper can keep state here */
@@ -1960,9 +1965,12 @@ typedef struct UniqueState
 typedef struct GatherState
 {
 	PlanState	ps;				/* its first field is NodeTag */
+	bool		initialized;
 	struct ParallelExecutorInfo *pei;
-	struct TupleQueueFunnel *funnel;
-	bool		need_to_scan_workers;
+	int			nreaders;
+	int			nextreader;
+	struct TupleQueueReader **reader;
+	TupleTableSlot *funnel_slot;
 	bool		need_to_scan_locally;
 } GatherState;
 

@@ -966,16 +966,6 @@ AlterOptRoleElem:
 						$$ = makeDefElem("superuser", (Node *)makeInteger(TRUE));
 					else if (strcmp($1, "nosuperuser") == 0)
 						$$ = makeDefElem("superuser", (Node *)makeInteger(FALSE));
-					else if (strcmp($1, "createuser") == 0)
-					{
-						/* For backwards compatibility, synonym for SUPERUSER */
-						$$ = makeDefElem("superuser", (Node *)makeInteger(TRUE));
-					}
-					else if (strcmp($1, "nocreateuser") == 0)
-					{
-						/* For backwards compatibility, synonym for SUPERUSER */
-						$$ = makeDefElem("superuser", (Node *)makeInteger(FALSE));
-					}
 					else if (strcmp($1, "createrole") == 0)
 						$$ = makeDefElem("createrole", (Node *)makeInteger(TRUE));
 					else if (strcmp($1, "nocreaterole") == 0)
@@ -2571,9 +2561,12 @@ ClosePortalStmt:
  *
  *		QUERY :
  *				COPY relname [(columnList)] FROM/TO file [WITH] [(options)]
- *				COPY ( SELECT ... ) TO file	[WITH] [(options)]
+ *				COPY ( query ) TO file	[WITH] [(options)]
  *
- *				where 'file' can be one of:
+ *				where 'query' can be one of:
+ *				{ SELECT | UPDATE | INSERT | DELETE }
+ *
+ *				and 'file' can be one of:
  *				{ PROGRAM 'command' | STDIN | STDOUT | 'filename' }
  *
  *				In the preferred syntax the options are comma-separated
@@ -2584,7 +2577,7 @@ ClosePortalStmt:
  *				COPY [ BINARY ] table [ WITH OIDS ] FROM/TO file
  *					[ [ USING ] DELIMITERS 'delimiter' ] ]
  *					[ WITH NULL AS 'null string' ]
- *				This option placement is not supported with COPY (SELECT...).
+ *				This option placement is not supported with COPY (query...).
  *
  *****************************************************************************/
 
@@ -2617,16 +2610,16 @@ CopyStmt:	COPY opt_binary qualified_name opt_column_list opt_oids
 						n->options = list_concat(n->options, $11);
 					$$ = (Node *)n;
 				}
-			| COPY select_with_parens TO opt_program copy_file_name opt_with copy_options
+			| COPY '(' PreparableStmt ')' TO opt_program copy_file_name opt_with copy_options
 				{
 					CopyStmt *n = makeNode(CopyStmt);
 					n->relation = NULL;
-					n->query = $2;
+					n->query = $3;
 					n->attlist = NIL;
 					n->is_from = false;
-					n->is_program = $4;
-					n->filename = $5;
-					n->options = $7;
+					n->is_program = $6;
+					n->filename = $7;
+					n->options = $9;
 
 					if (n->is_program && n->filename == NULL)
 						ereport(ERROR,

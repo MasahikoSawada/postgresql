@@ -602,12 +602,15 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 			set_join_references(root, (Join *) plan, rtoffset);
 			break;
 
+		case T_Gather:
+			set_upper_references(root, plan, rtoffset);
+			break;
+
 		case T_Hash:
 		case T_Material:
 		case T_Sort:
 		case T_Unique:
 		case T_SetOp:
-		case T_Gather:
 
 			/*
 			 * These plan types don't actually bother to evaluate their
@@ -1126,6 +1129,12 @@ set_foreignscan_references(PlannerInfo *root,
 						   itlist,
 						   INDEX_VAR,
 						   rtoffset);
+		fscan->fdw_recheck_quals = (List *)
+			fix_upper_expr(root,
+						   (Node *) fscan->fdw_recheck_quals,
+						   itlist,
+						   INDEX_VAR,
+						   rtoffset);
 		pfree(itlist);
 		/* fdw_scan_tlist itself just needs fix_scan_list() adjustments */
 		fscan->fdw_scan_tlist =
@@ -1133,13 +1142,15 @@ set_foreignscan_references(PlannerInfo *root,
 	}
 	else
 	{
-		/* Adjust tlist, qual, fdw_exprs in the standard way */
+		/* Adjust tlist, qual, fdw_exprs, etc. in the standard way */
 		fscan->scan.plan.targetlist =
 			fix_scan_list(root, fscan->scan.plan.targetlist, rtoffset);
 		fscan->scan.plan.qual =
 			fix_scan_list(root, fscan->scan.plan.qual, rtoffset);
 		fscan->fdw_exprs =
 			fix_scan_list(root, fscan->fdw_exprs, rtoffset);
+		fscan->fdw_recheck_quals =
+			fix_scan_list(root, fscan->fdw_recheck_quals, rtoffset);
 	}
 
 	/* Adjust fs_relids if needed */

@@ -31,7 +31,7 @@ extern bool add_path_precheck(RelOptInfo *parent_rel,
 				  List *pathkeys, Relids required_outer);
 
 extern Path *create_seqscan_path(PlannerInfo *root, RelOptInfo *rel,
-					Relids required_outer);
+					Relids required_outer, int nworkers);
 extern Path *create_samplescan_path(PlannerInfo *root, RelOptInfo *rel,
 					   Relids required_outer);
 extern IndexPath *create_index_path(PlannerInfo *root,
@@ -147,6 +147,7 @@ extern RelOptInfo *build_join_rel(PlannerInfo *root,
 			   RelOptInfo *inner_rel,
 			   SpecialJoinInfo *sjinfo,
 			   List **restrictlist_ptr);
+extern Relids min_join_parameterization(PlannerInfo *root, Relids joinrelids);
 extern RelOptInfo *build_empty_join_rel(PlannerInfo *root);
 extern AppendRelInfo *find_childrel_appendrelinfo(PlannerInfo *root,
 							RelOptInfo *rel);

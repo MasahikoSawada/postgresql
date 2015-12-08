@@ -27,10 +27,13 @@ typedef struct ParallelExecutorInfo
 	BufferUsage *buffer_usage;
 	SharedExecutorInstrumentation *instrumentation;
 	shm_mq_handle **tqueue;
+	bool	finished;
 }	ParallelExecutorInfo;
 
 extern ParallelExecutorInfo *ExecInitParallelPlan(PlanState *planstate,
 					 EState *estate, int nworkers);
 extern void ExecParallelFinish(ParallelExecutorInfo *pei);
+extern void ExecParallelCleanup(ParallelExecutorInfo *pei);
+extern void ExecParallelReinitialize(ParallelExecutorInfo *pei);
 
 #endif   /* EXECPARALLEL_H */

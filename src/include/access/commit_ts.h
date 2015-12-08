@@ -34,13 +34,13 @@ extern Size CommitTsShmemBuffers(void);
 extern Size CommitTsShmemSize(void);
 extern void CommitTsShmemInit(void);
 extern void BootStrapCommitTs(void);
-extern void StartupCommitTs(bool force_enable);
+extern void StartupCommitTs(bool enabled);
 extern void CommitTsParameterChange(bool xlrecvalue, bool pgcontrolvalue);
 extern void CompleteCommitTsInitialization(void);
 extern void ShutdownCommitTs(void);
 extern void CheckPointCommitTs(void);
 extern void ExtendCommitTs(TransactionId newestXact);
-extern void TruncateCommitTs(TransactionId oldestXact, bool do_wal);
+extern void TruncateCommitTs(TransactionId oldestXact);
 extern void SetCommitTsLimit(TransactionId oldestXact,
 				 TransactionId newestXact);
 extern void AdvanceOldestCommitTs(TransactionId oldestXact);
