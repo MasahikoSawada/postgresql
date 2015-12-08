@@ -393,8 +393,6 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 
 	if (synchronous_replication_method == SYNC_REP_METHOD_PRIORITY)
 		ret = SyncRepGetSyncLsnsPriority(&tmp_write_pos, &tmp_flush_pos);
-	else if (synchronous_replication_method == SYNC_REP_METHOD_QUORUM)
-		ret = SyncRepGetSyncLsnsQuorum(&tmp_write_pos, &tmp_flush_pos);
 
 #ifdef DEBUG_REPLICATION
 	elog(NOTICE, "====> CONSIDER (%d) write(tmp,my) %X/%X <= %X/%X, flush(tmp,my) : %X/%X <= %X/%X",
@@ -430,13 +428,12 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 int
 SyncRepGetSynchronousStandbys(int *sync_standbys)
 {
-	int	num_sync;
+	int	num_sync = 0;
+
 	Assert(sync_standbys);
 
 	if (synchronous_replication_method == SYNC_REP_METHOD_PRIORITY)
 		num_sync = SyncRepGetSynchronousStandbysPriority(sync_standbys);
-	else if (synchronous_replication_method == SYNC_REP_METHOD_QUORUM)
-		num_sync = SyncRepGetSynchronousStandbysQuorum(sync_standbys);
 
 	return num_sync;
 }
@@ -509,99 +506,6 @@ SyncRepGetSynchronousStandbysPriority(int *sync_standbys)
 #endif
 
 	return num_sync;
-}
-
-int
-SyncRepGetSynchronousStandbysQuorum(int *sync_standbys)
-{
-	int		num_sync = 0;
-	int		i;
-
-	sync_standbys = (int *) palloc(sizeof(int) * synchronous_standby_num);
-
-	for (i = 0; i < max_wal_senders; i++)
-	{
-		/* Is this wal sender active? */
-		if (!SyncRepActiveWalSender(i))
-			continue;
-
-		/* Active standbys are always sync standby in quorum method*/
-		sync_standbys[num_sync++] = i;
-	}
-
-#ifdef DEBUG_REPLICATION
-	{
-		char *sync_list = palloc(sizeof(char) * 20);
-		char *tmp = sync_list;
-
-		for (i = 0; i < num_sync; i++)
-		{
-			sprintf(tmp, "%d,", sync_standbys[i]);
-			tmp++;
-		}
-
-		*(tmp-1) = '\0';
-		elog(NOTICE, "SyncedStandbyList [%s]", sync_list);
-		pfree(sync_list);
-	}
-#endif
-
-	return num_sync;
-}
-
-bool
-SyncRepGetSyncLsnsQuorum(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
-{
-	int *sync_standbys = NULL;
-	int	num_sync;
-
-	num_sync = SyncRepGetSynchronousStandbysQuorum(sync_standbys);
-
-	if (num_sync < synchronous_standby_num)
-	{
-		pfree(sync_standbys);
-		return false;
-	}
-
-
-	pfree(sync_standbys);
-
-/*#ifdef 0
-	if (SyncRepMethodIsQuorum())
-	{
-		qsort((void *) write_pos_list, num_sync, sizeof(XLogRecPtr), comp_lsn);
-		qsort((void *) flush_pos_list, num_sync, sizeof(XLogRecPtr), comp_lsn);
-
-//#ifdef DEBUG_REPLICATION
-		elog(NOTICE, "SYNC LIST");
-		for (i = 0; i < num_sync; i++)
-			elog(NOTICE, "sync_standbys[%d] = %d", i, sync_standbys[i]);
-
-		elog(NOTICE, "WRITE LOCAITON LIST");
-		for (i = 0; i < num_sync; i++)
-		{
-			elog(NOTICE, "    [%d] : %X/%X", i,
-				 (uint32) (write_pos_list[i] >> 32) ,
-				 (uint32) write_pos_list[i]
-				);
-		}
-		elog(NOTICE, "FLUSH LOCAITON LIST");
-		for (i = 0; i < num_sync; i++)
-		{
-			elog(NOTICE, "    [%d] : %X/%X", i,
-				 (uint32) (flush_pos_list[i] >> 32) ,
-				 (uint32) flush_pos_list[i]
-				);
-		}
-//		#endif
-
-		write_pos = write_pos_list[synchronous_standby_num - 1];
-		flush_pos = flush_pos_list[synchronous_standby_num - 1];
-	}
-
-#endif
-*/
-	return true;
 }
 
 bool
@@ -846,11 +750,6 @@ SyncRepGetStandbyPriority(void)
 			pg_strcasecmp(standby_name, "*") == 0)
 		{
 			found = true;
-
-			/* All standby's priority is 1, if quorum mothod */
-			if (synchronous_replication_method == SYNC_REP_METHOD_QUORUM)
-				priority = 1;
-
 			break;
 		}
 	}

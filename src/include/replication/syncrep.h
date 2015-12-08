@@ -33,7 +33,6 @@
 
 /* SyncRepMethod */
 #define SYNC_REP_METHOD_PRIORITY	0
-#define SYNC_REP_METHOD_QUORUM		1
 
 /* user-settable parameters for synchronous replication */
 extern char *SyncRepStandbyNames;

@@ -312,7 +312,6 @@ static const struct config_enum_entry xmloption_options[] = {
 
 static const struct config_enum_entry synchronous_replication_method_options[] = {
 	{"priority", SYNC_REP_METHOD_PRIORITY, false},
-	{"quorum", SYNC_REP_METHOD_QUORUM, false},
 	{NULL, 0, false}
 };
 
