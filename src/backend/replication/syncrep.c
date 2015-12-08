@@ -60,7 +60,7 @@
 /*#define DEBUG_REPLICATION 1*/
 
 /* User-settable parameters for sync rep */
-char		*SyncRepStandbyNames;
+char	   *SyncRepStandbyNames;
 int			synchronous_replication_method;
 int			synchronous_standby_num;
 
@@ -78,8 +78,6 @@ static void SyncRepCancelWait(void);
 static int	SyncRepWakeQueue(bool all, int mode);
 
 static int	SyncRepGetStandbyPriority(void);
-
-static int	comp_lsn(const void *a, const void *b);
 
 #ifdef USE_ASSERT_CHECKING
 static bool SyncRepQueueIsOrderedByLSN(int mode);
@@ -403,7 +401,7 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 		 (uint32) (MyWalSnd->flush >> 32), (uint32) MyWalSnd->flush);
 #endif
 
-	/* We have advanced to LSN */
+	/* Have we advanced LSN? */
 	if (ret &&
 		MyWalSnd->write >= tmp_write_pos && MyWalSnd->flush >= tmp_flush_pos)
 	{
@@ -417,13 +415,8 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 }
 
 /*
- * Caller is responsible for palloc and free. Return the number of
- * synchronous standbys and its list.
- */
-
-/*
  * Obtain three palloc'd arrays containing position of standbys currently
- * considered as synchronous, write/flush LSN position of each sync node.
+ * considered as synchronous, and its length.
  */
 int
 SyncRepGetSynchronousStandbys(int *sync_standbys)
@@ -438,6 +431,10 @@ SyncRepGetSynchronousStandbys(int *sync_standbys)
 	return num_sync;
 }
 
+/*
+ * Obtain standby currently considered as synchronous using
+ * priority method.
+ */
 int
 SyncRepGetSynchronousStandbysPriority(int *sync_standbys)
 {
@@ -445,7 +442,6 @@ SyncRepGetSynchronousStandbysPriority(int *sync_standbys)
 	int	num_sync = 0;
 	int	i;
 
-	/* Decide synced wal senders */
 	for (i = 0; i < max_wal_senders; i++)
 	{
 		/* Use volatile pointer to prevent code rearrangement */
@@ -501,13 +497,16 @@ SyncRepGetSynchronousStandbysPriority(int *sync_standbys)
 
 		*(tmp-1) = '\0';
 		elog(NOTICE, "(%d) SyncedStandbyList [%s]", MyProcPid, sync_list);
-		//pfree(sync_list);
+		pfree(sync_list);
 	}
 #endif
 
 	return num_sync;
 }
 
+/*
+ * Obtain currently synced LSN: write and flush, using prioirty method.
+ */
 bool
 SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 {
@@ -531,26 +530,25 @@ SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 	{
 		volatile WalSnd *walsndloc = &WalSndCtl->walsnds[sync_standbys[i]];
 
+		SpinLockAcquire(&walsndloc->mutex);
+
 		/* Store first candidate */
 		if (XLogRecPtrIsInvalid(tmp_write) && XLogRecPtrIsInvalid(tmp_flush))
 		{
-			SpinLockAcquire(&walsndloc->mutex);
 			tmp_write = walsndloc->write;
 			tmp_flush = walsndloc->flush;
 			SpinLockRelease(&walsndloc->mutex);
 			continue;
 		}
 
-		SpinLockAcquire(&walsndloc->mutex);
 		/* Find lowest XLogRecPtr of both write and flush from sync_nodes */
 		if (tmp_write > walsndloc->write &&	tmp_flush > walsndloc->flush)
 		{
 			tmp_write = walsndloc->write;
 			tmp_flush = walsndloc->flush;
 		}
+
 		SpinLockRelease(&walsndloc->mutex);
-
-
 	}
 
 	*write_pos = tmp_write;
@@ -573,7 +571,7 @@ SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 	for (i = 0; i< num_sync; i++)
 	{
 		volatile WalSnd *walsndloc = &WalSndCtl->walsnds[sync_standbys[i]];
-		
+
 		elog(NOTICE, "    [%d] : %X/%X, priority = %d", i,
 			 (uint32) (walsndloc->flush >> 32) ,
 			 (uint32) walsndloc->flush,
@@ -621,7 +619,7 @@ SyncRepReleaseWaiters(void)
 
 	LWLockAcquire(SyncRepLock, LW_EXCLUSIVE);
 
-	/* Get latest synced LSNs according to replication method */
+	/* Get currently synced LSNs according to replication method */
 	if (!(SyncRepSyncedLsnAdvancedTo(&write_pos, &flush_pos)))
 	{
 		LWLockRelease(SyncRepLock);
@@ -635,8 +633,6 @@ SyncRepReleaseWaiters(void)
 		 (uint32) (write_pos >> 32), (uint32) write_pos,
 		 (uint32) (flush_pos >> 32), (uint32) flush_pos);
 #endif
-
-	//Assert(!(write_pos == InvalidXLogRecPtr && flush_pos == InvalidXLogRecPtr));
 
 	/*
 	 * Set the lsn first so that when we wake backends they will release up to
@@ -735,7 +731,6 @@ SyncRepGetStandbyPriority(void)
 
 		if (num == 0)
 		{
-			//num = pg_atoi(lfirst_int(value, sizeof(int), 0);
 			num = lfirst_int(l);
 			continue;
 		}
@@ -864,29 +859,6 @@ SyncRepUpdateSyncStandbysDefined(void)
 	}
 }
 
-static int
-comp_lsn(const void *a, const void *b)
-{
-	XLogRecPtr *lsn1 = (XLogRecPtr *) a;
-	XLogRecPtr *lsn2 = (XLogRecPtr *) b;
-	int	res;
-
-/*
-	elog(NOTICE, " lsn1 = %X/%X, lsn2 = %X/%X",
-		 (uint32) (*lsn1 >> 32) ,
-		 (uint32) *lsn1,
-		 (uint32) (*lsn2 >> 32),
-		 (uint32) *lsn2
-		);
-*/
-	if (*lsn1 <= *lsn2)
-		res = 1;
-	else
-		res = -1;
-
-	return res;
-}
-
 #ifdef USE_ASSERT_CHECKING
 static bool
 SyncRepQueueIsOrderedByLSN(int mode)
@@ -988,7 +960,6 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 	 */
 	if (elemlist != NULL && lfirst_int(list_head(elemlist)) == 0)
 	{
-		//GUC_check_errdetail("The number of synchronous standby must be more than 1");
 		pfree(rawstring);
 		list_free(elemlist);
 		return false;
