@@ -57,7 +57,7 @@
 #include "utils/builtins.h"
 #include "utils/ps_status.h"
 
-#define DEBUG_REPLICATION 1
+/*#define DEBUG_REPLICATION 1*/
 
 /* User-settable parameters for sync rep */
 char		*SyncRepStandbyNames;
