@@ -57,7 +57,7 @@
 #include "utils/builtins.h"
 #include "utils/ps_status.h"
 
-#define DEBUG_QUORUM 1
+#define DEBUG_REPLICATION 1
 
 /* User-settable parameters for sync rep */
 char		*SyncRepStandbyNames;
@@ -396,19 +396,21 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 	else if (synchronous_replication_method == SYNC_REP_METHOD_QUORUM)
 		ret = SyncRepGetSyncLsnsQuorum(&tmp_write_pos, &tmp_flush_pos);
 
+#ifdef DEBUG_REPLICATION
+	elog(NOTICE, "====> CONSIDER (%d) write(tmp,my) %X/%X <= %X/%X, flush(tmp,my) : %X/%X <= %X/%X",
+		 MyWalSnd->pid,
+		 (uint32) (tmp_write_pos >> 32), (uint32) tmp_write_pos,
+		 (uint32) (MyWalSnd->write >> 32), (uint32) MyWalSnd->write,
+		 (uint32) (tmp_flush_pos >> 32), (uint32) tmp_flush_pos,
+		 (uint32) (MyWalSnd->flush >> 32), (uint32) MyWalSnd->flush);
+#endif
+
 	/* We have advanced to LSN */
 	if (ret &&
 		MyWalSnd->write >= tmp_write_pos && MyWalSnd->flush >= tmp_flush_pos)
 	{
 		*write_pos = tmp_write_pos;
 		*flush_pos = tmp_flush_pos;
-
-#ifdef DEBUG_QUORUM
-	elog(NOTICE, "======> DECIDE (%d) write : %X/%X, flush : %X/%X #####",
-		 MyWalSnd->pid,
-		 (uint32) (*write_pos >> 32), (uint32) *write_pos,
-		 (uint32) (*flush_pos >> 32), (uint32) *flush_pos);
-#endif
 
 		return true;
 	}
@@ -442,11 +444,9 @@ SyncRepGetSynchronousStandbys(int *sync_standbys)
 int
 SyncRepGetSynchronousStandbysPriority(int *sync_standbys)
 {
-	int	priority;
+	int	priority = 0;
 	int	num_sync = 0;
 	int	i;
-
-	sync_standbys = (int *) palloc(sizeof(int) * synchronous_standby_num);
 
 	/* Decide synced wal senders */
 	for (i = 0; i < max_wal_senders; i++)
@@ -456,16 +456,9 @@ SyncRepGetSynchronousStandbysPriority(int *sync_standbys)
 		int			this_priority;
 		int			j;
 
+		/* Is this wal sender active? */
 		if (!SyncRepActiveWalSender(i))
 			continue;
-
-		/* Must have a lower priority value than any previous ones */
-		/*
-		if (result != NULL && result_priority <= this_priority)
-			continue;
-		*/
-
-		this_priority = walsnd->sync_standby_priority;
 
 		if (num_sync == synchronous_standby_num)
 		{
@@ -484,6 +477,7 @@ SyncRepGetSynchronousStandbysPriority(int *sync_standbys)
 				if (new_priority < walsndloc->sync_standby_priority)
 					new_priority = walsndloc->sync_standby_priority;
 			}
+
 			priority = new_priority;
 		}
 		else
@@ -497,7 +491,7 @@ SyncRepGetSynchronousStandbysPriority(int *sync_standbys)
 		}
 	}
 
-#ifdef DEBUG_QUORUM
+#ifdef DEBUG_REPLICATION
 	{
 		char *sync_list = palloc(sizeof(char) * 20);
 		char *tmp = sync_list;
@@ -505,12 +499,12 @@ SyncRepGetSynchronousStandbysPriority(int *sync_standbys)
 		for (i = 0; i < num_sync; i++)
 		{
 			sprintf(tmp, "%d,", sync_standbys[i]);
-			tmp++;
+			tmp += 2;
 		}
 
 		*(tmp-1) = '\0';
-		elog(NOTICE, "SyncedStandbyList [%s]", sync_list);
-		pfree(sync_list);
+		elog(NOTICE, "(%d) SyncedStandbyList [%s]", MyProcPid, sync_list);
+		//pfree(sync_list);
 	}
 #endif
 
@@ -535,7 +529,7 @@ SyncRepGetSynchronousStandbysQuorum(int *sync_standbys)
 		sync_standbys[num_sync++] = i;
 	}
 
-#ifdef DEBUG_QUORUM
+#ifdef DEBUG_REPLICATION
 	{
 		char *sync_list = palloc(sizeof(char) * 20);
 		char *tmp = sync_list;
@@ -575,11 +569,10 @@ SyncRepGetSyncLsnsQuorum(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 /*#ifdef 0
 	if (SyncRepMethodIsQuorum())
 	{
-
 		qsort((void *) write_pos_list, num_sync, sizeof(XLogRecPtr), comp_lsn);
 		qsort((void *) flush_pos_list, num_sync, sizeof(XLogRecPtr), comp_lsn);
 
-//#ifdef DEBUG_QUORUM
+//#ifdef DEBUG_REPLICATION
 		elog(NOTICE, "SYNC LIST");
 		for (i = 0; i < num_sync; i++)
 			elog(NOTICE, "sync_standbys[%d] = %d", i, sync_standbys[i]);
@@ -617,9 +610,10 @@ SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 	int			*sync_standbys = NULL;
 	int			num_sync;
 	int			i;
-	XLogRecPtr	tmp_write;
-	XLogRecPtr	tmp_flush;
+	XLogRecPtr	tmp_write = InvalidXLogRecPtr;
+	XLogRecPtr	tmp_flush = InvalidXLogRecPtr;
 
+	sync_standbys = (int *) palloc(sizeof(int) * synchronous_standby_num);
 	num_sync = SyncRepGetSynchronousStandbysPriority(sync_standbys);
 
 	/* Just return, if sync standby is not enough */
@@ -632,52 +626,61 @@ SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 	for (i = 0; i < num_sync; i++)
 	{
 		volatile WalSnd *walsndloc = &WalSndCtl->walsnds[sync_standbys[i]];
-		SpinLockAcquire(&walsndloc->mutex);
 
 		/* Store first candidate */
 		if (XLogRecPtrIsInvalid(tmp_write) && XLogRecPtrIsInvalid(tmp_flush))
 		{
+			SpinLockAcquire(&walsndloc->mutex);
 			tmp_write = walsndloc->write;
 			tmp_flush = walsndloc->flush;
+			SpinLockRelease(&walsndloc->mutex);
 			continue;
 		}
 
+		SpinLockAcquire(&walsndloc->mutex);
 		/* Find lowest XLogRecPtr of both write and flush from sync_nodes */
 		if (tmp_write > walsndloc->write &&	tmp_flush > walsndloc->flush)
 		{
 			tmp_write = walsndloc->write;
 			tmp_flush = walsndloc->flush;
 		}
-
 		SpinLockRelease(&walsndloc->mutex);
+
+
 	}
 
 	*write_pos = tmp_write;
 	*flush_pos = tmp_flush;
 
-#ifdef DEBUG_QUORUM
-		elog(NOTICE, "WRITE LOCAITON");
-		for (i = 0; i< num_sync; i++)
-		{
-			volatile WalSnd *walsndloc = &WalSndCtl->walsnds[sync_standbys[i]];
+#ifdef DEBUG_REPLICATION
+	elog(NOTICE, "================");
+	elog(NOTICE, "WRITE LOCAITON");
+	for (i = 0; i< num_sync; i++)
+	{
+		volatile WalSnd *walsndloc = &WalSndCtl->walsnds[sync_standbys[i]];
 
-			elog(NOTICE, "    [%d] : %X/%X, priority = %d", i,
-				 (uint32) (walsndloc->write >> 32) ,
-				 (uint32) walsndloc->write,
-				 walsndloc->sync_standby_priority
-				);
-		}
-		elog(NOTICE, "FLUSH LOCAITON");
-		for (i = 0; i< num_sync; i++)
-		{
-			volatile WalSnd *walsndloc = &WalSndCtl->walsnds[sync_standbys[i]];
+		elog(NOTICE, "    [%d] : %X/%X, priority = %d", i,
+			 (uint32) (walsndloc->write >> 32) ,
+			 (uint32) walsndloc->write,
+			 walsndloc->sync_standby_priority
+			);
+	}
+	elog(NOTICE, "FLUSH LOCAITON");
+	for (i = 0; i< num_sync; i++)
+	{
+		volatile WalSnd *walsndloc = &WalSndCtl->walsnds[sync_standbys[i]];
+		
+		elog(NOTICE, "    [%d] : %X/%X, priority = %d", i,
+			 (uint32) (walsndloc->flush >> 32) ,
+			 (uint32) walsndloc->flush,
+			 walsndloc->sync_standby_priority
+			);
+	}
+	elog(NOTICE, "-----> LOCATION : write %X/%X, flush %X/%X",
+		 (uint32) (*write_pos >> 32), (uint32) *write_pos,
+		 (uint32) (*flush_pos >> 32), (uint32) *flush_pos);
 
-			elog(NOTICE, "    [%d] : %X/%X, priority = %d", i,
-				 (uint32) (walsndloc->flush >> 32) ,
-				 (uint32) walsndloc->flush,
-				 walsndloc->sync_standby_priority
-				);
-		}
+	elog(NOTICE, "================");
 #endif
 
 	/* Clean up*/
@@ -720,6 +723,14 @@ SyncRepReleaseWaiters(void)
 		LWLockRelease(SyncRepLock);
 		return;
 	}
+
+
+#ifdef DEBUG_REPLICATION
+	elog(NOTICE, "==========> DECIDE (%d) write : %X/%X, flush : %X/%X #####",
+		 MyWalSnd->pid,
+		 (uint32) (write_pos >> 32), (uint32) write_pos,
+		 (uint32) (flush_pos >> 32), (uint32) flush_pos);
+#endif
 
 	//Assert(!(write_pos == InvalidXLogRecPtr && flush_pos == InvalidXLogRecPtr));
 
@@ -847,7 +858,7 @@ SyncRepGetStandbyPriority(void)
 	pfree(rawstring);
 	list_free(elemlist);
 
-#ifdef DEBUG_QUORUM
+#ifdef DEBUG_REPLICATION
 	elog(NOTICE, "(%d) Got priority %d", MyWalSnd->pid, priority);
 #endif
 	return (found ? priority : 0);
@@ -1027,14 +1038,23 @@ assign_synchronous_standby_names(char *newval, void *extra)
 	char	   *rawstring;
 	List	   *elemlist;
 
+	if (newval == NULL || newval[0] == '\0')
+		return;
+
+
 	/* Need a modifiable copy of string */
-	rawstring = pstrdup(*newval);
+	rawstring = pstrdup(newval);
 
 	/* Parse string into list of identifiers */
 	SplitIdentifierString(rawstring, ',', &elemlist);
 
 	/* Store them into globl variables */
-	synchronous_standby_num = lfirst_int(list_head(elemlist));
+	synchronous_standby_num = pg_atoi(lfirst(list_head(elemlist)), sizeof(int), 0);
+
+#ifdef DEBUG_REPLICATION
+	elog(NOTICE, "Variable s_s_num : %d, s_s_names : %s(%s)",
+		 synchronous_standby_num, rawstring, newval);
+#endif
 
 	return;
 }
@@ -1070,14 +1090,13 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 	 * Check whether the number of synchronous stadby is
 	 * specified correctly.
 	 */
-	if (lfirst_int(list_head(elemlist)) == 0)
+	if (elemlist != NULL && lfirst_int(list_head(elemlist)) == 0)
 	{
-		GUC_check_errdetail("The number of synchronous standby must be more than 1");
+		//GUC_check_errdetail("The number of synchronous standby must be more than 1");
 		pfree(rawstring);
 		list_free(elemlist);
 		return false;
 	}
-
 
 	pfree(rawstring);
 	list_free(elemlist);
