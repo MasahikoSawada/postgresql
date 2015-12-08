@@ -705,9 +705,6 @@ SyncRepGetStandbyPriority(void)
 	bool		found = false;
 	int			num = 0;
 
-	//elog(NOTICE, "hogehoge");
-	//pg_usleep(30 * 1000L * 1000L);
-
 	/*
 	 * Since synchronous cascade replication is not allowed, we always set the
 	 * priority of cascading walsender to zero.

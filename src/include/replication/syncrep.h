@@ -56,9 +56,7 @@ extern void SyncRepUpdateSyncStandbysDefined(void);
 struct WalSnd;
 extern int SyncRepGetSynchronousStandbys(int *sync_standbys);
 extern int SyncRepGetSynchronousStandbysPriority(int *sync_standbys);
-extern int SyncRepGetSynchronousStandbysQuorum(int *sync_standbys);
 extern bool SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
-extern bool	SyncRepGetSyncLsnsQuorum(XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
 extern bool	SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
 
 extern bool SyncRepActiveWalSender(int num);
