@@ -3679,7 +3679,7 @@ static struct config_enum ConfigureNamesEnum[] =
 	},
 
 	{
-		{"synchronous_replication_method", PGC_POSTMASTER, REPLICATION_MASTER,
+		{"synchronous_replication_method", PGC_SIGHUP, REPLICATION_MASTER,
 			gettext_noop("Method for multiple synchronous replication."),
 			NULL
 		},

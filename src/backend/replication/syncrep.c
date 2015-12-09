@@ -577,6 +577,12 @@ SyncRepGetSyncLsnsOnePriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 	sync_standbys = (int *) palloc(sizeof(int) * synchronous_standby_num);
 	num_sync = SyncRepGetSynchronousStandbysOnePriority(sync_standbys);
 
+	if (num_sync < synchronous_standby_num)
+	{
+		pfree(sync_standbys);
+		return false;
+	}
+
 	/* Synchronous standby is always one */
 	walsnd = &WalSndCtl->walsnds[sync_standbys[0]];
 
