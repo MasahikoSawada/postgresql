@@ -1068,7 +1068,7 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 	{
 		num = pg_atoi(lfirst(list_head(elemlist)), sizeof(int), 0);
 
-		if (num == 0)
+		if (num < 1 || num > (list_length(elemlist) - 1))
 		{
 			pfree(rawstring);
 			list_free(elemlist);
