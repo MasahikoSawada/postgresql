@@ -1002,7 +1002,7 @@ SyncRepQueueIsOrderedByLSN(int mode)
  */
 
 void
-assign_synchronous_standby_names(char *newval, void *extra)
+assign_synchronous_standby_names(const char *newval, void *extra)
 {
 	char	   *rawstring;
 	List	   *elemlist;

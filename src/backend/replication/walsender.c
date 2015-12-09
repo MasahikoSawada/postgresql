@@ -2747,8 +2747,6 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 	MemoryContext per_query_ctx;
 	MemoryContext oldcontext;
 	int			*sync_standbys;
-	XLogRecPtr	*write_pos_list;
-	XLogRecPtr	*flush_pos_list;
 	int			num_sync;
 	int			i;
 
@@ -2779,8 +2777,6 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 	MemoryContextSwitchTo(oldcontext);
 
 	sync_standbys = (int *) palloc(sizeof(int) * synchronous_standby_num);
-	write_pos_list = (XLogRecPtr *) palloc(sizeof(XLogRecPtr) * max_wal_senders);
-	flush_pos_list = (XLogRecPtr *) palloc(sizeof(XLogRecPtr) * max_wal_senders);
 
 	/*
 	 * Get the currently active synchronous standbys.
@@ -2879,16 +2875,8 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 	}
 
-	/* Clean up */
-	if (sync_standbys)
-		pfree(sync_standbys);
-	if (write_pos_list)
-		pfree(write_pos_list);
-	if (flush_pos_list)
-		pfree(flush_pos_list);
-
-
 	/* clean up and return the tuplestore */
+	pfree(sync_standbys);
 	tuplestore_donestoring(tupstore);
 
 
