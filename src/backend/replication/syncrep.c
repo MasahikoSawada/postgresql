@@ -389,7 +389,12 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 	XLogRecPtr tmp_flush_pos;
 	bool		ret = false;
 
-	if (synchronous_replication_method == SYNC_REP_METHOD_PRIORITY)
+	/* '1-priority' method */
+	if (synchronous_replication_method == SYNC_REP_METHOD_1_PRIORITY)
+		ret = SyncRepGetSyncLsnsOnePriority(&tmp_write_pos, &tmp_flush_pos);
+
+	/* 'priority' method */
+	else if (synchronous_replication_method == SYNC_REP_METHOD_PRIORITY)
 		ret = SyncRepGetSyncLsnsPriority(&tmp_write_pos, &tmp_flush_pos);
 
 #ifdef DEBUG_REPLICATION
@@ -423,8 +428,12 @@ SyncRepGetSynchronousStandbys(int *sync_standbys)
 {
 	int	num_sync = 0;
 
-	Assert(sync_standbys);
 
+	/* '1-priority' method */
+	if (synchronous_replication_method == SYNC_REP_METHOD_1_PRIORITY)
+		num_sync = SyncRepGetSynchronousStandbysOnePriority(sync_standbys);
+
+	/* 'priority' method */
 	if (synchronous_replication_method == SYNC_REP_METHOD_PRIORITY)
 		num_sync = SyncRepGetSynchronousStandbysPriority(sync_standbys);
 
@@ -433,7 +442,54 @@ SyncRepGetSynchronousStandbys(int *sync_standbys)
 
 /*
  * Obtain standby currently considered as synchronous using
- * priority method.
+ * '1-priority' method.
+ */
+int
+SyncRepGetSynchronousStandbysOnePriority(int *sync_standbys)
+{
+	int	priority = 0;
+	int	i;
+
+	for (i = 0; i < max_wal_senders; i++)
+	{
+		/* Use volatile pointer to prevent code rearrangement */
+		volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
+
+		/* Is this wal sender active? */
+		if (!SyncRepActiveWalSender(i))
+			continue;
+
+		/* Find standby having lowest priority */
+		if (priority == 0 ||
+			priority > walsnd->sync_standby_priority)
+			sync_standbys[0] = i;
+	}
+
+#ifdef DEBUG_REPLICATION
+	{
+		char *sync_list = palloc(sizeof(char) * 20);
+		char *tmp = sync_list;
+		int	num_sync = 1;
+
+		for (i = 0; i < num_sync; i++)
+		{
+			sprintf(tmp, "%d,", sync_standbys[i]);
+			tmp += 2;
+		}
+
+		*(tmp-1) = '\0';
+		elog(NOTICE, "(%d) SyncedStandbyList [%s]", MyProcPid, sync_list);
+		pfree(sync_list);
+	}
+#endif
+
+	/* Always return 1 */
+	return 1;
+}
+
+/*
+ * Obtain standby currently considered as synchronous using
+ * 'priority' method.
  */
 int
 SyncRepGetSynchronousStandbysPriority(int *sync_standbys)
@@ -446,7 +502,6 @@ SyncRepGetSynchronousStandbysPriority(int *sync_standbys)
 	{
 		/* Use volatile pointer to prevent code rearrangement */
 		volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
-		int			this_priority;
 		int			j;
 
 		/* Is this wal sender active? */
@@ -505,7 +560,42 @@ SyncRepGetSynchronousStandbysPriority(int *sync_standbys)
 }
 
 /*
- * Obtain currently synced LSN: write and flush, using prioirty method.
+ * Obtain currently synced LSN: write and flush,
+ * using '1-prioirty' method.
+ */
+bool
+SyncRepGetSyncLsnsOnePriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
+{
+	int			*sync_standbys = NULL;
+	int			num_sync;
+	volatile WalSnd *walsnd;
+
+	sync_standbys = (int *) palloc(sizeof(int) * synchronous_standby_num);
+	num_sync = SyncRepGetSynchronousStandbysOnePriority(sync_standbys);
+
+	/* Synchronous standby is always one */
+	walsnd = &WalSndCtl->walsnds[sync_standbys[0]];
+
+	SpinLockAcquire(&walsnd->mutex);
+	*write_pos = walsnd->write;
+	*flush_pos = walsnd->flush;
+	SpinLockRelease(&walsnd->mutex);
+
+#ifdef DEBUG_REPLICATION
+	elog(NOTICE, "-----> LOCATION : write %X/%X, flush %X/%X",
+		 (uint32) (*write_pos >> 32), (uint32) *write_pos,
+		 (uint32) (*flush_pos >> 32), (uint32) *flush_pos);
+#endif
+
+	/* Clean up*/
+	pfree(sync_standbys);
+
+	return true;
+}
+
+/*
+ * Obtain currently synced LSN: write and flush,
+ * using 'prioirty' method.
  */
 bool
 SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
@@ -729,7 +819,8 @@ SyncRepGetStandbyPriority(void)
 	{
 		char	   *standby_name;
 
-		if (num == 0)
+		if (num == 0 &&
+			synchronous_replication_method != SYNC_REP_METHOD_1_PRIORITY)
 		{
 			num = lfirst_int(l);
 			continue;
@@ -917,7 +1008,10 @@ assign_synchronous_standby_names(char *newval, void *extra)
 	SplitIdentifierString(rawstring, ',', &elemlist);
 
 	/* Store them into globl variables */
-	synchronous_standby_num = pg_atoi(lfirst(list_head(elemlist)), sizeof(int), 0);
+	if (synchronous_replication_method == SYNC_REP_METHOD_1_PRIORITY)
+		synchronous_standby_num = 1;
+	else
+		synchronous_standby_num = pg_atoi(lfirst(list_head(elemlist)), sizeof(int), 0);
 
 #ifdef DEBUG_REPLICATION
 	elog(NOTICE, "Variable s_s_num : %d, s_s_names : %s(%s)",
@@ -932,6 +1026,7 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 {
 	char	   *rawstring;
 	List	   *elemlist;
+	int			num = 0;
 
 	/* Need a modifiable copy of string */
 	rawstring = pstrdup(*newval);
@@ -958,11 +1053,17 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 	 * Check whether the number of synchronous stadby is
 	 * specified correctly.
 	 */
-	if (elemlist != NULL && lfirst_int(list_head(elemlist)) == 0)
+	if (elemlist != NULL)
 	{
-		pfree(rawstring);
-		list_free(elemlist);
-		return false;
+		if (synchronous_replication_method != SYNC_REP_METHOD_1_PRIORITY)
+			num = pg_atoi(lfirst(list_head(elemlist)), sizeof(int), 0);
+
+		if (num == 0)
+		{
+			pfree(rawstring);
+			list_free(elemlist);
+			return false;
+		}
 	}
 
 	pfree(rawstring);

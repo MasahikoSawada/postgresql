@@ -32,7 +32,8 @@
 #define SYNC_REP_WAIT_COMPLETE		2
 
 /* SyncRepMethod */
-#define SYNC_REP_METHOD_PRIORITY	0
+#define SYNC_REP_METHOD_1_PRIORITY	0
+#define SYNC_REP_METHOD_PRIORITY	1
 
 /* user-settable parameters for synchronous replication */
 extern char *SyncRepStandbyNames;
@@ -56,8 +57,10 @@ extern void SyncRepUpdateSyncStandbysDefined(void);
 struct WalSnd;
 extern int SyncRepGetSynchronousStandbys(int *sync_standbys);
 extern int SyncRepGetSynchronousStandbysPriority(int *sync_standbys);
+extern int SyncRepGetSynchronousStandbysOnePriority(int *sync_standbys);
 extern bool SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
 extern bool	SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
+extern bool	SyncRepGetSyncLsnsOnePriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
 
 extern bool SyncRepActiveWalSender(int num);
 
