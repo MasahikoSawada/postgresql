@@ -57,7 +57,7 @@
 #include "utils/builtins.h"
 #include "utils/ps_status.h"
 
-/*#define DEBUG_REPLICATION 1*/
+#define DEBUG_REPLICATION 1
 
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
@@ -354,8 +354,9 @@ SyncRepInitConfig(void)
 	}
 }
 
+/* Is this wal sender considerable one? */
 bool
-SyncRepActiveWalSender(int num)
+SyncRepActiveListedWalSender(int num)
 {
 	volatile WalSnd *walsnd = &WalSndCtl->walsnds[num];
 
@@ -455,14 +456,17 @@ SyncRepGetSynchronousStandbysOnePriority(int *sync_standbys)
 		/* Use volatile pointer to prevent code rearrangement */
 		volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
 
-		/* Is this wal sender active? */
-		if (!SyncRepActiveWalSender(i))
+		/* Is this wal sender considerable one? */
+		if (!SyncRepActiveListedWalSender(i))
 			continue;
 
-		/* Find standby having lowest priority */
+		/* Find lowest priority standby */
 		if (priority == 0 ||
 			priority > walsnd->sync_standby_priority)
+		{
+			priority = walsnd->sync_standby_priority;
 			sync_standbys[0] = i;
+		}
 	}
 
 #ifdef DEBUG_REPLICATION
@@ -504,8 +508,8 @@ SyncRepGetSynchronousStandbysPriority(int *sync_standbys)
 		volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
 		int			j;
 
-		/* Is this wal sender active? */
-		if (!SyncRepActiveWalSender(i))
+		/* Is this wal sender considerable one? */
+		if (!SyncRepActiveListedWalSender(i))
 			continue;
 
 		if (num_sync == synchronous_standby_num)
@@ -1053,10 +1057,10 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 	 * Check whether the number of synchronous stadby is
 	 * specified correctly.
 	 */
-	if (elemlist != NULL)
+	if (elemlist != NULL &&
+		synchronous_replication_method != SYNC_REP_METHOD_1_PRIORITY)
 	{
-		if (synchronous_replication_method != SYNC_REP_METHOD_1_PRIORITY)
-			num = pg_atoi(lfirst(list_head(elemlist)), sizeof(int), 0);
+		num = pg_atoi(lfirst(list_head(elemlist)), sizeof(int), 0);
 
 		if (num == 0)
 		{

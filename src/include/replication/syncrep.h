@@ -62,7 +62,7 @@ extern bool SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_
 extern bool	SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
 extern bool	SyncRepGetSyncLsnsOnePriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
 
-extern bool SyncRepActiveWalSender(int num);
+extern bool SyncRepActiveListedWalSender(int num);
 
 extern bool check_synchronous_standby_names(char **newval, void **extra, GucSource source);
 extern void assign_synchronous_standby_names(char *newva, void *extra);
