@@ -18,6 +18,7 @@
 #include "miscadmin.h"
 #include "storage/fd.h"
 #include "utils/guc.h"
+#include "replication/syncrep.h"
 
 
 /*
@@ -154,6 +155,12 @@ ProcessConfigFile(GucContext context)
 	 * Read and apply the config file.  We don't need to examine the result.
 	 */
 	(void) ProcessConfigFileInternal(context, true, elevel);
+
+	/*
+	 * After read all synchronous replication configuration parameter, we apply
+	 * settings according to replication method.
+	 */
+	ProcessSynchronousReplicationConfig();
 
 	/* Clean up */
 	MemoryContextSwitchTo(caller_cxt);

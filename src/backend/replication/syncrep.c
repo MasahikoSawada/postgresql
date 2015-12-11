@@ -57,7 +57,7 @@
 #include "utils/builtins.h"
 #include "utils/ps_status.h"
 
-#define DEBUG_REPLICATION 1
+/*#define DEBUG_REPLICATION 1 */
 
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
@@ -1000,37 +1000,6 @@ SyncRepQueueIsOrderedByLSN(int mode)
  * Synchronous Replication functions executed by any process
  * ===========================================================
  */
-
-void
-assign_synchronous_standby_names(const char *newval, void *extra)
-{
-	char	   *rawstring;
-	List	   *elemlist;
-
-	if (newval == NULL || newval[0] == '\0')
-		return;
-
-
-	/* Need a modifiable copy of string */
-	rawstring = pstrdup(newval);
-
-	/* Parse string into list of identifiers */
-	SplitIdentifierString(rawstring, ',', &elemlist);
-
-	/* Store them into globl variables */
-	if (synchronous_replication_method == SYNC_REP_METHOD_1_PRIORITY)
-		synchronous_standby_num = 1;
-	else
-		synchronous_standby_num = pg_atoi(lfirst(list_head(elemlist)), sizeof(int), 0);
-
-#ifdef DEBUG_REPLICATION
-	elog(NOTICE, "Variable s_s_num : %d, s_s_names : %s(%s)",
-		 synchronous_standby_num, rawstring, newval);
-#endif
-
-	return;
-}
-
 bool
 check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 {
@@ -1059,23 +1028,6 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 	 * yet correctly set.
 	 */
 
-	/*
-	 * Check whether the number of synchronous stadby is
-	 * specified correctly.
-	 */
-	if (elemlist != NULL &&
-		synchronous_replication_method != SYNC_REP_METHOD_1_PRIORITY)
-	{
-		num = pg_atoi(lfirst(list_head(elemlist)), sizeof(int), 0);
-
-		if (num < 1 || num > (list_length(elemlist) - 1))
-		{
-			pfree(rawstring);
-			list_free(elemlist);
-			return false;
-		}
-	}
-
 	pfree(rawstring);
 	list_free(elemlist);
 
@@ -1097,4 +1049,30 @@ assign_synchronous_commit(int newval, void *extra)
 			SyncRepWaitMode = SYNC_REP_NO_WAIT;
 			break;
 	}
+}
+
+void ProcessSynchronousReplicationConfig()
+{
+	char	   *rawstring;
+	List	   *elemlist;
+
+
+	/* Need a modifiable copy of string */
+	rawstring = pstrdup(SyncRepStandbyNames);
+
+	/* Parse string into list of identifiers */
+	SplitIdentifierString(rawstring, ',', &elemlist);
+
+	/* Store them into globl variables */
+	if (synchronous_replication_method == SYNC_REP_METHOD_1_PRIORITY)
+		synchronous_standby_num = 1;
+	else
+		synchronous_standby_num = pg_atoi(lfirst(list_head(elemlist)), sizeof(int), 0);
+
+#ifdef DEBUG_REPLICATION
+	elog(NOTICE, "Variable s_s_num : %d, s_s_names : %s",
+		 synchronous_standby_num, rawstring);
+#endif
+
+	return;
 }
