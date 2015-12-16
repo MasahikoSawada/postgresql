@@ -408,11 +408,12 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 #endif
 
 	/* Have we advanced LSN? */
-	if (ret &&
-		MyWalSnd->write >= tmp_write_pos && MyWalSnd->flush >= tmp_flush_pos)
+	if (ret)
 	{
-		*write_pos = tmp_write_pos;
-		*flush_pos = tmp_flush_pos;
+		if (MyWalSnd->write >= tmp_write_pos)
+			*write_pos = tmp_write_pos;
+		if (MyWalSnd->flush >= tmp_flush_pos)
+			*flush_pos = tmp_flush_pos;
 
 		return true;
 	}
@@ -435,7 +436,7 @@ SyncRepGetSynchronousStandbys(int *sync_standbys)
 		num_sync = SyncRepGetSynchronousStandbysOnePriority(sync_standbys);
 
 	/* 'priority' method */
-	if (synchronous_replication_method == SYNC_REP_METHOD_PRIORITY)
+	else if (synchronous_replication_method == SYNC_REP_METHOD_PRIORITY)
 		num_sync = SyncRepGetSynchronousStandbysPriority(sync_standbys);
 
 	return num_sync;
@@ -460,7 +461,7 @@ SyncRepGetSynchronousStandbysOnePriority(int *sync_standbys)
 		if (!SyncRepActiveListedWalSender(i))
 			continue;
 
-		/* Find lowest priority standby */
+		/* Find higher priority standbys */
 		if (priority == 0 ||
 			priority > walsnd->sync_standby_priority)
 		{
@@ -613,8 +614,8 @@ SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 	int			*sync_standbys = NULL;
 	int			num_sync;
 	int			i;
-	XLogRecPtr	tmp_write = InvalidXLogRecPtr;
-	XLogRecPtr	tmp_flush = InvalidXLogRecPtr;
+	XLogRecPtr	synced_write = InvalidXLogRecPtr;
+	XLogRecPtr	synced_flush = InvalidXLogRecPtr;
 
 	sync_standbys = (int *) palloc(sizeof(int) * synchronous_standby_num);
 	num_sync = SyncRepGetSynchronousStandbysPriority(sync_standbys);
@@ -633,26 +634,25 @@ SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 		SpinLockAcquire(&walsndloc->mutex);
 
 		/* Store first candidate */
-		if (XLogRecPtrIsInvalid(tmp_write) && XLogRecPtrIsInvalid(tmp_flush))
+		if (XLogRecPtrIsInvalid(synced_write) && XLogRecPtrIsInvalid(synced_flush))
 		{
-			tmp_write = walsndloc->write;
-			tmp_flush = walsndloc->flush;
+			synced_write = walsndloc->write;
+			synced_flush = walsndloc->flush;
 			SpinLockRelease(&walsndloc->mutex);
 			continue;
 		}
 
-		/* Find lowest XLogRecPtr of both write and flush from sync_nodes */
-		if (tmp_write > walsndloc->write &&	tmp_flush > walsndloc->flush)
-		{
-			tmp_write = walsndloc->write;
-			tmp_flush = walsndloc->flush;
-		}
+		/* Keep/Collect the earliest write and flush LSNs among prioritized standbys */
+		if (synced_write > walsndloc->write)
+			synced_write = walsndloc->write;
+		if (synced_flush > walsndloc->flush)
+			synced_flush = walsndloc->flush;
 
 		SpinLockRelease(&walsndloc->mutex);
 	}
 
-	*write_pos = tmp_write;
-	*flush_pos = tmp_flush;
+	*write_pos = synced_write;
+	*flush_pos = synced_flush;
 
 #ifdef DEBUG_REPLICATION
 	elog(NOTICE, "================");
@@ -1005,7 +1005,6 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 {
 	char	   *rawstring;
 	List	   *elemlist;
-	int			num = 0;
 
 	/* Need a modifiable copy of string */
 	rawstring = pstrdup(*newval);
@@ -1051,7 +1050,8 @@ assign_synchronous_commit(int newval, void *extra)
 	}
 }
 
-void ProcessSynchronousReplicationConfig()
+void
+ProcessSynchronousReplicationConfig()
 {
 	char	   *rawstring;
 	List	   *elemlist;

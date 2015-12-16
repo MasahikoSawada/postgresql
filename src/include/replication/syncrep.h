@@ -71,6 +71,7 @@ extern bool	SyncRepGetSyncLsnsOnePriority(XLogRecPtr *write_pos, XLogRecPtr *flu
 extern bool check_synchronous_standby_names(char **newval, void **extra, GucSource source);
 extern void assign_synchronous_commit(int newval, void *extra);
 
+/* Process configuration parameter related to synchronous replication */
 extern void ProcessSynchronousReplicationConfig();
 
 #endif   /* _SYNCREP_H */
