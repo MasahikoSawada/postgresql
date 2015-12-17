@@ -175,7 +175,7 @@ visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer buf)
 	char	   *map;
 
 #ifdef TRACE_VISIBILITYMAP
-	elog(DEBUG1, "vm_clear %s block %d", RelationGetRelationName(rel), heapBlk);
+	elog(DEBUG1, "vm_clear %s %d", RelationGetRelationName(rel), heapBlk);
 #endif
 
 	if (!BufferIsValid(buf) || BufferGetBlockNumber(buf) != mapBlock)
@@ -274,7 +274,7 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 	uint8		*map;
 
 #ifdef TRACE_VISIBILITYMAP
-	elog(DEBUG1, "vm_set %s block %d, flag %u", RelationGetRelationName(rel), heapBlk, flags);
+	elog(DEBUG1, "vm_set %s %d", RelationGetRelationName(rel), heapBlk);
 #endif
 
 	Assert(InRecovery || XLogRecPtrIsInvalid(recptr));
@@ -364,7 +364,7 @@ visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer *buf)
 	char	   *map;
 
 #ifdef TRACE_VISIBILITYMAP
-	elog(DEBUG1, "vm_get_status %s, block %d", RelationGetRelationName(rel), heapBlk);
+	elog(DEBUG1, "vm_get_status %s %d", RelationGetRelationName(rel), heapBlk);
 #endif
 
 	/* Reuse the old pinned buffer if possible */
@@ -467,7 +467,7 @@ visibilitymap_truncate(Relation rel, BlockNumber nheapblocks)
 	uint8		truncBit = HEAPBLK_TO_MAPBIT(nheapblocks);
 
 #ifdef TRACE_VISIBILITYMAP
-	elog(DEBUG1, "vm_truncate %s block %d", RelationGetRelationName(rel), nheapblocks);
+	elog(DEBUG1, "vm_truncate %s %d", RelationGetRelationName(rel), nheapblocks);
 #endif
 
 	RelationOpenSmgr(rel);
