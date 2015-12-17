@@ -445,7 +445,7 @@
     <command>VACUUM</> does that: a whole-table freezing is forced if
     the table hasn't been ensured all row versions are frozen for
     <varname>vacuum_freeze_table_age</> minus <varname>vacuum_freeze_min_age</>
-    transcations.
+    transcation.
    </para>
 
    <para>
@@ -551,16 +551,15 @@ SELECT datname, age(datfrozenxid) FROM pg_database;
     <command>VACUUM</> normally
     only scans pages that have been modified since the last vacuum, but
     <structfield>relfrozenxid</> can only be advanced when the whole table is
-    frozen. The whole-table freezing is occuerred only when all pages happen to
-    require freezing to freeze rows. In other cases such as where
-    <structfield>relfrozenxid</> is more than <varname>vacuum_freeze_table_age</>
-    transcations old, where <command>VACUUM</>'s <literal>FREEZE</> option is used,
-    <command>VACUUM</> can skip the pages that all tuples on the page itself are
-    marked as frozen.
+    frozen. Freezing occurs on the whole table once all pages of this relation
+    require it. In other cases such as where <structfield>relfrozenxid</> is more
+    than <varname>vacuum_freeze_table_age</> transactions old, where
+    <command>VACUUM</>'s <literal>FREEZE</> option is used, <command>VACUUM</>
+    can skip the pages that all tuples on the page itself are marked as frozen.
     When all pages of table are eventually marked as frozen by <command>VACUUM</>,
     after it's finished <literal>age(relfrozenxid)</> should be a little more
     than the <varname>vacuum_freeze_min_age</> setting that was used (more by
-    the number of transcations started since the <command>VACUUM</> started).
+    the number of transactions started since the <command>VACUUM</> started).
     If the advancing of <structfield>relfrozenxid</> is not happend until
     <varname>autovacuum_freeze_max_age</> is reached, an autovacuum will soon
     be forced for the table.
