@@ -35,8 +35,8 @@
  *
  * Clearing a visibility map bit is not separately WAL-logged.  The callers
  * must make sure that whenever a bit is cleared, the bit is cleared on WAL
- * replay of the updating operation as well.  And all-frozen bit must be
- * cleared with all-visible at the same time.
+ * replay of the updating operation as well.
+ * And all-frozen bit must be cleared with all-visible at the same time.
  *
  * When we *set* a visibility map during VACUUM, we must write WAL.  This may
  * seem counterintuitive, since the bit is basically a hint: if it is clear,
@@ -53,7 +53,7 @@
  * VACUUM will normally skip pages for which the visibility map bit is set;
  * such pages can't contain any dead tuples and therefore don't need vacuuming.
  * The visibility map has the all-frozen bit which indicates all tuples on
- * corresponding page has been completely frozen, so the visibility map is also
+ * corresponding page have been completely frozen, so the visibility map is also
  * used for anti-wraparound vacuum, even if freezing of tuples is required.
  *
  * LOCKING
@@ -108,13 +108,13 @@
  */
 #define MAPSIZE (BLCKSZ - MAXALIGN(SizeOfPageHeaderData))
 
+/* Number of heap blocks we can represent in one visibility map page. */
+#define HEAPBLOCKS_PER_PAGE (MAPSIZE * HEAPBLOCKS_PER_BYTE)
+
 /* Mapping from heap block number to the right bit in the visibility map */
 #define HEAPBLK_TO_MAPBLOCK(x) ((x) / HEAPBLOCKS_PER_PAGE)
 #define HEAPBLK_TO_MAPBYTE(x) (((x) % HEAPBLOCKS_PER_PAGE) / HEAPBLOCKS_PER_BYTE)
 #define HEAPBLK_TO_MAPBIT(x) (((x) % HEAPBLOCKS_PER_BYTE) * BITS_PER_HEAPBLOCK)
-
-/* Number of heap blocks we can represent in one visibility map page. */
-#define HEAPBLOCKS_PER_PAGE (MAPSIZE * HEAPBLOCKS_PER_BYTE)
 
 /* tables for fast counting of set bits for visible and freeze */
 static const uint8 number_of_ones_for_visible[256] = {

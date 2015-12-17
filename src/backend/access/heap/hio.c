@@ -119,7 +119,7 @@ ReadBufferBI(Relation relation, BlockNumber targetBlock,
  * be less than buffer2.
  */
 static void
-GetVisibilitymapPins(Relation relation, Buffer buffer1, Buffer buffer2,
+GetVisibilityMapPins(Relation relation, Buffer buffer1, Buffer buffer2,
 					 BlockNumber block1, BlockNumber block2,
 					 Buffer *vmbuffer1, Buffer *vmbuffer2)
 {
