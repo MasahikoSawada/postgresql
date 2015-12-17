@@ -157,8 +157,9 @@ static void lazy_record_dead_tuple(LVRelStats *vacrelstats,
 					   ItemPointer itemptr);
 static bool lazy_tid_reaped(ItemPointer itemptr, void *state);
 static int	vac_cmp_itemptr(const void *left, const void *right);
-static bool heap_page_is_all_visible(Relation rel, Buffer buf,
-						 TransactionId *visibility_cutoff_xid, bool *all_frozen);
+static void heap_page_visible_status(Relation rel, Buffer buf,
+						 TransactionId *visibility_cutoff_xid,
+						 bool *all_visible, bool *all_frozen);
 
 
 /*
@@ -805,7 +806,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 
 		/*
 		 * Note: If you change anything in the loop below, also look at
-		 * heap_page_is_all_visible to see if that needs to be changed.
+		 * heap_page_visible_status to see if that needs to be changed.
 		 */
 		for (offnum = FirstOffsetNumber;
 			 offnum <= maxoff;
@@ -1311,6 +1312,7 @@ lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 	OffsetNumber unused[MaxOffsetNumber];
 	int			uncnt = 0;
 	TransactionId visibility_cutoff_xid;
+	bool		all_visible;
 	bool		all_frozen;
 
 	START_CRIT_SECTION();
@@ -1363,7 +1365,9 @@ lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 	 * dirty, exclusively locked, and, if needed, a full page image has been
 	 * emitted in the log_heap_clean() above.
 	 */
-	if (heap_page_is_all_visible(onerel, buffer, &visibility_cutoff_xid, &all_frozen))
+	heap_page_visible_status(onerel, buffer, &visibility_cutoff_xid,
+							 &all_visible, &all_frozen);
+	if (all_visible)
 		PageSetAllVisible(page);
 
 	/*
@@ -1883,17 +1887,17 @@ vac_cmp_itemptr(const void *left, const void *right)
  * xmin amongst the visible tuples, and all_frozen which implies that all tuples
  * of this page are frozen.
  */
-static bool
-heap_page_is_all_visible(Relation rel, Buffer buf, TransactionId *visibility_cutoff_xid,
-						 bool *all_frozen)
+static void
+heap_page_visible_status(Relation rel, Buffer buf, TransactionId *visibility_cutoff_xid,
+					     bool *all_visible, bool *all_frozen)
 {
 	Page		page = BufferGetPage(buf);
 	BlockNumber blockno = BufferGetBlockNumber(buf);
 	OffsetNumber offnum,
 				maxoff;
-	bool		all_visible = true;
 
 	*visibility_cutoff_xid = InvalidTransactionId;
+	*all_visible = true;
 	*all_frozen = true;
 
 	/*
@@ -1902,7 +1906,7 @@ heap_page_is_all_visible(Relation rel, Buffer buf, TransactionId *visibility_cut
 	 */
 	maxoff = PageGetMaxOffsetNumber(page);
 	for (offnum = FirstOffsetNumber;
-		 offnum <= maxoff && all_visible;
+		 offnum <= maxoff && *all_visible;
 		 offnum = OffsetNumberNext(offnum))
 	{
 		ItemId		itemid;
@@ -1922,7 +1926,7 @@ heap_page_is_all_visible(Relation rel, Buffer buf, TransactionId *visibility_cut
 		 */
 		if (ItemIdIsDead(itemid))
 		{
-			all_visible = false;
+			*all_visible = false;
 			*all_frozen = false;
 			break;
 		}
@@ -1942,7 +1946,7 @@ heap_page_is_all_visible(Relation rel, Buffer buf, TransactionId *visibility_cut
 					/* Check comments in lazy_scan_heap. */
 					if (!HeapTupleHeaderXminCommitted(tuple.t_data))
 					{
-						all_visible = false;
+						*all_visible = false;
 						break;
 					}
 
@@ -1953,7 +1957,7 @@ heap_page_is_all_visible(Relation rel, Buffer buf, TransactionId *visibility_cut
 					xmin = HeapTupleHeaderGetXmin(tuple.t_data);
 					if (!TransactionIdPrecedes(xmin, OldestXmin))
 					{
-						all_visible = false;
+						*all_visible = false;
 						break;
 					}
 
@@ -1971,7 +1975,7 @@ heap_page_is_all_visible(Relation rel, Buffer buf, TransactionId *visibility_cut
 			case HEAPTUPLE_RECENTLY_DEAD:
 			case HEAPTUPLE_INSERT_IN_PROGRESS:
 			case HEAPTUPLE_DELETE_IN_PROGRESS:
-				all_visible = false;
+				*all_visible = false;
 				*all_frozen = false;
 				break;
 
@@ -1981,8 +1985,6 @@ heap_page_is_all_visible(Relation rel, Buffer buf, TransactionId *visibility_cut
 		}
 	}							/* scan along page */
 
-	if (!all_visible)
+	if (!(*all_visible))
 		*all_frozen = false;
-
-	return all_visible;
 }

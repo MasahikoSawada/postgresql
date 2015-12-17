@@ -438,7 +438,7 @@ visibilitymap_count(Relation rel, BlockNumber *all_visible, BlockNumber *all_fro
 
 		for (i = 0; i < MAPSIZE; i++)
 		{
-			all_visible += number_of_ones_for_visible[map[i]];
+			*all_visible += number_of_ones_for_visible[map[i]];
 			if (all_frozen)
 				*all_frozen += number_of_ones_for_frozen[map[i]];
 		}
