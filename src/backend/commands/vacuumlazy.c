@@ -224,7 +224,7 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	 * We request a full scan if either the table's frozen Xid is now older
 	 * than or equal to the requested Xid full-table scan limit; or if the
 	 * table's minimum MultiXactId is older than or equal to the requested
-	 * mxid full-table scan limit. During full scan, we could skip some pags
+	 * mxid full-table scan limit. During full scan, we could skip some pages
 	 * according to all-frozen bit of visibility map.
 	 */
 	scan_all = TransactionIdPrecedesOrEquals(onerel->rd_rel->relfrozenxid,
@@ -496,7 +496,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 	 * consecutive pages.  Since we're reading sequentially, the OS should be
 	 * doing readahead for us, so there's no gain in skipping a page now and
 	 * then; that's likely to disable readahead and so be counterproductive.
-	 * Also, skipping even a single page accorinding to all-visible bit of
+	 * Also, skipping even a single page according to all-visible bit of
 	 * visibility map means that we can't update relfrozenxid, so we only want
 	 * to do it if we can skip a goodly number. On the other hand, we count
 	 * both how many pages we skipped according to all-frozen bit of visibility
@@ -956,7 +956,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 				ntup_per_page += 1;;
 				hastup = true;
 
-				/* Check whether this tuple is alrady frozen or not */
+				/* Check whether this tuple is already frozen or not */
 				if (HeapTupleHeaderXminFrozen(tuple.t_data))
 					nalready_frozen += 1;
 
@@ -1961,7 +1961,7 @@ heap_page_is_all_visible(Relation rel, Buffer buf, TransactionId *visibility_cut
 					if (TransactionIdFollows(xmin, *visibility_cutoff_xid))
 						*visibility_cutoff_xid = xmin;
 
-					/* Check whether this tuple is alrady frozen or not */
+					/* Check whether this tuple is already frozen or not */
 					if (!HeapTupleHeaderXminFrozen(tuple.t_data))
 						*all_frozen = false;
 				}
