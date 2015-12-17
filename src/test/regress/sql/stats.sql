@@ -147,7 +147,7 @@ SELECT st.heap_blks_read + st.heap_blks_hit >= pr.heap_blks + cl.relpages,
   FROM pg_statio_user_tables AS st, pg_class AS cl, prevstats AS pr
  WHERE st.relname='tenk2' AND cl.relname='tenk2';
 
-SELECT n_frozen_page = (pg_relation_size('tenk2') / current_setting('block_size')::int)
+SELECT n_frozen_pages = (pg_relation_size('tenk2') / current_setting('block_size')::int)
   FROM pg_stat_user_tables
   WHERE relname ='tenk2';
 
