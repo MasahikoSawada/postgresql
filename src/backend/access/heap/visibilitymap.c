@@ -33,10 +33,9 @@
  * is set, we know the condition is true, but if a bit is not set, it might or
  * might not be true.
  *
- * Clearing a visibility map bit is not separately WAL-logged.  The callers
+ * Clearing both visibility map bits is not separately WAL-logged.  The callers
  * must make sure that whenever a bit is cleared, the bit is cleared on WAL
  * replay of the updating operation as well.
- * And all-frozen bit must be cleared with all-visible at the same time.
  *
  * When we *set* a visibility map during VACUUM, we must write WAL.  This may
  * seem counterintuitive, since the bit is basically a hint: if it is clear,
@@ -403,12 +402,15 @@ visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer *buf)
  * going to be marked all-visible or all-frozen, so they won't affect the result.
  * The caller must set the flags which indicates what flag we want to count.
  */
-BlockNumber
-visibilitymap_count(Relation rel, BlockNumber *all_frozen)
+void
+visibilitymap_count(Relation rel, BlockNumber *all_visible, BlockNumber *all_frozen)
 {
 	BlockNumber mapBlock;
-	BlockNumber all_visible = 0;
 
+	/* all_visible must be specified */
+	Assert(all_visible);
+
+	*all_visible = 0;
 	if (all_frozen)
 		*all_frozen = 0;
 
@@ -443,8 +445,6 @@ visibilitymap_count(Relation rel, BlockNumber *all_frozen)
 
 		ReleaseBuffer(mapBuffer);
 	}
-
-	return all_visible;
 }
 
 /*

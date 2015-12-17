@@ -380,11 +380,11 @@ RelationGetBufferForTuple(Relation relation, Size len,
 		 * done.
 		 */
 		if (otherBuffer == InvalidBuffer || buffer <= otherBuffer)
-			GetVisibilitymapPins(relation, buffer, otherBuffer,
+			GetVisibilityMapPins(relation, buffer, otherBuffer,
 								 targetBlock, otherBlock, vmbuffer,
 								 vmbuffer_other);
 		else
-			GetVisibilitymapPins(relation, otherBuffer, buffer,
+			GetVisibilityMapPins(relation, otherBuffer, buffer,
 								 otherBlock, targetBlock, vmbuffer_other,
 								 vmbuffer);
 

@@ -569,7 +569,7 @@ do_analyze_rel(Relation onerel, int options, VacuumParams *params,
 	if (!inh)
 	{
 		/* Calculate the number of all-visible and all-frozen bit */
-		relallvisible = visibilitymap_count(onerel, &relallfrozen);
+		visibilitymap_count(onerel, &relallvisible, &relallfrozen);
 
 		/*
 		 * Update pages/tuples stats in pg_class ... but not if we're doing
@@ -613,8 +613,7 @@ do_analyze_rel(Relation onerel, int options, VacuumParams *params,
 		 * inherited stats we shouldn't report, because the stats collector only
 		 * tracks per-table stats.
 		 */
-		if (!inh)
-			pgstat_report_analyze(onerel, totalrows, totaldeadrows, relallfrozen);
+		pgstat_report_analyze(onerel, totalrows, totaldeadrows, relallfrozen);
 
 	}
 
