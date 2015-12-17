@@ -426,18 +426,18 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
  * considered as synchronous, and its length.
  */
 int
-SyncRepGetSynchronousStandbys(int *sync_standbys)
+SyncRepGetSyncStandbys(int *sync_standbys)
 {
 	int	num_sync = 0;
 
 
 	/* '1-priority' method */
 	if (synchronous_replication_method == SYNC_REP_METHOD_1_PRIORITY)
-		num_sync = SyncRepGetSynchronousStandbysOnePriority(sync_standbys);
+		num_sync = SyncRepGetSyncStandbysOnePriority(sync_standbys);
 
 	/* 'priority' method */
 	else if (synchronous_replication_method == SYNC_REP_METHOD_PRIORITY)
-		num_sync = SyncRepGetSynchronousStandbysPriority(sync_standbys);
+		num_sync = SyncRepGetSyncStandbysPriority(sync_standbys);
 
 	return num_sync;
 }
@@ -447,7 +447,7 @@ SyncRepGetSynchronousStandbys(int *sync_standbys)
  * '1-priority' method.
  */
 int
-SyncRepGetSynchronousStandbysOnePriority(int *sync_standbys)
+SyncRepGetSyncStandbysOnePriority(int *sync_standbys)
 {
 	int	priority = 0;
 	int	i;
@@ -497,7 +497,7 @@ SyncRepGetSynchronousStandbysOnePriority(int *sync_standbys)
  * 'priority' method.
  */
 int
-SyncRepGetSynchronousStandbysPriority(int *sync_standbys)
+SyncRepGetSyncStandbysPriority(int *sync_standbys)
 {
 	int	priority = 0;
 	int	num_sync = 0;
@@ -576,7 +576,7 @@ SyncRepGetSyncLsnsOnePriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 	volatile WalSnd *walsnd;
 
 	sync_standbys = (int *) palloc(sizeof(int) * synchronous_standby_num);
-	num_sync = SyncRepGetSynchronousStandbysOnePriority(sync_standbys);
+	num_sync = SyncRepGetSyncStandbysOnePriority(sync_standbys);
 
 	if (num_sync < synchronous_standby_num)
 	{
@@ -618,7 +618,7 @@ SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 	XLogRecPtr	synced_flush = InvalidXLogRecPtr;
 
 	sync_standbys = (int *) palloc(sizeof(int) * synchronous_standby_num);
-	num_sync = SyncRepGetSynchronousStandbysPriority(sync_standbys);
+	num_sync = SyncRepGetSyncStandbysPriority(sync_standbys);
 
 	/* Just return, if sync standby is not enough */
 	if (num_sync < synchronous_standby_num)
@@ -1051,7 +1051,7 @@ assign_synchronous_commit(int newval, void *extra)
 }
 
 void
-ProcessSynchronousReplicationConfig()
+ProcessSynchronousReplicationConfig(void)
 {
 	char	   *rawstring;
 	List	   *elemlist;
