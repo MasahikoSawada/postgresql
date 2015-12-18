@@ -346,6 +346,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				OptTableElementList TableElementList OptInherit definition
 				OptTypedTableElementList TypedTableElementList
 				reloptions opt_reloptions
+				useroptions useroption_list
 				OptWith distinct_clause opt_all_clause opt_definition func_args func_args_list
 				func_args_with_defaults func_args_with_defaults_list
 				aggr_args aggr_args_list
@@ -459,6 +460,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <range>	relation_expr_opt_alias
 %type <node>	tablesample_clause opt_repeatable_clause
 %type <target>	target_el single_set_clause set_target insert_column_item
+%type <defelt>	useroption_elem;
 
 %type <str>		generic_option_name
 %type <node>	generic_option_arg
@@ -1074,7 +1076,7 @@ AlterRoleSetStmt:
 					AlterRoleSetStmt *n = makeNode(AlterRoleSetStmt);
 					n->role = $3;
 					n->database = $4;
-					n->setstmt = $5;
+					n->setstmt = list_make1($5);
 					$$ = (Node *)n;
 				}
 			| ALTER ROLE ALL opt_in_database SetResetClause
@@ -1082,7 +1084,7 @@ AlterRoleSetStmt:
 					AlterRoleSetStmt *n = makeNode(AlterRoleSetStmt);
 					n->role = NULL;
 					n->database = $4;
-					n->setstmt = $5;
+					n->setstmt = list_make1($5);
 					$$ = (Node *)n;
 				}
 		;
@@ -1105,19 +1107,47 @@ AlterUserStmt:
 				 }
 		;
 
-
 AlterUserSetStmt:
 			ALTER USER RoleSpec SetResetClause
 				{
 					AlterRoleSetStmt *n = makeNode(AlterRoleSetStmt);
 					n->role = $3;
 					n->database = NULL;
-					n->setstmt = $4;
+					//n->setstmt = $4;
+					n->setstmt = list_make1($4);
 					$$ = (Node *)n;
 				}
-			;
+			| 
+			ALTER USER RoleSpec SET useroptions
+				{
+					AlterRoleSetStmt *n = makeNode(AlterRoleSetStmt);
+					n->role = $3;
+					n->database = NULL;
+					//n->setstmt = NULL;
+					n->setstmt = $5;
+					$$ = (Node *)n;
+				}
+		;
 
+useroptions:
+			'(' useroption_list ')'				{ $$ = $2; }
+		;
 
+useroption_list:
+			useroption_elem	{ $$ = list_make1($1); }
+			| useroption_list ',' useroption_elem	{ $$ = lappend($1, $3); }
+		;
+
+useroption_elem:
+		var_name '=' var_value
+				{
+					VariableSetStmt *n = makeNode(VariableSetStmt);
+					n->kind = VAR_SET_VALUE;
+					n->name = $1;
+					n->args = list_make1($3);
+					$$ = (Node *)n;
+				}
+		;
 /*****************************************************************************
  *
  * Drop a postgresql DBMS role
