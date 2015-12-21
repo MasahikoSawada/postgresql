@@ -729,8 +729,8 @@ vac_estimate_reltuples(Relation relation, bool is_analyze,
  *		marked with xmin = our xid.
  *
  *		In addition to fundamentally nontransactional statistics such as
- *		relpages and  relallvisible, we try to maintain certain lazily-updated
- *		DDL flags such as relhasindex, by clearing them if no onger correct.
+ *		relpages and relallvisible, we try to maintain certain lazily-updated
+ *		DDL flags such as relhasindex, by clearing them if no longer correct.
  *		It's safe to do this in VACUUM, which can't run in parallel with
  *		CREATE INDEX/RULE/TRIGGER and can't be part of a transaction block.
  *		However, it's *not* safe to do it in an ANALYZE that's within an
