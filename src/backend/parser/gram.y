@@ -1077,6 +1077,25 @@ AlterRoleSetStmt:
 					n->role = $3;
 					n->database = $4;
 					n->setstmt = list_make1($5);
+					n->action = 0;
+					$$ = (Node *)n;
+				}
+			| ALTER ROLE RoleSpec opt_in_database SET useroptions
+				{
+					AlterRoleSetStmt *n = makeNode(AlterRoleSetStmt);
+					n->role = $3;
+					n->database = NULL;
+					n->setstmt = $6;
+					n->action = +1;
+					$$ = (Node *)n;
+				}
+			| ALTER ROLE RoleSpec opt_in_database RESET useroptions
+				{
+					AlterRoleSetStmt *n = makeNode(AlterRoleSetStmt);
+					n->role = $3;
+					n->database = NULL;
+					n->setstmt = $6;
+					n->action = -1;
 					$$ = (Node *)n;
 				}
 			| ALTER ROLE ALL opt_in_database SetResetClause
@@ -1085,6 +1104,7 @@ AlterRoleSetStmt:
 					n->role = NULL;
 					n->database = $4;
 					n->setstmt = list_make1($5);
+					n->action = 0;
 					$$ = (Node *)n;
 				}
 		;
@@ -1114,15 +1134,25 @@ AlterUserSetStmt:
 					n->role = $3;
 					n->database = NULL;
 					n->setstmt = list_make1($4);
+					n->action = 0;
 					$$ = (Node *)n;
 				}
-			|
-			ALTER USER RoleSpec SET useroptions
+			| ALTER USER RoleSpec SET useroptions
 				{
 					AlterRoleSetStmt *n = makeNode(AlterRoleSetStmt);
 					n->role = $3;
 					n->database = NULL;
 					n->setstmt = $5;
+					n->action = +1;
+					$$ = (Node *)n;
+				}
+			| ALTER USER RoleSpec RESET useroptions
+				{
+					AlterRoleSetStmt *n = makeNode(AlterRoleSetStmt);
+					n->role = $3;
+					n->database = NULL;
+					n->setstmt = $5;
+					n->action=  -1;
 					$$ = (Node *)n;
 				}
 		;
@@ -1137,13 +1167,21 @@ useroption_list:
 		;
 
 useroption_elem:
-		var_name '=' var_value
+			var_name '=' var_value
 				{
 					VariableSetStmt *n = makeNode(VariableSetStmt);
 					n->kind = VAR_SET_VALUE;
 					n->name = $1;
 					n->args = list_make1($3);
-					$$ = (Node *)n;
+					$$ = n;
+				}
+			| var_name
+				{
+					VariableSetStmt *n = makeNode(VariableSetStmt);
+					n->kind = VAR_RESET;
+					n->name = $1;
+					n->args = NULL;
+					$$ = n;
 				}
 		;
 /*****************************************************************************
@@ -8951,7 +8989,8 @@ AlterDatabaseSetStmt:
 				{
 					AlterDatabaseSetStmt *n = makeNode(AlterDatabaseSetStmt);
 					n->dbname = $3;
-					n->setstmt = $4;
+					n->setstmt = list_make1($4);
+					n->action = 0;
 					$$ = (Node *)n;
 				}
 		;

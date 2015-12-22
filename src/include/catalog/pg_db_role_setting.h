@@ -61,7 +61,7 @@ typedef FormData_pg_db_role_setting *Form_pg_db_role_setting;
 /*
  * prototypes for functions in pg_db_role_setting.h
  */
-extern void AlterSetting(Oid databaseid, Oid roleid, List *setstmt);
+extern void AlterSetting(Oid databaseid, Oid roleid, List *setstmt, int action);
 extern void DropSetting(Oid databaseid, Oid roleid);
 extern void ApplySetting(Snapshot snapshot, Oid databaseid, Oid roleid,
 			 Relation relsetting, GucSource source);

@@ -21,7 +21,7 @@
 #include "utils/tqual.h"
 
 void
-AlterSetting(Oid databaseid, Oid roleid, List *setstmt)
+AlterSetting(Oid databaseid, Oid roleid, List *setstmt, int action)
 {
 	HeapTuple	tuple;
 	Relation	rel;
@@ -69,6 +69,12 @@ AlterSetting(Oid databaseid, Oid roleid, List *setstmt)
 	{
 		VariableSetStmt *stmt = (VariableSetStmt *) lfirst(l);
 		char   *valuestr = NULL;
+
+		/* Set kind of variable set by action */
+		if (action == +1)
+			stmt->kind = VAR_SET_VALUE; /* +1 = set variable */
+		else if (action == -1)
+			stmt->kind = VAR_RESET; /* -1 = reset variable */
 
 		/* Extract old value of setconfig */
 		valuestr = ExtractSetVariableArgs(stmt);

@@ -1553,7 +1553,7 @@ AlterDatabaseSet(AlterDatabaseSetStmt *stmt)
 		aclcheck_error(ACLCHECK_NOT_OWNER, ACL_KIND_DATABASE,
 					   stmt->dbname);
 
-	AlterSetting(datid, InvalidOid, stmt->setstmt);
+	AlterSetting(datid, InvalidOid, list_make1(stmt->setstmt), stmt->action);
 
 	UnlockSharedObject(DatabaseRelationId, datid, 0, AccessShareLock);
 

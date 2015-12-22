@@ -854,6 +854,19 @@ AlterRoleSet(AlterRoleSetStmt *stmt)
 	HeapTuple	roletuple;
 	Oid			databaseid = InvalidOid;
 	Oid			roleid = InvalidOid;
+	ListCell	*l;
+
+	/* Syntax check for case where RESET multiple parameters */
+	if (stmt->action == -1)
+	{
+		foreach(l, stmt->setstmt)
+		{
+			if (((VariableSetStmt *) lfirst(l))->args != NULL)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("RESET must not include values for parameteres.")));
+		}
+	}
 
 	if (stmt->role)
 	{
@@ -916,7 +929,7 @@ AlterRoleSet(AlterRoleSetStmt *stmt)
 					 errmsg("must be superuser to alter settings globally")));
 	}
 
-	AlterSetting(databaseid, roleid, stmt->setstmt);
+	AlterSetting(databaseid, roleid, stmt->setstmt, stmt->action);
 
 	return roleid;
 }
