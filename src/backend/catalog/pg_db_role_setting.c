@@ -21,18 +21,18 @@
 #include "utils/tqual.h"
 
 void
-AlterSetting(Oid databaseid, Oid roleid, VariableSetStmt *setstmt)
+AlterSetting(Oid databaseid, Oid roleid, List *setstmt)
 {
-	char	   *valuestr;
 	HeapTuple	tuple;
 	Relation	rel;
 	ScanKeyData scankey[2];
 	SysScanDesc scan;
-
-	valuestr = ExtractSetVariableArgs(setstmt);
+	ListCell   *l;
+	Datum		datum;
+	bool		isnull;
+	ArrayType	*a = NULL;
 
 	/* Get the old tuple, if any. */
-
 	rel = heap_open(DbRoleSettingRelationId, RowExclusiveLock);
 	ScanKeyInit(&scankey[0],
 				Anum_pg_db_role_setting_setdatabase,
@@ -46,6 +46,13 @@ AlterSetting(Oid databaseid, Oid roleid, VariableSetStmt *setstmt)
 							  NULL, 2, scankey);
 	tuple = systable_getnext(scan);
 
+	if (HeapTupleIsValid(tuple))
+	{
+		datum = heap_getattr(tuple, Anum_pg_db_role_setting_setconfig,
+							 RelationGetDescr(rel), &isnull);
+		a = isnull ? NULL :DatumGetArrayTypeP(datum);
+	}
+
 	/*
 	 * There are three cases:
 	 *
@@ -58,72 +65,46 @@ AlterSetting(Oid databaseid, Oid roleid, VariableSetStmt *setstmt)
 	 * - otherwise, insert a new pg_db_role_setting tuple, but only if the
 	 * command is not RESET
 	 */
-	if (setstmt->kind == VAR_RESET_ALL)
+	foreach(l, setstmt)
 	{
-		if (HeapTupleIsValid(tuple))
-		{
-			ArrayType  *new = NULL;
-			Datum		datum;
-			bool		isnull;
-
-			datum = heap_getattr(tuple, Anum_pg_db_role_setting_setconfig,
-								 RelationGetDescr(rel), &isnull);
-
-			if (!isnull)
-				new = GUCArrayReset(DatumGetArrayTypeP(datum));
-
-			if (new)
-			{
-				Datum		repl_val[Natts_pg_db_role_setting];
-				bool		repl_null[Natts_pg_db_role_setting];
-				bool		repl_repl[Natts_pg_db_role_setting];
-				HeapTuple	newtuple;
-
-				memset(repl_repl, false, sizeof(repl_repl));
-
-				repl_val[Anum_pg_db_role_setting_setconfig - 1] =
-					PointerGetDatum(new);
-				repl_repl[Anum_pg_db_role_setting_setconfig - 1] = true;
-				repl_null[Anum_pg_db_role_setting_setconfig - 1] = false;
-
-				newtuple = heap_modify_tuple(tuple, RelationGetDescr(rel),
-											 repl_val, repl_null, repl_repl);
-				simple_heap_update(rel, &tuple->t_self, newtuple);
-
-				/* Update indexes */
-				CatalogUpdateIndexes(rel, newtuple);
-			}
-			else
-				simple_heap_delete(rel, &tuple->t_self);
-		}
-	}
-	else if (HeapTupleIsValid(tuple))
-	{
-		Datum		repl_val[Natts_pg_db_role_setting];
-		bool		repl_null[Natts_pg_db_role_setting];
-		bool		repl_repl[Natts_pg_db_role_setting];
-		HeapTuple	newtuple;
-		Datum		datum;
-		bool		isnull;
-		ArrayType  *a;
-
-		memset(repl_repl, false, sizeof(repl_repl));
-		repl_repl[Anum_pg_db_role_setting_setconfig - 1] = true;
-		repl_null[Anum_pg_db_role_setting_setconfig - 1] = false;
+		VariableSetStmt *stmt = (VariableSetStmt *) lfirst(l);
+		char   *valuestr = NULL;
 
 		/* Extract old value of setconfig */
-		datum = heap_getattr(tuple, Anum_pg_db_role_setting_setconfig,
-							 RelationGetDescr(rel), &isnull);
-		a = isnull ? NULL : DatumGetArrayTypeP(datum);
+		valuestr = ExtractSetVariableArgs(stmt);
 
-		/* Update (valuestr is NULL in RESET cases) */
-		if (valuestr)
-			a = GUCArrayAdd(a, setstmt->name, valuestr);
-		else
-			a = GUCArrayDelete(a, setstmt->name);
+		if (stmt->kind == VAR_RESET_ALL)
+		{
+			if (HeapTupleIsValid(tuple) && !isnull)
+				a = GUCArrayReset(a);
+			break;
+		}
+		else if (HeapTupleIsValid(tuple))
+		{
+			/* Update (valuestr is NULL in RESET cases) */
+			if (valuestr)
+				a = GUCArrayAdd(a, stmt->name, valuestr);
+			else
+				a = GUCArrayDelete(a, stmt->name);
+		}
+		else if (valuestr)
+			a = GUCArrayAdd(a, stmt->name, valuestr);
+	}
 
+	/* Update system catalog */
+	if (HeapTupleIsValid(tuple))
+	{
+		/* Update or delete tuple */
 		if (a)
 		{
+			Datum		repl_val[Natts_pg_db_role_setting];
+			bool		repl_null[Natts_pg_db_role_setting];
+			bool		repl_repl[Natts_pg_db_role_setting];
+			HeapTuple	newtuple;
+
+			memset(repl_repl, false, sizeof(repl_repl));
+			repl_repl[Anum_pg_db_role_setting_setconfig - 1] = true;
+			repl_null[Anum_pg_db_role_setting_setconfig - 1] = false;
 			repl_val[Anum_pg_db_role_setting_setconfig - 1] =
 				PointerGetDatum(a);
 
@@ -137,17 +118,12 @@ AlterSetting(Oid databaseid, Oid roleid, VariableSetStmt *setstmt)
 		else
 			simple_heap_delete(rel, &tuple->t_self);
 	}
-	else if (valuestr)
+	else
 	{
 		/* non-null valuestr means it's not RESET, so insert a new tuple */
-		HeapTuple	newtuple;
 		Datum		values[Natts_pg_db_role_setting];
 		bool		nulls[Natts_pg_db_role_setting];
-		ArrayType  *a;
-
-		memset(nulls, false, sizeof(nulls));
-
-		a = GUCArrayAdd(NULL, setstmt->name, valuestr);
+		HeapTuple	newtuple;
 
 		values[Anum_pg_db_role_setting_setdatabase - 1] =
 			ObjectIdGetDatum(databaseid);

@@ -854,7 +854,6 @@ AlterRoleSet(AlterRoleSetStmt *stmt)
 	HeapTuple	roletuple;
 	Oid			databaseid = InvalidOid;
 	Oid			roleid = InvalidOid;
-	ListCell	*l;
 
 	if (stmt->role)
 	{
@@ -917,11 +916,7 @@ AlterRoleSet(AlterRoleSetStmt *stmt)
 					 errmsg("must be superuser to alter settings globally")));
 	}
 
-	foreach(l, stmt->setstmt)
-	{
-		AlterSetting(databaseid, roleid, (VariableSetStmt *) l);
-//		AlterSetting(databaseid, roleid, stmt->setstmt);
-	}
+	AlterSetting(databaseid, roleid, stmt->setstmt);
 
 	return roleid;
 }
