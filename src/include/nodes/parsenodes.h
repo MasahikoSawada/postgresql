@@ -2169,7 +2169,7 @@ typedef struct AlterRoleSetStmt
 	Node	   *role;			/* role */
 	char	   *database;		/* database name, or NULL */
 	List	   *setstmt;		/* list of VariableSetStmt */
-	int			action;			/* +1 = set, -1 = reset, 0 = followed by VariableSetStmt */
+	int			action;			/* +1 = set, -1 = reset, 0 = follows each element */
 } AlterRoleSetStmt;
 
 typedef struct DropRoleStmt
@@ -2740,7 +2740,7 @@ typedef struct AlterDatabaseSetStmt
 	NodeTag		type;
 	char	   *dbname;			/* database name */
 	List	   *setstmt;	/* list of VariableSetStmt */
-	int			action;		/* +1 = set, -1 = reset, 0 = followed by VariableSetStmt */
+	int			action;		/* +1 = set, -1 = reset, 0 = follows each element */
 } AlterDatabaseSetStmt;
 
 /* ----------------------
