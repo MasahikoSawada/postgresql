@@ -1173,7 +1173,7 @@ useroption_elem:
 					n->kind = VAR_SET_VALUE;
 					n->name = $1;
 					n->args = list_make1($3);
-					$$ = n;
+					$$ = (void *)n;
 				}
 			| var_name
 				{
@@ -1181,7 +1181,7 @@ useroption_elem:
 					n->kind = VAR_RESET;
 					n->name = $1;
 					n->args = NULL;
-					$$ = n;
+					$$ = (void *)n;
 				}
 		;
 /*****************************************************************************
