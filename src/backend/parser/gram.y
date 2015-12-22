@@ -1113,17 +1113,15 @@ AlterUserSetStmt:
 					AlterRoleSetStmt *n = makeNode(AlterRoleSetStmt);
 					n->role = $3;
 					n->database = NULL;
-					//n->setstmt = $4;
 					n->setstmt = list_make1($4);
 					$$ = (Node *)n;
 				}
-			| 
+			|
 			ALTER USER RoleSpec SET useroptions
 				{
 					AlterRoleSetStmt *n = makeNode(AlterRoleSetStmt);
 					n->role = $3;
 					n->database = NULL;
-					//n->setstmt = NULL;
 					n->setstmt = $5;
 					$$ = (Node *)n;
 				}
@@ -1134,7 +1132,7 @@ useroptions:
 		;
 
 useroption_list:
-			useroption_elem	{ $$ = list_make1($1); }
+			useroption_elem							{ $$ = list_make1($1); }
 			| useroption_list ',' useroption_elem	{ $$ = lappend($1, $3); }
 		;
 
