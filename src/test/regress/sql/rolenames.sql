@@ -150,7 +150,7 @@ ALTER ROLE nonexistent SET application_name to 'BOMB'; -- error
 --  ALTER USER SET/RESET
 SELECT * FROM chksetconfig();
 ALTER USER CURRENT_USER SET application_name to 'FOO';
-ALTER USER SESSION_USER SET application_name to 'BAR';
+ALTER USER SESSION_USER SET (application_name = 'BAR', log_min_duration_statement = 100);
 ALTER USER "current_user" SET application_name to 'FOOFOO';
 ALTER USER "Public" SET application_name to 'BARBAR';
 ALTER USER ALL SET application_name to 'SLAP';
@@ -158,7 +158,7 @@ SELECT * FROM chksetconfig();
 ALTER USER testrol1 SET application_name to 'SLAM';
 SELECT * FROM chksetconfig();
 ALTER USER CURRENT_USER RESET application_name;
-ALTER USER SESSION_USER RESET application_name;
+ALTER USER SESSION_USER RESET (application_name, log_min_duration_statement, log_duration);
 ALTER USER "current_user" RESET application_name;
 ALTER USER "Public" RESET application_name;
 ALTER USER ALL RESET application_name;
