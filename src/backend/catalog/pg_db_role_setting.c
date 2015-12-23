@@ -124,7 +124,7 @@ AlterSetting(Oid databaseid, Oid roleid, List *setstmt, int action)
 		else
 			simple_heap_delete(rel, &tuple->t_self);
 	}
-	else
+	else if (a)
 	{
 		/* non-null valuestr means it's not RESET, so insert a new tuple */
 		Datum		values[Natts_pg_db_role_setting];

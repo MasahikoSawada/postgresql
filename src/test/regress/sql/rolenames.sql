@@ -136,7 +136,6 @@ ALTER ROLE testrol1 SET application_name to 'SLAM';
 SELECT * FROM chksetconfig();
 ALTER ROLE CURRENT_USER RESET application_name;
 ALTER ROLE SESSION_USER RESET (application_name, log_min_duration_statement, log_duration);
-ALTER ROLE SESSION_USER RESET application_name;
 ALTER ROLE "current_user" RESET application_name;
 ALTER ROLE "Public" RESET application_name;
 ALTER ROLE ALL RESET application_name;

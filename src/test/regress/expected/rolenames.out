@@ -324,31 +324,31 @@ SELECT * FROM chksetconfig();
 (0 rows)
 
 ALTER ROLE CURRENT_USER SET application_name to 'FOO';
-ALTER ROLE SESSION_USER SET application_name to 'BAR';
+ALTER ROLE SESSION_USER SET (application_name = 'BAR', log_min_duration_statement = 100);
 ALTER ROLE "current_user" SET application_name to 'FOOFOO';
 ALTER ROLE "Public" SET application_name to 'BARBAR';
 ALTER ROLE ALL SET application_name to 'SLAP';
 SELECT * FROM chksetconfig();
- db  |     role     |  rolkeyword  |         setconfig         
------+--------------+--------------+---------------------------
+ db  |     role     |  rolkeyword  |                       setconfig                       
+-----+--------------+--------------+-------------------------------------------------------
  ALL | Public       | -            | {application_name=BARBAR}
  ALL | current_user | -            | {application_name=FOOFOO}
- ALL | testrol1     | session_user | {application_name=BAR}
+ ALL | testrol1     | session_user | {application_name=BAR,log_min_duration_statement=100}
  ALL | testrol2     | current_user | {application_name=FOO}
 (4 rows)
 
 ALTER ROLE testrol1 SET application_name to 'SLAM';
 SELECT * FROM chksetconfig();
- db  |     role     |  rolkeyword  |         setconfig         
------+--------------+--------------+---------------------------
+ db  |     role     |  rolkeyword  |                       setconfig                        
+-----+--------------+--------------+--------------------------------------------------------
  ALL | Public       | -            | {application_name=BARBAR}
  ALL | current_user | -            | {application_name=FOOFOO}
- ALL | testrol1     | session_user | {application_name=SLAM}
+ ALL | testrol1     | session_user | {application_name=SLAM,log_min_duration_statement=100}
  ALL | testrol2     | current_user | {application_name=FOO}
 (4 rows)
 
 ALTER ROLE CURRENT_USER RESET application_name;
-ALTER ROLE SESSION_USER RESET application_name;
+ALTER ROLE SESSION_USER RESET (application_name, log_min_duration_statement, log_duration);
 ALTER ROLE "current_user" RESET application_name;
 ALTER ROLE "Public" RESET application_name;
 ALTER ROLE ALL RESET application_name;
