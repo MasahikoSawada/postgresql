@@ -127,7 +127,7 @@ ALTER USER nonexistent WITH NOREPLICATION; -- error
 --  ALTER ROLE SET/RESET
 SELECT * FROM chksetconfig();
 ALTER ROLE CURRENT_USER SET application_name to 'FOO';
-ALTER ROLE SESSION_USER SET application_name to 'BAR';
+ALTER ROLE SESSION_USER SET (application_name = 'BAR', log_min_duration_statement = 100);
 ALTER ROLE "current_user" SET application_name to 'FOOFOO';
 ALTER ROLE "Public" SET application_name to 'BARBAR';
 ALTER ROLE ALL SET application_name to 'SLAP';
@@ -135,6 +135,7 @@ SELECT * FROM chksetconfig();
 ALTER ROLE testrol1 SET application_name to 'SLAM';
 SELECT * FROM chksetconfig();
 ALTER ROLE CURRENT_USER RESET application_name;
+ALTER ROLE SESSION_USER RESET (application_name, log_min_duration_statement, log_duration);
 ALTER ROLE SESSION_USER RESET application_name;
 ALTER ROLE "current_user" RESET application_name;
 ALTER ROLE "Public" RESET application_name;
