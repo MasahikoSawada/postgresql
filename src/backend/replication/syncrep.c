@@ -943,6 +943,7 @@ assign_synchronous_commit(int newval, void *extra)
 void
 ProcessSynchronousReplicationConfig(void)
 {
+#define SYNC_REP_MAX_SYNC_STANDBY_NUM 256
 	char	   *rawstring;
 	List	   *elemlist;
 
@@ -958,6 +959,23 @@ ProcessSynchronousReplicationConfig(void)
 		synchronous_standby_num = 1;
 	else
 		synchronous_standby_num = pg_atoi(lfirst(list_head(elemlist)), sizeof(int), 0);
+
+	/* In 'priority' method, additional validation checks for synchronous_standby_num */
+	if (synchronous_replication_method == SYNC_REP_METHOD_PRIORITY)
+	{
+		if ((list_length(elemlist) - 1) < synchronous_standby_num)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("The number of synchronous standbys must be smaller than the number of listed : %d",
+							synchronous_standby_num)));
+
+		if (1 > synchronous_standby_num ||
+			synchronous_standby_num > SYNC_REP_MAX_SYNC_STANDBY_NUM)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("The number of synchronous standbys must be between 1 and %d : %d",
+							SYNC_REP_MAX_SYNC_STANDBY_NUM, synchronous_standby_num)));
+	}
 
 #ifdef DEBUG_REPLICATION
 	elog(NOTICE, "Variable s_s_num : %d, s_s_names : %s",
