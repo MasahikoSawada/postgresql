@@ -354,7 +354,10 @@ SyncRepInitConfig(void)
 	}
 }
 
-/* Is this wal sender considerable one? */
+/*
+ * Is this wal sender managing a standby that is streaming and
+ * listed as a synchronous standby?
+ */
 bool
 SyncRepActiveListedWalSender(int num)
 {
@@ -390,12 +393,9 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 	XLogRecPtr tmp_flush_pos;
 	bool		ret = false;
 
-	/* '1-priority' method */
-	if (synchronous_replication_method == SYNC_REP_METHOD_1_PRIORITY)
-		ret = SyncRepGetSyncLsnsOnePriority(&tmp_write_pos, &tmp_flush_pos);
-
-	/* 'priority' method */
-	else if (synchronous_replication_method == SYNC_REP_METHOD_PRIORITY)
+	/* '1-priority' and 'priority' method */
+	if (synchronous_replication_method == SYNC_REP_METHOD_1_PRIORITY ||
+		synchronous_replication_method == SYNC_REP_METHOD_PRIORITY)
 		ret = SyncRepGetSyncLsnsPriority(&tmp_write_pos, &tmp_flush_pos);
 
 #ifdef DEBUG_REPLICATION
@@ -422,7 +422,8 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 }
 
 /*
- * Obtain three palloc'd arrays containing position of standbys currently
+ * Populate a caller-supplied array which much have enough space for
+ * synchronous_standby_num. Returns position of standbys currently
  * considered as synchronous, and its length.
  */
 int
@@ -431,70 +432,19 @@ SyncRepGetSyncStandbys(int *sync_standbys)
 	int	num_sync = 0;
 
 
-	/* '1-priority' method */
-	if (synchronous_replication_method == SYNC_REP_METHOD_1_PRIORITY)
-		num_sync = SyncRepGetSyncStandbysOnePriority(sync_standbys);
-
-	/* 'priority' method */
-	else if (synchronous_replication_method == SYNC_REP_METHOD_PRIORITY)
+	/* '1-priority' and 'priority' method */
+	if (synchronous_replication_method == SYNC_REP_METHOD_1_PRIORITY ||
+		synchronous_replication_method == SYNC_REP_METHOD_PRIORITY)
 		num_sync = SyncRepGetSyncStandbysPriority(sync_standbys);
 
 	return num_sync;
 }
 
 /*
- * Obtain standby currently considered as synchronous using
- * '1-priority' method.
- */
-int
-SyncRepGetSyncStandbysOnePriority(int *sync_standbys)
-{
-	int	priority = 0;
-	int	i;
-
-	for (i = 0; i < max_wal_senders; i++)
-	{
-		/* Use volatile pointer to prevent code rearrangement */
-		volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
-
-		/* Is this wal sender considerable one? */
-		if (!SyncRepActiveListedWalSender(i))
-			continue;
-
-		/* Find higher priority standbys */
-		if (priority == 0 ||
-			priority > walsnd->sync_standby_priority)
-		{
-			priority = walsnd->sync_standby_priority;
-			sync_standbys[0] = i;
-		}
-	}
-
-#ifdef DEBUG_REPLICATION
-	{
-		char *sync_list = palloc(sizeof(char) * 20);
-		char *tmp = sync_list;
-		int	num_sync = 1;
-
-		for (i = 0; i < num_sync; i++)
-		{
-			sprintf(tmp, "%d,", sync_standbys[i]);
-			tmp += 2;
-		}
-
-		*(tmp-1) = '\0';
-		elog(NOTICE, "(%d) SyncedStandbyList [%s]", MyProcPid, sync_list);
-		pfree(sync_list);
-	}
-#endif
-
-	/* Always return 1 */
-	return 1;
-}
-
-/*
- * Obtain standby currently considered as synchronous using
- * 'priority' method.
+ * Populates a caller-supplied buffer with the walsnds indexes of the
+ * highest priority active synchronous standbys, up to the a limit of
+ * 'synchronous_standby_num'. The order of the results is undefined.
+ * Return the number of results actually written.
  */
 int
 SyncRepGetSyncStandbysPriority(int *sync_standbys)
@@ -521,7 +471,7 @@ SyncRepGetSyncStandbysPriority(int *sync_standbys)
 			{
 				volatile WalSnd *walsndloc = &WalSndCtl->walsnds[sync_standbys[j]];
 
-				/* Found sync standby */
+				/* Found lowest priority standby, so replace it */
 				if (walsndloc->sync_standby_priority == priority &&
 					walsnd->sync_standby_priority < priority)
 					sync_standbys[j] = i;
@@ -566,58 +516,17 @@ SyncRepGetSyncStandbysPriority(int *sync_standbys)
 
 /*
  * Obtain currently synced LSN: write and flush,
- * using '1-prioirty' method.
- */
-bool
-SyncRepGetSyncLsnsOnePriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
-{
-	int			*sync_standbys = NULL;
-	int			num_sync;
-	volatile WalSnd *walsnd;
-
-	sync_standbys = (int *) palloc(sizeof(int) * synchronous_standby_num);
-	num_sync = SyncRepGetSyncStandbysOnePriority(sync_standbys);
-
-	if (num_sync < synchronous_standby_num)
-	{
-		pfree(sync_standbys);
-		return false;
-	}
-
-	/* Synchronous standby is always one */
-	walsnd = &WalSndCtl->walsnds[sync_standbys[0]];
-
-	SpinLockAcquire(&walsnd->mutex);
-	*write_pos = walsnd->write;
-	*flush_pos = walsnd->flush;
-	SpinLockRelease(&walsnd->mutex);
-
-#ifdef DEBUG_REPLICATION
-	elog(NOTICE, "-----> LOCATION : write %X/%X, flush %X/%X",
-		 (uint32) (*write_pos >> 32), (uint32) *write_pos,
-		 (uint32) (*flush_pos >> 32), (uint32) *flush_pos);
-#endif
-
-	/* Clean up*/
-	pfree(sync_standbys);
-
-	return true;
-}
-
-/*
- * Obtain currently synced LSN: write and flush,
- * using 'prioirty' method.
+ * using 'priority' method.
  */
 bool
 SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 {
-	int			*sync_standbys = NULL;
+	int			sync_standbys[synchronous_standby_num];
 	int			num_sync;
 	int			i;
 	XLogRecPtr	synced_write = InvalidXLogRecPtr;
 	XLogRecPtr	synced_flush = InvalidXLogRecPtr;
 
-	sync_standbys = (int *) palloc(sizeof(int) * synchronous_standby_num);
 	num_sync = SyncRepGetSyncStandbysPriority(sync_standbys);
 
 	/* Just return, if sync standby is not enough */
@@ -766,21 +675,6 @@ SyncRepReleaseWaiters(void)
 				(errmsg("standby \"%s\" is now the synchronous standby with priority %u",
 						application_name, MyWalSnd->sync_standby_priority)));
 	}
-
-
-	/*-----------------------------------*/
-
-	/*
-	for (i = 0; i < num_sync; i++)
-	{
-		volatile WalSnd *walsndloc = &WalSndCtl->walsnds[sync_standbys[i]];
-		if (walsndloc == MyWalSnd)
-		{
-			found = true;
-			break;
-		}
-	}
-	*/
 }
 
 /*

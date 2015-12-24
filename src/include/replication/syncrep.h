@@ -60,13 +60,9 @@ extern int SyncRepGetSyncStandbys(int *sync_standbys);
 extern bool SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
 extern bool SyncRepActiveListedWalSender(int num);
 
-/* 'priority' method */
+/* '1-priority' and 'priority' method */
 extern int SyncRepGetSyncStandbysPriority(int *sync_standbys);
 extern bool	SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
-
-/* '1-priority' method */
-extern int SyncRepGetSyncStandbysOnePriority(int *sync_standbys);
-extern bool	SyncRepGetSyncLsnsOnePriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
 
 extern bool check_synchronous_standby_names(char **newval, void **extra, GucSource source);
 extern void assign_synchronous_commit(int newval, void *extra);
