@@ -532,7 +532,6 @@ SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 	/* Just return, if sync standby is not enough */
 	if (num_sync < synchronous_standby_num)
 	{
-		pfree(sync_standbys);
 		return false;
 	}
 
