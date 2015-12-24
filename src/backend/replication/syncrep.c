@@ -593,9 +593,6 @@ SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 	elog(NOTICE, "================");
 #endif
 
-	/* Clean up*/
-	pfree(sync_standbys);
-
 	return true;
 }
 
