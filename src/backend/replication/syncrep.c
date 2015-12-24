@@ -487,8 +487,8 @@ SyncRepGetSyncStandbysPriority(int *sync_standbys)
 }
 
 /*
- * Obtain currently synced LSN: write and flush,
- * using 'priority' method.
+ * Obtain currently synced LSN location: write and flush, using priority
+ * method.
  */
 bool
 SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
