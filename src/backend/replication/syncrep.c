@@ -57,6 +57,8 @@
 #include "utils/builtins.h"
 #include "utils/ps_status.h"
 
+/*#define DEBUG_REPLICATION 1 */
+
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
 int			synchronous_replication_method;
@@ -396,6 +398,15 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 		synchronous_replication_method == SYNC_REP_METHOD_PRIORITY)
 		ret = SyncRepGetSyncLsnsPriority(&tmp_write_pos, &tmp_flush_pos);
 
+#ifdef DEBUG_REPLICATION
+	elog(NOTICE, "====> CONSIDER (%d) write(tmp,my) %X/%X <= %X/%X, flush(tmp,my) : %X/%X <= %X/%X",
+		 MyWalSnd->pid,
+		 (uint32) (tmp_write_pos >> 32), (uint32) tmp_write_pos,
+		 (uint32) (MyWalSnd->write >> 32), (uint32) MyWalSnd->write,
+		 (uint32) (tmp_flush_pos >> 32), (uint32) tmp_flush_pos,
+		 (uint32) (MyWalSnd->flush >> 32), (uint32) MyWalSnd->flush);
+#endif
+
 	/* Have we advanced LSN? */
 	if (ret)
 	{
@@ -483,6 +494,23 @@ SyncRepGetSyncStandbysPriority(int *sync_standbys)
 		}
 	}
 
+#ifdef DEBUG_REPLICATION
+	{
+		char *sync_list = palloc(sizeof(char) * 20);
+		char *tmp = sync_list;
+
+		for (i = 0; i < num_sync; i++)
+		{
+			sprintf(tmp, "%d,", sync_standbys[i]);
+			tmp += 2;
+		}
+
+		*(tmp-1) = '\0';
+		elog(NOTICE, "(%d) SyncedStandbyList [%s]", MyProcPid, sync_list);
+		pfree(sync_list);
+	}
+#endif
+
 	return num_sync;
 }
 
@@ -535,6 +563,37 @@ SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 	*write_pos = synced_write;
 	*flush_pos = synced_flush;
 
+#ifdef DEBUG_REPLICATION
+	elog(NOTICE, "================");
+	elog(NOTICE, "WRITE LOCAITON");
+	for (i = 0; i< num_sync; i++)
+	{
+		volatile WalSnd *walsndloc = &WalSndCtl->walsnds[sync_standbys[i]];
+
+		elog(NOTICE, "    [%d] : %X/%X, priority = %d", i,
+			 (uint32) (walsndloc->write >> 32) ,
+			 (uint32) walsndloc->write,
+			 walsndloc->sync_standby_priority
+			);
+	}
+	elog(NOTICE, "FLUSH LOCAITON");
+	for (i = 0; i< num_sync; i++)
+	{
+		volatile WalSnd *walsndloc = &WalSndCtl->walsnds[sync_standbys[i]];
+
+		elog(NOTICE, "    [%d] : %X/%X, priority = %d", i,
+			 (uint32) (walsndloc->flush >> 32) ,
+			 (uint32) walsndloc->flush,
+			 walsndloc->sync_standby_priority
+			);
+	}
+	elog(NOTICE, "-----> LOCATION : write %X/%X, flush %X/%X",
+		 (uint32) (*write_pos >> 32), (uint32) *write_pos,
+		 (uint32) (*flush_pos >> 32), (uint32) *flush_pos);
+
+	elog(NOTICE, "================");
+#endif
+
 	/* Clean up*/
 	pfree(sync_standbys);
 
@@ -575,6 +634,14 @@ SyncRepReleaseWaiters(void)
 		LWLockRelease(SyncRepLock);
 		return;
 	}
+
+
+#ifdef DEBUG_REPLICATION
+	elog(NOTICE, "==========> DECIDE (%d) write : %X/%X, flush : %X/%X #####",
+		 MyWalSnd->pid,
+		 (uint32) (write_pos >> 32), (uint32) write_pos,
+		 (uint32) (flush_pos >> 32), (uint32) flush_pos);
+#endif
 
 	/*
 	 * Set the lsn first so that when we wake backends they will release up to
@@ -677,6 +744,9 @@ SyncRepGetStandbyPriority(void)
 	pfree(rawstring);
 	list_free(elemlist);
 
+#ifdef DEBUG_REPLICATION
+	elog(NOTICE, "(%d) Got priority %d", MyWalSnd->pid, priority);
+#endif
 	return (found ? priority : 0);
 }
 
@@ -892,6 +962,11 @@ ProcessSynchronousReplicationConfig(void)
 		synchronous_standby_num = 1;
 	else
 		synchronous_standby_num = pg_atoi(lfirst(list_head(elemlist)), sizeof(int), 0);
+
+#ifdef DEBUG_REPLICATION
+	elog(NOTICE, "Variable s_s_num : %d, s_s_names : %s",
+		 synchronous_standby_num, rawstring);
+#endif
 
 	return;
 }
