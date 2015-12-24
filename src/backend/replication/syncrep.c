@@ -29,8 +29,8 @@
  * single ordered queue of waiting backends, so that we can avoid
  * searching the through all waiters each time we receive a reply.
  *
- * In 9.1 we support only a single synchronous standby, chosen from a
- * priority list of synchronous_standby_names. Before it can become the
+ * In 9.6 we support multiple synchronous standby, chosen from a priority
+ * list of synchronous_standby_names. Before it can become the
  * synchronous standby it must have caught up with the primary; that may
  * take some time. Once caught up, the current highest priority standby
  * will release waiters from the queue.
