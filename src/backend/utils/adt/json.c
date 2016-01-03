@@ -3,7 +3,7 @@
  * json.c
  *		JSON data type support.
  *
- * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -2415,7 +2415,7 @@ escape_json(StringInfo buf, const char *str)
 {
 	const char *p;
 
-	appendStringInfoCharMacro(buf, '\"');
+	appendStringInfoCharMacro(buf, '"');
 	for (p = str; *p; p++)
 	{
 		switch (*p)
@@ -2449,7 +2449,7 @@ escape_json(StringInfo buf, const char *str)
 				break;
 		}
 	}
-	appendStringInfoCharMacro(buf, '\"');
+	appendStringInfoCharMacro(buf, '"');
 }
 
 /*

@@ -3,7 +3,7 @@
  * outfuncs.c
  *	  Output functions for Postgres tree nodes.
  *
- * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -124,7 +124,7 @@ _outToken(StringInfo str, const char *s)
 	 */
 	/* These characters only need to be quoted at the start of the string */
 	if (*s == '<' ||
-		*s == '\"' ||
+		*s == '"' ||
 		isdigit((unsigned char) *s) ||
 		((*s == '+' || *s == '-') &&
 		 (isdigit((unsigned char) s[1]) || s[1] == '.')))
@@ -2763,6 +2763,7 @@ _outA_Indices(StringInfo str, const A_Indices *node)
 {
 	WRITE_NODE_TYPE("A_INDICES");
 
+	WRITE_BOOL_FIELD(is_slice);
 	WRITE_NODE_FIELD(lidx);
 	WRITE_NODE_FIELD(uidx);
 }
