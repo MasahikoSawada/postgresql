@@ -454,10 +454,9 @@ SyncRepGetSyncStandbysPriority(int *sync_standbys)
 		if (!SyncRepActiveListedWalSender(i))
 			continue;
 
-		if (num_sync == synchronous_standby_num)
+		if (num_sync == synchronous_standby_num &&
+			walsnd->sync_standby_priority < priority)
 		{
-			int new_priority = 0;
-
 			for (j = 0; j < num_sync; j++)
 			{
 				volatile WalSnd *walsndloc = &WalSndCtl->walsnds[sync_standbys[j]];
@@ -468,11 +467,9 @@ SyncRepGetSyncStandbysPriority(int *sync_standbys)
 					sync_standbys[j] = i;
 
 				/* Update highest priority standby */
-				if (new_priority < walsndloc->sync_standby_priority)
-					new_priority = walsndloc->sync_standby_priority;
+				if (priority < walsndloc->sync_standby_priority)
+					priority = walsndloc->sync_standby_priority;
 			}
-
-			priority = new_priority;
 		}
 		else
 		{
