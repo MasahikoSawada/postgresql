@@ -29,10 +29,10 @@
  * single ordered queue of waiting backends, so that we can avoid
  * searching the through all waiters each time we receive a reply.
  *
- * In 9.6 we support multiple synchronous standby, chosen from a priority
- * list of synchronous_standby_names. Before it can become the
- * synchronous standby it must have caught up with the primary; that may
- * take some time. Once caught up, the current highest priority standby
+ * In 9.6 we support multiple synchronous standbys, chosen from a priority
+ * list of synchronous_standby_names. Before any standby can become a
+ * synchronous standbys it must have caught up with the primary; that may
+ * take some time. Once caught up, the current highest priority standbys
  * will release waiters from the queue.
  *
  * Portions Copyright (c) 2010-2015, PostgreSQL Global Development Group
@@ -66,6 +66,8 @@ int			synchronous_standby_num;
 	(SyncRepStandbyNames != NULL && \
 	 SyncRepStandbyNames[0] != '\0' && \
 	 synchronous_standby_num > 0)
+
+#define SYNC_REP_MAX_SYNC_STANDBY_NUM 256
 
 static bool announce_next_takeover = true;
 
@@ -411,7 +413,7 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 }
 
 /*
- * Populate a caller-supplied array which much have enough space for
+ * Populate a caller-supplied array which must have enough space for
  * synchronous_standby_num. Returns position of standbys currently
  * considered as synchronous, and its length.
  */
@@ -493,7 +495,7 @@ SyncRepGetSyncStandbysPriority(int *sync_standbys)
 bool
 SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 {
-	int			sync_standbys[synchronous_standby_num];
+	int			sync_standbys[SYNC_REP_MAX_SYNC_STANDBY_NUM];
 	int			num_sync;
 	int			i;
 	XLogRecPtr	synced_write = InvalidXLogRecPtr;
@@ -873,7 +875,6 @@ assign_synchronous_commit(int newval, void *extra)
 void
 ProcessSynchronousReplicationConfig(void)
 {
-#define SYNC_REP_MAX_SYNC_STANDBY_NUM 256
 	char	   *rawstring;
 	List	   *elemlist;
 
@@ -896,14 +897,14 @@ ProcessSynchronousReplicationConfig(void)
 		if ((list_length(elemlist) - 1) < synchronous_standby_num)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("The number of synchronous standbys must be smaller than the number of listed : %d",
+					 errmsg("the number of synchronous standbys exceed the length of the standby list: %d",
 							synchronous_standby_num)));
 
 		if (1 > synchronous_standby_num ||
 			synchronous_standby_num > SYNC_REP_MAX_SYNC_STANDBY_NUM)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("The number of synchronous standbys must be between 1 and %d : %d",
+					 errmsg("the number of synchronous standbys must be between 1 and %d: %d",
 							SYNC_REP_MAX_SYNC_STANDBY_NUM, synchronous_standby_num)));
 	}
 
