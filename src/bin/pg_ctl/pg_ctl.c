@@ -2,7 +2,7 @@
  *
  * pg_ctl --- start/stops/restarts the PostgreSQL server
  *
- * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  *
  * src/bin/pg_ctl/pg_ctl.c
  *
@@ -212,11 +212,20 @@ write_stderr(const char *fmt,...)
 	vfprintf(stderr, fmt, ap);
 #else
 
+/*
+ * On Cygwin, we don't yet have a reliable mechanism to detect when
+ * we're being run as a service, so fall back to the old (and broken)
+ * stderr test.
+ */
+#ifdef __CYGWIN__
+#define	pgwin32_is_service()	(isatty(fileno(stderr)))
+#endif
+
 	/*
 	 * On Win32, we print to stderr if running on a console, or write to
 	 * eventlog if running as a service
 	 */
-	if (!isatty(fileno(stderr)))	/* Running as a service */
+	if (!pgwin32_is_service())	/* Running as a service */
 	{
 		char		errbuf[2048];		/* Arbitrary size? */
 

@@ -2,7 +2,6 @@ use strict;
 use warnings;
 use PostgresNode;
 use TestLib;
-use TestLib;
 use Test::More tests => 38;
 use ServerSetup;
 use File::Copy;
@@ -37,7 +36,7 @@ sub run_test_psql
 	my $logstring = $_[1];
 
 	my $cmd = [
-		'psql', '-A', '-t', '-c', "SELECT 'connected with $connstr'",
+		'psql', '-X', '-A', '-t', '-c', "SELECT 'connected with $connstr'",
 		'-d', "$connstr" ];
 
 	my $result = run_log($cmd);

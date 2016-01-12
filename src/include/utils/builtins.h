@@ -4,7 +4,7 @@
  *	  Declarations for operations on built-in types.
  *
  *
- * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/utils/builtins.h
@@ -1022,6 +1022,7 @@ extern Datum numeric_exp(PG_FUNCTION_ARGS);
 extern Datum numeric_ln(PG_FUNCTION_ARGS);
 extern Datum numeric_log(PG_FUNCTION_ARGS);
 extern Datum numeric_power(PG_FUNCTION_ARGS);
+extern Datum numeric_scale(PG_FUNCTION_ARGS);
 extern Datum int4_numeric(PG_FUNCTION_ARGS);
 extern Datum numeric_int4(PG_FUNCTION_ARGS);
 extern Datum int8_numeric(PG_FUNCTION_ARGS);
