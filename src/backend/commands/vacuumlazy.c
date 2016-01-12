@@ -599,7 +599,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 			 */
 			bool	all_frozen = VM_ALL_FROZEN(onerel, blkno, &vmbuffer);
 
-			if (scan_all && all_frozen)
+			if (scan_all && all_frozen && !FORCE_CHECK_PAGE())
 			{
 					vacrelstats->vmskipped_frozen_pages++;
 					continue;
