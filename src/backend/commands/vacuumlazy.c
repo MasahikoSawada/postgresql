@@ -280,15 +280,15 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	 * Update statistics in pg_class.
 	 *
 	 * A corner case here is that if we scanned no pages at all because every
-	 * page is all-visible, we should not update relpages/reltuples, because
-	 * we have no new information to contribute.  In particular this keeps us
-	 * from replacing relpages=reltuples=0 (which means "unknown tuple
+	 * page is all-visible or all-frozen, we should not update relpages/reltuples,
+	 * because we have no new information to contribute.  In particular this keeps
+	 * us from replacing relpages=reltuples=0 (which means "unknown tuple
 	 * density") with nonzero relpages and reltuples=0 (which means "zero
 	 * tuple density") unless there's some actual evidence for the latter.
 	 *
-	 * We do update relallvisible even in the corner case, since if the table
-	 * is all-visible we'd definitely like to know that.  But clamp the value
-	 * to be not more than what we're setting relpages to.
+	 * We do update relallvisible and relallfrozen even in the corner case,
+	 * since if the table is all-visible we'd definitely like to know that.
+	 * But clamp the value to be not more than what we're setting relpages to.
 	 *
 	 * Also, don't change relfrozenxid/relminmxid if we skipped any pages,
 	 * since then we don't know for certain that all tuples have a newer xmin.
@@ -492,11 +492,11 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 	 * doing readahead for us, so there's no gain in skipping a page now and
 	 * then; that's likely to disable readahead and so be counterproductive.
 	 * Also, skipping even a single page according to all-visible bit of
-	 * visibility map means that we can't update relfrozenxid, so we only want
-	 * to do it if we can skip a goodly number. On the other hand, we count
-	 * both how many pages we skipped according to all-frozen bit of visibility
-	 * map and how many pages we freeze, so we can update relfrozenxid if
-	 * the sum of two is as many as pages of table.
+	 * visibility map means that we might not be able to update relfrozenxid,
+	 * so we only want to do it if we can skip a goodly number. On the other hand,
+	 * we count both how many pages we skipped according to all-frozen bit of
+	 * visibility map and how many pages we froze, so we can update relfrozenxid
+	 * if the sum of two is as many as pages of table.
 	 *
 	 * Before entering the main loop, establish the invariant that
 	 * next_not_all_visible_block is the next block number >= blkno that's not
@@ -593,7 +593,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		else
 		{
 			/*
-			 * This block is at least all-visible according to the visibility map.
+			 * This block is at least all-visible according to visibility map.
 			 * We check whether this block is all-frozen or not, to skip to
 			 * vacuum this page even if scan_all is true.
 			 */
@@ -1034,7 +1034,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 			END_CRIT_SECTION();
 		}
 
-		/* Compute the number of frozen tuples in a page */
+		/* Compute total number of frozen tuples in a page */
 		ntotal_frozen = nfrozen + nalready_frozen;
 
 		/*
@@ -1137,7 +1137,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		 */
 		else if (PageIsAllVisible(page) && has_dead_tuples)
 		{
-			/* If the all-frozen is set then all-visible must be set */
+			/* If all-frozen is set then all-visible must be set */
 			if (PageIsAllFrozen(page))
 				Assert(VM_ALL_FROZEN(onerel, blkno, &vmbuffer) &&
 					   VM_ALL_VISIBLE(onerel, blkno, &vmbuffer));

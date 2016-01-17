@@ -115,7 +115,7 @@
 #define HEAPBLK_TO_MAPBYTE(x) (((x) % HEAPBLOCKS_PER_PAGE) / HEAPBLOCKS_PER_BYTE)
 #define HEAPBLK_TO_MAPBIT(x) (((x) % HEAPBLOCKS_PER_BYTE) * BITS_PER_HEAPBLOCK)
 
-/* tables for fast counting of set bits for visible and freeze */
+/* tables for fast counting of set bits for visible and frozen */
 static const uint8 number_of_ones_for_visible[256] = {
 	0, 1, 0, 1, 1, 2, 1, 2, 0, 1, 0, 1, 1, 2, 1, 2,
 	1, 2, 1, 2, 2, 3, 2, 3, 1, 2, 1, 2, 2, 3, 2, 3,
@@ -400,7 +400,6 @@ visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer *buf)
  * Note: we ignore the possibility of race conditions when the table is being
  * extended concurrently with the call.  New pages added to the table aren't
  * going to be marked all-visible or all-frozen, so they won't affect the result.
- * The caller must set the flags which indicates what flag we want to count.
  */
 void
 visibilitymap_count(Relation rel, BlockNumber *all_visible, BlockNumber *all_frozen)

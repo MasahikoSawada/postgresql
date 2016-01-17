@@ -86,7 +86,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 * we'll use the index tuple not the heap tuple as the data source.
 		 *
 		 * Note on Memory Ordering Effects: visibilitymap_get_status does not
-		 * lock. The visibility map buffer, and therefore the result we read
+		 * lock the visibility map buffer, and therefore the result we read
 		 * here could be slightly stale.  However, it can't be stale enough to
 		 * matter.
 		 *
