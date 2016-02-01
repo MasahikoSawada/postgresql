@@ -1054,6 +1054,8 @@ create_unique_plan(PlannerInfo *root, UniquePath *best_path)
 								 groupOperators,
 								 NIL,
 								 numGroups,
+								 false,
+								 true,
 								 subplan);
 	}
 	else
@@ -1128,7 +1130,7 @@ create_gather_plan(PlannerInfo *root, GatherPath *best_path)
 
 	gather_plan = make_gather(subplan->targetlist,
 							  NIL,
-							  best_path->num_workers,
+							  best_path->path.parallel_degree,
 							  best_path->single_copy,
 							  subplan);
 
@@ -2148,6 +2150,15 @@ create_foreignscan_plan(PlannerInfo *root, ForeignPath *best_path,
 
 	/* Likewise, copy the relids that are represented by this foreign scan */
 	scan_plan->fs_relids = best_path->path.parent->relids;
+
+	/*
+	 * If a join between foreign relations was pushed down, remember it. The
+	 * push-down safety of the join depends upon the server and user mapping
+	 * being same. That can change between planning and execution time, in which
+	 * case the plan should be invalidated.
+	 */
+	if (scan_relid == 0)
+		root->glob->hasForeignJoin = true;
 
 	/*
 	 * Replace any outer-relation variables with nestloop params in the qual,
@@ -4557,9 +4568,8 @@ Agg *
 make_agg(PlannerInfo *root, List *tlist, List *qual,
 		 AggStrategy aggstrategy, const AggClauseCosts *aggcosts,
 		 int numGroupCols, AttrNumber *grpColIdx, Oid *grpOperators,
-		 List *groupingSets,
-		 long numGroups,
-		 Plan *lefttree)
+		 List *groupingSets, long numGroups, bool combineStates,
+		 bool finalizeAggs, Plan *lefttree)
 {
 	Agg		   *node = makeNode(Agg);
 	Plan	   *plan = &node->plan;
@@ -4568,6 +4578,8 @@ make_agg(PlannerInfo *root, List *tlist, List *qual,
 
 	node->aggstrategy = aggstrategy;
 	node->numCols = numGroupCols;
+	node->combineStates = combineStates;
+	node->finalizeAggs = finalizeAggs;
 	node->grpColIdx = grpColIdx;
 	node->grpOperators = grpOperators;
 	node->numGroups = numGroups;

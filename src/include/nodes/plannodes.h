@@ -73,6 +73,7 @@ typedef struct PlannedStmt
 	bool		hasRowSecurity; /* row security applied? */
 
 	bool		parallelModeNeeded; /* parallel mode required to execute? */
+	bool		hasForeignJoin;	/* Plan has a pushed down foreign join */
 } PlannedStmt;
 
 /* macro for fetching the Plan associated with a SubPlan node */
@@ -726,6 +727,8 @@ typedef struct Agg
 	AggStrategy aggstrategy;
 	int			numCols;		/* number of grouping columns */
 	AttrNumber *grpColIdx;		/* their indexes in the target list */
+	bool		combineStates;	/* input tuples contain transition states */
+	bool		finalizeAggs;	/* should we call the finalfn on agg states? */
 	Oid		   *grpOperators;	/* equality operators to compare with */
 	long		numGroups;		/* estimated number of groups in input */
 	List	   *groupingSets;	/* grouping sets to use */
