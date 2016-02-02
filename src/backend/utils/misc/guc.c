@@ -310,12 +310,6 @@ static const struct config_enum_entry xmloption_options[] = {
 	{NULL, 0, false}
 };
 
-static const struct config_enum_entry synchronous_replication_method_options[] = {
-	{"1-priority", SYNC_REP_METHOD_1_PRIORITY, false},
-	{"priority", SYNC_REP_METHOD_PRIORITY, false},
-	{NULL, 0, false}
-};
-
 /*
  * Although only "on", "off", and "safe_encoding" are documented, we
  * accept all the likely variants of "on" and "off".
@@ -2689,6 +2683,16 @@ static struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"synchronous_standby_num", PGC_SIGHUP, REPLICATION_MASTER,
+		 gettext_noop("Number fo sync standbys."),
+		 NULL,
+		},
+		&synchronous_standby_num,
+		1, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, 0, 0, 0, NULL, NULL, NULL
@@ -3675,16 +3679,6 @@ static struct config_enum ConfigureNamesEnum[] =
 		},
 		&huge_pages,
 		HUGE_PAGES_TRY, huge_pages_options,
-		NULL, NULL, NULL
-	},
-
-	{
-		{"synchronous_replication_method", PGC_SIGHUP, REPLICATION_MASTER,
-			gettext_noop("Method for multiple synchronous replication."),
-			NULL
-		},
-		&synchronous_replication_method,
-		SYNC_REP_METHOD_1_PRIORITY, synchronous_replication_method_options,
 		NULL, NULL, NULL
 	},
 

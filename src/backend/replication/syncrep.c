@@ -59,7 +59,6 @@
 
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
-int			synchronous_replication_method;
 int			synchronous_standby_num;
 
 #define SyncStandbysDefined() \
@@ -383,8 +382,8 @@ SyncRepActiveListedWalSender(int num)
 }
 
 /*
- * Get both LSNs: write and flush, according to replication method.
- * And confirm whether we have advanced to LSN or not.
+ * Get both LSNs: write and flush, and confirm whether we have advanced
+ *  to LSN or not.
  */
 bool
 SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
@@ -393,10 +392,7 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 	XLogRecPtr tmp_flush_pos;
 	bool		ret = false;
 
-	/* '1-priority' and 'priority' method */
-	if (synchronous_replication_method == SYNC_REP_METHOD_1_PRIORITY ||
-		synchronous_replication_method == SYNC_REP_METHOD_PRIORITY)
-		ret = SyncRepGetSyncLsnsPriority(&tmp_write_pos, &tmp_flush_pos);
+	ret = SyncRepGetSyncLsns(&tmp_write_pos, &tmp_flush_pos);
 
 	/* Have we advanced LSN? */
 	if (ret)
@@ -413,32 +409,13 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 }
 
 /*
- * Populate a caller-supplied array which must have enough space for
- * synchronous_standby_num. Returns position of standbys currently
- * considered as synchronous, and its length.
- */
-int
-SyncRepGetSyncStandbys(int *sync_standbys)
-{
-	int	num_sync = 0;
-
-
-	/* '1-priority' and 'priority' method */
-	if (synchronous_replication_method == SYNC_REP_METHOD_1_PRIORITY ||
-		synchronous_replication_method == SYNC_REP_METHOD_PRIORITY)
-		num_sync = SyncRepGetSyncStandbysPriority(sync_standbys);
-
-	return num_sync;
-}
-
-/*
- * Populates a caller-supplied buffer with the walsnds indexes of the
+ * Populate a caller-supplied buffer with the walsnds indexes of the
  * highest priority active synchronous standbys, up to the a limit of
  * 'synchronous_standby_num'. The order of the results is undefined.
  * Return the number of results actually written.
  */
 int
-SyncRepGetSyncStandbysPriority(int *sync_standbys)
+SyncRepGetSyncStandbys(int *sync_standbys)
 {
 	int	priority = 0;
 	int	num_sync = 0;
@@ -454,18 +431,20 @@ SyncRepGetSyncStandbysPriority(int *sync_standbys)
 		if (!SyncRepActiveListedWalSender(i))
 			continue;
 
-		if (num_sync == synchronous_standby_num &&
-			walsnd->sync_standby_priority < priority)
+		if (num_sync == synchronous_standby_num)
 		{
+			if (walsnd->sync_standby_priority > priority)
+				continue;
+
 			for (j = 0; j < num_sync; j++)
 			{
 				volatile WalSnd *walsndloc = &WalSndCtl->walsnds[sync_standbys[j]];
-
+				
 				/* Found lowest priority standby, so replace it */
 				if (walsndloc->sync_standby_priority == priority &&
 					walsnd->sync_standby_priority < priority)
 					sync_standbys[j] = i;
-
+				
 				/* Update highest priority standby */
 				if (priority < walsndloc->sync_standby_priority)
 					priority = walsndloc->sync_standby_priority;
@@ -486,11 +465,10 @@ SyncRepGetSyncStandbysPriority(int *sync_standbys)
 }
 
 /*
- * Obtain currently synced LSN location: write and flush, using priority
- * method.
+ * Obtain currently synced LSN location: write and flush.
  */
 bool
-SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
+SyncRepGetSyncLsns(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 {
 	int			sync_standbys[SYNC_REP_MAX_SYNC_STANDBY_NUM];
 	int			num_sync;
@@ -498,13 +476,17 @@ SyncRepGetSyncLsnsPriority(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 	XLogRecPtr	synced_write = InvalidXLogRecPtr;
 	XLogRecPtr	synced_flush = InvalidXLogRecPtr;
 
-	num_sync = SyncRepGetSyncStandbysPriority(sync_standbys);
+	num_sync = SyncRepGetSyncStandbys(sync_standbys);
+
+	for (i = 0; i < num_sync; i++)
+	{
+		elog(WARNING, "sync_standbys[%d] = %d", i, sync_standbys[i]);
+	}
+	elog(WARNING, "num_sync = %d, s_s_num = %d", num_sync, synchronous_standby_num);
 
 	/* Just return, if sync standby is not enough */
 	if (num_sync < synchronous_standby_num)
-	{
 		return false;
-	}
 
 	for (i = 0; i < num_sync; i++)
 	{
@@ -564,7 +546,7 @@ SyncRepReleaseWaiters(void)
 
 	LWLockAcquire(SyncRepLock, LW_EXCLUSIVE);
 
-	/* Get currently synced LSNs according to replication method */
+	/* Get currently synced LSNs according */
 	if (!(SyncRepSyncedLsnAdvancedTo(&write_pos, &flush_pos)))
 	{
 		LWLockRelease(SyncRepLock);
@@ -650,13 +632,6 @@ SyncRepGetStandbyPriority(void)
 	foreach(l, elemlist)
 	{
 		char	   *standby_name;
-
-		if (num == 0 &&
-			synchronous_replication_method != SYNC_REP_METHOD_1_PRIORITY)
-		{
-			num = lfirst_int(l);
-			continue;
-		}
 
 		standby_name = (char *) lfirst(l);
 		priority++;
@@ -867,43 +842,4 @@ assign_synchronous_commit(int newval, void *extra)
 			SyncRepWaitMode = SYNC_REP_NO_WAIT;
 			break;
 	}
-}
-
-void
-ProcessSynchronousReplicationConfig(void)
-{
-	char	   *rawstring;
-	List	   *elemlist;
-
-
-	/* Need a modifiable copy of string */
-	rawstring = pstrdup(SyncRepStandbyNames);
-
-	/* Parse string into list of identifiers */
-	SplitIdentifierString(rawstring, ',', &elemlist);
-
-	/* Store them into globl variables */
-	if (synchronous_replication_method == SYNC_REP_METHOD_1_PRIORITY)
-		synchronous_standby_num = 1;
-	else
-		synchronous_standby_num = pg_atoi(lfirst(list_head(elemlist)), sizeof(int), 0);
-
-	/* In 'priority' method, additional validation checks for synchronous_standby_num */
-	if (synchronous_replication_method == SYNC_REP_METHOD_PRIORITY)
-	{
-		if ((list_length(elemlist) - 1) < synchronous_standby_num)
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("the number of synchronous standbys exceed the length of the standby list: %d",
-							synchronous_standby_num)));
-
-		if (1 > synchronous_standby_num ||
-			synchronous_standby_num > SYNC_REP_MAX_SYNC_STANDBY_NUM)
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("the number of synchronous standbys must be between 1 and %d: %d",
-							SYNC_REP_MAX_SYNC_STANDBY_NUM, synchronous_standby_num)));
-	}
-
-	return;
 }
