@@ -3365,6 +3365,16 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
+		{"synchronous_standby_group", PGC_SIGHUP, REPLICATION_MASTER,
+			gettext_noop("synchronous standbys using synchronous group language."),
+			NULL
+		},
+		&SyncRepStandbyGroupString,
+		"",
+		check_synchronous_standby_group, NULL, NULL
+	},
+
+	{
 		{"default_text_search_config", PGC_USERSET, CLIENT_CONN_LOCALE,
 			gettext_noop("Sets default text search configuration."),
 			NULL

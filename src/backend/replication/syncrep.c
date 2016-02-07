@@ -48,6 +48,7 @@
 
 #include "access/xact.h"
 #include "miscadmin.h"
+#include "nodes/pg_list.h"
 #include "replication/syncrep.h"
 #include "replication/walsender.h"
 #include "replication/walsender_private.h"
@@ -59,9 +60,13 @@
 
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
+char	   *SyncRepStandbyGroupString;
+SyncGroupNode	*SyncRepStandbyGroup;
+
 
 #define SyncStandbysDefined() \
-	(SyncRepStandbyNames != NULL && SyncRepStandbyNames[0] != '\0')
+	((SyncRepStandbyNames != NULL && SyncRepStandbyNames[0] != '\0') || \
+	 (SyncRepStandbyGroup != NULL && SyncRepStandbyGroupString[0] != '\0'))
 
 static bool announce_next_takeover = true;
 
@@ -72,6 +77,9 @@ static void SyncRepCancelWait(void);
 static int	SyncRepWakeQueue(bool all, int mode);
 
 static int	SyncRepGetStandbyPriority(void);
+
+static int SyncRepFindStandbyName(char *name, XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
+
 
 #ifdef USE_ASSERT_CHECKING
 static bool SyncRepQueueIsOrderedByLSN(int mode);
@@ -349,7 +357,74 @@ SyncRepInitConfig(void)
 }
 
 /*
- * Find the WAL sender servicing the synchronous standby with the lowest
+ * Confirm whether specific node is listed in SyncRepStandbyGroup.
+ */
+/*
+bool
+SyncRepNodeListed(char *name)
+{
+	SyncGroupNode *node;
+
+	foreach(node, SyncRepStandbyGroup)
+	{
+		if (strcmp(node->name, name) == 0)
+			return true;
+	}
+
+	return false;
+}
+*/
+/*
+ * Find active standby having same name as "name" while finding lowest LSNs if
+ * write_pos and flush_pos is not NULL.
+ * Return index of walsnds array if found, otherwise return -1.
+ */
+static int
+SyncRepFindStandbyName(char *name, XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
+{
+	int	i;
+
+	for (i = 0; i < max_wal_senders; i++)
+	{
+		/* Use volatile pointer to prevent code rearrangement */
+		volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
+
+		/* Must be active */
+		if (walsnd->pid == 0)
+			continue;
+
+		/* Must be streaming */
+		if (walsnd->state != WALSNDSTATE_STREAMING)
+			continue;
+
+		/* Must be synchronous */
+		if (walsnd->sync_standby_priority == 0)
+			continue;
+
+		/* Must have a valid flush position */
+		if (XLogRecPtrIsInvalid(walsnd->flush))
+			continue;
+
+		if (pg_strcasecmp(walsnd->name, name) == 0)
+		{
+			if (write_pos && flush_pos)
+			{
+				/* Find the lowest LSNs from standbys considered sychronous */
+				if (XLogRecPtrIsInvalid(*write_pos) || *write_pos > walsnd->write)
+					*write_pos = walsnd->write;
+				if (XLogRecPtrIsInvalid(*flush_pos) || *flush_pos > walsnd->flush)
+					*flush_pos = walsnd->flush;
+			}
+
+			return i;
+		}
+	}
+
+	return -1;
+}
+
+/*
+ * Find the WAL sender servicing the synchronous standbys with the lowest
  * priority value, or NULL if no synchronous standby is connected. If there
  * are multiple standbys with the same lowest priority value, the first one
  * found is selected. The caller must hold SyncRepLock.
@@ -413,7 +488,8 @@ void
 SyncRepReleaseWaiters(void)
 {
 	volatile WalSndCtlData *walsndctl = WalSndCtl;
-	WalSnd	   *syncWalSnd;
+	XLogRecPtr	write_pos = InvalidXLogRecPtr;
+	XLogRecPtr	flush_pos = InvalidXLogRecPtr;
 	int			numwrite = 0;
 	int			numflush = 0;
 
@@ -433,33 +509,24 @@ SyncRepReleaseWaiters(void)
 	 * priority standby.
 	 */
 	LWLockAcquire(SyncRepLock, LW_EXCLUSIVE);
-	syncWalSnd = SyncRepGetSynchronousStandby();
 
-	/* We should have found ourselves at least */
-	Assert(syncWalSnd != NULL);
-
-	/*
-	 * If we aren't managing the highest priority standby then just leave.
-	 */
-	if (syncWalSnd != MyWalSnd)
+	if (!(SyncRepSyncedLsnAdvancedTo(&write_pos, &flush_pos)))
 	{
 		LWLockRelease(SyncRepLock);
-		announce_next_takeover = true;
-		return;
 	}
 
 	/*
 	 * Set the lsn first so that when we wake backends they will release up to
 	 * this location.
 	 */
-	if (walsndctl->lsn[SYNC_REP_WAIT_WRITE] < MyWalSnd->write)
+	if (walsndctl->lsn[SYNC_REP_WAIT_WRITE] < write_pos)
 	{
-		walsndctl->lsn[SYNC_REP_WAIT_WRITE] = MyWalSnd->write;
+		walsndctl->lsn[SYNC_REP_WAIT_WRITE] = write_pos;
 		numwrite = SyncRepWakeQueue(false, SYNC_REP_WAIT_WRITE);
 	}
-	if (walsndctl->lsn[SYNC_REP_WAIT_FLUSH] < MyWalSnd->flush)
+	if (walsndctl->lsn[SYNC_REP_WAIT_FLUSH] < flush_pos)
 	{
-		walsndctl->lsn[SYNC_REP_WAIT_FLUSH] = MyWalSnd->flush;
+		walsndctl->lsn[SYNC_REP_WAIT_FLUSH] = flush_pos;
 		numflush = SyncRepWakeQueue(false, SYNC_REP_WAIT_FLUSH);
 	}
 
@@ -480,6 +547,76 @@ SyncRepReleaseWaiters(void)
 				(errmsg("standby \"%s\" is now the synchronous standby with priority %u",
 						application_name, MyWalSnd->sync_standby_priority)));
 	}
+}
+
+/*
+ * Get both synced LSNS: write and flush, and confirm whether we have advanced
+ * to LSN or not.
+ */
+bool
+SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
+{
+	XLogRecPtr	tmp_write_pos = InvalidXLogRecPtr;
+	XLogRecPtr	tmp_flush_pos = InvalidXLogRecPtr;
+	int			*sync_list;
+
+	/* Get synced LSNs at this moment */
+	sync_list = SyncRepStandbyGroup->SyncRepGetSyncedLsnsFn(&tmp_write_pos, &tmp_flush_pos);
+
+	if (sync_list)
+	{
+		if (MyWalSnd->write >= tmp_write_pos)
+			*write_pos = tmp_write_pos;
+		if (MyWalSnd->flush >= tmp_flush_pos)
+			*flush_pos = tmp_flush_pos;
+		return true;
+	}
+
+	return false;
+}
+
+/*
+ * Determine synced LSNs at this moment.
+ * Return buffer with walsnds indexes of the highest priority active
+ * synchronous standbys up to wait_num of its group. And return lowest
+ * LSNs of synchronous standbys.
+ */
+int *
+SyncRepGetSyncedLsns(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
+{
+	SyncGroupNode	*node = SyncRepStandbyGroup->member;
+	int	num = 0;
+	int *sync_list;
+
+	sync_list = palloc(sizeof(int) * SyncRepStandbyGroup->wait_num);
+
+	while (node != NULL)
+	{
+		int	pos = 0;
+
+		/* We find synchronous standbys up to wait_num of this group */
+		if (num >= SyncRepStandbyGroup->wait_num)
+			break;
+
+		pos = SyncRepFindStandbyName(node->name, write_pos, flush_pos);
+
+		/* Could not find the standby */
+		if (pos == -1)
+			continue;
+
+		sync_list[num] = pos;
+		num++;
+		node = node->next;
+	}
+
+	/* If we could not find any sync standbys, return NULL */
+	if (!num)
+	{
+		pfree(sync_list);
+		return NULL;
+	}
+	
+	return sync_list;
 }
 
 /*
@@ -506,35 +643,54 @@ SyncRepGetStandbyPriority(void)
 	if (am_cascading_walsender)
 		return 0;
 
-	/* Need a modifiable copy of string */
-	rawstring = pstrdup(SyncRepStandbyNames);
-
-	/* Parse string into list of identifiers */
-	if (!SplitIdentifierString(rawstring, ',', &elemlist))
+	if (SyncRepStandbyNames)
 	{
-		/* syntax error in list */
+		/* Need a modifiable copy of string */
+		rawstring = pstrdup(SyncRepStandbyNames);
+
+		/* Parse string into list of identifiers */
+		if (!SplitIdentifierString(rawstring, ',', &elemlist))
+		{
+			/* syntax error in list */
+			pfree(rawstring);
+			list_free(elemlist);
+			/* GUC machinery will have already complained - no need to do again */
+			return 0;
+		}
+
+		foreach(l, elemlist)
+		{
+			char	   *standby_name = (char *) lfirst(l);
+
+			priority++;
+
+			if (pg_strcasecmp(standby_name, application_name) == 0 ||
+				pg_strcasecmp(standby_name, "*") == 0)
+			{
+				found = true;
+				break;
+			}
+		}
+
 		pfree(rawstring);
 		list_free(elemlist);
-		/* GUC machinery will have already complained - no need to do again */
-		return 0;
 	}
-
-	foreach(l, elemlist)
+	else if (SyncRepStandbyGroup)
 	{
-		char	   *standby_name = (char *) lfirst(l);
+		SyncGroupNode	*node = SyncRepStandbyGroup->member;
 
-		priority++;
-
-		if (pg_strcasecmp(standby_name, application_name) == 0 ||
-			pg_strcasecmp(standby_name, "*") == 0)
+		while (node != NULL)
 		{
-			found = true;
-			break;
+			priority++;
+			if (pg_strcasecmp(node->name, application_name) == 0)
+			{
+				found = true;
+				break;
+			}
+
+			node = node->next;
 		}
 	}
-
-	pfree(rawstring);
-	list_free(elemlist);
 
 	return (found ? priority : 0);
 }
@@ -683,6 +839,27 @@ SyncRepQueueIsOrderedByLSN(int mode)
  * Synchronous Replication functions executed by any process
  * ===========================================================
  */
+
+bool
+check_synchronous_standby_group(char **newval, void **extra, GucSource source)
+{
+	int	parse_rc;
+
+	if (*newval != NULL && (*newval)[0] != '\0')
+	{
+		syncgroup_scanner_init(*newval);
+		parse_rc = syncgroup_yyparse();
+
+		if (parse_rc != 0)
+		{
+			GUC_check_errdetail("Invalid syntax");
+			return false;
+		}
+		syncgroup_scanner_finish();
+	}
+
+	return true;
+}
 
 bool
 check_synchronous_standby_names(char **newval, void **extra, GucSource source)

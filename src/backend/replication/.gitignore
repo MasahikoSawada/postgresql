@@ -1,2 +1,4 @@
 /repl_gram.c
 /repl_scanner.c
+/syncgroup_gram.c
+/syncgroup_scanner.c

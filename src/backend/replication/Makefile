@@ -15,7 +15,8 @@ include $(top_builddir)/src/Makefile.global
 override CPPFLAGS := -I. -I$(srcdir) $(CPPFLAGS)
 
 OBJS = walsender.o walreceiverfuncs.o walreceiver.o basebackup.o \
-	repl_gram.o slot.o slotfuncs.o syncrep.o
+	syncgroup_gram.o repl_gram.o slot.o \
+	slotfuncs.o syncrep.o
 
 SUBDIRS = logical
 
@@ -23,6 +24,10 @@ include $(top_srcdir)/src/backend/common.mk
 
 # repl_scanner is compiled as part of repl_gram
 repl_gram.o: repl_scanner.c
+# syncgroup_scanner is complied as part of syncgroup_gram
+syncgroup_gram.o : syncgroup_scanner.c
 
 # repl_gram.c and repl_scanner.c are in the distribution tarball, so
+# they are not cleaned here.
+# syncgroup_gram.c and syncgroup_scanner.c are in the distribution tarball, so
 # they are not cleaned here.

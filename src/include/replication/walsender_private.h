@@ -19,6 +19,8 @@
 #include "storage/shmem.h"
 #include "storage/spin.h"
 
+#define MAX_WALSENDER_NAME 8192
+
 typedef enum WalSndState
 {
 	WALSNDSTATE_STARTUP = 0,
@@ -62,6 +64,11 @@ typedef struct WalSnd
 	 * SyncRepLock.
 	 */
 	int			sync_standby_priority;
+
+	/*
+	 * Corresponding standby's application_name.
+	 */
+	const char	   name[MAX_WALSENDER_NAME];
 } WalSnd;
 
 extern WalSnd *MyWalSnd;
