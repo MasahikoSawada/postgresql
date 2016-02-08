@@ -47,11 +47,12 @@ struct	SyncGroupNode
 {
 	int		type;
 	char	*name;
+	SyncGroupNode	*next;
 
 	/* For group ndoe */
 	int sync_method;
 	int	wait_num;
-	List	*member;
+	SyncGroupNode	*member;
 	bool (*SyncRepGetSyncedLsnsFn) (SyncGroupNode *group, XLogRecPtr *write_pos,
 									XLogRecPtr *flush_pos);
 	int (*SyncRepGetSyncStandbysFn) (SyncGroupNode *group, int *list);

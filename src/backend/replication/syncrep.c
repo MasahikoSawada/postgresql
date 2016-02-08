@@ -335,29 +335,17 @@ SyncRepCleanupAtProcExit(void)
  * Clear all node in SyncRepStandbyGroup recursively.
  */
 static void
-SyncRepClearStandbyGroupList(SyncGroupNode *node)
+SyncRepClearStandbyGroupList(SyncGroupNode *group)
 {
-	ListCell *cell;
+	SyncGroupNode *n = group->member;
 
-	foreach(cell, node->member)
+	while (n != NULL)
 	{
-		SyncGroupNode	*node = (SyncGroupNode *)lfirst(cell);
-		free(node);
+		SyncGroupNode *tmp = n->next;
+
+		free(n);
+		n = tmp;
 	}
-
-/*
-	cell = list_head(node->member);
-	while (cell != NULL)
-	{
-		ListCell	*tmp = cell;
-
-		cell = lnext(cell);
-		free(tmp);
-	}
-
-	if (node->member)
-		free(node->member);
-*/
 }
 
 
@@ -614,10 +602,6 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 	XLogRecPtr	tmp_flush_pos = InvalidXLogRecPtr;
 	bool		ret;
 
-	elog(NOTICE, "hogehogeho");
-	pg_usleep(20 * 1000L *1000L);
-	pg_usleep(20 * 1000L *1000L);
-
 	/* Get synced LSNs at this moment */
 	ret = SyncRepStandbyGroup->SyncRepGetSyncedLsnsFn(SyncRepStandbyGroup,
 													  &tmp_write_pos,
@@ -656,23 +640,22 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 bool
 SyncRepGetSyncedLsns(SyncGroupNode *group, XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 {
-	ListCell	*cell;
+	SyncGroupNode	*n;
 	int	num = 0;
 
-	foreach(cell, group->member)
+	for(n = group->member; n != NULL; n = n->next)
 	{
 		int pos;
-		SyncGroupNode *node = (SyncGroupNode *)lfirst(cell);
 
 		/* We found synchronous standbys enough to decide LSNs, return */
 		if (num == group->wait_num)
 			return true;
 
 #ifdef DEBUG_REP
-		elog(NOTICE, "    [%d] FindStandbyByName : name = %s", MyProcPid, node->name);
+		elog(NOTICE, "    [%d] FindStandbyByName : name = %s", MyProcPid, n->name);
 #endif
 
-		pos = SyncRepFindStandbyByName(node->name, write_pos, flush_pos);
+		pos = SyncRepFindStandbyByName(n->name, write_pos, flush_pos);
 
 		/* Could not find the standby, then find next */
 		if (pos == -1)
@@ -691,27 +674,24 @@ SyncRepGetSyncedLsns(SyncGroupNode *group, XLogRecPtr *write_pos, XLogRecPtr *fl
 int
 SyncRepGetSyncStandbys(SyncGroupNode *group, int *sync_list)
 {
-	ListCell	*cell;
+	SyncGroupNode	*n;
 	int	num = 0;
 
-	foreach(cell, group->member)
+	for (n = group->member; n != NULL; n = n->next)
 	{
 		int pos = 0;
-		SyncGroupNode	*node = (SyncGroupNode *)lfirst(cell);
 
 		/* We got enough synchronous standbys, return */
 		if (num == group->wait_num)
 			return num;
 
-		pos = SyncRepFindStandbyByName(node->name, NULL, NULL);
+		pos = SyncRepFindStandbyByName(n->name, NULL, NULL);
 
 		if (pos == -1)
 			continue;
 
 		sync_list[num] = pos;
 		num++;
-
-
 	}
 
 #ifdef DEBUG_REP
@@ -783,14 +763,12 @@ SyncRepGetStandbyPriority(void)
 	}
 	else if (SyncStandbyGroupDefined())
 	{
-		ListCell	*cell;
+		SyncGroupNode	*n;
 
-		foreach(cell, SyncRepStandbyGroup->member)
+		for (n = SyncRepStandbyGroup->member; n != NULL; n = n->next)
 		{
-			SyncGroupNode *node = (SyncGroupNode *)lfirst(cell);
-
 			priority++;
-			if (pg_strcasecmp(node->name, application_name) == 0)
+			if (pg_strcasecmp(n->name, application_name) == 0)
 			{
 				
 				elog(NOTICE, "[%d] GET PRIORITY %d", MyProcPid, priority);
@@ -798,7 +776,7 @@ SyncRepGetStandbyPriority(void)
 				break;
 			}
 			else
-				elog(NOTICE, "unmatched %s %s", node->name, application_name);
+				elog(NOTICE, "unmatched %s %s", n->name, application_name);
 		}
 	}
 
@@ -1028,16 +1006,15 @@ assign_synchronous_commit(int newval, void *extra)
 static
 void print_setting()
 {
-	ListCell *cell;
+	SyncGroupNode *n;
 
 	elog(WARNING, "== Node Structure ==");
 	elog(WARNING, "[%s] wait_num = %d", SyncRepStandbyGroup->name,
 		 SyncRepStandbyGroup->wait_num);
-
-	foreach(cell, SyncRepStandbyGroup->member)
+	
+	for (n = SyncRepStandbyGroup->member; n != NULL; n = n->next)
 	{
-		SyncGroupNode *node = (SyncGroupNode *) lfirst(cell);
-		elog(WARNING, "    [%s] ", node->name);
+		elog(WARNING, "    [%s] ", n->name);
 	}
 }
 
@@ -1081,10 +1058,9 @@ pg_stat_get_synchronous_replication_group(PG_FUNCTION_ARGS)
 	Tuplestorestate *tupstore;
 	MemoryContext per_query_ctx;
 	MemoryContext oldcontext;
-	ListCell	*cell;
+	SyncGroupNode *n;
 	int	   *sync_standbys;
 	int		num;
-	int		i;
 
 	/* check to see if caller supports us returning a tuplestore */
 	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
@@ -1149,17 +1125,16 @@ pg_stat_get_synchronous_replication_group(PG_FUNCTION_ARGS)
 	}
 
 	/* Fill member node data */
-	foreach(cell, SyncRepStandbyGroup->member)
+	for (n = SyncRepStandbyGroup->member; n != NULL; n = n->next)
 	{
 		WalSnd	*walsnd;
-		SyncGroupNode *node = (SyncGroupNode *)lfirst(cell);
 		int	pos;
 		int i;
 		Datum	values[PG_STAT_GET_SYNCHRONOUS_REPLICATION_GROUP_COLS];
 		bool	nulls[PG_STAT_GET_SYNCHRONOUS_REPLICATION_GROUP_COLS];
 
  		memset(nulls, 0, sizeof(nulls));
-		values[0] = CStringGetTextDatum(node->name);
+		values[0] = CStringGetTextDatum(n->name);
 
 		if (!superuser())
 		{
@@ -1173,10 +1148,10 @@ pg_stat_get_synchronous_replication_group(PG_FUNCTION_ARGS)
 		{
 			nulls[1] = true;
 
-			values[2] = Int32GetDatum(node->wait_num);
+			values[2] = Int32GetDatum(n->wait_num);
 
 			/* Get wal sender position of WalSndCtl */
-			pos = SyncRepFindStandbyByName(node->name, NULL, NULL);
+			pos = SyncRepFindStandbyByName(n->name, NULL, NULL);
 			walsnd = &WalSndCtl->walsnds[pos];
 			values[3] = Int32GetDatum(walsnd->sync_standby_priority);
 
