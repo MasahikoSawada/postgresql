@@ -3,13 +3,6 @@
 
 #include "replication/syncrep.h"
 
-typedef struct SyncGroupArray
-{
-	SyncGroupNode array[SYNC_REP_MAX_STANDBY_NODE];
-	int	size;
-} SyncGroupArray;
-
-
 static List *list_make(SyncGroupNode *node);
 static SyncGroupNode *create_name_node(char *name);
 //static SyncGroupArray *add_node(List *node_list, SyncGroupNode *node);
@@ -45,7 +38,7 @@ result:
 
 sync_list:
 sync_element 					{ $$ = list_make((void *)$1);}
-| sync_list ',' sync_element	{ $$ = lappend($1, (void *)$3);}
+| sync_list ',' sync_element	{ elog(NOTICE, "lappend");$$ = lappend($1, (void *)$3);}
 ;
 
 sync_node_group:
@@ -53,7 +46,7 @@ sync_node_group:
 ;
 
 sync_element:
-	NAME 							{ $$ = create_name_node($1);}
+NAME 							{ $$ = create_name_node($1);}
 ;
 
 

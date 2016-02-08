@@ -345,7 +345,19 @@ SyncRepClearStandbyGroupList(SyncGroupNode *node)
 		free(node);
 	}
 
-	//list_free(node->member);
+/*
+	cell = list_head(node->member);
+	while (cell != NULL)
+	{
+		ListCell	*tmp = cell;
+
+		cell = lnext(cell);
+		free(tmp);
+	}
+
+	if (node->member)
+		free(node->member);
+*/
 }
 
 
@@ -602,6 +614,10 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 	XLogRecPtr	tmp_flush_pos = InvalidXLogRecPtr;
 	bool		ret;
 
+	elog(NOTICE, "hogehogeho");
+	pg_usleep(20 * 1000L *1000L);
+	pg_usleep(20 * 1000L *1000L);
+
 	/* Get synced LSNs at this moment */
 	ret = SyncRepStandbyGroup->SyncRepGetSyncedLsnsFn(SyncRepStandbyGroup,
 													  &tmp_write_pos,
@@ -663,8 +679,6 @@ SyncRepGetSyncedLsns(SyncGroupNode *group, XLogRecPtr *write_pos, XLogRecPtr *fl
 			continue;
 
 		num++;
-	
-
 	}
 
 	return (num == group->wait_num);
@@ -771,10 +785,6 @@ SyncRepGetStandbyPriority(void)
 	{
 		ListCell	*cell;
 
-		elog(NOTICE, "hogehogeho");
-		pg_usleep(30 * 1000L * 1000L);
-		pg_usleep(30 * 1000L * 1000L);
-
 		foreach(cell, SyncRepStandbyGroup->member)
 		{
 			SyncGroupNode *node = (SyncGroupNode *)lfirst(cell);
@@ -790,7 +800,6 @@ SyncRepGetStandbyPriority(void)
 			else
 				elog(NOTICE, "unmatched %s %s", node->name, application_name);
 		}
-		elog(NOTICE, "hoge");
 	}
 
 	return (found ? priority : 0);
