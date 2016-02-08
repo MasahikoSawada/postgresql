@@ -445,11 +445,13 @@ SyncRepFindStandbyByName(char *name, XLogRecPtr *write_pos, XLogRecPtr *flush_po
 #endif
 			if (write_pos && flush_pos)
 			{
+				SpinLockAcquire(&walsnd->mutex);
 				/* Find the lowest LSNs from standbys considered sychronous */
 				if (XLogRecPtrIsInvalid(*write_pos) || *write_pos > walsnd->write)
 					*write_pos = walsnd->write;
 				if (XLogRecPtrIsInvalid(*flush_pos) || *flush_pos > walsnd->flush)
 					*flush_pos = walsnd->flush;
+				SpinLockRelease(&walsnd->mutex);
 #ifdef DEBUG_REP
 				elog(NOTICE, "    ----> write %X/%X, flush %X/%X",
 					 (uint32)((*write_pos) >> 32), (uint32)(*write_pos),
@@ -693,14 +695,6 @@ SyncRepGetSyncStandbys(SyncGroupNode *group, int *sync_list)
 		sync_list[num] = pos;
 		num++;
 	}
-
-#ifdef DEBUG_REP
-	int i;
-	for (i = 0; i < num; i++)
-	{
-		elog(NOTICE, "SYNC_STANDBY[%d] : %d", i, sync_list[i]);
-	}
-#endif
 
 	return num;
 }
@@ -1115,7 +1109,7 @@ pg_stat_get_synchronous_replication_group(PG_FUNCTION_ARGS)
 		}
 		else
 		{
-			values[1] = CStringGetTextDatum("priority");
+			values[1] = CStringGetTextDatum(SyncRepGetMethodString(node));
 			values[2] = Int32GetDatum(node->wait_num);
 			values[3] = Int32GetDatum(0);
 			nulls[4] = true;
