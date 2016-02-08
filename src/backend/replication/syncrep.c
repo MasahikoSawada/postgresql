@@ -345,7 +345,7 @@ SyncRepClearStandbyGroupList(SyncGroupNode *node)
 		free(node);
 	}
 
-	list_free(node->member);
+	//list_free(node->member);
 }
 
 
@@ -1019,9 +1019,6 @@ assign_synchronous_commit(int newval, void *extra)
 static
 void print_setting()
 {
-	
-	
-
 	ListCell *cell;
 
 	elog(WARNING, "== Node Structure ==");

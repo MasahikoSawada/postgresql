@@ -51,7 +51,7 @@ struct	SyncGroupNode
 	/* For group ndoe */
 	int sync_method;
 	int	wait_num;
-	SyncGroupNode	*member;
+	List	*member;
 	bool (*SyncRepGetSyncedLsnsFn) (SyncGroupNode *group, XLogRecPtr *write_pos,
 									XLogRecPtr *flush_pos);
 	int (*SyncRepGetSyncStandbysFn) (SyncGroupNode *group, int *list);
