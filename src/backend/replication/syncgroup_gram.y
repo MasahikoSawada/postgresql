@@ -3,9 +3,17 @@
 
 #include "replication/syncrep.h"
 
+typedef struct SyncGroupArray
+{
+	SyncGroupNode array[SYNC_REP_MAX_STANDBY_NODE];
+	int	size;
+} SyncGroupArray;
+
+
+static SyncGroupArray *array_make(SyncGroupNode *node);
 static SyncGroupNode *create_name_node(char *name);
-static SyncGroupNode *add_node(SyncGroupNode *node1, SyncGroupNode *node2);
-static SyncGroupNode *create_group_node(int wait_num, SyncGroupNode *list);
+static SyncGroupArray *add_node(SyncGroupArray *array, SyncGroupNode *node);
+static SyncGroupNode *create_group_node(int wait_num, SyncGroupArray *node_array);
 
 #define YYMALLOC palloc
 #define YYFREE   pfree
@@ -31,69 +39,86 @@ static SyncGroupNode *create_group_node(int wait_num, SyncGroupNode *list);
 
 %%
 
-result:				{SyncRepStandbyGroup = NULL;}
-	| sync_list									{SyncRepStandbyGroup = $1; }
-	;
-
-sync_list:
-	sync_element 					{ $$ = $1;}
-	| sync_list ',' sync_element	{ $$ = add_node($3, $1);}
+result:
+	sync_node_group						{ SyncRepStandbyGroup = $1; }
 ;
 
-sync_element:
-	NAME 							{ $$ = create_name_node($1);}
-	| sync_node_group 				{ $$ = $1}
+sync_list:
+sync_element 					{ $$ = array_make($1);}
+| sync_list ',' sync_element	{ $$ = add_node($1, $3);}
 ;
 
 sync_node_group:
 	INT '[' sync_list ']' 			{ $$ = create_group_node($1, $3);}
 ;
 
+sync_element:
+	NAME 							{ $$ = create_name_node($1);}
+;
+
+
 %%
+
+static SyncGroupArray *
+array_make(SyncGroupNode *node)
+{
+	SyncGroupArray *node_array = (SyncGroupArray *)malloc(sizeof(SyncGroupArray));
+
+//	node_array.array =  malloc(sizeof(SyncGroupNode)  * SYNC_REP_MAX_STANDBY_NODE);
+	node_array->array[0] = *node;
+	node_array->size = 1;
+
+	return node_array;
+}
 
 static SyncGroupNode *
 create_name_node(char *name)
 {
-	SyncGroupNode *name_node = malloc(sizeof(SyncGroupNode));
+	SyncGroupNode *name_node = (SyncGroupNode *)malloc(sizeof(SyncGroupNode));
 
-	name_node->type = SYNCGROUP_NAME;
+	name_node->type = SYNC_REP_GROUP_NAME;
 
 	/* For NAME */
-	name_node->next = NULL;
 	name_node->name = strdup(name);
 
 	/* For GROUP */
-	name_node->wait_num = -1;
+	name_node->sync_method = 0;
+	name_node->wait_num = 0;
 	name_node->member = NULL;
-	name_node->SyncRepGetSyncedLsnsFn = SyncRepGetSyncedLsns;
+	name_node->SyncRepGetSyncedLsnsFn = NULL;
+	name_node->SyncRepGetSyncStandbysFn = NULL;
 	elog(WARNING, "create node : %s", name);
 	return name_node;
 }
 
 static SyncGroupNode *
-create_group_node(int wait_num, SyncGroupNode *list)
+create_group_node(int wait_num, SyncGroupArray *array)
 {
-	SyncGroupNode *group_node = malloc(sizeof(SyncGroupNode));
+	SyncGroupNode *group_node = (SyncGroupNode *) malloc(sizeof(SyncGroupNode));
 
-	group_node->type = SYNCGROUP_GROUP;
+	group_node->type = SYNC_REP_GROUP_GROUP | SYNC_REP_GROUP_MAIN;
 
 	/* For NAME */
-	group_node->next = NULL;
 	group_node->name = "main";
 
 	/* For GROUP */
+	group_node->sync_method = SYNC_REP_METHOD_PRIORITY;
 	group_node->wait_num = wait_num;
-	group_node->member = list;
+	group_node->member = array->array;
+	group_node->SyncRepGetSyncedLsnsFn = SyncRepGetSyncedLsns;
+	group_node->SyncRepGetSyncStandbysFn = SyncRepGetSyncStandbys;
 
-	elog(WARNING, "add group : wait_num = %d, (group)->(%s)", group_node->wait_num, group_node->name);
+	elog(WARNING, "create group : wait_num = %d", group_node->wait_num);
 	return group_node;
 }
 
-static SyncGroupNode *
-add_node(SyncGroupNode *node1, SyncGroupNode *node2)
+static SyncGroupArray *
+add_node(SyncGroupArray *array, SyncGroupNode *node)
 {
-	node1->next = node2;
-	return node1;
+	array->array[array->size] = *node;
+	array->size++;
+
+	return array;
 }
 
 #include "syncgroup_scanner.c"

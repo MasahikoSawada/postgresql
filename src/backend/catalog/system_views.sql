@@ -678,6 +678,16 @@ CREATE VIEW pg_stat_wal_receiver AS
     FROM pg_stat_get_wal_receiver() s
     WHERE s.pid IS NOT NULL;
 
+CREATE VIEW pg_stat_replication_group AS
+    SELECT
+         r.name,
+         r.sync_type,
+         r.wait_num,
+         r.sync_priority,
+         r.sync_state
+    FROM pg_stat_get_synchronous_replication_group() AS r
+;
+
 CREATE VIEW pg_stat_ssl AS
     SELECT
             S.pid,

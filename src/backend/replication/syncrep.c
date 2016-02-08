@@ -47,6 +47,7 @@
 #include <unistd.h>
 
 #include "access/xact.h"
+#include "funcapi.h"
 #include "miscadmin.h"
 #include "nodes/pg_list.h"
 #include "replication/syncrep.h"
@@ -58,15 +59,19 @@
 #include "utils/builtins.h"
 #include "utils/ps_status.h"
 
+#define DEBUG_REP
+
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
 char	   *SyncRepStandbyGroupString;
 SyncGroupNode	*SyncRepStandbyGroup;
 
-
+#define SyncStandbyNamesDefined() \
+	(SyncRepStandbyNames != NULL && SyncRepStandbyNames[0] != '\0')
+#define SyncStandbyGroupDefined() \
+	(SyncRepStandbyGroupString != NULL && SyncRepStandbyGroupString[0] != '\0')
 #define SyncStandbysDefined() \
-	((SyncRepStandbyNames != NULL && SyncRepStandbyNames[0] != '\0') || \
-	 (SyncRepStandbyGroup != NULL && SyncRepStandbyGroupString[0] != '\0'))
+	(SyncStandbyNamesDefined() || SyncStandbyGroupDefined())
 
 static bool announce_next_takeover = true;
 
@@ -78,8 +83,9 @@ static int	SyncRepWakeQueue(bool all, int mode);
 
 static int	SyncRepGetStandbyPriority(void);
 
-static int SyncRepFindStandbyName(char *name, XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
-
+static int SyncRepFindStandbyByName(char *name, XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
+static void SyncRepClearStandbyGroupList(SyncGroupNode *node);
+static const char *SyncRepGetMethodString(SyncGroupNode *group);
 
 #ifdef USE_ASSERT_CHECKING
 static bool SyncRepQueueIsOrderedByLSN(int mode);
@@ -326,6 +332,24 @@ SyncRepCleanupAtProcExit(void)
 }
 
 /*
+ * Clear all node in SyncRepStandbyGroup recursively.
+ */
+static void
+SyncRepClearStandbyGroupList(SyncGroupNode *node)
+{
+	ListCell *cell;
+
+	foreach(cell, node->member)
+	{
+		SyncGroupNode	*node = (SyncGroupNode *)lfirst(cell);
+		free(node);
+	}
+
+	list_free(node->member);
+}
+
+
+/*
  * ===========================================================
  * Synchronous Replication functions for wal sender processes
  * ===========================================================
@@ -347,8 +371,11 @@ SyncRepInitConfig(void)
 	priority = SyncRepGetStandbyPriority();
 	if (MyWalSnd->sync_standby_priority != priority)
 	{
+		char *walsnd_name;
 		LWLockAcquire(SyncRepLock, LW_EXCLUSIVE);
 		MyWalSnd->sync_standby_priority = priority;
+		walsnd_name = (char *)MyWalSnd->name;
+		memcpy(walsnd_name, application_name, sizeof(MyWalSnd->name));
 		LWLockRelease(SyncRepLock);
 		ereport(DEBUG1,
 			(errmsg("standby \"%s\" now has synchronous standby priority %u",
@@ -380,14 +407,16 @@ SyncRepNodeListed(char *name)
  * Return index of walsnds array if found, otherwise return -1.
  */
 static int
-SyncRepFindStandbyName(char *name, XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
+SyncRepFindStandbyByName(char *name, XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 {
 	int	i;
+
 
 	for (i = 0; i < max_wal_senders; i++)
 	{
 		/* Use volatile pointer to prevent code rearrangement */
 		volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
+		char *walsnd_name;
 
 		/* Must be active */
 		if (walsnd->pid == 0)
@@ -405,8 +434,15 @@ SyncRepFindStandbyName(char *name, XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 		if (XLogRecPtrIsInvalid(walsnd->flush))
 			continue;
 
-		if (pg_strcasecmp(walsnd->name, name) == 0)
+		walsnd_name = (char *) walsnd->name;
+		if (pg_strcasecmp(walsnd_name, name) == 0)
 		{
+#ifdef DEBUG_REP
+			elog(NOTICE, "    ----> Find at %d, write %X/%X, flush %X/%X", i,
+				 (uint32) (walsnd->write >> 32), (uint32) walsnd->write,
+				 (uint32) (walsnd->flush >> 32), (uint32) walsnd->flush);
+
+#endif
 			if (write_pos && flush_pos)
 			{
 				/* Find the lowest LSNs from standbys considered sychronous */
@@ -414,6 +450,11 @@ SyncRepFindStandbyName(char *name, XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 					*write_pos = walsnd->write;
 				if (XLogRecPtrIsInvalid(*flush_pos) || *flush_pos > walsnd->flush)
 					*flush_pos = walsnd->flush;
+#ifdef DEBUG_REP
+				elog(NOTICE, "    ----> write %X/%X, flush %X/%X",
+					 (uint32)((*write_pos) >> 32), (uint32)(*write_pos),
+					 (uint32)((*flush_pos) >> 32), (uint32)(*flush_pos));
+#endif
 			}
 
 			return i;
@@ -513,6 +554,7 @@ SyncRepReleaseWaiters(void)
 	if (!(SyncRepSyncedLsnAdvancedTo(&write_pos, &flush_pos)))
 	{
 		LWLockRelease(SyncRepLock);
+		return;
 	}
 
 	/*
@@ -550,7 +592,7 @@ SyncRepReleaseWaiters(void)
 }
 
 /*
- * Get both synced LSNS: write and flush, and confirm whether we have advanced
+ * Get both synced LSNS: write and flush, and confirm each LSN has advanced
  * to LSN or not.
  */
 bool
@@ -558,17 +600,33 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 {
 	XLogRecPtr	tmp_write_pos = InvalidXLogRecPtr;
 	XLogRecPtr	tmp_flush_pos = InvalidXLogRecPtr;
-	int			*sync_list;
+	bool		ret;
 
 	/* Get synced LSNs at this moment */
-	sync_list = SyncRepStandbyGroup->SyncRepGetSyncedLsnsFn(&tmp_write_pos, &tmp_flush_pos);
+	ret = SyncRepStandbyGroup->SyncRepGetSyncedLsnsFn(SyncRepStandbyGroup,
+													  &tmp_write_pos,
+													  &tmp_flush_pos);
+#ifdef DEBUG_REP
+	elog(NOTICE, "[%d] SyncedLsnAdvancedTo : ret %d, tmp_write %X/%X, tmp_flush %X/%X",
+		 MyProcPid, ret, (uint32) (tmp_write_pos >> 32), (uint32) tmp_write_pos, 
+		 (uint32) (tmp_flush_pos >> 32), (uint32) tmp_flush_pos);
+#endif
 
-	if (sync_list)
+	/* Check whether each LSN has advanced to */
+	if (ret)
 	{
 		if (MyWalSnd->write >= tmp_write_pos)
 			*write_pos = tmp_write_pos;
 		if (MyWalSnd->flush >= tmp_flush_pos)
 			*flush_pos = tmp_flush_pos;
+
+#ifdef DEBUG_REP
+		elog(NOTICE, "[%d]     -----> write %X/%x, flush %X/%X",
+			 MyProcPid,
+			 (uint32) (*write_pos >> 32), (uint32) *write_pos,
+			 (uint32) (*flush_pos >> 32), (uint32) *flush_pos);
+#endif
+
 		return true;
 	}
 
@@ -577,46 +635,80 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 
 /*
  * Determine synced LSNs at this moment.
- * Return buffer with walsnds indexes of the highest priority active
- * synchronous standbys up to wait_num of its group. And return lowest
- * LSNs of synchronous standbys.
+ * If there are not active standbys enough to determine LSNs, return false.
  */
-int *
-SyncRepGetSyncedLsns(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
+bool
+SyncRepGetSyncedLsns(SyncGroupNode *group, XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 {
-	SyncGroupNode	*node = SyncRepStandbyGroup->member;
+	ListCell	*cell;
 	int	num = 0;
-	int *sync_list;
 
-	sync_list = palloc(sizeof(int) * SyncRepStandbyGroup->wait_num);
-
-	while (node != NULL)
+	foreach(cell, group->member)
 	{
-		int	pos = 0;
+		int pos;
+		SyncGroupNode *node = (SyncGroupNode *)lfirst(cell);
 
-		/* We find synchronous standbys up to wait_num of this group */
-		if (num >= SyncRepStandbyGroup->wait_num)
-			break;
+		/* We found synchronous standbys enough to decide LSNs, return */
+		if (num == group->wait_num)
+			return true;
 
-		pos = SyncRepFindStandbyName(node->name, write_pos, flush_pos);
+#ifdef DEBUG_REP
+		elog(NOTICE, "    [%d] FindStandbyByName : name = %s", MyProcPid, node->name);
+#endif
 
-		/* Could not find the standby */
+		pos = SyncRepFindStandbyByName(node->name, write_pos, flush_pos);
+
+		/* Could not find the standby, then find next */
+		if (pos == -1)
+			continue;
+
+		num++;
+	
+
+	}
+
+	return (num == group->wait_num);
+}
+
+/*
+ * Return buffer with walsnds indexes of the highest priority
+ * active synchronous standbys up to wait_num of its group, and its size.
+ */
+int
+SyncRepGetSyncStandbys(SyncGroupNode *group, int *sync_list)
+{
+	ListCell	*cell;
+	int	num = 0;
+
+	foreach(cell, group->member)
+	{
+		int pos = 0;
+		SyncGroupNode	*node = (SyncGroupNode *)lfirst(cell);
+
+		/* We got enough synchronous standbys, return */
+		if (num == group->wait_num)
+			return num;
+
+		pos = SyncRepFindStandbyByName(node->name, NULL, NULL);
+
 		if (pos == -1)
 			continue;
 
 		sync_list[num] = pos;
 		num++;
-		node = node->next;
+
+
 	}
 
-	/* If we could not find any sync standbys, return NULL */
-	if (!num)
+#ifdef DEBUG_REP
+	int i;
+	for (i = 0; i < num; i++)
 	{
-		pfree(sync_list);
-		return NULL;
+		elog(NOTICE, "SYNC_STANDBY[%d] : %d", i, sync_list[i]);
 	}
-	
-	return sync_list;
+#endif
+
+	return num;
 }
 
 /*
@@ -643,7 +735,7 @@ SyncRepGetStandbyPriority(void)
 	if (am_cascading_walsender)
 		return 0;
 
-	if (SyncRepStandbyNames)
+	if (SyncStandbyNamesDefined())
 	{
 		/* Need a modifiable copy of string */
 		rawstring = pstrdup(SyncRepStandbyNames);
@@ -675,21 +767,30 @@ SyncRepGetStandbyPriority(void)
 		pfree(rawstring);
 		list_free(elemlist);
 	}
-	else if (SyncRepStandbyGroup)
+	else if (SyncStandbyGroupDefined())
 	{
-		SyncGroupNode	*node = SyncRepStandbyGroup->member;
+		ListCell	*cell;
 
-		while (node != NULL)
+		elog(NOTICE, "hogehogeho");
+		pg_usleep(30 * 1000L * 1000L);
+		pg_usleep(30 * 1000L * 1000L);
+
+		foreach(cell, SyncRepStandbyGroup->member)
 		{
+			SyncGroupNode *node = (SyncGroupNode *)lfirst(cell);
+
 			priority++;
 			if (pg_strcasecmp(node->name, application_name) == 0)
 			{
+				
+				elog(NOTICE, "[%d] GET PRIORITY %d", MyProcPid, priority);
 				found = true;
 				break;
 			}
-
-			node = node->next;
+			else
+				elog(NOTICE, "unmatched %s %s", node->name, application_name);
 		}
+		elog(NOTICE, "hoge");
 	}
 
 	return (found ? priority : 0);
@@ -856,6 +957,9 @@ check_synchronous_standby_group(char **newval, void **extra, GucSource source)
 			return false;
 		}
 		syncgroup_scanner_finish();
+
+		SyncRepClearStandbyGroupList(SyncRepStandbyGroup);
+		SyncRepStandbyGroup = NULL;
 	}
 
 	return true;
@@ -909,4 +1013,196 @@ assign_synchronous_commit(int newval, void *extra)
 			SyncRepWaitMode = SYNC_REP_NO_WAIT;
 			break;
 	}
+}
+
+/* Debug fucntion, will be removed */
+static
+void print_setting()
+{
+	
+	
+
+	ListCell *cell;
+
+	elog(WARNING, "== Node Structure ==");
+	elog(WARNING, "[%s] wait_num = %d", SyncRepStandbyGroup->name,
+		 SyncRepStandbyGroup->wait_num);
+
+	foreach(cell, SyncRepStandbyGroup->member)
+	{
+		SyncGroupNode *node = (SyncGroupNode *) lfirst(cell);
+		elog(WARNING, "    [%s] ", node->name);
+	}
+}
+
+void
+assign_synchronous_standby_group(const char *newval, void *extra)
+{
+	int	parse_rc;
+
+	if (newval != NULL && newval[0] != '\0')
+	{
+		syncgroup_scanner_init(newval);
+		parse_rc = syncgroup_yyparse();
+
+		if (parse_rc != 0)
+			GUC_check_errdetail("Invalid syntax");
+
+		syncgroup_scanner_finish();
+		print_setting();
+	}
+}
+
+static const char *
+SyncRepGetMethodString(SyncGroupNode *group)
+{
+	switch(group->sync_method)
+	{
+		case SYNC_REP_METHOD_PRIORITY:
+			return "priority";
+	}
+
+	return "";
+}
+
+Datum
+pg_stat_get_synchronous_replication_group(PG_FUNCTION_ARGS)
+{
+	#define PG_STAT_GET_SYNCHRONOUS_REPLICATION_GROUP_COLS 5
+
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+	ListCell	*cell;
+	int	   *sync_standbys;
+	int		num;
+	int		i;
+
+	/* check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not " \
+						"allowed in this context")));
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	sync_standbys = palloc(sizeof(int) * SyncRepStandbyGroup->wait_num);
+
+	/*
+	 * Get the currently active synchronous standby.
+	 */
+	LWLockAcquire(SyncRepLock, LW_SHARED);
+	num = SyncRepStandbyGroup->SyncRepGetSyncStandbysFn(SyncRepStandbyGroup, sync_standbys);
+	LWLockRelease(SyncRepLock);
+
+	/* Fill "main" node data */
+	{
+		SyncGroupNode *node = SyncRepStandbyGroup;
+		Datum	values[PG_STAT_GET_SYNCHRONOUS_REPLICATION_GROUP_COLS];
+		bool	nulls[PG_STAT_GET_SYNCHRONOUS_REPLICATION_GROUP_COLS];
+
+		memset(nulls, 0, sizeof(nulls));
+		values[0] = CStringGetTextDatum(node->name);
+
+		if (!superuser())
+		{
+			/*
+			 * Only superusers can see details. Other users only get the pid
+			 * value to know it's a walsender, but no details.
+			 */
+			MemSet(&nulls[1], true, PG_STAT_GET_SYNCHRONOUS_REPLICATION_GROUP_COLS - 1);
+		}
+		else
+		{
+			values[1] = CStringGetTextDatum("priority");
+			values[2] = Int32GetDatum(node->wait_num);
+			values[3] = Int32GetDatum(0);
+			nulls[4] = true;
+			tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+		}
+		
+	}
+
+	/* Fill member node data */
+	foreach(cell, SyncRepStandbyGroup->member)
+	{
+		WalSnd	*walsnd;
+		SyncGroupNode *node = (SyncGroupNode *)lfirst(cell);
+		int	pos;
+		int i;
+		Datum	values[PG_STAT_GET_SYNCHRONOUS_REPLICATION_GROUP_COLS];
+		bool	nulls[PG_STAT_GET_SYNCHRONOUS_REPLICATION_GROUP_COLS];
+
+ 		memset(nulls, 0, sizeof(nulls));
+		values[0] = CStringGetTextDatum(node->name);
+
+		if (!superuser())
+		{
+			/*
+			 * Only superusers can see details. Other users only get the pid
+			 * value to know it's a walsender, but no details.
+			 */
+			MemSet(&nulls[1], true, PG_STAT_GET_SYNCHRONOUS_REPLICATION_GROUP_COLS - 1);
+		}
+		else
+		{
+			nulls[1] = true;
+
+			values[2] = Int32GetDatum(node->wait_num);
+
+			/* Get wal sender position of WalSndCtl */
+			pos = SyncRepFindStandbyByName(node->name, NULL, NULL);
+			walsnd = &WalSndCtl->walsnds[pos];
+			values[3] = Int32GetDatum(walsnd->sync_standby_priority);
+
+			if (walsnd->sync_standby_priority == 0)
+				values[4] = CStringGetTextDatum("async");
+			else
+			{
+				bool	found = false;
+
+				for (i = 0; i < num; i++)
+				{
+					if (sync_standbys[i] == pos)
+					{
+						found = true;
+						break;
+					}
+					
+				}
+
+				if (found)
+					values[4] = CStringGetTextDatum("sync");
+				else
+					values[4] = CStringGetTextDatum("potential");
+			}
+		}
+
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+
+	/* Clean up and return the tuplestore */
+	tuplestore_donestoring(tupstore);
+
+	return (Datum) 0;
+
 }

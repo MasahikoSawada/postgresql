@@ -3371,7 +3371,7 @@ static struct config_string ConfigureNamesString[] =
 		},
 		&SyncRepStandbyGroupString,
 		"",
-		check_synchronous_standby_group, NULL, NULL
+		check_synchronous_standby_group, assign_synchronous_standby_group, NULL
 	},
 
 	{

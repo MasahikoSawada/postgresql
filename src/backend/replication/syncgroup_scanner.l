@@ -6,7 +6,6 @@
 
 /* Handles to the buffer that the lexer uses internally */
 static YY_BUFFER_STATE scanbufhandle;
-static char *scanbuf;
 
 %}
 %option 8bit
@@ -17,8 +16,18 @@ static char *scanbuf;
 %option noyywrap
 %option warn
 %option prefix="syncgroup_yy"
+%option yylineno
+
+space		[ \t\n\r\f]
+non_newline	[^\n\r]
+comment		("--"{non_newline}*)
+whitespace	({space}+|{comment})
+
+self		[\[\]]
 
 %%
+
+{whitespace}	{ /* ignore */ }
 
 [a-zA-Z][a-zA-Z0-9]*    {
 				yylval.str = strdup(yytext);
@@ -30,6 +39,12 @@ static char *scanbuf;
 [,()\n]        {
 			return yytext[0];
 		}
+
+{self}		{
+			return yytext[0];
+		}
+
+. 		printf("bad input character '%s' at line %d\n", yytext, yylineno);
 %%
 
 void
@@ -44,6 +59,7 @@ void
 syncgroup_scanner_init(const char *str)
 {
 	Size		slen = strlen(str);
+	char		*scanbuf;
 
 	/*
 	 * Might be left over after ereport()
@@ -59,12 +75,12 @@ syncgroup_scanner_init(const char *str)
 	scanbuf[slen] = scanbuf[slen + 1] = YY_END_OF_BUFFER_CHAR;
 	scanbufhandle = yy_scan_buffer(scanbuf, slen + 2);
 
-	BEGIN(INITIAL);
+	//BEGIN(INITIAL);
 }
 
 void
 syncgroup_scanner_finish(void)
 {
 	yy_delete_buffer(scanbufhandle);
-	pfree(scanbuf);
+	scanbufhandle = NULL;
 }

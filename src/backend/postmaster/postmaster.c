@@ -114,6 +114,7 @@
 #include "postmaster/postmaster.h"
 #include "postmaster/syslogger.h"
 #include "replication/walsender.h"
+#include "replication/syncrep.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/pg_shmem.h"
@@ -857,6 +858,10 @@ PostmasterMain(int argc, char *argv[])
 	if (max_wal_senders > 0 && wal_level == WAL_LEVEL_MINIMAL)
 		ereport(ERROR,
 				(errmsg("WAL streaming (max_wal_senders > 0) requires wal_level \"archive\", \"hot_standby\", or \"logical\"")));
+	if ((SyncRepStandbyNames != NULL && SyncRepStandbyNames[0] != '\0') &&
+		(SyncRepStandbyGroupString != NULL && SyncRepStandbyGroupString[0] != '\0'))
+		ereport(ERROR,
+				(errmsg("synchronous_standby_names and synchronous_standby_group must not be set at the same time, %s, %s", SyncRepStandbyNames, SyncRepStandbyGroupString)));
 
 	/*
 	 * Other one-time internal sanity checks can go here, if they are fast.
