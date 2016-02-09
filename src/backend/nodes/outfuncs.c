@@ -443,6 +443,7 @@ _outGather(StringInfo str, const Gather *node)
 
 	WRITE_INT_FIELD(num_workers);
 	WRITE_BOOL_FIELD(single_copy);
+	WRITE_BOOL_FIELD(invisible);
 }
 
 static void
@@ -1705,8 +1706,6 @@ _outCustomPath(StringInfo str, const CustomPath *node)
 	WRITE_NODE_FIELD(custom_private);
 	appendStringInfoString(str, " :methods ");
 	_outToken(str, node->methods->CustomName);
-	if (node->methods->TextOutCustomPath)
-		node->methods->TextOutCustomPath(str, node);
 }
 
 static void
@@ -1826,6 +1825,7 @@ _outPlannerGlobal(StringInfo str, const PlannerGlobal *node)
 	WRITE_BOOL_FIELD(hasRowSecurity);
 	WRITE_BOOL_FIELD(parallelModeOK);
 	WRITE_BOOL_FIELD(parallelModeNeeded);
+	WRITE_BOOL_FIELD(wholePlanParallelSafe);
 	WRITE_BOOL_FIELD(hasForeignJoin);
 }
 

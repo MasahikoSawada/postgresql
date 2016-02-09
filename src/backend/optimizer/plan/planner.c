@@ -48,10 +48,12 @@
 #include "storage/dsm_impl.h"
 #include "utils/rel.h"
 #include "utils/selfuncs.h"
+#include "utils/syscache.h"
 
 
-/* GUC parameter */
+/* GUC parameters */
 double		cursor_tuple_fraction = DEFAULT_CURSOR_TUPLE_FRACTION;
+int			force_parallel_mode = FORCE_PARALLEL_OFF;
 
 /* Hook for plugins to get control in planner() */
 planner_hook_type planner_hook = NULL;
@@ -230,25 +232,31 @@ standard_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		!has_parallel_hazard((Node *) parse, true);
 
 	/*
-	 * glob->parallelModeOK should tell us whether it's necessary to impose
-	 * the parallel mode restrictions, but we don't actually want to impose
-	 * them unless we choose a parallel plan, so that people who mislabel
-	 * their functions but don't use parallelism anyway aren't harmed.
-	 * However, it's useful for testing purposes to be able to force the
-	 * restrictions to be imposed whenever a parallel plan is actually chosen
-	 * or not.
+	 * glob->parallelModeNeeded should tell us whether it's necessary to
+	 * impose the parallel mode restrictions, but we don't actually want to
+	 * impose them unless we choose a parallel plan, so that people who
+	 * mislabel their functions but don't use parallelism anyway aren't
+	 * harmed. But when force_parallel_mode is set, we enable the restrictions
+	 * whenever possible for testing purposes.
 	 *
-	 * (It's been suggested that we should always impose these restrictions
-	 * whenever glob->parallelModeOK is true, so that it's easier to notice
-	 * incorrectly-labeled functions sooner.  That might be the right thing to
-	 * do, but for now I've taken this approach.  We could also control this
-	 * with a GUC.)
+	 * glob->wholePlanParallelSafe should tell us whether it's OK to stick a
+	 * Gather node on top of the entire plan.  However, it only needs to be
+	 * accurate when force_parallel_mode is 'on' or 'regress', so we don't
+	 * bother doing the work otherwise.  The value we set here is just a
+	 * preliminary guess; it may get changed from true to false later, but
+	 * not visca versa.
 	 */
-#ifdef FORCE_PARALLEL_MODE
-	glob->parallelModeNeeded = glob->parallelModeOK;
-#else
-	glob->parallelModeNeeded = false;
-#endif
+	if (force_parallel_mode == FORCE_PARALLEL_OFF || !glob->parallelModeOK)
+	{
+		glob->parallelModeNeeded = false;
+		glob->wholePlanParallelSafe = false;	/* either false or don't care */
+	}
+	else
+	{
+		glob->parallelModeNeeded = true;
+		glob->wholePlanParallelSafe =
+			!has_parallel_hazard((Node *) parse, false);
+	}
 
 	/* Determine what fraction of the plan is likely to be scanned */
 	if (cursorOptions & CURSOR_OPT_FAST_PLAN)
@@ -290,6 +298,35 @@ standard_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	{
 		if (!ExecSupportsBackwardScan(top_plan))
 			top_plan = materialize_finished_plan(top_plan);
+	}
+
+	/*
+	 * At present, we don't copy subplans to workers.  The presence of a
+	 * subplan in one part of the plan doesn't preclude the use of parallelism
+	 * in some other part of the plan, but it does preclude the possibility of
+	 * regarding the entire plan parallel-safe.
+	 */
+	if (glob->subplans != NULL)
+		glob->wholePlanParallelSafe = false;
+
+	/*
+	 * Optionally add a Gather node for testing purposes, provided this is
+	 * actually a safe thing to do.
+	 */
+	if (glob->wholePlanParallelSafe &&
+		force_parallel_mode != FORCE_PARALLEL_OFF)
+	{
+		Gather	   *gather = makeNode(Gather);
+
+		gather->plan.targetlist = top_plan->targetlist;
+		gather->plan.qual = NIL;
+		gather->plan.lefttree = top_plan;
+		gather->plan.righttree = NULL;
+		gather->num_workers = 1;
+		gather->single_copy = true;
+		gather->invisible = (force_parallel_mode == FORCE_PARALLEL_REGRESS);
+		root->glob->parallelModeNeeded = true;
+		top_plan = &gather->plan;
 	}
 
 	/*
@@ -616,13 +653,19 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 	 * In some cases we may want to transfer a HAVING clause into WHERE. We
 	 * cannot do so if the HAVING clause contains aggregates (obviously) or
 	 * volatile functions (since a HAVING clause is supposed to be executed
-	 * only once per group).  Also, it may be that the clause is so expensive
-	 * to execute that we're better off doing it only once per group, despite
-	 * the loss of selectivity.  This is hard to estimate short of doing the
-	 * entire planning process twice, so we use a heuristic: clauses
-	 * containing subplans are left in HAVING.  Otherwise, we move or copy the
-	 * HAVING clause into WHERE, in hopes of eliminating tuples before
-	 * aggregation instead of after.
+	 * only once per group).  We also can't do this if there are any nonempty
+	 * grouping sets; moving such a clause into WHERE would potentially change
+	 * the results, if any referenced column isn't present in all the grouping
+	 * sets.  (If there are only empty grouping sets, then the HAVING clause
+	 * must be degenerate as discussed below.)
+	 *
+	 * Also, it may be that the clause is so expensive to execute that we're
+	 * better off doing it only once per group, despite the loss of
+	 * selectivity.  This is hard to estimate short of doing the entire
+	 * planning process twice, so we use a heuristic: clauses containing
+	 * subplans are left in HAVING.  Otherwise, we move or copy the HAVING
+	 * clause into WHERE, in hopes of eliminating tuples before aggregation
+	 * instead of after.
 	 *
 	 * If the query has explicit grouping then we can simply move such a
 	 * clause into WHERE; any group that fails the clause will not be in the
@@ -642,7 +685,8 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 	{
 		Node	   *havingclause = (Node *) lfirst(l);
 
-		if (contain_agg_clause(havingclause) ||
+		if ((parse->groupClause && parse->groupingSets) ||
+			contain_agg_clause(havingclause) ||
 			contain_volatile_functions(havingclause) ||
 			contain_subplans(havingclause))
 		{
