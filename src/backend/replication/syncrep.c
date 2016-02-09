@@ -67,16 +67,11 @@
 #include "utils/ps_status.h"
 
 /* User-settable parameters for sync rep */
-char	   *SyncRepStandbyNames;
-char	   *SyncRepStandbyGroupString;
-SyncGroupNode	*SyncRepStandbyGroup;
+SyncGroupNode	   *SyncRepStandbyNames;
+char	   *SyncRepStandbyNamesString;
 
-#define SyncStandbyNamesDefined() \
-	(SyncRepStandbyNames != NULL && SyncRepStandbyNames[0] != '\0')
-#define SyncStandbyGroupDefined() \
-	(SyncRepStandbyGroupString != NULL && SyncRepStandbyGroupString[0] != '\0')
 #define SyncStandbysDefined() \
-	(SyncStandbyNamesDefined() || SyncStandbyGroupDefined())
+	(SyncRepStandbyNamesString != NULL && SyncRepStandbyNamesString[0] != '\0')
 
 static bool announce_next_takeover = true;
 
@@ -336,7 +331,7 @@ SyncRepCleanupAtProcExit(void)
 }
 
 /*
- * Clear all node in SyncRepStandbyGroup recursively.
+ * Clear all node in SyncRepStandbyNames recursively.
  */
 static void
 SyncRepClearStandbyGroupList(SyncGroupNode *group)
@@ -428,60 +423,6 @@ SyncRepFindWalSenderByName(char *name)
 }
 
 /*
- * Find the WAL sender servicing the synchronous standbys with the lowest
- * priority value, or NULL if no synchronous standby is connected. If there
- * are multiple standbys with the same lowest priority value, the first one
- * found is selected. The caller must hold SyncRepLock.
- */
-WalSnd *
-SyncRepGetSynchronousStandby(void)
-{
-	WalSnd	   *result = NULL;
-	int			result_priority = 0;
-	int			i;
-
-	for (i = 0; i < max_wal_senders; i++)
-	{
-		/* Use volatile pointer to prevent code rearrangement */
-		volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
-		int			this_priority;
-
-		/* Must be active */
-		if (walsnd->pid == 0)
-			continue;
-
-		/* Must be streaming */
-		if (walsnd->state != WALSNDSTATE_STREAMING)
-			continue;
-
-		/* Must be synchronous */
-		this_priority = walsnd->sync_standby_priority;
-		if (this_priority == 0)
-			continue;
-
-		/* Must have a lower priority value than any previous ones */
-		if (result != NULL && result_priority <= this_priority)
-			continue;
-
-		/* Must have a valid flush position */
-		if (XLogRecPtrIsInvalid(walsnd->flush))
-			continue;
-
-		result = (WalSnd *) walsnd;
-		result_priority = this_priority;
-
-		/*
-		 * If priority is equal to 1, there cannot be any other WAL senders
-		 * with a lower priority, so we're done.
-		 */
-		if (this_priority == 1)
-			return result;
-	}
-
-	return result;
-}
-
-/*
  * Update the LSNs on each queue based upon our latest state. This
  * implements a simple policy of first-valid-standby-releases-waiter.
  *
@@ -562,7 +503,7 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 	bool		ret;
 
 	/* Get synced LSNs at this moment */
-	ret = SyncRepStandbyGroup->SyncRepGetSyncedLsnsFn(SyncRepStandbyGroup,
+	ret = SyncRepStandbyNames->SyncRepGetSyncedLsnsFn(SyncRepStandbyNames,
 													  &cur_write_pos,
 													  &cur_flush_pos);
 
@@ -672,9 +613,6 @@ SyncRepGetSyncStandbysPriority(SyncGroupNode *group, int *sync_list)
 static int
 SyncRepGetStandbyPriority(void)
 {
-	char	   *rawstring;
-	List	   *elemlist;
-	ListCell   *l;
 	int			priority = 0;
 	bool		found = false;
 
@@ -685,47 +623,16 @@ SyncRepGetStandbyPriority(void)
 	if (am_cascading_walsender)
 		return 0;
 
-	if (SyncStandbyNamesDefined())
-	{
-		/* Need a modifiable copy of string */
-		rawstring = pstrdup(SyncRepStandbyNames);
-
-		/* Parse string into list of identifiers */
-		if (!SplitIdentifierString(rawstring, ',', &elemlist))
-		{
-			/* syntax error in list */
-			pfree(rawstring);
-			list_free(elemlist);
-			/* GUC machinery will have already complained - no need to do again */
-			return 0;
-		}
-
-		foreach(l, elemlist)
-		{
-			char	   *standby_name = (char *) lfirst(l);
-
-			priority++;
-
-			if (pg_strcasecmp(standby_name, application_name) == 0 ||
-				pg_strcasecmp(standby_name, "*") == 0)
-			{
-				found = true;
-				break;
-			}
-		}
-
-		pfree(rawstring);
-		list_free(elemlist);
-	}
-	else if (SyncStandbyGroupDefined())
+	if (SyncStandbysDefined())
 	{
 		SyncGroupNode	*n;
 
-		for (n = SyncRepStandbyGroup->member; n != NULL; n = n->next)
+		for (n = SyncRepStandbyNames->member; n != NULL; n = n->next)
 		{
 			priority++;
 
-			if (pg_strcasecmp(n->name, application_name) == 0)
+			if (pg_strcasecmp(n->name, application_name) == 0 ||
+				pg_strcasecmp(n->name, "*") == 0)
 			{
 				found = true;
 				break;
@@ -882,7 +789,7 @@ SyncRepQueueIsOrderedByLSN(int mode)
  */
 
 bool
-check_synchronous_standby_group(char **newval, void **extra, GucSource source)
+check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 {
 	int	parse_rc;
 
@@ -898,42 +805,17 @@ check_synchronous_standby_group(char **newval, void **extra, GucSource source)
 		}
 		syncgroup_scanner_finish();
 
-		SyncRepClearStandbyGroupList(SyncRepStandbyGroup);
-		SyncRepStandbyGroup = NULL;
+		/*
+		 * Any additional validation of standby names should go here.
+		 *
+		 * Don't attempt to set WALSender priority because this is executed by
+		 * postmaster at startup, not WALSender, so the application_name is not
+		 * yet correctly set.
+		 */
+
+		SyncRepClearStandbyGroupList(SyncRepStandbyNames);
+		SyncRepStandbyNames = NULL;
 	}
-
-	return true;
-}
-
-bool
-check_synchronous_standby_names(char **newval, void **extra, GucSource source)
-{
-	char	   *rawstring;
-	List	   *elemlist;
-
-	/* Need a modifiable copy of string */
-	rawstring = pstrdup(*newval);
-
-	/* Parse string into list of identifiers */
-	if (!SplitIdentifierString(rawstring, ',', &elemlist))
-	{
-		/* syntax error in list */
-		GUC_check_errdetail("List syntax is invalid.");
-		pfree(rawstring);
-		list_free(elemlist);
-		return false;
-	}
-
-	/*
-	 * Any additional validation of standby names should go here.
-	 *
-	 * Don't attempt to set WALSender priority because this is executed by
-	 * postmaster at startup, not WALSender, so the application_name is not
-	 * yet correctly set.
-	 */
-
-	pfree(rawstring);
-	list_free(elemlist);
 
 	return true;
 }
@@ -956,7 +838,7 @@ assign_synchronous_commit(int newval, void *extra)
 }
 
 void
-assign_synchronous_standby_group(const char *newval, void *extra)
+assign_synchronous_standby_names(const char *newval, void *extra)
 {
 	int	parse_rc;
 

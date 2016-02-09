@@ -3359,19 +3359,9 @@ static struct config_string ConfigureNamesString[] =
 			NULL,
 			GUC_LIST_INPUT
 		},
-		&SyncRepStandbyNames,
+		&SyncRepStandbyNamesString,
 		"",
-		check_synchronous_standby_names, NULL, NULL
-	},
-
-	{
-		{"synchronous_standby_group", PGC_SIGHUP, REPLICATION_MASTER,
-			gettext_noop("synchronous standbys using synchronous group language."),
-			NULL
-		},
-		&SyncRepStandbyGroupString,
-		"",
-		check_synchronous_standby_group, assign_synchronous_standby_group, NULL
+		check_synchronous_standby_names, assign_synchronous_standby_names, NULL
 	},
 
 	{

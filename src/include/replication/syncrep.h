@@ -59,9 +59,8 @@ struct	SyncGroupNode
 };
 
 /* user-settable parameters for synchronous replication */
-extern char *SyncRepStandbyNames;
-extern char *SyncRepStandbyGroupString;
-extern SyncGroupNode	*SyncRepStandbyGroup;
+extern SyncGroupNode *SyncRepStandbyNames;
+extern char	*SyncRepStandbyNamesString;
 
 /* called by user backend */
 extern void SyncRepWaitForLSN(XLogRecPtr XactCommitLSN);
@@ -76,14 +75,9 @@ extern void SyncRepReleaseWaiters(void);
 /* called by checkpointer */
 extern void SyncRepUpdateSyncStandbysDefined(void);
 
-/* forward declaration to avoid pulling in walsender_private.h */
-struct WalSnd;
-extern struct WalSnd *SyncRepGetSynchronousStandby(void);
-
 extern bool check_synchronous_standby_names(char **newval, void **extra, GucSource source);
+extern void assign_synchronous_standby_names(const char *newval, void *extra);
 extern void assign_synchronous_commit(int newval, void *extra);
-extern bool	check_synchronous_standby_group(char **newval, void **extra, GucSource source);
-extern void assign_synchronous_standby_group(const char *newval, void *extra);
 
 /*
  * Internal functions for parsing the replication grammar, in syncgroup_gram.y and

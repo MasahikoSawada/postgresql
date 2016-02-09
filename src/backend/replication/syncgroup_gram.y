@@ -54,7 +54,7 @@ static SyncGroupNode *create_group_node(int wait_num, SyncGroupNode *node_list);
 %%
 
 result:
-	sync_node_group						{ SyncRepStandbyGroup = $1; }
+	sync_node_group						{ SyncRepStandbyNames = $1; }
 ;
 
 sync_list:
