@@ -79,16 +79,15 @@ create_name_node(char *name)
 {
 	SyncGroupNode *name_node = (SyncGroupNode *)malloc(sizeof(SyncGroupNode));
 
+	/* Common information */
 	name_node->type = SYNC_REP_GROUP_NAME;
-
-	/* For NAME node */
 	name_node->name = strdup(name);
+	name_node->next = NULL;
 
 	/* For GROUP node */
 	name_node->sync_method = 0;
 	name_node->wait_num = 0;
 	name_node->member = NULL;
-	name_node->next = NULL;
 	name_node->SyncRepGetSyncedLsnsFn = NULL;
 	name_node->SyncRepGetSyncStandbysFn = NULL;
 
@@ -100,16 +99,15 @@ create_group_node(int wait_num, SyncGroupNode *node_list)
 {
 	SyncGroupNode *group_node = (SyncGroupNode *) malloc(sizeof(SyncGroupNode));
 
-	group_node->type = SYNC_REP_GROUP_GROUP | SYNC_REP_GROUP_MAIN;
-
 	/* For NAME node */
+	group_node->type = SYNC_REP_GROUP_GROUP | SYNC_REP_GROUP_MAIN;
 	group_node->name = "main";
+	group_node->next = NULL;
 
 	/* For GROUP node */
 	group_node->sync_method = SYNC_REP_METHOD_PRIORITY;
 	group_node->wait_num = wait_num;
 	group_node->member = node_list;
-	group_node->next = NULL;
 	group_node->SyncRepGetSyncedLsnsFn = SyncRepGetSyncedLsnsPriority;
 	group_node->SyncRepGetSyncStandbysFn = SyncRepGetSyncStandbysPriority;
 

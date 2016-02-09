@@ -44,14 +44,15 @@ typedef struct SyncGroupNode SyncGroupNode;
 
 struct	SyncGroupNode
 {
+	/* Common information */
 	int		type;
 	char	*name;
-	SyncGroupNode	*next;
+	SyncGroupNode	*next; /* Same group, next name node */
 
 	/* For group ndoe */
-	int sync_method;
+	int sync_method; /* priority */
 	int	wait_num;
-	SyncGroupNode	*member;
+	SyncGroupNode	*member; /* member of its group */
 	bool (*SyncRepGetSyncedLsnsFn) (SyncGroupNode *group, XLogRecPtr *write_pos,
 									XLogRecPtr *flush_pos);
 	int (*SyncRepGetSyncStandbysFn) (SyncGroupNode *group, int *list);
