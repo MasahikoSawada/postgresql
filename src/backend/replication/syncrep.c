@@ -59,8 +59,6 @@
 #include "utils/builtins.h"
 #include "utils/ps_status.h"
 
-//#define DEBUG_REP
-
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
 char	   *SyncRepStandbyGroupString;
@@ -417,12 +415,6 @@ SyncRepFindStandbyByName(char *name, XLogRecPtr *write_pos, XLogRecPtr *flush_po
 		walsnd_name = (char *) walsnd->name;
 		if (pg_strcasecmp(walsnd_name, name) == 0)
 		{
-#ifdef DEBUG_REP
-			elog(NOTICE, "    ----> Find at %d, write %X/%X, flush %X/%X", i,
-				 (uint32) (walsnd->write >> 32), (uint32) walsnd->write,
-				 (uint32) (walsnd->flush >> 32), (uint32) walsnd->flush);
-
-#endif
 			if (write_pos && flush_pos)
 			{
 				SpinLockAcquire(&walsnd->mutex);
@@ -432,12 +424,8 @@ SyncRepFindStandbyByName(char *name, XLogRecPtr *write_pos, XLogRecPtr *flush_po
 					*write_pos = walsnd->write;
 				if (XLogRecPtrIsInvalid(*flush_pos) || *flush_pos > walsnd->flush)
 					*flush_pos = walsnd->flush;
+
 				SpinLockRelease(&walsnd->mutex);
-#ifdef DEBUG_REP
-				elog(NOTICE, "    ----> write %X/%X, flush %X/%X",
-					 (uint32)((*write_pos) >> 32), (uint32)(*write_pos),
-					 (uint32)((*flush_pos) >> 32), (uint32)(*flush_pos));
-#endif
 			}
 
 			return i;
@@ -585,11 +573,6 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 	ret = SyncRepStandbyGroup->SyncRepGetSyncedLsnsFn(SyncRepStandbyGroup,
 													  &tmp_write_pos,
 													  &tmp_flush_pos);
-#ifdef DEBUG_REP
-	elog(NOTICE, "[%d] SyncedLsnAdvancedTo : ret %d, tmp_write %X/%X, tmp_flush %X/%X",
-		 MyProcPid, ret, (uint32) (tmp_write_pos >> 32), (uint32) tmp_write_pos, 
-		 (uint32) (tmp_flush_pos >> 32), (uint32) tmp_flush_pos);
-#endif
 
 	/* Check whether each LSN has advanced to */
 	if (ret)
@@ -598,13 +581,6 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 			*write_pos = tmp_write_pos;
 		if (MyWalSnd->flush >= tmp_flush_pos)
 			*flush_pos = tmp_flush_pos;
-
-#ifdef DEBUG_REP
-		elog(NOTICE, "[%d]     -----> write %X/%x, flush %X/%X",
-			 MyProcPid,
-			 (uint32) (*write_pos >> 32), (uint32) *write_pos,
-			 (uint32) (*flush_pos >> 32), (uint32) *flush_pos);
-#endif
 
 		return true;
 	}
@@ -629,10 +605,6 @@ SyncRepGetSyncedLsnsPriority(SyncGroupNode *group, XLogRecPtr *write_pos, XLogRe
 		/* We found synchronous standbys enough to decide LSNs, return */
 		if (num == group->wait_num)
 			return true;
-
-#ifdef DEBUG_REP
-		elog(NOTICE, "    [%d] FindStandbyByName : name = %s", MyProcPid, n->name);
-#endif
 
 		pos = SyncRepFindStandbyByName(n->name, write_pos, flush_pos);
 
@@ -742,8 +714,6 @@ SyncRepGetStandbyPriority(void)
 
 			if (pg_strcasecmp(n->name, application_name) == 0)
 			{
-				
-				elog(NOTICE, "[%d] GET PRIORITY %d", MyProcPid, priority);
 				found = true;
 				break;
 			}
@@ -972,22 +942,6 @@ assign_synchronous_commit(int newval, void *extra)
 	}
 }
 
-/* Debug fucntion, will be removed */
-static
-void print_setting()
-{
-	SyncGroupNode *n;
-
-	elog(WARNING, "== Node Structure ==");
-	elog(WARNING, "[%s] wait_num = %d", SyncRepStandbyGroup->name,
-		 SyncRepStandbyGroup->wait_num);
-	
-	for (n = SyncRepStandbyGroup->member; n != NULL; n = n->next)
-	{
-		elog(WARNING, "    [%s] ", n->name);
-	}
-}
-
 void
 assign_synchronous_standby_group(const char *newval, void *extra)
 {
@@ -1002,7 +956,6 @@ assign_synchronous_standby_group(const char *newval, void *extra)
 			GUC_check_errdetail("Invalid syntax");
 
 		syncgroup_scanner_finish();
-		print_setting();
 	}
 }
 
