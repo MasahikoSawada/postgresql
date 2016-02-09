@@ -100,5 +100,4 @@ extern bool SyncRepGetSyncedLsnsPriority(SyncGroupNode *group,
 								 XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
 extern int SyncRepGetSyncStandbysPriority(SyncGroupNode *group, int *sync_list);
 
-extern Datum pg_stat_get_synchronous_replication_group(PG_FUNCTION_ARGS);
 #endif   /* _SYNCREP_H */
