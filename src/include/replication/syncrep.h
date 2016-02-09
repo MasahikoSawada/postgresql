@@ -34,11 +34,10 @@
 /* SyncRepMethod */
 #define SYNC_REP_METHOD_PRIORITY	0
 
+/* SyncGroupNode */
 #define SYNC_REP_GROUP_MAIN			0x01
 #define SYNC_REP_GROUP_NAME			0x02
 #define SYNC_REP_GROUP_GROUP		0x04
-
-#define SYNC_REP_MAX_STANDBY_NODE	256
 
 struct SyncGroupNode;
 typedef struct SyncGroupNode SyncGroupNode;
@@ -60,6 +59,8 @@ struct	SyncGroupNode
 
 /* user-settable parameters for synchronous replication */
 extern char *SyncRepStandbyNames;
+extern char *SyncRepStandbyGroupString;
+extern SyncGroupNode	*SyncRepStandbyGroup;
 
 /* called by user backend */
 extern void SyncRepWaitForLSN(XLogRecPtr XactCommitLSN);
@@ -93,13 +94,10 @@ extern void syncgroup_yyerror(const char *str) pg_attribute_noreturn();
 extern void syncgroup_scanner_init(const char *query_string);
 extern void syncgroup_scanner_finish(void);
 
-/* XXX : */
-extern bool SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
-extern bool SyncRepGetSyncedLsns(SyncGroupNode *group,
+/* function for synchronous replication group */
+extern bool SyncRepGetSyncedLsnsPriority(SyncGroupNode *group,
 								 XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
-extern int SyncRepGetSyncStandbys(SyncGroupNode *group, int *sync_list);
+extern int SyncRepGetSyncStandbysPriority(SyncGroupNode *group, int *sync_list);
 
-extern SyncGroupNode *SyncRepStandbyGroup;
-extern char *SyncRepStandbyGroupString;
 extern Datum pg_stat_get_synchronous_replication_group(PG_FUNCTION_ARGS);
 #endif   /* _SYNCREP_H */

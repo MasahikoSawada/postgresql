@@ -1,4 +1,18 @@
 %{
+/*-------------------------------------------------------------------------
+ *
+ * syncgroup_gram.y				- Parser for synchronous replication group
+ *
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1994, Regents of the University of California
+ *
+ *
+ * IDENTIFICATION
+ *	  src/backend/replication/syncgroup_gram.y
+ *
+ *-------------------------------------------------------------------------
+ */
+
 #include "postgres.h"
 
 #include "replication/syncrep.h"
@@ -7,6 +21,14 @@ static SyncGroupNode *create_name_node(char *name);
 static SyncGroupNode *add_node(SyncGroupNode *node_list, SyncGroupNode *node);
 static SyncGroupNode *create_group_node(int wait_num, SyncGroupNode *node_list);
 
+/*
+ * Bison doesn't allocate anything that needs to live across parser calls,
+ * so we can easily have it use palloc instead of malloc.  This prevents
+ * memory leaks if we error out during parsing.  Note this only works with
+ * bison >= 2.0.  However, in bison 1.875 the default is to use alloca()
+ * if possible, so there's not really much problem anyhow, at least if
+ * you're building with gcc.
+ */
 #define YYMALLOC palloc
 #define YYFREE   pfree
 
@@ -36,16 +58,17 @@ result:
 ;
 
 sync_list:
-sync_element 					{ $$ = $1;}
-| sync_list ',' sync_element	{ $$ = add_node($1, $3);}
+	sync_element 						{ $$ = $1;}
+	| sync_list ',' sync_element		{ $$ = add_node($1, $3);}
 ;
 
 sync_node_group:
-	INT '[' sync_list ']' 			{ $$ = create_group_node($1, $3);}
+	sync_list							{ $$ = create_group_node(1, $1); }
+|	INT '[' sync_list ']' 				{ $$ = create_group_node($1, $3);}
 ;
 
 sync_element:
-NAME 							{ $$ = create_name_node($1);}
+	NAME	 							{ $$ = create_name_node($1);}
 ;
 
 
@@ -58,17 +81,17 @@ create_name_node(char *name)
 
 	name_node->type = SYNC_REP_GROUP_NAME;
 
-	/* For NAME */
+	/* For NAME node */
 	name_node->name = strdup(name);
 
-	/* For GROUP */
+	/* For GROUP node */
 	name_node->sync_method = 0;
 	name_node->wait_num = 0;
 	name_node->member = NULL;
 	name_node->next = NULL;
 	name_node->SyncRepGetSyncedLsnsFn = NULL;
 	name_node->SyncRepGetSyncStandbysFn = NULL;
-	elog(WARNING, "create node : %s", name);
+
 	return name_node;
 }
 
@@ -79,18 +102,17 @@ create_group_node(int wait_num, SyncGroupNode *node_list)
 
 	group_node->type = SYNC_REP_GROUP_GROUP | SYNC_REP_GROUP_MAIN;
 
-	/* For NAME */
+	/* For NAME node */
 	group_node->name = "main";
 
-	/* For GROUP */
+	/* For GROUP node */
 	group_node->sync_method = SYNC_REP_METHOD_PRIORITY;
 	group_node->wait_num = wait_num;
 	group_node->member = node_list;
 	group_node->next = NULL;
-	group_node->SyncRepGetSyncedLsnsFn = SyncRepGetSyncedLsns;
-	group_node->SyncRepGetSyncStandbysFn = SyncRepGetSyncStandbys;
+	group_node->SyncRepGetSyncedLsnsFn = SyncRepGetSyncedLsnsPriority;
+	group_node->SyncRepGetSyncStandbysFn = SyncRepGetSyncStandbysPriority;
 
-	elog(WARNING, "create group : wait_num = %d", group_node->wait_num);
 	return group_node;
 }
 
@@ -99,10 +121,11 @@ add_node(SyncGroupNode *node_list, SyncGroupNode *node)
 {
 	SyncGroupNode *tmp = node_list;
 
+	/* Add node to tailing of node_list */
 	while(tmp->next != NULL) tmp = tmp->next;
 
 	tmp->next = node;
-	return node_list;;
+	return node_list;
 }
 
 #include "syncgroup_scanner.c"

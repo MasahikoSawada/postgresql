@@ -20,8 +20,7 @@ static YY_BUFFER_STATE scanbufhandle;
 
 space		[ \t\n\r\f]
 non_newline	[^\n\r]
-comment		("--"{non_newline}*)
-whitespace	({space}+|{comment})
+whitespace	({space}+)
 
 self		[\[\]]
 
@@ -29,22 +28,28 @@ self		[\[\]]
 
 {whitespace}	{ /* ignore */ }
 
-[a-zA-Z][a-zA-Z0-9]*    {
+[a-zA-Z][a-zA-Z0-9]*	{
 				yylval.str = strdup(yytext);
 				return NAME;
-			}
+				}
 
-[1-9][0-9]*  {yylval.val = atoi(yytext);   return INT;}
-
-[,()\n]        {
-			return yytext[0];
+[1-9][0-9]*  {
+				yylval.val = atoi(yytext);   return INT;
 		}
 
-{self}		{
-			return yytext[0];
+[,()\n]	{
+				return yytext[0];
 		}
 
-. 		printf("bad input character '%s' at line %d\n", yytext, yylineno);
+{self}	{
+				return yytext[0];
+		}
+
+.				{
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("syntax error: unexpected character \"%s\"", yytext)));
+				}
 %%
 
 void

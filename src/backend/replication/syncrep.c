@@ -59,7 +59,7 @@
 #include "utils/builtins.h"
 #include "utils/ps_status.h"
 
-#define DEBUG_REP
+//#define DEBUG_REP
 
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
@@ -82,10 +82,9 @@ static void SyncRepCancelWait(void);
 static int	SyncRepWakeQueue(bool all, int mode);
 
 static int	SyncRepGetStandbyPriority(void);
-
 static int SyncRepFindStandbyByName(char *name, XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
 static void SyncRepClearStandbyGroupList(SyncGroupNode *node);
-static const char *SyncRepGetMethodString(SyncGroupNode *group);
+static bool SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
 
 #ifdef USE_ASSERT_CHECKING
 static bool SyncRepQueueIsOrderedByLSN(int mode);
@@ -384,33 +383,14 @@ SyncRepInitConfig(void)
 }
 
 /*
- * Confirm whether specific node is listed in SyncRepStandbyGroup.
- */
-/*
-bool
-SyncRepNodeListed(char *name)
-{
-	SyncGroupNode *node;
-
-	foreach(node, SyncRepStandbyGroup)
-	{
-		if (strcmp(node->name, name) == 0)
-			return true;
-	}
-
-	return false;
-}
-*/
-/*
- * Find active standby having same name as "name" while finding lowest LSNs if
- * write_pos and flush_pos is not NULL.
- * Return index of walsnds array if found, otherwise return -1.
+ * Find active walsender by name. If write_pos and flush_pos is given then
+ * we will find lowest LSNs. Return index of walsnds array if found,
+ * otherwise return -1.
  */
 static int
 SyncRepFindStandbyByName(char *name, XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 {
 	int	i;
-
 
 	for (i = 0; i < max_wal_senders; i++)
 	{
@@ -446,6 +426,7 @@ SyncRepFindStandbyByName(char *name, XLogRecPtr *write_pos, XLogRecPtr *flush_po
 			if (write_pos && flush_pos)
 			{
 				SpinLockAcquire(&walsnd->mutex);
+
 				/* Find the lowest LSNs from standbys considered sychronous */
 				if (XLogRecPtrIsInvalid(*write_pos) || *write_pos > walsnd->write)
 					*write_pos = walsnd->write;
@@ -547,10 +528,6 @@ SyncRepReleaseWaiters(void)
 		XLogRecPtrIsInvalid(MyWalSnd->flush))
 		return;
 
-	/*
-	 * We're a potential sync standby. Release waiters if we are the highest
-	 * priority standby.
-	 */
 	LWLockAcquire(SyncRepLock, LW_EXCLUSIVE);
 
 	if (!(SyncRepSyncedLsnAdvancedTo(&write_pos, &flush_pos)))
@@ -594,10 +571,10 @@ SyncRepReleaseWaiters(void)
 }
 
 /*
- * Get both synced LSNS: write and flush, and confirm each LSN has advanced
- * to LSN or not.
+ * Get both synced LSNS: write and flush, using its group function and check
+ * whether each LSN has advanced to, or not.
  */
-bool
+static bool
 SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 {
 	XLogRecPtr	tmp_write_pos = InvalidXLogRecPtr;
@@ -636,11 +613,11 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 }
 
 /*
- * Determine synced LSNs at this moment.
+ * Determine synced LSNs at this moment using priority method.
  * If there are not active standbys enough to determine LSNs, return false.
  */
 bool
-SyncRepGetSyncedLsns(SyncGroupNode *group, XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
+SyncRepGetSyncedLsnsPriority(SyncGroupNode *group, XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 {
 	SyncGroupNode	*n;
 	int	num = 0;
@@ -670,11 +647,11 @@ SyncRepGetSyncedLsns(SyncGroupNode *group, XLogRecPtr *write_pos, XLogRecPtr *fl
 }
 
 /*
- * Return buffer with walsnds indexes of the highest priority
+ * Return buffer with walsnds indexes of the lowest priority
  * active synchronous standbys up to wait_num of its group, and its size.
  */
 int
-SyncRepGetSyncStandbys(SyncGroupNode *group, int *sync_list)
+SyncRepGetSyncStandbysPriority(SyncGroupNode *group, int *sync_list)
 {
 	SyncGroupNode	*n;
 	int	num = 0;
@@ -683,7 +660,7 @@ SyncRepGetSyncStandbys(SyncGroupNode *group, int *sync_list)
 	{
 		int pos = 0;
 
-		/* We got enough synchronous standbys, return */
+		/* We already got enough synchronous standbys, return */
 		if (num == group->wait_num)
 			return num;
 
@@ -762,6 +739,7 @@ SyncRepGetStandbyPriority(void)
 		for (n = SyncRepStandbyGroup->member; n != NULL; n = n->next)
 		{
 			priority++;
+
 			if (pg_strcasecmp(n->name, application_name) == 0)
 			{
 				
@@ -769,8 +747,6 @@ SyncRepGetStandbyPriority(void)
 				found = true;
 				break;
 			}
-			else
-				elog(NOTICE, "unmatched %s %s", n->name, application_name);
 		}
 	}
 
@@ -1030,18 +1006,6 @@ assign_synchronous_standby_group(const char *newval, void *extra)
 	}
 }
 
-static const char *
-SyncRepGetMethodString(SyncGroupNode *group)
-{
-	switch(group->sync_method)
-	{
-		case SYNC_REP_METHOD_PRIORITY:
-			return "priority";
-	}
-
-	return "";
-}
-
 Datum
 pg_stat_get_synchronous_replication_group(PG_FUNCTION_ARGS)
 {
@@ -1109,10 +1073,21 @@ pg_stat_get_synchronous_replication_group(PG_FUNCTION_ARGS)
 		}
 		else
 		{
-			values[1] = CStringGetTextDatum(SyncRepGetMethodString(node));
+			bool	ret;
+
+			/* "main" group can have priority method only for now */
+			values[1] = CStringGetTextDatum("priority");
+
 			values[2] = Int32GetDatum(node->wait_num);
+
+			/* "main" group always has 0 sync_priority */
 			values[3] = Int32GetDatum(0);
-			nulls[4] = true;
+			ret = SyncRepStandbyGroup->SyncRepGetSyncedLsnsFn(SyncRepStandbyGroup,
+														NULL,
+														NULL);
+			if (!ret)
+				nulls[4] = true;
+			values[4] = CStringGetTextDatum("sync");
 			tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 		}
 		
@@ -1150,7 +1125,7 @@ pg_stat_get_synchronous_replication_group(PG_FUNCTION_ARGS)
 			values[3] = Int32GetDatum(walsnd->sync_standby_priority);
 
 			if (walsnd->sync_standby_priority == 0)
-				values[4] = CStringGetTextDatum("async");
+				nulls[4] = true;
 			else
 			{
 				bool	found = false;
