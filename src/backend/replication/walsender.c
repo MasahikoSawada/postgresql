@@ -2735,7 +2735,6 @@ WalSndGetStateString(WalSndState state)
 	return "UNKNOWN";
 }
 
-
 /*
  * Returns activity of walsenders, including pids and xlog locations sent to
  * standby servers.
@@ -2752,8 +2751,6 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 	int	   *sync_standbys;
 	int		num_sync;
 	int			i;
-
-	elog(WARNING, "hoge1");
 
 	/* check to see if caller supports us returning a tuplestore */
 	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
