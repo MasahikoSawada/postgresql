@@ -80,7 +80,7 @@ static void SyncRepCancelWait(void);
 static int	SyncRepWakeQueue(bool all, int mode);
 
 static int	SyncRepGetStandbyPriority(void);
-static int SyncRepFindStandbyByName(char *name, XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
+static int SyncRepFindStandbyByName(char *name);
 static void SyncRepClearStandbyGroupList(SyncGroupNode *node);
 static bool SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
 
@@ -381,12 +381,11 @@ SyncRepInitConfig(void)
 }
 
 /*
- * Find active walsender by name. If write_pos and flush_pos is given then
- * we will find lowest LSNs. Return index of walsnds array if found,
+ * Find active walsender by name. Returns index of walsnds array if found,
  * otherwise return -1.
  */
 static int
-SyncRepFindStandbyByName(char *name, XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
+SyncRepFindStandbyByName(char *name)
 {
 	int	i;
 
@@ -394,7 +393,7 @@ SyncRepFindStandbyByName(char *name, XLogRecPtr *write_pos, XLogRecPtr *flush_po
 	{
 		/* Use volatile pointer to prevent code rearrangement */
 		volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
-		char *walsnd_name;
+		char *walsnd_name = (char *) walsnd->name;
 
 		/* Must be active */
 		if (walsnd->pid == 0)
@@ -412,24 +411,9 @@ SyncRepFindStandbyByName(char *name, XLogRecPtr *write_pos, XLogRecPtr *flush_po
 		if (XLogRecPtrIsInvalid(walsnd->flush))
 			continue;
 
-		walsnd_name = (char *) walsnd->name;
+		/* Match */
 		if (pg_strcasecmp(walsnd_name, name) == 0)
-		{
-			if (write_pos && flush_pos)
-			{
-				SpinLockAcquire(&walsnd->mutex);
-
-				/* Find the lowest LSNs from standbys considered sychronous */
-				if (XLogRecPtrIsInvalid(*write_pos) || *write_pos > walsnd->write)
-					*write_pos = walsnd->write;
-				if (XLogRecPtrIsInvalid(*flush_pos) || *flush_pos > walsnd->flush)
-					*flush_pos = walsnd->flush;
-
-				SpinLockRelease(&walsnd->mutex);
-			}
-
 			return i;
-		}
 	}
 
 	return -1;
@@ -565,22 +549,22 @@ SyncRepReleaseWaiters(void)
 static bool
 SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 {
-	XLogRecPtr	tmp_write_pos = InvalidXLogRecPtr;
-	XLogRecPtr	tmp_flush_pos = InvalidXLogRecPtr;
+	XLogRecPtr	cur_write_pos;
+	XLogRecPtr	cur_flush_pos;
 	bool		ret;
 
 	/* Get synced LSNs at this moment */
 	ret = SyncRepStandbyGroup->SyncRepGetSyncedLsnsFn(SyncRepStandbyGroup,
-													  &tmp_write_pos,
-													  &tmp_flush_pos);
+													  &cur_write_pos,
+													  &cur_flush_pos);
 
 	/* Check whether each LSN has advanced to */
 	if (ret)
 	{
-		if (MyWalSnd->write >= tmp_write_pos)
-			*write_pos = tmp_write_pos;
-		if (MyWalSnd->flush >= tmp_flush_pos)
-			*flush_pos = tmp_flush_pos;
+		if (MyWalSnd->write >= cur_write_pos)
+			*write_pos = cur_write_pos;
+		if (MyWalSnd->flush >= cur_flush_pos)
+			*flush_pos = cur_flush_pos;
 
 		return true;
 	}
@@ -589,7 +573,7 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 }
 
 /*
- * Determine synced LSNs at this moment using priority method.
+ * Decide synced LSNs at this moment using priority method.
  * If there are not active standbys enough to determine LSNs, return false.
  */
 bool
@@ -597,6 +581,9 @@ SyncRepGetSyncedLsnsPriority(SyncGroupNode *group, XLogRecPtr *write_pos, XLogRe
 {
 	SyncGroupNode	*n;
 	int	num = 0;
+
+	*write_pos = InvalidXLogRecPtr;
+	*flush_pos = InvalidXLogRecPtr;
 
 	for(n = group->member; n != NULL; n = n->next)
 	{
@@ -606,7 +593,24 @@ SyncRepGetSyncedLsnsPriority(SyncGroupNode *group, XLogRecPtr *write_pos, XLogRe
 		if (num == group->wait_num)
 			return true;
 
-		pos = SyncRepFindStandbyByName(n->name, write_pos, flush_pos);
+		pos = SyncRepFindStandbyByName(n->name);
+
+		if (pos != -1)
+		{
+			volatile WalSnd *walsnd = &WalSndCtl->walsnds[pos];
+			XLogRecPtr	write;
+			XLogRecPtr	flush;
+
+			SpinLockAcquire(&walsnd->mutex);
+			write = walsnd->write;
+			flush = walsnd->flush;
+			SpinLockRelease(&walsnd->mutex);
+
+			if (XLogRecPtrIsInvalid(*write_pos) || *write_pos > write)
+				*write_pos = write;
+			if (XLogRecPtrIsInvalid(*flush_pos) || *flush_pos > flush)
+				*flush_pos = flush;
+		}
 
 		/* Could not find the standby, then find next */
 		if (pos == -1)
@@ -636,7 +640,7 @@ SyncRepGetSyncStandbysPriority(SyncGroupNode *group, int *sync_list)
 		if (num == group->wait_num)
 			return num;
 
-		pos = SyncRepFindStandbyByName(n->name, NULL, NULL);
+		pos = SyncRepFindStandbyByName(n->name);
 
 		if (pos == -1)
 			continue;
@@ -1073,7 +1077,7 @@ pg_stat_get_synchronous_replication_group(PG_FUNCTION_ARGS)
 			values[2] = Int32GetDatum(n->wait_num);
 
 			/* Get wal sender position of WalSndCtl */
-			pos = SyncRepFindStandbyByName(n->name, NULL, NULL);
+			pos = SyncRepFindStandbyByName(n->name);
 			walsnd = &WalSndCtl->walsnds[pos];
 			values[3] = Int32GetDatum(walsnd->sync_standby_priority);
 
