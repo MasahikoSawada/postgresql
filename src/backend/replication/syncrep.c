@@ -5,7 +5,7 @@
  * Synchronous replication is new as of PostgreSQL 9.1.
  *
  * If requested, transaction commits wait until their commit LSN is
- * acknowledged by the synchronous standby.
+ * acknowledged by the synchronous standbys.
  *
  * This module contains the code for waiting and release of backends.
  * All code in this module executes on the primary. The core streaming
@@ -34,6 +34,13 @@
  * synchronous standby it must have caught up with the primary; that may
  * take some time. Once caught up, the current highest priority standby
  * will release waiters from the queue.
+ * In 9.5 we support the possibility to have multiple synchronous standbys,
+ * as defined in synchronous_standby_group. Before on standby can become a
+ * synchronous standby it must have caught up with the primary;
+ * that may take some time.
+ *
+ * Waiters will be released from the queue once the number of standbys
+ * specified in synchronous_standby_group have caught.
  *
  * Portions Copyright (c) 2010-2016, PostgreSQL Global Development Group
  *
@@ -80,7 +87,7 @@ static void SyncRepCancelWait(void);
 static int	SyncRepWakeQueue(bool all, int mode);
 
 static int	SyncRepGetStandbyPriority(void);
-static int SyncRepFindStandbyByName(char *name);
+static int SyncRepFindWalSenderByName(char *name);
 static void SyncRepClearStandbyGroupList(SyncGroupNode *node);
 static bool SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
 
@@ -208,7 +215,7 @@ SyncRepWaitForLSN(XLogRecPtr XactCommitLSN)
 			ereport(WARNING,
 					(errcode(ERRCODE_ADMIN_SHUTDOWN),
 					 errmsg("canceling the wait for synchronous replication and terminating connection due to administrator command"),
-					 errdetail("The transaction has already committed locally, but might not have been replicated to the standby.")));
+					 errdetail("The transaction has already committed locally, but might not have been replicated to the standby(s).")));
 			whereToSendOutput = DestNone;
 			SyncRepCancelWait();
 			break;
@@ -225,7 +232,7 @@ SyncRepWaitForLSN(XLogRecPtr XactCommitLSN)
 			QueryCancelPending = false;
 			ereport(WARNING,
 					(errmsg("canceling wait for synchronous replication due to user request"),
-					 errdetail("The transaction has already committed locally, but might not have been replicated to the standby.")));
+					 errdetail("The transaction has already committed locally, but might not have been replicated to the standby(s).")));
 			SyncRepCancelWait();
 			break;
 		}
@@ -381,11 +388,11 @@ SyncRepInitConfig(void)
 }
 
 /*
- * Find active walsender by name. Returns index of walsnds array if found,
- * otherwise return -1.
+ * Find active walsender position of WalSnd by name. Returns index of walsnds
+ * array if found, otherwise return -1.
  */
 static int
-SyncRepFindStandbyByName(char *name)
+SyncRepFindWalSenderByName(char *name)
 {
 	int	i;
 
@@ -411,11 +418,12 @@ SyncRepFindStandbyByName(char *name)
 		if (XLogRecPtrIsInvalid(walsnd->flush))
 			continue;
 
-		/* Match */
+		/* Compare wal sender name */
 		if (pg_strcasecmp(walsnd_name, name) == 0)
-			return i;
+			return i; /* Found */
 	}
 
+	/* Not found */
 	return -1;
 }
 
@@ -593,7 +601,7 @@ SyncRepGetSyncedLsnsPriority(SyncGroupNode *group, XLogRecPtr *write_pos, XLogRe
 		if (num == group->wait_num)
 			return true;
 
-		pos = SyncRepFindStandbyByName(n->name);
+		pos = SyncRepFindWalSenderByName(n->name);
 
 		if (pos != -1)
 		{
@@ -623,8 +631,9 @@ SyncRepGetSyncedLsnsPriority(SyncGroupNode *group, XLogRecPtr *write_pos, XLogRe
 }
 
 /*
- * Return buffer with walsnds indexes of the lowest priority
- * active synchronous standbys up to wait_num of its group, and its size.
+ * Obtain a array containing positions of standbys of specified group
+ * currently considered as synchronous up to wait_num of its group.
+ * Caller is respnsible for allocating the data obtained.
  */
 int
 SyncRepGetSyncStandbysPriority(SyncGroupNode *group, int *sync_list)
@@ -640,7 +649,7 @@ SyncRepGetSyncStandbysPriority(SyncGroupNode *group, int *sync_list)
 		if (num == group->wait_num)
 			return num;
 
-		pos = SyncRepFindStandbyByName(n->name);
+		pos = SyncRepFindWalSenderByName(n->name);
 
 		if (pos == -1)
 			continue;
@@ -1077,7 +1086,7 @@ pg_stat_get_synchronous_replication_group(PG_FUNCTION_ARGS)
 			values[2] = Int32GetDatum(n->wait_num);
 
 			/* Get wal sender position of WalSndCtl */
-			pos = SyncRepFindStandbyByName(n->name);
+			pos = SyncRepFindWalSenderByName(n->name);
 			walsnd = &WalSndCtl->walsnds[pos];
 			values[3] = Int32GetDatum(walsnd->sync_standby_priority);
 
