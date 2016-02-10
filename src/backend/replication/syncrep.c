@@ -70,9 +70,6 @@
 SyncGroupNode	   *SyncRepStandbyNames;
 char	   *SyncRepStandbyNamesString;
 
-#define SyncStandbysDefined() \
-	(SyncRepStandbyNamesString != NULL && SyncRepStandbyNamesString[0] != '\0')
-
 static bool announce_next_takeover = true;
 
 static int	SyncRepWaitMode = SYNC_REP_NO_WAIT;
@@ -337,14 +334,14 @@ SyncRepCleanupAtProcExit(void)
 static void
 SyncRepClearStandbyGroupList(SyncGroupNode *group)
 {
-	SyncGroupNode *n = group->member;
+	SyncGroupNode *node = group->members;
 
-	while (n != NULL)
+	while (node != NULL)
 	{
-		SyncGroupNode *tmp = n->next;
+		SyncGroupNode *tmp = node->next;
 
-		free(n);
-		n = tmp;
+		free(node);
+		node = tmp;
 	}
 }
 
@@ -514,27 +511,24 @@ SyncRepReleaseWaiters(void)
 static bool
 SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 {
-	XLogRecPtr	cur_write_pos;
-	XLogRecPtr	cur_flush_pos;
+	XLogRecPtr	group_write_pos;
+	XLogRecPtr	group_flush_pos;
 	bool		ret;
 
 	/* Get synced LSNs at this moment */
 	ret = SyncRepStandbyNames->SyncRepGetSyncedLsnsFn(SyncRepStandbyNames,
-													  &cur_write_pos,
-													  &cur_flush_pos);
+													  &group_write_pos,
+													  &group_flush_pos);
+	if (!ret)
+		return false;
 
 	/* Check whether each LSN has advanced to */
-	if (ret)
-	{
-		if (MyWalSnd->write >= cur_write_pos)
-			*write_pos = cur_write_pos;
-		if (MyWalSnd->flush >= cur_flush_pos)
-			*flush_pos = cur_flush_pos;
+	if (MyWalSnd->write >= group_write_pos)
+		*write_pos = group_write_pos;
+	if (MyWalSnd->flush >= group_flush_pos)
+		*flush_pos = group_flush_pos;
 
-		return true;
-	}
-
-	return false;
+	return true;
 }
 
 /*
@@ -544,13 +538,13 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 bool
 SyncRepGetSyncedLsnsPriority(SyncGroupNode *group, XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 {
-	SyncGroupNode	*n;
+	SyncGroupNode	*node;
 	int	num = 0;
 
 	*write_pos = InvalidXLogRecPtr;
 	*flush_pos = InvalidXLogRecPtr;
 
-	for(n = group->member; n != NULL; n = n->next)
+	for(node = group->members; node != NULL; node = node->next)
 	{
 		int pos;
 
@@ -558,7 +552,7 @@ SyncRepGetSyncedLsnsPriority(SyncGroupNode *group, XLogRecPtr *write_pos, XLogRe
 		if (num == group->wait_num)
 			return true;
 
-		pos = SyncRepFindWalSenderByName(n->name);
+		pos = SyncRepFindWalSenderByName(node->name);
 
 		if (pos != -1)
 		{
@@ -595,54 +589,75 @@ SyncRepGetSyncedLsnsPriority(SyncGroupNode *group, XLogRecPtr *write_pos, XLogRe
 int
 SyncRepGetSyncStandbysPriority(SyncGroupNode *group, int *sync_list)
 {
-	SyncGroupNode	*n;
-	int pos;
+	SyncGroupNode	*node;
 	int	num = 0;
 
-	/*
-	 * "*" represents all connecting standbys up to group->wait_num
-	 * are considered as synchronous.
-	 */
-	if (pg_strcasecmp(group->member->name, "*") == 0)
+	for (node = group->members; node != NULL; node = node->next)
 	{
-		int i;
+		int	pos = -1;
 
-		for (i = 0; i < max_wal_senders; i++)
+		if (num == group->wait_num)
+			return num;
+
+		if (pg_strcasecmp(node->name, "*") != 0)
 		{
-			volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
-			char *walsnd_name = (char *) walsnd->name;
+			pos = SyncRepFindWalSenderByName(node->name);
 
-			if (!SyncRepStandbyIsSync(i))
-				continue;
-
-			/* We already got enough synchronous standbys, return */
-			if (num == group->wait_num)
-				return num;
-
-			pos = SyncRepFindWalSenderByName(walsnd_name);
-
-			if (pos == -1)
+			/* Could not find wal sender by this name */
+			if ( pos == -1)
 				continue;
 
 			sync_list[num] = pos;
 			num++;
 		}
-	}
-	else
-	{
-		for (n = group->member; n != NULL; n = n->next)
+		else /* normal name */
 		{
-			/* We already got enough synchronous standbys, return */
-			if (num == group->wait_num)
-				return num;
 
-			pos = SyncRepFindWalSenderByName(n->name);
+			int i;
 
-			if (pos == -1)
-				continue;
+			/*
+			 * '*' means that all remaining standbys up to group->wait_num
+			 * are considered as synchronous. We allows user to use only '*'
+			 * in synchronous_standby_names, or use '*' at last node of
+			 * synchronous_standby_names.
+			 */
+			for (i = 0; i < max_wal_senders; i++)
+			{
+				volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
+				char *walsnd_name = (char *) walsnd->name;
+				bool	already_listed = false;
+				int j;
 
-			sync_list[num] = pos;
-			num++;
+				/* We got enough synchronous standbys, return */
+				if (num == group->wait_num)
+					return num;
+
+				if (!SyncRepStandbyIsSync(i))
+					continue;
+
+				pos = SyncRepFindWalSenderByName(walsnd_name);
+
+				/* Could not find wal sender by this name */
+				if (pos == -1)
+					continue;
+
+				for (j = 0; j < num; j++)
+				{
+					if (sync_list[j] == pos)
+					{
+						already_listed = true;
+						break;
+					}
+				}
+
+				/* We already listed this standby, ignore */
+				if (already_listed)
+					continue;
+
+				/* Add this position to list */
+				sync_list[num] = pos;
+				num++;
+			}
 		}
 	}
 
@@ -672,14 +687,14 @@ SyncRepGetStandbyPriority(void)
 
 	if (SyncStandbysDefined())
 	{
-		SyncGroupNode	*n;
+		SyncGroupNode	*node;
 
-		for (n = SyncRepStandbyNames->member; n != NULL; n = n->next)
+		for (node = SyncRepStandbyNames->members; node != NULL; node = node->next)
 		{
 			priority++;
 
-			if (pg_strcasecmp(n->name, application_name) == 0 ||
-				pg_strcasecmp(n->name, "*") == 0)
+			if (pg_strcasecmp(node->name, application_name) == 0 ||
+				pg_strcasecmp(node->name, "*") == 0)
 			{
 				found = true;
 				break;
@@ -895,7 +910,23 @@ assign_synchronous_standby_names(const char *newval, void *extra)
 		parse_rc = syncgroup_yyparse();
 
 		if (parse_rc != 0)
-			GUC_check_errdetail("Invalid syntax");
+			ereport(ERROR, 
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 (errmsg_internal("Invalid syntax. synchronous_standby_names parse returned %d",
+									  parse_rc))));
+
+		//GUC_check_errdetail("Invalid syntax");
+
+		SyncGroupNode *n;
+
+		elog(WARNING, "== Node Structure ==");
+		elog(WARNING, "[%s] wait_num = %d", SyncRepStandbyNames->name,
+			 SyncRepStandbyNames->wait_num);
+       
+		for (n = SyncRepStandbyNames->members; n != NULL; n = n->next)
+		{
+			elog(WARNING, "    [%s] ", n->name);
+		}
 
 		syncgroup_scanner_finish();
 	}

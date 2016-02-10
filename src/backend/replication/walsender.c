@@ -2780,10 +2780,13 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 	/*
 	 * Get the currently active synchronous standby.
 	 */
-	sync_standbys = (int *) palloc(sizeof(int) * SyncRepStandbyNames->wait_num);
-	LWLockAcquire(SyncRepLock, LW_SHARED);
-	num_sync = SyncRepGetSyncStandbysPriority(SyncRepStandbyNames, sync_standbys);
-	LWLockRelease(SyncRepLock);
+	if (SyncStandbysDefined())
+	{
+		sync_standbys = (int *) palloc(sizeof(int) * SyncRepStandbyNames->wait_num);
+		LWLockAcquire(SyncRepLock, LW_SHARED);
+		num_sync = SyncRepGetSyncStandbysPriority(SyncRepStandbyNames, sync_standbys);
+		LWLockRelease(SyncRepLock);
+	}
 
 	for (i = 0; i < max_wal_senders; i++)
 	{

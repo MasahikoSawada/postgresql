@@ -39,6 +39,9 @@
 #define SYNC_REP_GROUP_NAME			0x02
 #define SYNC_REP_GROUP_GROUP		0x04
 
+#define SyncStandbysDefined() \
+	(SyncRepStandbyNamesString != NULL && SyncRepStandbyNamesString[0] != '\0')
+
 struct SyncGroupNode;
 typedef struct SyncGroupNode SyncGroupNode;
 
@@ -52,7 +55,7 @@ struct	SyncGroupNode
 	/* For group ndoe */
 	int sync_method; /* priority */
 	int	wait_num;
-	SyncGroupNode	*member; /* member of its group */
+	SyncGroupNode	*members; /* member of its group */
 	bool (*SyncRepGetSyncedLsnsFn) (SyncGroupNode *group, XLogRecPtr *write_pos,
 									XLogRecPtr *flush_pos);
 	int (*SyncRepGetSyncStandbysFn) (SyncGroupNode *group, int *list);

@@ -35,10 +35,10 @@ self		[\[\]]
 \*	{
 		yylval.str = strdup(yytext);
 		return AST;
-	}
-
+}
 [1-9][0-9]*  {
-				yylval.val = atoi(yytext);   return INT;
+				yylval.val = atoi(yytext);
+			       	return INT;
 		}
 
 [,()\n]	{
@@ -49,11 +49,11 @@ self		[\[\]]
 				return yytext[0];
 		}
 
-.				{
-					ereport(ERROR,
-							(errcode(ERRCODE_SYNTAX_ERROR),
-							 errmsg("syntax error: unexpected character \"%s\"", yytext)));
-				}
+.	{
+				ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+						errmsg("syntax error: unexpected character \"%s\"", yytext)));
+	}
 %%
 
 void

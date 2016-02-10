@@ -68,7 +68,7 @@ typedef struct WalSnd
 	/*
 	 * Corresponding standby's application_name.
 	 */
-	const char	   name[MAX_WALSENDER_NAME];
+	const char	   name[NAMEDATALEN];
 } WalSnd;
 
 extern WalSnd *MyWalSnd;

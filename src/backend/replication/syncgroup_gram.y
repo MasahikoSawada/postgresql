@@ -48,7 +48,8 @@ static SyncGroupNode *create_group_node(int wait_num, SyncGroupNode *node_list);
 %token <val> INT
 %token <str> AST
 
-%type <expr> result sync_list sync_element sync_element_ast sync_node_group
+%type <expr> result sync_list sync_list_ast sync_element sync_element_ast
+			 sync_node_group
 
 %start result
 
@@ -63,11 +64,15 @@ sync_list:
 	|	sync_list ',' sync_element			{ $$ = add_node($1, $3);}
 ;
 
+sync_list_ast:
+		sync_element_ast					{ $$ = $1;}
+		| sync_list ',' sync_element_ast	{ $$ = add_node($1, $3);}
+
 sync_node_group:
 		sync_list							{ $$ = create_group_node(1, $1); }
-	|	sync_element_ast					{ $$ = create_group_node(1, $1);}
-	|	INT '[' sync_list ']' 				{ $$ = create_group_node($1, $3);}
-	| 	INT '[' sync_element_ast ']'		{ $$ = create_group_node($1, $3); }
+		| sync_list_ast						{ $$ = create_group_node(1, $1);}
+		| INT '[' sync_list ']' 			{ $$ = create_group_node($1, $3);}
+		| INT '[' sync_list_ast ']'			{ $$ = create_group_node($1, $3);}
 ;
 
 sync_element:
@@ -75,8 +80,6 @@ sync_element:
 
 sync_element_ast:
 	AST										{ $$ = create_name_node($1);}
-;
-
 
 %%
 
@@ -93,7 +96,7 @@ create_name_node(char *name)
 	/* For GROUP node */
 	name_node->sync_method = 0;
 	name_node->wait_num = 0;
-	name_node->member = NULL;
+	name_node->members = NULL;
 	name_node->SyncRepGetSyncedLsnsFn = NULL;
 	name_node->SyncRepGetSyncStandbysFn = NULL;
 
@@ -113,7 +116,7 @@ create_group_node(int wait_num, SyncGroupNode *node_list)
 	/* For GROUP node */
 	group_node->sync_method = SYNC_REP_METHOD_PRIORITY;
 	group_node->wait_num = wait_num;
-	group_node->member = node_list;
+	group_node->members = node_list;
 	group_node->SyncRepGetSyncedLsnsFn = SyncRepGetSyncedLsnsPriority;
 	group_node->SyncRepGetSyncStandbysFn = SyncRepGetSyncStandbysPriority;
 
