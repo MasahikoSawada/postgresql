@@ -46,29 +46,35 @@ static SyncGroupNode *create_group_node(int wait_num, SyncGroupNode *node_list);
 
 %token <str> NAME
 %token <val> INT
+%token <str> AST
 
-%type <expr> result sync_list sync_element sync_node_group
+%type <expr> result sync_list sync_element sync_element_ast sync_node_group
 
 %start result
 
 %%
 
 result:
-	sync_node_group						{ SyncRepStandbyNames = $1; }
+		sync_node_group						{ SyncRepStandbyNames = $1; }
 ;
 
 sync_list:
-	sync_element 						{ $$ = $1;}
-	| sync_list ',' sync_element		{ $$ = add_node($1, $3);}
+		sync_element 						{ $$ = $1;}
+	|	sync_list ',' sync_element			{ $$ = add_node($1, $3);}
 ;
 
 sync_node_group:
-	sync_list							{ $$ = create_group_node(1, $1); }
-|	INT '[' sync_list ']' 				{ $$ = create_group_node($1, $3);}
+		sync_list							{ $$ = create_group_node(1, $1); }
+	|	sync_element_ast					{ $$ = create_group_node(1, $1);}
+	|	INT '[' sync_list ']' 				{ $$ = create_group_node($1, $3);}
+	| 	INT '[' sync_element_ast ']'		{ $$ = create_group_node($1, $3); }
 ;
 
 sync_element:
-	NAME	 							{ $$ = create_name_node($1);}
+	NAME	 								{ $$ = create_name_node($1);}
+
+sync_element_ast:
+	AST										{ $$ = create_name_node($1);}
 ;
 
 

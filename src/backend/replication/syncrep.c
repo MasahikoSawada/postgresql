@@ -85,6 +85,7 @@ static int	SyncRepGetStandbyPriority(void);
 static int SyncRepFindWalSenderByName(char *name);
 static void SyncRepClearStandbyGroupList(SyncGroupNode *node);
 static bool SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
+static bool SyncRepStandbyIsSync(int pos);
 
 #ifdef USE_ASSERT_CHECKING
 static bool SyncRepQueueIsOrderedByLSN(int mode);
@@ -383,6 +384,34 @@ SyncRepInitConfig(void)
 }
 
 /*
+ * Check whether specified standby is active, which means not only having
+ * pid but also having any priority.
+ */
+static bool
+SyncRepStandbyIsSync(int pos)
+{
+	volatile WalSnd *walsnd = &WalSndCtl->walsnds[pos];
+
+	/* Must be active */
+	if (walsnd->pid == 0)
+		return false;
+
+	/* Must be streaming */
+	if (walsnd->state != WALSNDSTATE_STREAMING)
+		return false;
+
+	/* Must be synchronous */
+	if (walsnd->sync_standby_priority == 0)
+		return false;
+
+	/* Must have a valid flush position */
+	if (XLogRecPtrIsInvalid(walsnd->flush))
+		return false;
+
+	return true;
+}
+
+/*
  * Find active walsender position of WalSnd by name. Returns index of walsnds
  * array if found, otherwise return -1.
  */
@@ -397,24 +426,11 @@ SyncRepFindWalSenderByName(char *name)
 		volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
 		char *walsnd_name = (char *) walsnd->name;
 
-		/* Must be active */
-		if (walsnd->pid == 0)
-			continue;
-
-		/* Must be streaming */
-		if (walsnd->state != WALSNDSTATE_STREAMING)
-			continue;
-
-		/* Must be synchronous */
-		if (walsnd->sync_standby_priority == 0)
-			continue;
-
-		/* Must have a valid flush position */
-		if (XLogRecPtrIsInvalid(walsnd->flush))
+		if (!SyncRepStandbyIsSync(i))
 			continue;
 
 		/* Compare wal sender name */
-		if (pg_strcasecmp(walsnd_name, name) == 0)
+		if (pg_strcasecmp(name, walsnd_name) == 0)
 			return i; /* Found */
 	}
 
@@ -580,23 +596,54 @@ int
 SyncRepGetSyncStandbysPriority(SyncGroupNode *group, int *sync_list)
 {
 	SyncGroupNode	*n;
+	int pos;
 	int	num = 0;
 
-	for (n = group->member; n != NULL; n = n->next)
+	/*
+	 * "*" represents all connecting standbys up to group->wait_num
+	 * are considered as synchronous.
+	 */
+	if (pg_strcasecmp(group->member->name, "*") == 0)
 	{
-		int pos = 0;
+		int i;
 
-		/* We already got enough synchronous standbys, return */
-		if (num == group->wait_num)
-			return num;
+		for (i = 0; i < max_wal_senders; i++)
+		{
+			volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
+			char *walsnd_name = (char *) walsnd->name;
 
-		pos = SyncRepFindWalSenderByName(n->name);
+			if (!SyncRepStandbyIsSync(i))
+				continue;
 
-		if (pos == -1)
-			continue;
+			/* We already got enough synchronous standbys, return */
+			if (num == group->wait_num)
+				return num;
 
-		sync_list[num] = pos;
-		num++;
+			pos = SyncRepFindWalSenderByName(walsnd_name);
+
+			if (pos == -1)
+				continue;
+
+			sync_list[num] = pos;
+			num++;
+		}
+	}
+	else
+	{
+		for (n = group->member; n != NULL; n = n->next)
+		{
+			/* We already got enough synchronous standbys, return */
+			if (num == group->wait_num)
+				return num;
+
+			pos = SyncRepFindWalSenderByName(n->name);
+
+			if (pos == -1)
+				continue;
+
+			sync_list[num] = pos;
+			num++;
+		}
 	}
 
 	return num;

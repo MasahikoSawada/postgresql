@@ -32,6 +32,10 @@ self		[\[\]]
 				yylval.str = strdup(yytext);
 				return NAME;
 				}
+\*	{
+		yylval.str = strdup(yytext);
+		return AST;
+	}
 
 [1-9][0-9]*  {
 				yylval.val = atoi(yytext);   return INT;
