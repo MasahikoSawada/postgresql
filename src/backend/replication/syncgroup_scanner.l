@@ -27,24 +27,44 @@ separater	,
 non_newline	[^\n\r]
 whitespace	({space}+)
 self		[\[\]]
-
+node_name	[a-zA-Z\200-\377_0-9]
 ascii		[\x20-\x70]
 
 /* Double quote */
 dquote		\"
 xdstart		{dquote}
-xdstop		{dquote}
 xddouble	{dquote}{dquote}
+xdstop		{dquote}
 xdinside	[^\"]+
 
 %%
-
-{whitespace}	{ /* ignore */ }
-
+{xdstart} {
+				elog(NOTICE, "xdstart, return yytext = %s", yytext);
+				BEGIN(xd);
+				yymore();
+		}
+<xd>{xddouble} {
+		elog(NOTICE, "xddouble, yytext = %s", yytext);
+		yymore();
+		}
+<xd>{xdinside} {
+		elog(NOTICE, "    xdinside, yytext = %s", yytext);
+		yymore();
+		}
+<xd>{xdstop} {
+				elog(NOTICE, "xdstop, yytext = %s", yytext);
+				BEGIN(INITIAL);
+				yylval.str = strdup(yytext);
+				return IDENT;
+		}
 [1-9][0-9]*  {
 				yylval.val = atoi(yytext);
 			       	return INT;
 		}
+{node_name}+   {
+				yylval.str = strdup(yytext);
+				return NAME;
+                               }
 \*	{
 		yylval.str = strdup(yytext);
 		return AST;
@@ -56,25 +76,7 @@ xdinside	[^\"]+
 {self}	{
 				return yytext[0];
 		}
-{xdstart} {
-		elog(NOTICE, "xdstart, return yytext[0] = %c", yytext[0]);
-				BEGIN(xd);
-		yymore();
-		}
-<xd>{xddouble} {
-		elog(NOTICE, "xddouble, yytext = %s", yytext);
-		yymore();
-		}
-<xd>{xdstop} {
-		elog(NOTICE, "xdstop, yytext = %s", yytext);
-				BEGIN(INITIAL);
-				yylval.str = strdup(yytext);
-				return IDENT;
-		}
-<xd>{xdinside} {
-		elog(NOTICE, "    xdinside, yytext = %s", yytext);
-		yymore();
-		}
+{whitespace}	{ /* ignore */ }
 .	{
 				ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
