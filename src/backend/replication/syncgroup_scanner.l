@@ -16,39 +16,65 @@ static YY_BUFFER_STATE scanbufhandle;
 %option noyywrap
 %option warn
 %option prefix="syncgroup_yy"
-%option yylineno
+
+/*
+ * <xd> delimited identifiers (double-quoted identifiers)
+ */
+%x xd
 
 space		[ \t\n\r\f]
+separater	,
 non_newline	[^\n\r]
 whitespace	({space}+)
-
 self		[\[\]]
+
+ascii		[\x20-\x70]
+
+/* Double quote */
+dquote		\"
+xdstart		{dquote}
+xdstop		{dquote}
+xddouble	{dquote}{dquote}
+xdinside	[^\"]+
 
 %%
 
 {whitespace}	{ /* ignore */ }
 
-[a-zA-Z][a-zA-Z0-9]*	{
-				yylval.str = strdup(yytext);
-				return NAME;
-				}
-\*	{
-		yylval.str = strdup(yytext);
-		return AST;
-}
 [1-9][0-9]*  {
 				yylval.val = atoi(yytext);
 			       	return INT;
 		}
-
-[,()\n]	{
+\*	{
+		yylval.str = strdup(yytext);
+		return AST;
+}
+{separater}	{
 				return yytext[0];
 		}
 
 {self}	{
 				return yytext[0];
 		}
-
+{xdstart} {
+		elog(NOTICE, "xdstart, return yytext[0] = %c", yytext[0]);
+				BEGIN(xd);
+		yymore();
+		}
+<xd>{xddouble} {
+		elog(NOTICE, "xddouble, yytext = %s", yytext);
+		yymore();
+		}
+<xd>{xdstop} {
+		elog(NOTICE, "xdstop, yytext = %s", yytext);
+				BEGIN(INITIAL);
+				yylval.str = strdup(yytext);
+				return IDENT;
+		}
+<xd>{xdinside} {
+		elog(NOTICE, "    xdinside, yytext = %s", yytext);
+		yymore();
+		}
 .	{
 				ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -59,9 +85,9 @@ self		[\[\]]
 void
 yyerror(const char *message)
 {
-    ereport(ERROR,
-	    (errcode(ERRCODE_SYNTAX_ERROR),
-		    errmsg_internal("%s", message)));
+	ereport(ERROR,
+		(errcode(ERRCODE_SYNTAX_ERROR),
+			errmsg_internal("%s", message)));
 }
 
 void

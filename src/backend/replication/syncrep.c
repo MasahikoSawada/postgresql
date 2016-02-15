@@ -67,7 +67,7 @@
 #include "utils/ps_status.h"
 
 /* User-settable parameters for sync rep */
-SyncGroupNode	   *SyncRepStandbyNames;
+SyncGroupNode	   *SyncRepStandbys;
 char	   *SyncRepStandbyNamesString;
 
 static bool announce_next_takeover = true;
@@ -329,7 +329,7 @@ SyncRepCleanupAtProcExit(void)
 }
 
 /*
- * Clear all node in SyncRepStandbyNames recursively.
+ * Clear all node in SyncRepStandbys recursively.
  */
 static void
 SyncRepClearStandbyGroupList(SyncGroupNode *group)
@@ -409,8 +409,8 @@ SyncRepStandbyIsSync(int pos)
 }
 
 /*
- * Find active walsender position of WalSnd by name. Returns index of walsnds
- * array if found, otherwise return -1.
+ * Finds the first active synchronous walsender with given name in
+ * WalSndCtl->walsnds and returns the index of that. Returns -1 if not found.
  */
 static int
 SyncRepFindWalSenderByName(char *name)
@@ -505,28 +505,29 @@ SyncRepReleaseWaiters(void)
 }
 
 /*
- * Get both synced LSNS: write and flush, using its group function and check
- * whether each LSN has advanced to, or not.
+ * Return true if we have enough synchrononized standbys and the 'safe' written
+ * flushed LSNs, which are LSNs assured in all standbys considered should be
+ * synchronized.
  */
 static bool
 SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 {
-	XLogRecPtr	group_write_pos;
-	XLogRecPtr	group_flush_pos;
-	bool		ret;
+	XLogRecPtr	safe_write_pos;
+	XLogRecPtr	safe_flush_pos;
+	bool		got_lsns;
 
 	/* Get synced LSNs at this moment */
-	ret = SyncRepStandbyNames->SyncRepGetSyncedLsnsFn(SyncRepStandbyNames,
-													  &group_write_pos,
-													  &group_flush_pos);
-	if (!ret)
+	got_lsns = SyncRepStandbys->SyncRepGetSyncedLsnsFn(SyncRepStandbys,
+													  &safe_write_pos,
+													  &safe_flush_pos);
+	if (!got_lsns)
 		return false;
 
 	/* Check whether each LSN has advanced to */
-	if (MyWalSnd->write >= group_write_pos)
-		*write_pos = group_write_pos;
-	if (MyWalSnd->flush >= group_flush_pos)
-		*flush_pos = group_flush_pos;
+	if (MyWalSnd->write >= safe_write_pos)
+		*write_pos = safe_write_pos;
+	if (MyWalSnd->flush >= safe_flush_pos)
+		*flush_pos = safe_flush_pos;
 
 	return true;
 }
@@ -536,58 +537,53 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
  * If there are not active standbys enough to determine LSNs, return false.
  */
 bool
-SyncRepGetSyncedLsnsPriority(SyncGroupNode *group, XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
+SyncRepGetSyncedLsnsUsingPriority(SyncGroupNode *group, XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 {
-	SyncGroupNode	*node;
-	int	num = 0;
+	int	*sync_list = (int *)palloc(sizeof(int) * group->wait_num);
+	int	sync_num;
+	int i;
+
+	/* Get standbys list that are considered as synchronous at this moment */
+	sync_num = group->SyncRepGetSyncStandbysFn(group, sync_list);
+
+	/* If we could not get standbys enough, return false */
+	if (sync_num != group->wait_num)
+		return false;
 
 	*write_pos = InvalidXLogRecPtr;
 	*flush_pos = InvalidXLogRecPtr;
 
-	for(node = group->members; node != NULL; node = node->next)
+	/*
+	 * In priority method, we seek the lowest each LSNs(write, flush) from
+	 * standbys which are considered as synchronous.
+	 */
+	for (i = 0; i < sync_num; i++)
 	{
-		int pos;
+		volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
+		XLogRecPtr	write;
+		XLogRecPtr	flush;
 
-		/* We found synchronous standbys enough to decide LSNs, return */
-		if (num == group->wait_num)
-			return true;
+		SpinLockAcquire(&walsnd->mutex);
+		write = walsnd->write;
+		flush = walsnd->flush;
+		SpinLockRelease(&walsnd->mutex);
 
-		pos = SyncRepFindWalSenderByName(node->name);
-
-		if (pos != -1)
-		{
-			volatile WalSnd *walsnd = &WalSndCtl->walsnds[pos];
-			XLogRecPtr	write;
-			XLogRecPtr	flush;
-
-			SpinLockAcquire(&walsnd->mutex);
-			write = walsnd->write;
-			flush = walsnd->flush;
-			SpinLockRelease(&walsnd->mutex);
-
-			if (XLogRecPtrIsInvalid(*write_pos) || *write_pos > write)
-				*write_pos = write;
-			if (XLogRecPtrIsInvalid(*flush_pos) || *flush_pos > flush)
-				*flush_pos = flush;
-		}
-
-		/* Could not find the standby, then find next */
-		if (pos == -1)
-			continue;
-
-		num++;
+		if (XLogRecPtrIsInvalid(*write_pos) || *write_pos > write)
+			*write_pos = write;
+		if (XLogRecPtrIsInvalid(*flush_pos) || *flush_pos > flush)
+			*flush_pos = flush;
 	}
 
-	return (num == group->wait_num);
+	return true;
 }
 
 /*
- * Obtain a array containing positions of standbys of specified group
- * currently considered as synchronous up to wait_num of its group.
- * Caller is respnsible for allocating the data obtained.
+ * Return the positions of the first group->wait_num synchronized standbys
+ * in group->member list into sync_list. sync_list is assumed to have enough
+ * space for at least group->wait_num elements.
  */
 int
-SyncRepGetSyncStandbysPriority(SyncGroupNode *group, int *sync_list)
+SyncRepGetSyncStandbysUsingPriority(SyncGroupNode *group, int *sync_list)
 {
 	SyncGroupNode	*node;
 	int	num = 0;
@@ -596,7 +592,8 @@ SyncRepGetSyncStandbysPriority(SyncGroupNode *group, int *sync_list)
 	{
 		int	pos = -1;
 
-		if (num == group->wait_num)
+		/* We got enough synchronous standbys, return */
+		if (num >= group->wait_num)
 			return num;
 
 		if (pg_strcasecmp(node->name, "*") != 0)
@@ -604,23 +601,22 @@ SyncRepGetSyncStandbysPriority(SyncGroupNode *group, int *sync_list)
 			pos = SyncRepFindWalSenderByName(node->name);
 
 			/* Could not find wal sender by this name */
-			if ( pos == -1)
+			if (pos == -1)
 				continue;
 
 			sync_list[num] = pos;
 			num++;
 		}
-		else /* normal name */
+		else
 		{
-
-			int i;
-
 			/*
 			 * '*' means that all remaining standbys up to group->wait_num
 			 * are considered as synchronous. We allows user to use only '*'
 			 * in synchronous_standby_names, or use '*' at last node of
 			 * synchronous_standby_names.
 			 */
+			int i;
+
 			for (i = 0; i < max_wal_senders; i++)
 			{
 				volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
@@ -629,7 +625,7 @@ SyncRepGetSyncStandbysPriority(SyncGroupNode *group, int *sync_list)
 				int j;
 
 				/* We got enough synchronous standbys, return */
-				if (num == group->wait_num)
+				if (num >= group->wait_num)
 					return num;
 
 				if (!SyncRepStandbyIsSync(i))
@@ -669,7 +665,7 @@ SyncRepGetSyncStandbysPriority(SyncGroupNode *group, int *sync_list)
  * priority sequence. Return priority if set, or zero to indicate that
  * we are not a potential sync standby.
  *
- * Compare the parameter SyncRepStandbyNames against the application_name
+ * Compare the parameter SyncRepStandbys against the application_name
  * for this WALSender, or allow any name if we find a wildcard "*".
  */
 static int
@@ -689,7 +685,7 @@ SyncRepGetStandbyPriority(void)
 	{
 		SyncGroupNode	*node;
 
-		for (node = SyncRepStandbyNames->members; node != NULL; node = node->next)
+		for (node = SyncRepStandbys->members; node != NULL; node = node->next)
 		{
 			priority++;
 
@@ -857,14 +853,34 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 
 	if (*newval != NULL && (*newval)[0] != '\0')
 	{
-		syncgroup_scanner_init(*newval);
-		parse_rc = syncgroup_yyparse();
+		List *elemlist;
+		ListCell *cell;
+		bool hoge;
+
+		elog(WARNING, "<%s>", *newval);
+		hoge = SplitIdentifierString(*newval, ',', &elemlist); 
+		elog(WARNING, "<%s>", *newval);
+
+		if (!hoge)
+			elog(ERROR, "Split ERROR");
+		
+		int num = 0;
+		foreach(cell, elemlist)
+		{
+			num++;
+			elog(WARNING, "[%d] <%s>", num, (char *)lfirst(cell));
+		}
 
 		if (parse_rc != 0)
 		{
 			GUC_check_errdetail("Invalid syntax");
 			return false;
 		}
+
+		syncgroup_scanner_init(*newval);
+		parse_rc = syncgroup_yyparse();
+
+
 		syncgroup_scanner_finish();
 
 		/*
@@ -875,8 +891,13 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 		 * yet correctly set.
 		 */
 
-		SyncRepClearStandbyGroupList(SyncRepStandbyNames);
-		SyncRepStandbyNames = NULL;
+		/*
+		 * syncgroup_yyparse sets the global SyncRepStandbys as side effect.
+		 * But this function is required to just check, so frees SyncRepStandbyNanes
+		 * once parsing parameter.
+		 */
+		SyncRepClearStandbyGroupList(SyncRepStandbys);
+		SyncRepStandbys = NULL;
 	}
 
 	return true;
@@ -915,15 +936,15 @@ assign_synchronous_standby_names(const char *newval, void *extra)
 					 (errmsg_internal("Invalid syntax. synchronous_standby_names parse returned %d",
 									  parse_rc))));
 
-		//GUC_check_errdetail("Invalid syntax");
+		GUC_check_errdetail("Invalid syntax");
 
 		SyncGroupNode *n;
 
 		elog(WARNING, "== Node Structure ==");
-		elog(WARNING, "[%s] wait_num = %d", SyncRepStandbyNames->name,
-			 SyncRepStandbyNames->wait_num);
+		elog(WARNING, "[%s] wait_num = %d", SyncRepStandbys->name,
+			 SyncRepStandbys->wait_num);
        
-		for (n = SyncRepStandbyNames->members; n != NULL; n = n->next)
+		for (n = SyncRepStandbys->members; n != NULL; n = n->next)
 		{
 			elog(WARNING, "    [%s] ", n->name);
 		}

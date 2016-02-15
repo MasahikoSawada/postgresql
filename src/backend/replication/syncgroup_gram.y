@@ -21,16 +21,8 @@ static SyncGroupNode *create_name_node(char *name);
 static SyncGroupNode *add_node(SyncGroupNode *node_list, SyncGroupNode *node);
 static SyncGroupNode *create_group_node(int wait_num, SyncGroupNode *node_list);
 
-/*
- * Bison doesn't allocate anything that needs to live across parser calls,
- * so we can easily have it use palloc instead of malloc.  This prevents
- * memory leaks if we error out during parsing.  Note this only works with
- * bison >= 2.0.  However, in bison 1.875 the default is to use alloca()
- * if possible, so there's not really much problem anyhow, at least if
- * you're building with gcc.
- */
-#define YYMALLOC palloc
-#define YYFREE   pfree
+#define YYMALLOC malloc
+#define YYFREE   free
 
 %}
 
@@ -47,6 +39,7 @@ static SyncGroupNode *create_group_node(int wait_num, SyncGroupNode *node_list);
 %token <str> NAME
 %token <val> INT
 %token <str> AST
+%token <str> IDENT
 
 %type <expr> result sync_list sync_list_ast sync_element sync_element_ast
 			 sync_node_group
@@ -54,9 +47,8 @@ static SyncGroupNode *create_group_node(int wait_num, SyncGroupNode *node_list);
 %start result
 
 %%
-
 result:
-		sync_node_group						{ SyncRepStandbyNames = $1; }
+		sync_node_group						{ SyncRepStandbys = $1; }
 ;
 
 sync_list:
@@ -77,10 +69,10 @@ sync_node_group:
 
 sync_element:
 	NAME	 								{ $$ = create_name_node($1);}
+|	IDENT									{ $$ = create_name_node($1); }
 
 sync_element_ast:
 	AST										{ $$ = create_name_node($1);}
-
 %%
 
 static SyncGroupNode *
@@ -117,8 +109,8 @@ create_group_node(int wait_num, SyncGroupNode *node_list)
 	group_node->sync_method = SYNC_REP_METHOD_PRIORITY;
 	group_node->wait_num = wait_num;
 	group_node->members = node_list;
-	group_node->SyncRepGetSyncedLsnsFn = SyncRepGetSyncedLsnsPriority;
-	group_node->SyncRepGetSyncStandbysFn = SyncRepGetSyncStandbysPriority;
+	group_node->SyncRepGetSyncedLsnsFn = SyncRepGetSyncedLsnsUsingPriority;
+	group_node->SyncRepGetSyncStandbysFn = SyncRepGetSyncStandbysUsingPriority;
 
 	return group_node;
 }

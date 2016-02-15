@@ -62,7 +62,7 @@ struct	SyncGroupNode
 };
 
 /* user-settable parameters for synchronous replication */
-extern SyncGroupNode *SyncRepStandbyNames;
+extern SyncGroupNode *SyncRepStandbys;
 extern char	*SyncRepStandbyNamesString;
 
 /* called by user backend */
@@ -93,8 +93,8 @@ extern void syncgroup_scanner_init(const char *query_string);
 extern void syncgroup_scanner_finish(void);
 
 /* function for synchronous replication group */
-extern bool SyncRepGetSyncedLsnsPriority(SyncGroupNode *group,
-								 XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
-extern int SyncRepGetSyncStandbysPriority(SyncGroupNode *group, int *sync_list);
+extern bool SyncRepGetSyncedLsnsUsingPriority(SyncGroupNode *group,
+											  XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
+extern int SyncRepGetSyncStandbysUsingPriority(SyncGroupNode *group, int *sync_list);
 
 #endif   /* _SYNCREP_H */
