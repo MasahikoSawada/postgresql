@@ -21,8 +21,8 @@ static SyncGroupNode *create_name_node(char *name);
 static SyncGroupNode *add_node(SyncGroupNode *node_list, SyncGroupNode *node);
 static SyncGroupNode *create_group_node(int wait_num, SyncGroupNode *node_list);
 
-#define YYMALLOC malloc
-#define YYFREE   free
+#define YYMALLOC palloc
+#define YYFREE   pfree
 
 %}
 
@@ -39,7 +39,6 @@ static SyncGroupNode *create_group_node(int wait_num, SyncGroupNode *node_list);
 %token <str> NAME
 %token <val> INT
 %token <str> AST
-%token <str> IDENT
 
 %type <expr> result sync_list sync_list_ast sync_element sync_element_ast
 			 sync_node_group
@@ -69,7 +68,6 @@ sync_node_group:
 
 sync_element:
 	NAME	 								{ $$ = create_name_node($1);}
-|	IDENT									{ $$ = create_name_node($1); }
 
 sync_element_ast:
 	AST										{ $$ = create_name_node($1);}
@@ -98,7 +96,7 @@ create_name_node(char *name)
 static SyncGroupNode *
 create_group_node(int wait_num, SyncGroupNode *node_list)
 {
-	SyncGroupNode *group_node = (SyncGroupNode *) malloc(sizeof(SyncGroupNode));
+	SyncGroupNode *group_node = (SyncGroupNode *)malloc(sizeof(SyncGroupNode));
 
 	/* For NAME node */
 	group_node->type = SYNC_REP_GROUP_GROUP | SYNC_REP_GROUP_MAIN;

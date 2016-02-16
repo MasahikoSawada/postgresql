@@ -853,33 +853,14 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 
 	if (*newval != NULL && (*newval)[0] != '\0')
 	{
-		List *elemlist;
-		ListCell *cell;
-		bool hoge;
-
-		elog(WARNING, "<%s>", *newval);
-		hoge = SplitIdentifierString(*newval, ',', &elemlist); 
-		elog(WARNING, "<%s>", *newval);
-
-		if (!hoge)
-			elog(ERROR, "Split ERROR");
-		
-		int num = 0;
-		foreach(cell, elemlist)
-		{
-			num++;
-			elog(WARNING, "[%d] <%s>", num, (char *)lfirst(cell));
-		}
+		syncgroup_scanner_init(*newval);
+		parse_rc = syncgroup_yyparse();
 
 		if (parse_rc != 0)
 		{
 			GUC_check_errdetail("Invalid syntax");
 			return false;
 		}
-
-		syncgroup_scanner_init(*newval);
-		parse_rc = syncgroup_yyparse();
-
 
 		syncgroup_scanner_finish();
 

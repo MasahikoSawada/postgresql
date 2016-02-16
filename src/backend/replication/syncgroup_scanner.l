@@ -4,15 +4,24 @@
 /* No reason to constrain amount of data slurped */
 #define YY_READ_BUF_SIZE 16777216
 
+#define BUFSIZE 8192
+
 /* Handles to the buffer that the lexer uses internally */
 static YY_BUFFER_STATE scanbufhandle;
 
+/* Functions for handling double quoted string */
+static void init_xd_string(void);
+static void addlit_xd_string(char *ytext, int yleng);
+static void addlitchar_xd_string(unsigned char ychar);
+
+char *xd_string;
+int	xd_size; /* actual size of xd_string */
+int	xd_len; /* string length of xd_string  */
 %}
 %option 8bit
 %option never-interactive
-%option nodefault
-%option noinput
 %option nounput
+%option noinput
 %option noyywrap
 %option warn
 %option prefix="syncgroup_yy"
@@ -23,39 +32,43 @@ static YY_BUFFER_STATE scanbufhandle;
 %x xd
 
 space		[ \t\n\r\f]
-separater	,
 non_newline	[^\n\r]
 whitespace	({space}+)
-self		[\[\]]
-node_name	[a-zA-Z\200-\377_0-9]
-ascii		[\x20-\x70]
+self		[\[\]\,]
+asterisk	\*
 
-/* Double quote */
+/*
+ * Basically all ascii characteres except for {self} and {whitespace} are allowed
+ * to be used for node name. These special charater could be used by double-quoted.
+ */
+node_name	[a-zA-Z0-9\!\#\$\%\&\'\(\)\-\=\^\~\|\\\{\}\;\:\+\/\.]
+dquoted_name	[a-zA-Z0-9\!\#\$\%\&\'\(\)\-\=\^\~\|\\\{\}\;\:\+\/\.\,\[\]\ ]
+
+/* Double-quoted string */
 dquote		\"
 xdstart		{dquote}
 xddouble	{dquote}{dquote}
 xdstop		{dquote}
-xdinside	[^\"]+
+xdinside	{dquoted_name}+
 
 %%
+{whitespace}	{ /* ignore */ }
+
 {xdstart} {
-				elog(NOTICE, "xdstart, return yytext = %s", yytext);
+				init_xd_string();
 				BEGIN(xd);
-				yymore();
 		}
 <xd>{xddouble} {
-		elog(NOTICE, "xddouble, yytext = %s", yytext);
-		yymore();
+				addlitchar_xd_string('\"');
 		}
 <xd>{xdinside} {
-		elog(NOTICE, "    xdinside, yytext = %s", yytext);
-		yymore();
+				addlit_xd_string(yytext, yyleng);
 		}
 <xd>{xdstop} {
-				elog(NOTICE, "xdstop, yytext = %s", yytext);
+				xd_string[xd_len] = '\0';
+				yylval.str = xd_string;
 				BEGIN(INITIAL);
-				yylval.str = strdup(yytext);
-				return IDENT;
+				return NAME;
 		}
 [1-9][0-9]*  {
 				yylval.val = atoi(yytext);
@@ -65,18 +78,13 @@ xdinside	[^\"]+
 				yylval.str = strdup(yytext);
 				return NAME;
                                }
-\*	{
+{asterisk}	{
 		yylval.str = strdup(yytext);
 		return AST;
 }
-{separater}	{
-				return yytext[0];
-		}
-
 {self}	{
 				return yytext[0];
 		}
-{whitespace}	{ /* ignore */ }
 .	{
 				ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -118,4 +126,34 @@ syncgroup_scanner_finish(void)
 {
 	yy_delete_buffer(scanbufhandle);
 	scanbufhandle = NULL;
+}
+
+static void
+init_xd_string()
+{
+	xd_string = palloc(sizeof(char) * BUFSIZE);
+	xd_size = BUFSIZE;
+	xd_len = 0;
+}
+
+static void
+addlit_xd_string(char *ytext, int yleng)
+{
+	/* enlarge buffer if needed */
+	if ((xd_len + yleng) > xd_size)
+		xd_string = repalloc(xd_string, xd_size + BUFSIZE);
+
+	memcpy(xd_string + xd_len, ytext, yleng);
+	xd_len += yleng;
+}
+
+static void
+addlitchar_xd_string(unsigned char ychar)
+{
+	/* enlarge buffer if needed */
+	if ((xd_len + 1) > xd_size)
+		xd_string = repalloc(xd_string, xd_size + BUFSIZE);
+
+	xd_string[xd_len] = ychar;
+	xd_len += 1;
 }
