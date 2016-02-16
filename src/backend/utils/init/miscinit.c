@@ -691,31 +691,6 @@ GetUserNameFromId(Oid roleid, bool noerr)
 	return result;
 }
 
-/*
- * Quick hack.
- */
-const char *
-current_time_as_str(void)
-{
-	static char buf[128];
-	struct timeval now_timeval;
-	pg_time_t	now;
-	char		msbuf[8];
-
-	gettimeofday(&now_timeval, NULL);
-	now = (pg_time_t) now_timeval.tv_sec;
-
-	pg_strftime(buf, sizeof(buf),
-	/* leave room for milliseconds... */
-				"%Y-%m-%d %H:%M:%S     %Z",
-				pg_localtime(&now, log_timezone));
-
-	/* 'paste' milliseconds into place... */
-	sprintf(msbuf, ".%03d", (int) (now_timeval.tv_usec / 1000));
-	memcpy(buf + 19, msbuf, 4);
-
-	return buf;
-}
 
 /*-------------------------------------------------------------------------
  *				Interlock-file support
@@ -750,8 +725,16 @@ UnlinkLockFiles(int status, Datum arg)
 	/* Since we're about to exit, no need to reclaim storage */
 	lock_files = NIL;
 
-	if (IsPostmasterEnvironment)
-		elog(LOG, "lock files all released at %s", current_time_as_str());
+	/*
+	 * Lock file removal should always be the last externally visible action
+	 * of a postmaster or standalone backend, while we won't come here at all
+	 * when exiting postmaster child processes.  Therefore, this is a good
+	 * place to log completion of shutdown.  We could alternatively teach
+	 * proc_exit() to do it, but that seems uglier.  In a standalone backend,
+	 * use NOTICE elevel to be less chatty.
+	 */
+	ereport(IsPostmasterEnvironment ? LOG : NOTICE,
+			(errmsg("database system is shut down")));
 }
 
 /*

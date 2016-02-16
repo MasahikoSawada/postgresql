@@ -72,6 +72,7 @@ typedef enum
 static bool do_wait = false;
 static bool wait_set = false;
 static int	wait_seconds = DEFAULT_WAIT;
+static bool wait_seconds_arg = false;
 static bool silent_mode = false;
 static ShutdownMode shutdown_mode = FAST_MODE;
 static int	sig = SIGINT;		/* default */
@@ -946,32 +947,6 @@ do_start(void)
 }
 
 
-/*
- * Quick hack.
- */
-const char *
-current_time_as_str(void)
-{
-	static char buf[128];
-	struct timeval now_timeval;
-	time_t	now;
-	char		msbuf[8];
-
-	gettimeofday(&now_timeval, NULL);
-	now = (time_t) now_timeval.tv_sec;
-
-	strftime(buf, sizeof(buf),
-			 /* leave room for milliseconds... */
-			 "%Y-%m-%d %H:%M:%S     %Z",
-			 localtime(&now));
-
-	/* 'paste' milliseconds into place... */
-	sprintf(msbuf, ".%03d", (int) (now_timeval.tv_usec / 1000));
-	memcpy(buf + 19, msbuf, 4);
-
-	return buf;
-}
-
 static void
 do_stop(void)
 {
@@ -1024,12 +999,7 @@ do_stop(void)
 						"Shutdown will not complete until pg_stop_backup() is called.\n\n"));
 		}
 
-		if (!silent_mode)
-		{
-			fprintf(stdout, _("waiting for server to shut down at %s..."),
-					current_time_as_str());
-			fflush(stdout);
-		}
+		print_msg(_("waiting for server to shut down..."));
 
 		for (cnt = 0; cnt < wait_seconds; cnt++)
 		{
@@ -1046,8 +1016,7 @@ do_stop(void)
 		{
 			print_msg(_(" failed\n"));
 
-			write_stderr(_("%s: server does not shut down at %s\n"),
-						 progname, current_time_as_str());
+			write_stderr(_("%s: server does not shut down\n"), progname);
 			if (shutdown_mode == SMART_MODE)
 				write_stderr(_("HINT: The \"-m fast\" option immediately disconnects sessions rather than\n"
 						  "waiting for session-initiated disconnection.\n"));
@@ -1463,7 +1432,8 @@ pgwin32_CommandLine(bool registration)
 	if (registration && do_wait)
 		appendPQExpBuffer(cmdLine, " -w");
 
-	if (registration && wait_seconds != DEFAULT_WAIT)
+	/* Don't propagate a value from an environment variable. */
+	if (registration && wait_seconds_arg && wait_seconds != DEFAULT_WAIT)
 		appendPQExpBuffer(cmdLine, " -t %d", wait_seconds);
 
 	if (registration && silent_mode)
@@ -2160,6 +2130,7 @@ main(int argc, char **argv)
 		{NULL, 0, NULL, 0}
 	};
 
+	char	   *env_wait;
 	int			option_index;
 	int			c;
 	pgpid_t		killproc = 0;
@@ -2209,6 +2180,10 @@ main(int argc, char **argv)
 		exit(1);
 	}
 #endif
+
+	env_wait = getenv("PGCTLTIMEOUT");
+	if (env_wait != NULL)
+		wait_seconds = atoi(env_wait);
 
 	/*
 	 * 'Action' can be before or after args so loop over both. Some
@@ -2287,6 +2262,7 @@ main(int argc, char **argv)
 					break;
 				case 't':
 					wait_seconds = atoi(optarg);
+					wait_seconds_arg = true;
 					break;
 				case 'U':
 					if (strchr(optarg, '\\'))
