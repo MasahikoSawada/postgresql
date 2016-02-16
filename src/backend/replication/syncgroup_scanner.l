@@ -70,22 +70,22 @@ xdinside	{dquoted_name}+
 				BEGIN(INITIAL);
 				return NAME;
 		}
-[1-9][0-9]*  {
+[1-9][0-9]* {
 				yylval.val = atoi(yytext);
-			       	return INT;
+				return INT;
 		}
-{node_name}+   {
+{node_name}+ {
 				yylval.str = strdup(yytext);
 				return NAME;
-                               }
-{asterisk}	{
+			}
+{asterisk} {
 		yylval.str = strdup(yytext);
 		return AST;
-}
-{self}	{
+			}
+{self} {
 				return yytext[0];
 		}
-.	{
+. {
 				ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
 						errmsg("syntax error: unexpected character \"%s\"", yytext)));

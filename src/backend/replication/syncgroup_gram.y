@@ -21,6 +21,14 @@ static SyncGroupNode *create_name_node(char *name);
 static SyncGroupNode *add_node(SyncGroupNode *node_list, SyncGroupNode *node);
 static SyncGroupNode *create_group_node(int wait_num, SyncGroupNode *node_list);
 
+/*
+ * Bison doesn't allocate anything that needs to live across parser calls,
+ * so we can easily have it use palloc instead of malloc.  This prevents
+ * memory leaks if we error out during parsing.  Note this only works with
+ * bison >= 2.0.  However, in bison 1.875 the default is to use alloca()
+ * if possible, so there's not really much problem anyhow, at least if
+ * you're building with gcc.
+ */
 #define YYMALLOC palloc
 #define YYFREE   pfree
 

@@ -54,9 +54,7 @@
 #include <unistd.h>
 
 #include "access/xact.h"
-#include "funcapi.h"
 #include "miscadmin.h"
-#include "nodes/pg_list.h"
 #include "replication/syncrep.h"
 #include "replication/walsender.h"
 #include "replication/walsender_private.h"
@@ -912,24 +910,12 @@ assign_synchronous_standby_names(const char *newval, void *extra)
 		parse_rc = syncgroup_yyparse();
 
 		if (parse_rc != 0)
-			ereport(ERROR, 
+			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
 					 (errmsg_internal("Invalid syntax. synchronous_standby_names parse returned %d",
 									  parse_rc))));
 
 		GUC_check_errdetail("Invalid syntax");
-
-		SyncGroupNode *n;
-
-		elog(WARNING, "== Node Structure ==");
-		elog(WARNING, "[%s] wait_num = %d", SyncRepStandbys->name,
-			 SyncRepStandbys->wait_num);
-       
-		for (n = SyncRepStandbys->members; n != NULL; n = n->next)
-		{
-			elog(WARNING, "    [%s] ", n->name);
-		}
-
 		syncgroup_scanner_finish();
 	}
 }
