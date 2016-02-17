@@ -851,6 +851,9 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 
 	if (*newval != NULL && (*newval)[0] != '\0')
 	{
+		SyncGroupNode	*node;
+		int	num_member = 0;
+
 		syncgroup_scanner_init(*newval);
 		parse_rc = syncgroup_yyparse();
 
@@ -869,6 +872,21 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 		 * postmaster at startup, not WALSender, so the application_name is not
 		 * yet correctly set.
 		 */
+
+		/*
+		 * Check whether group wait_num is not exceeded to the number of its
+		 * member.
+		 */
+		for (node = SyncRepStandbys->members; node != NULL; node = node->next)
+			num_member++;
+
+		if (num_member < SyncRepStandbys->wait_num)
+		{
+			SyncRepClearStandbyGroupList(SyncRepStandbys);
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 (errmsg_internal("The number of group memebers must be less than its group waits."))));
+		}
 
 		/*
 		 * syncgroup_yyparse sets the global SyncRepStandbys as side effect.
