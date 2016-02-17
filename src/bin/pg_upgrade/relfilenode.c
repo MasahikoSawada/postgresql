@@ -122,37 +122,6 @@ transfer_all_new_dbs(DbInfoArr *old_db_arr, DbInfoArr *new_db_arr,
 	return;
 }
 
-
-/*
- * get_pg_database_relfilenode()
- *
- *	Retrieves the relfilenode for a few system-catalog tables.  We need these
- *	relfilenodes later in the upgrade process.
- */
-void
-get_pg_database_relfilenode(ClusterInfo *cluster)
-{
-	PGconn	   *conn = connectToServer(cluster, "template1");
-	PGresult   *res;
-	int			i_relfile;
-
-	res = executeQueryOrDie(conn,
-							"SELECT c.relname, c.relfilenode "
-							"FROM	pg_catalog.pg_class c, "
-							"		pg_catalog.pg_namespace n "
-							"WHERE	c.relnamespace = n.oid AND "
-							"		n.nspname = 'pg_catalog' AND "
-							"		c.relname = 'pg_database' "
-							"ORDER BY c.relname");
-
-	i_relfile = PQfnumber(res, "relfilenode");
-	cluster->pg_database_oid = atooid(PQgetvalue(res, 0, i_relfile));
-
-	PQclear(res);
-	PQfinish(conn);
-}
-
-
 /*
  * transfer_single_new_db()
  *
