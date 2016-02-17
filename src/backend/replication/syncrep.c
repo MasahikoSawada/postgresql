@@ -922,6 +922,13 @@ assign_synchronous_standby_names(const char *newval, void *extra)
 {
 	int	parse_rc;
 
+	/*
+	 * Before assign paramter, clear previous configuration,
+	 * if there is.
+	 */
+	if (SyncRepStandbys)
+		SyncRepClearStandbyGroupList(SyncRepStandbys);
+
 	if (newval != NULL && newval[0] != '\0')
 	{
 		syncgroup_scanner_init(newval);
