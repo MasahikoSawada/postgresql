@@ -14,6 +14,7 @@ static void init_xd_string(void);
 static void addlit_xd_string(char *ytext, int yleng);
 static void addlitchar_xd_string(unsigned char ychar);
 
+char  *scanbuf;
 char *xd_string;
 int	xd_size; /* actual size of xd_string */
 int	xd_len; /* string length of xd_string  */
@@ -97,14 +98,14 @@ yyerror(const char *message)
 {
 	ereport(ERROR,
 		(errcode(ERRCODE_SYNTAX_ERROR),
-			errmsg_internal("%s", message)));
+			errmsg("%s at or near \"%s\" in \"%s\"", message,
+			       yytext, scanbuf)));
 }
 
 void
 syncgroup_scanner_init(const char *str)
 {
 	Size		slen = strlen(str);
-	char		*scanbuf;
 
 	/*
 	 * Might be left over after ereport()
