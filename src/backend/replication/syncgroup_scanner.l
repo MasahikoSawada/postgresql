@@ -41,8 +41,8 @@ asterisk	\*
  * Basically all ascii characteres except for {self} and {whitespace} are allowed
  * to be used for node name. These special charater could be used by double-quoted.
  */
-node_name	[a-zA-Z0-9\!\#\$\%\&\'\(\)\-\=\^\~\|\\\{\}\;\:\+\/\.]
-dquoted_name	[a-zA-Z0-9\!\#\$\%\&\'\(\)\-\=\^\~\|\\\{\}\;\:\+\/\.\,\[\]\ ]
+node_name	[a-zA-Z0-9\!\#\$\%\&\'\(\)\-\=\^\~\|\\\{\}\@\`\;\:\+\/\.\_]
+dquoted_name	[a-zA-Z0-9\!\#\$\%\&\'\(\)\-\=\^\~\|\\\{\}\@\`\;\:\+\/\._\,\[\]\ ]
 
 /* Double-quoted string */
 dquote		\"
