@@ -2823,15 +2823,6 @@ include_dir 'conf.d'
        <para>
         Specidies a standby names that can support <firstterm>synchronous replication</> using
         either two types of syntax; comma-separated list or dedicated language, as described in <xref linkend="synchronous-replication">.
-        The synopsis of this is,
-       </para>
-
-       <synopsis>
-        synchronous_standby_names = '<replaceable class="PARAMETER">node</replaceable> [, ...]'
-        synchronous_standby_names = '<replaceable class="PARAMETER">N</replaceable> [ <replaceable class="PARAMETER">node</replaceable> [, ...] ]'
-       </synopsis>
-
-       <para>
         Transcations waiting for commit will be allowed to proceed after the
         specified number of standby servers confirms receipt of their data.
         The synchronous standbys will be those named in this parameter that are both
@@ -2839,8 +2830,7 @@ include_dir 'conf.d'
         of <literal>streaming</> in the
         <link linkend="monitoring-stats-views-table">
         <literal>pg_stat_replication</></link> view).
-        If the current synchronous standby disconnects for whatever reason,
-        it will be replaced immediately with another server same name.
+
 <!--
         Specifies a comma-separated list of standby names that can support
         <firstterm>synchronous replication</>, as described in
