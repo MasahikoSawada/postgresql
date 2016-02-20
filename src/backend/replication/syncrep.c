@@ -35,12 +35,12 @@
  * take some time. Once caught up, the current highest priority standby
  * will release waiters from the queue.
  * In 9.5 we support the possibility to have multiple synchronous standbys,
- * as defined in synchronous_standby_group. Before on standby can become a
+ * as defined in synchronous_standby_names. Before on standby can become a
  * synchronous standby it must have caught up with the primary;
  * that may take some time.
  *
  * Waiters will be released from the queue once the number of standbys
- * specified in synchronous_standby_group have caught.
+ * specified in synchronous_standby_names have caught.
  *
  * Portions Copyright (c) 2010-2016, PostgreSQL Global Development Group
  *
