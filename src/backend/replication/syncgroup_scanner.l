@@ -42,8 +42,8 @@ asterisk	\*
  * Basically all ascii characteres except for {self} and {whitespace} are allowed
  * to be used for node name. These special charater could be used by double-quoted.
  */
-node_name	[a-zA-Z0-9\!\#\$\%\&\'\(\)\-\=\^\~\|\\\{\}\@\`\;\:\+\/\.\_]
-dquoted_name	[a-zA-Z0-9\!\#\$\%\&\'\(\)\-\=\^\~\|\\\{\}\@\`\;\:\+\/\._\,\[\]\ ]
+node_name	[a-zA-Z0-9\!\#\$\%\&\'\(\)\-\=\^\~\|\\\{\}\@\`\;\:\+\/\.\_\*]
+dquoted_name	[a-zA-Z0-9\!\#\$\%\&\'\(\)\-\=\^\~\|\\\{\}\@\`\;\:\+\/\.\_\*\,\[\]\ ]
 
 /* Double-quoted string */
 dquote		\"
@@ -75,13 +75,13 @@ xdinside	{dquoted_name}+
 				yylval.val = atoi(yytext);
 				return INT;
 		}
-{node_name}+ {
+{node_name}{node_name}+ {
 				yylval.str = strdup(yytext);
 				return NAME;
 			}
 {asterisk} {
-		yylval.str = strdup(yytext);
-		return AST;
+				yylval.str = strdup(yytext);
+				return AST;
 			}
 {self} {
 				return yytext[0];
