@@ -1138,12 +1138,7 @@ primary_slot_name = 'node_a_slot'
     Any standby name is accepted at any position of its list, but '*' is accepted at only tailing of the standby list.
     The leading N is a number which specifies that how many standbys the master server waits to commit for. This number
     must be less than actual number of members of its group.
-   </para>
-
-   <para>
     The listed standby are given highest priority from left defined starting with 1.
-    If any of synchronous standbys disconnect for whatever reason,
-    it will be replaced immediately with the next-highest-priority standby.
    </para>
 
    <note>
