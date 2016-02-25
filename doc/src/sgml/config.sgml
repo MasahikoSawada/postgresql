@@ -2821,7 +2821,7 @@ include_dir 'conf.d'
       </term>
       <listitem>
        <para>
-        Specidies a standby names that can support <firstterm>synchronous replication</> using
+        Specifies a standby names that can support <firstterm>synchronous replication</> using
         either two types of syntax; comma-separated list or dedicated language, as described in <xref linkend="synchronous-replication">.
         Transcations waiting for commit will be allowed to proceed after the
         specified number of standby servers confirms receipt of their data.
@@ -2830,25 +2830,9 @@ include_dir 'conf.d'
         of <literal>streaming</> in the
         <link linkend="monitoring-stats-views-table">
         <literal>pg_stat_replication</></link> view).
-
-<!--
-        Specifies a comma-separated list of standby names that can support
-        <firstterm>synchronous replication</>, as described in
-        <xref linkend="synchronous-replication">.
-        At any one time there will be at most one active synchronous standby;
-        transactions waiting for commit will be allowed to proceed after
-        this standby server confirms receipt of their data.
-        The synchronous standby will be the first standby named in this list
-        that is both currently connected and streaming data in real-time
-        (as shown by a state of <literal>streaming</literal> in the
-        <link linkend="monitoring-stats-views-table">
-        <literal>pg_stat_replication</></link> view).
-        Other standby servers appearing later in this list represent potential
-        synchronous standbys.
-        If the current synchronous standby disconnects for whatever reason,
+        If the current any of synchronous standbys disconnects for whatever reason,
         it will be replaced immediately with the next-highest-priority standby.
         Specifying more than one standby name can allow very high availability.
--->
        </para>
        <para>
         The name of a standby server for this purpose is the
@@ -2858,14 +2842,6 @@ include_dir 'conf.d'
         only the specified count of standbys will be chosen to be synchronous
         standbys, though exactly which one is indeterminate, the rest will
         represent potential synchronous standbys.
-<!--
-        The name of a standby server for this purpose is the
-        <varname>application_name</> setting of the standby, as set in the
-        <varname>primary_conninfo</> of the standby's WAL receiver.  There is
-        no mechanism to enforce uniqueness. In case of duplicates one of the
-        matching standbys will be chosen to be the synchronous standby, though
-        exactly which one is indeterminate.
--->
         The special entry <literal>*</> matches any
         <varname>application_name</>, including the default application name
         of <literal>walreceiver</>.

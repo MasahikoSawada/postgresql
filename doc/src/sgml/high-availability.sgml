@@ -1138,12 +1138,12 @@ primary_slot_name = 'node_a_slot'
 
    <para>
     Setting up synchronous standby at multiple locations bring us high availability.
-    It ensures that modified data willbe replicated to multiple synchronous standbys.
+    It ensures that modified data will be replicated to multiple synchronous standbys.
    </para>
 
    <para>
     Multiple synchronous replication is set up by setting <xref linkend="guc-synchronous-standby-names">
-    using dedicated language. The dedicated language has two types of syntax.
+    using dedicated language. The syntax of dedicated language is following.
    </para>
     
     <synopsis>
@@ -1151,15 +1151,17 @@ primary_slot_name = 'node_a_slot'
     </synopsis>
 
    <para>
-    Using dedicated language, we can define a synchronous group with one number N.
+    Using dedicated language, we can define a synchronous group with a number N.
     synchronous group can have some members which are consdiered as synchronous standby using comma-separated list.
-    Any standby name are accepted at any position, but '*' is accepted at only tailing of the standby list.
+    Any standby name is accepted at any position of its list, but '*' is accepted at only tailing of the standby list.
     The leading N is a number which specifies that how many standbys the master server waits to commit for. This number
-    must be less than actual number of members of its group. The first syntax implies N = 1.
+    must be less than actual number of members of its group.
    </para>
 
    <para>
-    The listed standby are given highest priority from left defined.
+    The listed standby are given highest priority from left defined starting with 1.
+    For exmample, <xref linkend="guc-synchronous-standby-names"> is set '2[node1, node2, node3]',
+    
     If any of synchronous standbys disconnect for whatever reason,
     it will be replaced immediately with the next-highest-priority standby.
    </para>
