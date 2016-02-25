@@ -73,10 +73,6 @@ xdinside	{dquoted_name}+
 				BEGIN(INITIAL);
 				return NAME;
 		}
-{node_name}{node_name}+ {
-				yylval.str = strdup(yytext);
-				return NAME;
-			}
 [1-9][0-9]* {
 				yylval.str = yytext;
 				return NUM;
@@ -84,6 +80,10 @@ xdinside	{dquoted_name}+
 {asterisk} {
 				yylval.str = strdup(yytext);
 				return AST;
+			}
+{node_name}+ {
+				yylval.str = strdup(yytext);
+				return NAME;
 			}
 {self} {
 				return yytext[0];
