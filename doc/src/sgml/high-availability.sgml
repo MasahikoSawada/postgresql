@@ -1029,11 +1029,6 @@ primary_slot_name = 'node_a_slot'
     Synchronous replication offers the ability to confirm that all changes
     made by a transcation have been transferred to one or more synchronous standby
     server. This extends that standard levelof durability
-<!--
-    Synchronous replication offers the ability to confirm that all changes
-    made by a transaction have been transferred to one synchronous standby
-    server. This extends the standard level of durability
--->
     offered by a transaction commit. This level of protection is referred
     to as 2-safe replication in computer science theory.
    </para>
@@ -1050,19 +1045,6 @@ primary_slot_name = 'node_a_slot'
     changes will not be lost in the event of server crashes but it also
     necessarily increases the response time for the requesting transaction.
     The minimum wait time is the roundtrip time between primary to standbys.
-<!--
-    When requesting synchronous replication, each commit of a
-    write transaction will wait until confirmation is
-    received that the commit has been written to the transaction log on disk
-    of both the primary and standby server. The only possibility that data
-    can be lost is if both the primary and the standby suffer crashes at the
-    same time. This can provide a much higher level of durability, though only
-    if the sysadmin is cautious about the placement and management of the two
-    servers.  Waiting for confirmation increases the user's confidence that the
-    changes will not be lost in the event of server crashes but it also
-    necessarily increases the response time for the requesting transaction.
-    The minimum wait time is the roundtrip time between primary to standby.
--->
    </para>
 
    <para>
@@ -1160,16 +1142,15 @@ primary_slot_name = 'node_a_slot'
 
    <para>
     The listed standby are given highest priority from left defined starting with 1.
-    For exmample, <xref linkend="guc-synchronous-standby-names"> is set '2[node1, node2, node3]',
-    
     If any of synchronous standbys disconnect for whatever reason,
     it will be replaced immediately with the next-highest-priority standby.
    </para>
 
    <note>
     <para>
-    All ASCII characters except for special characters(,(comma), &quot(double-quotation), [](box brackets), witespace) are accepted as standby name.
-    When these special characters are used as standby name, whole standby name string need to be surrounded by double-quotation.
+    All ASCII characters except for special characters(',', '&quot', '[', ']', ' ') are allowed as standby name.
+    When these special characters are used as standby name, whole standby name string need to be written in
+    double-quoted representation.
     </para>
    </note>
 
