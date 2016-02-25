@@ -19,7 +19,7 @@
 
 static SyncGroupNode *create_name_node(char *name);
 static SyncGroupNode *add_node(SyncGroupNode *node_list, SyncGroupNode *node);
-static SyncGroupNode *create_group_node(int wait_num, SyncGroupNode *node_list);
+static SyncGroupNode *create_group_node(char *wait_num, SyncGroupNode *node_list);
 
 /*
  * Bison doesn't allocate anything that needs to live across parser calls,
@@ -39,17 +39,15 @@ static SyncGroupNode *create_group_node(int wait_num, SyncGroupNode *node_list);
 
 %union
 {
-	int32		val;
 	char	   *str;
 	SyncGroupNode  *expr;
 }
 
-%token <str> NAME
-%token <val> INT
+%token <str> NAME NUM
 %token <str> AST
 
 %type <expr> result sync_list sync_list_ast sync_element sync_element_ast
-			 sync_node_group
+			 sync_node_group sync_group_old sync_group
 
 %start result
 
@@ -57,28 +55,33 @@ static SyncGroupNode *create_group_node(int wait_num, SyncGroupNode *node_list);
 result:
 		sync_node_group						{ SyncRepStandbys = $1; }
 ;
-
+sync_node_group:
+		sync_group_old						{ $$ = $1; }
+		| sync_group						{ $$ = $1; }
+;
+sync_group_old:
+		sync_list							{ $$ = create_group_node("1", $1); }
+		| sync_list_ast						{ $$ = create_group_node("1", $1); }
+;
+sync_group:
+		NUM '[' sync_list ']'	 			{ $$ = create_group_node($1, $3); }
+		| NUM '[' sync_list_ast ']'			{ $$ = create_group_node($1, $3); }
+;
 sync_list:
 		sync_element 						{ $$ = $1;}
-	|	sync_list ',' sync_element			{ $$ = add_node($1, $3);}
+		| sync_list ',' sync_element		{ $$ = add_node($1, $3);}
 ;
-
 sync_list_ast:
 		sync_element_ast					{ $$ = $1;}
 		| sync_list ',' sync_element_ast	{ $$ = add_node($1, $3);}
-
-sync_node_group:
-		sync_list							{ $$ = create_group_node(1, $1); }
-		| sync_list_ast						{ $$ = create_group_node(1, $1);}
-		| INT '[' sync_list ']' 			{ $$ = create_group_node($1, $3);}
-		| INT '[' sync_list_ast ']'			{ $$ = create_group_node($1, $3);}
 ;
-
 sync_element:
-	NAME	 								{ $$ = create_name_node($1);}
-
+		NAME	 							{ $$ = create_name_node($1); }
+		| NUM								{ $$ = create_name_node($1); }
+;
 sync_element_ast:
-	AST										{ $$ = create_name_node($1);}
+		AST									{ $$ = create_name_node($1); }
+;
 %%
 
 static SyncGroupNode *
@@ -102,7 +105,7 @@ create_name_node(char *name)
 }
 
 static SyncGroupNode *
-create_group_node(int wait_num, SyncGroupNode *node_list)
+create_group_node(char *wait_num, SyncGroupNode *node_list)
 {
 	SyncGroupNode *group_node = (SyncGroupNode *)malloc(sizeof(SyncGroupNode));
 
@@ -113,7 +116,7 @@ create_group_node(int wait_num, SyncGroupNode *node_list)
 
 	/* For GROUP node */
 	group_node->sync_method = SYNC_REP_METHOD_PRIORITY;
-	group_node->wait_num = wait_num;
+	group_node->wait_num = atoi(wait_num);
 	group_node->members = node_list;
 	group_node->SyncRepGetSyncedLsnsFn = SyncRepGetSyncedLsnsUsingPriority;
 	group_node->SyncRepGetSyncStandbysFn = SyncRepGetSyncStandbysUsingPriority;
