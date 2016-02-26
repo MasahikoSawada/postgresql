@@ -30,7 +30,7 @@ syncgroup_gram.o: syncgroup_scanner.c
 syncgroup_gram.h: syncgroup_gram.c ;
 syncgroup_gram.c: BISONFLAGS += -d
 
-syncgroup_scanner.c: FLEXFLAGS = -CF -p -p
+syncgroup_scanner.c: FLEXFLAGS = -CF -p
 syncgroup_scanner.c: FLEX_NO_BACKUP=yes
 
 syncgroup_gram.o : syncgroup_gram.h

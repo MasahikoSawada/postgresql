@@ -44,10 +44,8 @@ static SyncGroupNode *create_group_node(char *wait_num, SyncGroupNode *node_list
 }
 
 %token <str> NAME NUM
-%token <str> AST
 
-%type <expr> result sync_list sync_list_ast sync_element sync_element_ast
-			 sync_node_group sync_group_old sync_group
+%type <expr> result sync_list sync_element sync_node_group sync_group_old sync_group
 
 %start result
 
@@ -61,26 +59,17 @@ sync_node_group:
 ;
 sync_group_old:
 		sync_list							{ $$ = create_group_node("1", $1); }
-		| sync_list_ast						{ $$ = create_group_node("1", $1); }
 ;
 sync_group:
 		NUM '[' sync_list ']'	 			{ $$ = create_group_node($1, $3); }
-		| NUM '[' sync_list_ast ']'			{ $$ = create_group_node($1, $3); }
 ;
 sync_list:
 		sync_element 						{ $$ = $1;}
 		| sync_list ',' sync_element		{ $$ = add_node($1, $3);}
 ;
-sync_list_ast:
-		sync_element_ast					{ $$ = $1;}
-		| sync_list ',' sync_element_ast	{ $$ = add_node($1, $3);}
-;
 sync_element:
 		NAME	 							{ $$ = create_name_node($1); }
 		| NUM								{ $$ = create_name_node($1); }
-;
-sync_element_ast:
-		AST									{ $$ = create_name_node($1); }
 ;
 %%
 
@@ -108,6 +97,15 @@ static SyncGroupNode *
 create_group_node(char *wait_num, SyncGroupNode *node_list)
 {
 	SyncGroupNode *group_node = (SyncGroupNode *)malloc(sizeof(SyncGroupNode));
+	SyncGroupNode *tmpnode = node_list;
+	int	member_num = 1;
+
+	/* Count the number of member of its group */
+	while(tmpnode->next != NULL)
+	{
+		member_num++;
+		tmpnode = tmpnode->next;
+	}
 
 	/* For NAME node */
 	group_node->type = SYNC_REP_GROUP_GROUP | SYNC_REP_GROUP_MAIN;
@@ -117,6 +115,7 @@ create_group_node(char *wait_num, SyncGroupNode *node_list)
 	/* For GROUP node */
 	group_node->sync_method = SYNC_REP_METHOD_PRIORITY;
 	group_node->wait_num = atoi(wait_num);
+	group_node->member_num = member_num;
 	group_node->members = node_list;
 	group_node->SyncRepGetSyncedLsnsFn = SyncRepGetSyncedLsnsUsingPriority;
 	group_node->SyncRepGetSyncStandbysFn = SyncRepGetSyncStandbysUsingPriority;
@@ -127,12 +126,12 @@ create_group_node(char *wait_num, SyncGroupNode *node_list)
 static SyncGroupNode *
 add_node(SyncGroupNode *node_list, SyncGroupNode *node)
 {
-	SyncGroupNode *tmp = node_list;
+	SyncGroupNode *tmpnode = node_list;
 
 	/* Add node to tailing of node_list */
-	while(tmp->next != NULL) tmp = tmp->next;
+	while(tmpnode->next != NULL) tmpnode = tmpnode->next;
 
-	tmp->next = node;
+	tmpnode->next = node;
 	return node_list;
 }
 

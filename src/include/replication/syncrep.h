@@ -55,6 +55,7 @@ struct	SyncGroupNode
 	/* For group ndoe */
 	int sync_method; /* priority */
 	int	wait_num;
+	int	member_num;
 	SyncGroupNode	*members; /* member of its group */
 	bool (*SyncRepGetSyncedLsnsFn) (SyncGroupNode *group, XLogRecPtr *write_pos,
 									XLogRecPtr *flush_pos);
@@ -88,7 +89,7 @@ extern void assign_synchronous_commit(int newval, void *extra);
  */
 extern int  syncgroup_yyparse(void);
 extern int  syncgroup_yylex(void);
-extern void syncgroup_yyerror(const char *str) pg_attribute_noreturn();
+extern void syncgroup_yyerror(const char *str);
 extern void syncgroup_scanner_init(const char *query_string);
 extern void syncgroup_scanner_finish(void);
 

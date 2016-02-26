@@ -1,6 +1,8 @@
 %{
 #include "postgres.h"
 
+#include "miscadmin.h"
+
 /* No reason to constrain amount of data slurped */
 #define YY_READ_BUF_SIZE 16777216
 
@@ -19,6 +21,7 @@ char *xd_string;
 int	xd_size; /* actual size of xd_string */
 int	xd_len; /* string length of xd_string  */
 %}
+
 %option 8bit
 %option never-interactive
 %option nounput
@@ -33,26 +36,24 @@ int	xd_len; /* string length of xd_string  */
 %x xd
 
 space		[ \t\n\r\f]
-non_newline	[^\n\r]
 whitespace	({space}+)
 self		[\[\]\,]
-asterisk	\*
 
 /*
- * Basically all ascii characteres except for {self} and {whitespace} are allowed
- * to be used for node name. These special charater could be used by double-quoted.
+ * Basically all ascii characteres except for special characters(' ', '\"', ',', '[', ']') are allowed
+ * to be used for node name. These special charater could be used in double-quoted representation.
+ * Note that double-quote character can be used except at leading string.
  */
- /* excluding ' ', '\"', '*', ',', '[', ']' */
-node_name	[\x21\x23-\x29\x29-\x2b\x2d-\x5a\x5c\x5e-\x7e]
-/* excluding '\"' */
-dquoted_name	[\x20\x21\x23-\x7e]
+node_name_start	[^\ \"\,\[\]]
+node_name	[^\ \,\[\]]
+dquoted_name	[^\"]+
 
 /* Double-quoted string */
 dquote		\"
 xdstart		{dquote}
 xddouble	{dquote}{dquote}
 xdstop		{dquote}
-xdinside	{dquoted_name}+
+xdinside	{dquoted_name}
 
 %%
 {whitespace}	{ /* ignore */ }
@@ -73,32 +74,25 @@ xdinside	{dquoted_name}+
 				BEGIN(INITIAL);
 				return NAME;
 		}
+{self} {
+				BEGIN(INITIAL);
+				return yytext[0];
+}
 [1-9][0-9]* {
 				yylval.str = yytext;
 				return NUM;
 		}
-{asterisk} {
-				yylval.str = strdup(yytext);
-				return AST;
-			}
-{node_name}+ {
-				yylval.str = strdup(yytext);
+{node_name_start}{node_name}* {
+				yylval.str = yytext;
 				return NAME;
-			}
-{self} {
-				return yytext[0];
-		}
-. {
-				ereport(ERROR,
-					(errcode(ERRCODE_SYNTAX_ERROR),
-						errmsg("syntax error: unexpected character \"%s\"", yytext)));
-	}
+}
 %%
 
 void
 yyerror(const char *message)
 {
-	ereport(ERROR,
+	int	elevel = IsUnderPostmaster ? DEBUG2 : LOG;
+	ereport(elevel,
 		(errcode(ERRCODE_SYNTAX_ERROR),
 			errmsg("%s at or near \"%s\" in \"%s\"", message,
 			       yytext, scanbuf)));

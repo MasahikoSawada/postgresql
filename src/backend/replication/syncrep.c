@@ -77,7 +77,6 @@ static void SyncRepCancelWait(void);
 static int	SyncRepWakeQueue(bool all, int mode);
 
 static int	SyncRepGetStandbyPriority(void);
-static int SyncRepFindWalSenderByName(char *name);
 static void SyncRepClearStandbyGroupList(SyncGroupNode *node);
 static bool SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
 static bool SyncRepStandbyIsSync(int pos);
@@ -407,33 +406,6 @@ SyncRepStandbyIsSync(int pos)
 }
 
 /*
- * Finds the first active synchronous walsender with given name in
- * WalSndCtl->walsnds and returns the index of that. Returns -1 if not found.
- */
-static int
-SyncRepFindWalSenderByName(char *name)
-{
-	int	i;
-
-	for (i = 0; i < max_wal_senders; i++)
-	{
-		/* Use volatile pointer to prevent code rearrangement */
-		volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
-		char *walsnd_name = (char *) walsnd->name;
-
-		if (!SyncRepStandbyIsSync(i))
-			continue;
-
-		/* Compare wal sender name */
-		if (pg_strcasecmp(name, walsnd_name) == 0)
-			return i; /* Found */
-	}
-
-	/* Not found */
-	return -1;
-}
-
-/*
  * Update the LSNs on each queue based upon our latest state. This
  * implements a simple policy of first-valid-standby-releases-waiter.
  *
@@ -583,76 +555,31 @@ SyncRepGetSyncedLsnsUsingPriority(SyncGroupNode *group, XLogRecPtr *write_pos, X
 int
 SyncRepGetSyncStandbysUsingPriority(SyncGroupNode *group, int *sync_list)
 {
-	SyncGroupNode	*node;
+	int	target_priority = 1; /* lowest priority is 1 */
 	int	num = 0;
+	int i;
 
-	for (node = group->members; node != NULL; node = node->next)
+	while (target_priority <= group->member_num)
 	{
-		int	pos = -1;
+		/* Got enough synchronous stnadby */
+		if (num == group->wait_num)
+			break;
 
-		/* We got enough synchronous standbys, return */
-		if (num >= group->wait_num)
-			return num;
-
-		if (pg_strcasecmp(node->name, "*") != 0)
+		/* Seach wal sender having target_priority priority */
+		for (i = 0; i < max_wal_senders; i++)
 		{
-			pos = SyncRepFindWalSenderByName(node->name);
+			volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
 
-			/* Could not find wal sender by this name */
-			if (pos == -1)
-				continue;
-
-			sync_list[num] = pos;
-			num++;
-		}
-		else
-		{
-			/*
-			 * '*' means that all remaining standbys up to group->wait_num
-			 * are considered as synchronous. We allows user to use only '*'
-			 * in synchronous_standby_names, or use '*' at last node of
-			 * synchronous_standby_names.
-			 */
-			int i;
-
-			for (i = 0; i < max_wal_senders; i++)
+			if (SyncRepStandbyIsSync(i) &&
+				target_priority == walsnd->sync_standby_priority)
 			{
-				volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
-				char *walsnd_name = (char *) walsnd->name;
-				bool	already_listed = false;
-				int j;
-
-				/* We got enough synchronous standbys, return */
-				if (num >= group->wait_num)
-					return num;
-
-				if (!SyncRepStandbyIsSync(i))
-					continue;
-
-				pos = SyncRepFindWalSenderByName(walsnd_name);
-
-				/* Could not find wal sender by this name */
-				if (pos == -1)
-					continue;
-
-				for (j = 0; j < num; j++)
-				{
-					if (sync_list[j] == pos)
-					{
-						already_listed = true;
-						break;
-					}
-				}
-
-				/* We already listed this standby, ignore */
-				if (already_listed)
-					continue;
-
-				/* Add this position to list */
-				sync_list[num] = pos;
+				sync_list[num] = i;
 				num++;
+				break;
 			}
 		}
+
+		target_priority++;
 	}
 
 	return num;
@@ -851,17 +778,11 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 
 	if (*newval != NULL && (*newval)[0] != '\0')
 	{
-		SyncGroupNode	*node;
-		int	num_member = 0;
-
 		syncgroup_scanner_init(*newval);
 		parse_rc = syncgroup_yyparse();
 
 		if (parse_rc != 0)
-		{
-			GUC_check_errdetail("Invalid syntax");
 			return false;
-		}
 
 		syncgroup_scanner_finish();
 
@@ -877,10 +798,7 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 		 * Check whether group wait_num is not exceeded to the number of its
 		 * member.
 		 */
-		for (node = SyncRepStandbys->members; node != NULL; node = node->next)
-			num_member++;
-
-		if (num_member < SyncRepStandbys->wait_num)
+		if (SyncRepStandbys->member_num < SyncRepStandbys->wait_num)
 		{
 			SyncRepClearStandbyGroupList(SyncRepStandbys);
 			ereport(ERROR,
