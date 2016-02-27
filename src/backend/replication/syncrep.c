@@ -561,14 +561,12 @@ SyncRepGetSyncStandbysUsingPriority(SyncGroupNode *group, int *sync_list)
 
 	/*
 	 * Select low priority standbys from walsnds array. If there are same
-	 * priority standbys, first defined standby is selected.
+	 * priority standbys, first defined standby is selected. It's possible
+	 * to have same priority different standbys, so we can not break loop
+	 * even when standby having target_prioirty priority is found.
 	 */
 	while (target_priority <= group->member_num)
 	{
-		/* Got enough synchronous stnadby */
-		if (num == group->wait_num)
-			break;
-
 		/* Seach wal sender having target_priority priority */
 		for (i = 0; i < max_wal_senders; i++)
 		{
@@ -579,8 +577,11 @@ SyncRepGetSyncStandbysUsingPriority(SyncGroupNode *group, int *sync_list)
 			{
 				sync_list[num] = i;
 				num++;
-				break;
 			}
+
+			/* Got enough synchronous stnadby */
+			if (num == group->wait_num)
+				break;
 		}
 
 		target_priority++;
@@ -617,6 +618,8 @@ SyncRepGetStandbyPriority(void)
 		for (node = SyncRepStandbys->members; node != NULL; node = node->next)
 		{
 			priority++;
+
+			elog(NOTICE, "node->name : %s, application_name : %s", node->name, application_name);
 
 			if (pg_strcasecmp(node->name, application_name) == 0 ||
 				pg_strcasecmp(node->name, "*") == 0)
@@ -800,14 +803,30 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 
 		/*
 		 * Check whether group wait_num is not exceeded to the number of its
-		 * member.
+		 * member. But in case where there is standby having name '*',
+		 * it's OK wait_num to exceed the number of its member.
 		 */
 		if (SyncRepStandbys->member_num < SyncRepStandbys->wait_num)
 		{
-			SyncRepClearStandbyGroupList(SyncRepStandbys);
-			ereport(ERROR,
-					(errcode(ERRCODE_SYNTAX_ERROR),
-					 (errmsg_internal("The number of group memebers must be less than its group waits."))));
+			SyncGroupNode *node;
+			bool	has_asterisk = false;
+
+			for (node = SyncRepStandbys->members; node != NULL; node = node->next)
+			{
+				if (pg_strcasecmp(node->name, "*") == 0)
+				{
+					has_asterisk = true;
+					break;
+				}
+			}
+
+			if (!has_asterisk)
+			{
+				SyncRepClearStandbyGroupList(SyncRepStandbys);
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 (errmsg_internal("The number of group memebers must be less than its group waits."))));
+			}
 		}
 
 		/*

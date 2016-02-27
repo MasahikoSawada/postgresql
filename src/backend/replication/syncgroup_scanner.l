@@ -2,6 +2,7 @@
 #include "postgres.h"
 
 #include "miscadmin.h"
+#include "lib/stringinfo.h"
 
 /* No reason to constrain amount of data slurped */
 #define YY_READ_BUF_SIZE 16777216
@@ -13,13 +14,14 @@ static YY_BUFFER_STATE scanbufhandle;
 
 /* Functions for handling double quoted string */
 static void init_xd_string(void);
-static void addlit_xd_string(char *ytext, int yleng);
+static char *xd_stringdup(void);
+static void addlit_xd_string(char *ytext);
 static void addlitchar_xd_string(unsigned char ychar);
 
-char  *scanbuf;
-char *xd_string;
-int	xd_size; /* actual size of xd_string */
-int	xd_len; /* string length of xd_string  */
+static char  *scanbuf;
+static StringInfoData xd_string;
+static int	xd_size; /* actual size of xd_string */
+static int	xd_len; /* string length of xd_string  */
 %}
 
 %option 8bit
@@ -66,11 +68,10 @@ xdinside	{dquoted_name}
 				addlitchar_xd_string('\"');
 		}
 <xd>{xdinside} {
-				addlit_xd_string(yytext, yyleng);
+				addlit_xd_string(yytext);
 		}
 <xd>{xdstop} {
-				xd_string[xd_len] = '\0';
-				yylval.str = xd_string;
+				yylval.str = xd_stringdup();
 				BEGIN(INITIAL);
 				return NAME;
 		}
@@ -128,29 +129,23 @@ syncgroup_scanner_finish(void)
 static void
 init_xd_string()
 {
-	xd_string = palloc(sizeof(char) * BUFSIZE);
-	xd_size = BUFSIZE;
-	xd_len = 0;
+	initStringInfo(&xd_string);
+}
+
+static char *
+xd_stringdup(void)
+{
+	return xd_string.data;
 }
 
 static void
-addlit_xd_string(char *ytext, int yleng)
+addlit_xd_string(char *ytext)
 {
-	/* enlarge buffer if needed */
-	if ((xd_len + yleng) > xd_size)
-		xd_string = repalloc(xd_string, xd_size + BUFSIZE);
-
-	memcpy(xd_string + xd_len, ytext, yleng);
-	xd_len += yleng;
+	appendStringInfoString(&xd_string, ytext);
 }
 
 static void
 addlitchar_xd_string(unsigned char ychar)
 {
-	/* enlarge buffer if needed */
-	if ((xd_len + 1) > xd_size)
-		xd_string = repalloc(xd_string, xd_size + BUFSIZE);
-
-	xd_string[xd_len] = ychar;
-	xd_len += 1;
+	appendStringInfoChar(&xd_string, ychar);
 }
