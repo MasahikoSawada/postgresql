@@ -559,6 +559,10 @@ SyncRepGetSyncStandbysUsingPriority(SyncGroupNode *group, int *sync_list)
 	int	num = 0;
 	int i;
 
+	/*
+	 * Select low priority standbys from walsnds array. If there are same
+	 * priority standbys, first defined standby is selected.
+	 */
 	while (target_priority <= group->member_num)
 	{
 		/* Got enough synchronous stnadby */
