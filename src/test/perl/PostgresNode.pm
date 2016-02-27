@@ -368,6 +368,7 @@ sub init
 	  unless defined $params{hba_permit_replication};
 	$params{allows_streaming} = 0 unless defined $params{allows_streaming};
 	$params{has_archiving} = 0 unless defined $params{has_archiving};
+	$params{allows_sync_rep} = 0 unless defined $params{allows_sync_rep};
 
 	mkdir $self->backup_dir;
 	mkdir $self->archive_dir;
@@ -392,6 +393,10 @@ sub init
 		print $conf "hot_standby = on\n";
 		print $conf "max_connections = 10\n";
 	}
+	if ($params{allows_sync_rep})
+        {
+                print $conf "synchronous_standby_names = 'standby1,standby2'\n";
+        }
 
 	if ($TestLib::windows_os)
 	{
