@@ -30,5 +30,11 @@ $node->issues_sql_like(
 qr/statement: CREATE ROLE user3 SUPERUSER CREATEDB CREATEROLE INHERIT LOGIN;/,
 	'create a superuser');
 
+$node->issues_sql_like(
+	[ 'createuser', '-b', 'user4' ],
+qr/statement: CREATE ROLE user4 NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT LOGIN BYPASSRLS;/,
+	'create a superuser');
+
+
 $node->command_fails([ 'createuser', 'user1' ],
 	'fails if role already exists');

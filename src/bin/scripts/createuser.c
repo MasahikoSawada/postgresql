@@ -40,6 +40,8 @@ main(int argc, char *argv[])
 		{"no-login", no_argument, NULL, 'L'},
 		{"replication", no_argument, NULL, 1},
 		{"no-replication", no_argument, NULL, 2},
+		{"bypassrls", no_argument, NULL, 'b'},
+		{"no-bypassrls", no_argument, NULL, 'B'},
 		{"interactive", no_argument, NULL, 3},
 		/* adduser is obsolete, undocumented spelling of superuser */
 		{"adduser", no_argument, NULL, 'a'},
@@ -73,7 +75,8 @@ main(int argc, char *argv[])
 				inherit = TRI_DEFAULT,
 				login = TRI_DEFAULT,
 				replication = TRI_DEFAULT,
-				encrypted = TRI_DEFAULT;
+				encrypted = TRI_DEFAULT,
+				bypassrls = TRI_DEFAULT;
 
 	PQExpBufferData sql;
 
@@ -85,7 +88,7 @@ main(int argc, char *argv[])
 
 	handle_help_version_opts(argc, argv, "createuser", help);
 
-	while ((c = getopt_long(argc, argv, "h:p:U:g:wWedDsSaArRiIlLc:PEN",
+	while ((c = getopt_long(argc, argv, "h:p:U:g:wWedDsSaArRibBIlLc:PEN",
 							long_options, &optindex)) != -1)
 	{
 		switch (c)
@@ -154,6 +157,12 @@ main(int argc, char *argv[])
 				break;
 			case 'N':
 				encrypted = TRI_NO;
+				break;
+			case 'b':
+				bypassrls = TRI_YES;
+				break;
+			case 'B':
+				bypassrls = TRI_NO;
 				break;
 			case 1:
 				replication = TRI_YES;
@@ -305,6 +314,10 @@ main(int argc, char *argv[])
 		appendPQExpBufferStr(&sql, " REPLICATION");
 	if (replication == TRI_NO)
 		appendPQExpBufferStr(&sql, " NOREPLICATION");
+	if (bypassrls == TRI_YES)
+		appendPQExpBufferStr(&sql, " BYPASSRLS");
+	if (bypassrls == TRI_NO)
+		appendPQExpBufferStr(&sql, " NOBYPASSRLS");
 	if (conn_limit != NULL)
 		appendPQExpBuffer(&sql, " CONNECTION LIMIT %s", conn_limit);
 	if (roles.head != NULL)
@@ -370,6 +383,8 @@ help(const char *progname)
 			 "                            than using defaults\n"));
 	printf(_("  --replication             role can initiate replication\n"));
 	printf(_("  --no-replication          role cannot initiate replication\n"));
+	printf(_("  --bypassrls               role can bypass row level security\n"));
+	printf(_("  --no-bypassrls            role cannot bypass row level security\n"));
 	printf(_("  -?, --help                show this help, then exit\n"));
 	printf(_("\nConnection options:\n"));
 	printf(_("  -h, --host=HOSTNAME       database server host or socket directory\n"));
