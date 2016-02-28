@@ -3,7 +3,7 @@ use warnings;
 
 use PostgresNode;
 use TestLib;
-use Test::More tests => 17;
+use Test::More tests => 19;
 
 program_help_ok('createuser');
 program_version_ok('createuser');
@@ -29,11 +29,10 @@ $node->issues_sql_like(
 	[ 'createuser', '-s', 'user3' ],
 qr/statement: CREATE ROLE user3 SUPERUSER CREATEDB CREATEROLE INHERIT LOGIN;/,
 	'create a superuser');
-
 $node->issues_sql_like(
 	[ 'createuser', '-b', 'user4' ],
 qr/statement: CREATE ROLE user4 NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT LOGIN BYPASSRLS;/,
-	'create a superuser');
+	'create a BYPASSRLS user');
 
 
 $node->command_fails([ 'createuser', 'user1' ],

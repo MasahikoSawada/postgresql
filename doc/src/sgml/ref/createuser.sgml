@@ -77,6 +77,27 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>-b</></term>
+      <term><option>--bypassrls</></term>
+      <listitem>
+       <para>
+        The new user will be allowed to bypass row level security.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-B</></term>
+      <term><option>--no-bypassrls</></term>
+      <listitem>
+       <para>
+        The new user will not be allowed to bypass row level security.  This is the
+        default.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-c <replaceable class="parameter">number</replaceable></></term>
       <term><option>--connection-limit=<replaceable class="parameter">number</replaceable></></term>
       <listitem>
