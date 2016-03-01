@@ -25,9 +25,7 @@ include $(top_srcdir)/src/backend/common.mk
 # repl_scanner is compiled as part of repl_gram
 repl_gram.o: repl_scanner.c
 # syncgroup_scanner is complied as part of syncgroup_gram
-syncgroup_gram.o: syncgroup_scanner.c
-
-syncgroup_gram.h: syncgroup_gram.c ;
+syncgroup_gram.o: syncgroup_scanner.c syncgroup_gram.c
 syncgroup_gram.c: BISONFLAGS += -d
 
 syncgroup_scanner.c: FLEXFLAGS = -CF -p

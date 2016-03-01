@@ -14,14 +14,12 @@ static YY_BUFFER_STATE scanbufhandle;
 
 /* Functions for handling double quoted string */
 static void init_xd_string(void);
-static char *xd_stringdup(void);
+static char *xd_string_data(void);
 static void addlit_xd_string(char *ytext);
 static void addlitchar_xd_string(unsigned char ychar);
 
 static char  *scanbuf;
 static StringInfoData xd_string;
-static int	xd_size; /* actual size of xd_string */
-static int	xd_len; /* string length of xd_string  */
 %}
 
 %option 8bit
@@ -46,8 +44,8 @@ self		[\[\]\,]
  * to be used for node name. These special charater could be used in double-quoted representation.
  * Note that double-quote character can be used except at leading string.
  */
-node_name_start	[^\ \"\,\[\]]
-node_name	[^\ \,\[\]]
+node_name_start	[^\ \",\[\]]
+node_name_chars	[^\ ,\[\]]
 dquoted_name	[^\"]+
 
 /* Double-quoted string */
@@ -71,7 +69,7 @@ xdinside	{dquoted_name}
 				addlit_xd_string(yytext);
 		}
 <xd>{xdstop} {
-				yylval.str = xd_stringdup();
+				yylval.str = xd_string_data();
 				BEGIN(INITIAL);
 				return NAME;
 		}
@@ -79,11 +77,11 @@ xdinside	{dquoted_name}
 				BEGIN(INITIAL);
 				return yytext[0];
 }
-[1-9][0-9]* {
+[0-9]+ {
 				yylval.str = yytext;
 				return NUM;
 		}
-{node_name_start}{node_name}* {
+{node_name_start}{node_name_chars}* {
 				yylval.str = yytext;
 				return NAME;
 }
@@ -133,7 +131,7 @@ init_xd_string()
 }
 
 static char *
-xd_stringdup(void)
+xd_string_data(void)
 {
 	return xd_string.data;
 }

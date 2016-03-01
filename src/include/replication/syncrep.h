@@ -35,9 +35,8 @@
 #define SYNC_REP_METHOD_PRIORITY	0
 
 /* SyncGroupNode */
-#define SYNC_REP_GROUP_MAIN			0x01
-#define SYNC_REP_GROUP_NAME			0x02
-#define SYNC_REP_GROUP_GROUP		0x04
+#define SYNC_REP_GROUP_NAME			0x01
+#define SYNC_REP_GROUP_GROUP		0x02
 
 #define SyncStandbysDefined() \
 	(SyncRepStandbyNamesString != NULL && SyncRepStandbyNamesString[0] != '\0')
@@ -54,7 +53,7 @@ struct	SyncGroupNode
 
 	/* For group ndoe */
 	int sync_method; /* priority */
-	int	wait_num;
+	int	sync_num;
 	int	member_num;
 	SyncGroupNode	*members; /* member of its group */
 	bool (*SyncRepGetSyncedLsnsFn) (SyncGroupNode *group, XLogRecPtr *write_pos,
@@ -92,6 +91,7 @@ extern int  syncgroup_yylex(void);
 extern void syncgroup_yyerror(const char *str);
 extern void syncgroup_scanner_init(const char *query_string);
 extern void syncgroup_scanner_finish(void);
+extern void SyncRepClearStandbyGroupList(SyncGroupNode *group);
 
 /* function for synchronous replication group */
 extern bool SyncRepGetSyncedLsnsUsingPriority(SyncGroupNode *group,

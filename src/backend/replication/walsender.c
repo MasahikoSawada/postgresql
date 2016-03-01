@@ -2749,7 +2749,7 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 	MemoryContext per_query_ctx;
 	MemoryContext oldcontext;
 	int	   *sync_standbys;
-	int		num_sync;
+	int		num_sync = 0;
 	int			i;
 
 	/* check to see if caller supports us returning a tuplestore */
@@ -2782,7 +2782,7 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 	 */
 	if (SyncStandbysDefined())
 	{
-		sync_standbys = (int *) palloc(sizeof(int) * SyncRepStandbys->wait_num);
+		sync_standbys = (int *) palloc(sizeof(int) * SyncRepStandbys->sync_num);
 		LWLockAcquire(SyncRepLock, LW_SHARED);
 		num_sync = SyncRepGetSyncStandbysUsingPriority(SyncRepStandbys, sync_standbys);
 		LWLockRelease(SyncRepLock);

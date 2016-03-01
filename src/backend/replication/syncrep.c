@@ -77,9 +77,8 @@ static void SyncRepCancelWait(void);
 static int	SyncRepWakeQueue(bool all, int mode);
 
 static int	SyncRepGetStandbyPriority(void);
-static void SyncRepClearStandbyGroupList(SyncGroupNode *node);
 static bool SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos);
-static bool SyncRepStandbyIsSync(int pos);
+static bool SyncRepStandbyIsSync(volatile WalSnd *walsnd);
 
 #ifdef USE_ASSERT_CHECKING
 static bool SyncRepQueueIsOrderedByLSN(int mode);
@@ -205,7 +204,7 @@ SyncRepWaitForLSN(XLogRecPtr XactCommitLSN)
 			ereport(WARNING,
 					(errcode(ERRCODE_ADMIN_SHUTDOWN),
 					 errmsg("canceling the wait for synchronous replication and terminating connection due to administrator command"),
-					 errdetail("The transaction has already committed locally, but might not have been replicated to the standby(s).")));
+					 errdetail("The transaction has already committed locally, but might not have been replicated to some of the required standbys.")));
 			whereToSendOutput = DestNone;
 			SyncRepCancelWait();
 			break;
@@ -222,7 +221,7 @@ SyncRepWaitForLSN(XLogRecPtr XactCommitLSN)
 			QueryCancelPending = false;
 			ereport(WARNING,
 					(errmsg("canceling wait for synchronous replication due to user request"),
-					 errdetail("The transaction has already committed locally, but might not have been replicated to the standby(s).")));
+					 errdetail("The transaction has already committed locally, but might not have been replicated to some of the required standbys.")));
 			SyncRepCancelWait();
 			break;
 		}
@@ -328,7 +327,7 @@ SyncRepCleanupAtProcExit(void)
 /*
  * Clear all node in SyncRepStandbys recursively.
  */
-static void
+void
 SyncRepClearStandbyGroupList(SyncGroupNode *group)
 {
 	SyncGroupNode *node = group->members;
@@ -379,13 +378,11 @@ SyncRepInitConfig(void)
 
 /*
  * Check whether specified standby is active, which means not only having
- * pid but also having any priority.
+ * pid but also having any priority and valid flush position reported.
  */
 static bool
-SyncRepStandbyIsSync(int pos)
+SyncRepStandbyIsSync(volatile WalSnd *walsnd)
 {
-	volatile WalSnd *walsnd = &WalSndCtl->walsnds[pos];
-
 	/* Must be active */
 	if (walsnd->pid == 0)
 		return false;
@@ -507,9 +504,10 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
  * If there are not active standbys enough to determine LSNs, return false.
  */
 bool
-SyncRepGetSyncedLsnsUsingPriority(SyncGroupNode *group, XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
+SyncRepGetSyncedLsnsUsingPriority(SyncGroupNode *group, XLogRecPtr *write_pos,
+								  XLogRecPtr *flush_pos)
 {
-	int	*sync_list = (int *)palloc(sizeof(int) * group->wait_num);
+	int	*sync_list = (int *)palloc(sizeof(int) * group->sync_num);
 	int	sync_num;
 	int i;
 
@@ -517,7 +515,7 @@ SyncRepGetSyncedLsnsUsingPriority(SyncGroupNode *group, XLogRecPtr *write_pos, X
 	sync_num = group->SyncRepGetSyncStandbysFn(group, sync_list);
 
 	/* If we could not get standbys enough, return false */
-	if (sync_num != group->wait_num)
+	if (sync_num < group->sync_num)
 		return false;
 
 	*write_pos = InvalidXLogRecPtr;
@@ -529,7 +527,7 @@ SyncRepGetSyncedLsnsUsingPriority(SyncGroupNode *group, XLogRecPtr *write_pos, X
 	 */
 	for (i = 0; i < sync_num; i++)
 	{
-		volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
+		volatile WalSnd *walsnd = &WalSndCtl->walsnds[sync_list[i]];
 		XLogRecPtr	write;
 		XLogRecPtr	flush;
 
@@ -548,9 +546,9 @@ SyncRepGetSyncedLsnsUsingPriority(SyncGroupNode *group, XLogRecPtr *write_pos, X
 }
 
 /*
- * Return the positions of the first group->wait_num synchronized standbys
+ * Return the positions of the first group->sync_num synchronized standbys
  * in group->member list into sync_list. sync_list is assumed to have enough
- * space for at least group->wait_num elements.
+ * space for at least group->sync_num elements.
  */
 int
 SyncRepGetSyncStandbysUsingPriority(SyncGroupNode *group, int *sync_list)
@@ -560,10 +558,11 @@ SyncRepGetSyncStandbysUsingPriority(SyncGroupNode *group, int *sync_list)
 	int i;
 
 	/*
-	 * Select low priority standbys from walsnds array. If there are same
-	 * priority standbys, first defined standby is selected. It's possible
-	 * to have same priority different standbys, so we can not break loop
-	 * even when standby having target_prioirty priority is found.
+	 * Returns the list of standbys in sync up to the number that required
+	 * to satisfy synchronous_standby_names. If there are standbys with the
+	 * same priority value, the first defined ones are selected. It's possible
+	 * for multiple standbys to have a some name, so we do not break the
+	 * inner loop just by finding a standby with the target_priority.
 	 */
 	while (target_priority <= group->member_num)
 	{
@@ -572,15 +571,15 @@ SyncRepGetSyncStandbysUsingPriority(SyncGroupNode *group, int *sync_list)
 		{
 			volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
 
-			if (SyncRepStandbyIsSync(i) &&
+			if (SyncRepStandbyIsSync(walsnd) &&
 				target_priority == walsnd->sync_standby_priority)
 			{
 				sync_list[num] = i;
 				num++;
 			}
 
-			/* Got enough synchronous stnadby */
-			if (num == group->wait_num)
+			/* Got enough synchronous stnadbys */
+			if (num == group->sync_num)
 				break;
 		}
 
@@ -802,11 +801,11 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 		 */
 
 		/*
-		 * Check whether group wait_num is not exceeded to the number of its
+		 * Check whether group sync_num is not exceeded to the number of its
 		 * member. But in case where there is standby having name '*',
-		 * it's OK wait_num to exceed the number of its member.
+		 * it's OK sync_num to exceed the number of its member.
 		 */
-		if (SyncRepStandbys->member_num < SyncRepStandbys->wait_num)
+		if (SyncRepStandbys->member_num < SyncRepStandbys->sync_num)
 		{
 			SyncGroupNode *node;
 			bool	has_asterisk = false;

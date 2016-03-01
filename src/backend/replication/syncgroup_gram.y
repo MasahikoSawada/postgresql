@@ -16,10 +16,11 @@
 #include "postgres.h"
 
 #include "replication/syncrep.h"
+#include "utils/formatting.h"
 
 static SyncGroupNode *create_name_node(char *name);
 static SyncGroupNode *add_node(SyncGroupNode *node_list, SyncGroupNode *node);
-static SyncGroupNode *create_group_node(char *wait_num, SyncGroupNode *node_list);
+static SyncGroupNode *create_group_node(char *sync_num, SyncGroupNode *node_list);
 
 /*
  * Bison doesn't allocate anything that needs to live across parser calls,
@@ -51,7 +52,10 @@ static SyncGroupNode *create_group_node(char *wait_num, SyncGroupNode *node_list
 
 %%
 result:
-		sync_node_group						{ SyncRepStandbys = $1; }
+		sync_node_group						{
+												SyncRepClearStandbyGroupList(SyncRepStandbys);
+												SyncRepStandbys = $1;
+											}
 ;
 sync_node_group:
 		sync_group_old						{ $$ = $1; }
@@ -80,12 +84,12 @@ create_name_node(char *name)
 
 	/* Common information */
 	name_node->type = SYNC_REP_GROUP_NAME;
-	name_node->name = strdup(name);
+	name_node->name = asc_tolower(name, strlen(name));
 	name_node->next = NULL;
 
 	/* For GROUP node */
 	name_node->sync_method = 0;
-	name_node->wait_num = 0;
+	name_node->sync_num = 0;
 	name_node->members = NULL;
 	name_node->SyncRepGetSyncedLsnsFn = NULL;
 	name_node->SyncRepGetSyncStandbysFn = NULL;
@@ -94,7 +98,7 @@ create_name_node(char *name)
 }
 
 static SyncGroupNode *
-create_group_node(char *wait_num, SyncGroupNode *node_list)
+create_group_node(char *sync_num, SyncGroupNode *node_list)
 {
 	SyncGroupNode *group_node = (SyncGroupNode *)malloc(sizeof(SyncGroupNode));
 	SyncGroupNode *tmpnode = node_list;
@@ -108,13 +112,13 @@ create_group_node(char *wait_num, SyncGroupNode *node_list)
 	}
 
 	/* For NAME node */
-	group_node->type = SYNC_REP_GROUP_GROUP | SYNC_REP_GROUP_MAIN;
+	group_node->type = SYNC_REP_GROUP_GROUP;
 	group_node->name = "main";
 	group_node->next = NULL;
 
 	/* For GROUP node */
 	group_node->sync_method = SYNC_REP_METHOD_PRIORITY;
-	group_node->wait_num = atoi(wait_num);
+	group_node->sync_num = atoi(sync_num);
 	group_node->member_num = member_num;
 	group_node->members = node_list;
 	group_node->SyncRepGetSyncedLsnsFn = SyncRepGetSyncedLsnsUsingPriority;
