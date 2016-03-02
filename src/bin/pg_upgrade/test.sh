@@ -174,6 +174,11 @@ if "$MAKE" -C "$oldsrc" installcheck; then
 		mv "$temp_root"/dump1.sql "$temp_root"/dump1.sql.orig
 		sed "s;$oldsrc;$newsrc;g" "$temp_root"/dump1.sql.orig >"$temp_root"/dump1.sql
 	fi
+
+	vm_sql="SELECT c.relname, c.relallvisible FROM pg_class as c, pg_namespace as n WHERE c.relnamespace = n.oid AND n.nspname NOT IN ('information_schema', 'pg_toast', 'pg_catalog') ORDER BY c.relname;"
+	# Test for rewriting visibility map
+	vacuumdb -d regression || visibilitymap_vacuum1_status=$?
+	psql -d regression -c "$vm_sql" > "$temp_root"/vm_test1.txt || visibilitymap_test1_status=$?
 else
 	make_installcheck_status=$?
 fi
@@ -186,6 +191,14 @@ if [ -n "$psql_fix_sql_status" ]; then
 fi
 if [ -n "$pg_dumpall1_status" ]; then
 	echo "pg_dumpall of pre-upgrade database cluster failed"
+	exit 1
+fi
+if [ -n "$visibilitymap_vacuum1_status" ];then
+	echo "VACUUM of pre-upgrade database cluster for visibility map test failed"
+	exit 1
+fi
+if [ -n "$visibilitymap_test1_status" ];then
+	echo "SELECT of pre-upgrade database cluster for visibility map test failed"
 	exit 1
 fi
 
@@ -203,6 +216,8 @@ case $testhost in
 esac
 
 pg_dumpall -f "$temp_root"/dump2.sql || pg_dumpall2_status=$?
+vacuumdb -d regression || visibilitymap_vacuum2_status=$?
+psql -d regression -c "$vm_sql" > "$temp_root"/vm_test2.txt || visibilitymap_test2_status=$?
 pg_ctl -m fast stop
 
 # no need to echo commands anymore
@@ -214,10 +229,25 @@ if [ -n "$pg_dumpall2_status" ]; then
 	exit 1
 fi
 
+if [ -n "$visibilitymap_vacuum2_status" ];then
+	echo "VACUUM of post-upgrade database cluster for visibility map test failed"
+	exit 1
+fi
+
+if [ -n "$visibilitymap_test2_status" ];then
+	echo "SELECT of post-upgrade database cluster for visibility map test failed"
+	exit 1
+fi
+
 case $testhost in
 	MINGW*)	cmd /c delete_old_cluster.bat ;;
 	*)	    sh ./delete_old_cluster.sh ;;
 esac
+
+if ! diff "$temp_root"/vm_test1.txt "$temp_root"/vm_test2.txt >/dev/null; then
+	echo "Visibility map rewriting test failed"
+	exit 1
+fi
 
 if diff "$temp_root"/dump1.sql "$temp_root"/dump2.sql >/dev/null; then
 	echo PASSED
