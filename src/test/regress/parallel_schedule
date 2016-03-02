@@ -110,3 +110,6 @@ test: event_trigger
 
 # run stats by itself because its delay may be insufficient under heavy load
 test: stats
+
+# visiblity map and vacuum test cannot concurrently with any test that runs SQL
+test: visibilitymap

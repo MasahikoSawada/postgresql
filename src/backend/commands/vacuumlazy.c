@@ -106,6 +106,7 @@ typedef struct LVRelStats
 	BlockNumber rel_pages;		/* total number of pages */
 	BlockNumber scanned_pages;	/* number of pages we examined */
 	BlockNumber pinskipped_pages;		/* # of pages we skipped due to a pin */
+	BlockNumber vmskipped_frozen_pages; /* # of pages we skipped by all-frozen bit */
 	double		scanned_tuples; /* counts only tuples on scanned pages */
 	double		old_rel_tuples; /* previous value of pg_class.reltuples */
 	double		new_rel_tuples; /* new estimated total # of tuples */
@@ -221,7 +222,8 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	 * We request a full scan if either the table's frozen Xid is now older
 	 * than or equal to the requested Xid full-table scan limit; or if the
 	 * table's minimum MultiXactId is older than or equal to the requested
-	 * mxid full-table scan limit.
+	 * mxid full-table scan limit. During full scan, we could skip to scan
+	 * pages according to all-frozen bit of visibility map.
 	 */
 	scan_all = TransactionIdPrecedesOrEquals(onerel->rd_rel->relfrozenxid,
 											 xidFullScanLimit);
@@ -253,7 +255,8 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	 * NB: We need to check this before truncating the relation, because that
 	 * will change ->rel_pages.
 	 */
-	if (vacrelstats->scanned_pages < vacrelstats->rel_pages)
+	if ((vacrelstats->scanned_pages + vacrelstats->vmskipped_frozen_pages)
+		< vacrelstats->rel_pages)
 	{
 		Assert(!scan_all);
 		scanned_all = false;
@@ -274,9 +277,9 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	 * Update statistics in pg_class.
 	 *
 	 * A corner case here is that if we scanned no pages at all because every
-	 * page is all-visible, we should not update relpages/reltuples, because
-	 * we have no new information to contribute.  In particular this keeps us
-	 * from replacing relpages=reltuples=0 (which means "unknown tuple
+	 * page is all-visible or all-forzen, we should not update relpages/reltuples,
+	 * because we have no new information to contribute.  In particular this keeps
+	 * us from replacing relpages=reltuples=0 (which means "unknown tuple
 	 * density") with nonzero relpages and reltuples=0 (which means "zero
 	 * tuple density") unless there's some actual evidence for the latter.
 	 *
@@ -354,10 +357,11 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 							 get_namespace_name(RelationGetNamespace(onerel)),
 							 RelationGetRelationName(onerel),
 							 vacrelstats->num_index_scans);
-			appendStringInfo(&buf, _("pages: %u removed, %u remain, %u skipped due to pins\n"),
+			appendStringInfo(&buf, _("pages: %u removed, %u remain, %u skipped due to pins, %u skipped according to vm\n"),
 							 vacrelstats->pages_removed,
 							 vacrelstats->rel_pages,
-							 vacrelstats->pinskipped_pages);
+							 vacrelstats->pinskipped_pages,
+							 vacrelstats->vmskipped_frozen_pages);
 			appendStringInfo(&buf,
 							 _("tuples: %.0f removed, %.0f remain, %.0f are dead but not yet removable\n"),
 							 vacrelstats->tuples_deleted,
@@ -480,9 +484,12 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 	 * consecutive pages.  Since we're reading sequentially, the OS should be
 	 * doing readahead for us, so there's no gain in skipping a page now and
 	 * then; that's likely to disable readahead and so be counterproductive.
-	 * Also, skipping even a single page means that we can't update
-	 * relfrozenxid, so we only want to do it if we can skip a goodly number
-	 * of pages.
+	 * Also, skipping even a single page according to all-visible bit of
+	 * visibility map means that we might not be able to update relfrozenxid,
+	 * so we on ly want to do if if we can skip a goodly number. On the other hand,
+	 * we count both how many pages we skipped according to all-frozen bit and
+	 * how many pages we froze, so we can update relfrozenxid if the sum of two
+	 * is as many as the number of pages of table.
 	 *
 	 * Before entering the main loop, establish the invariant that
 	 * next_not_all_visible_block is the next block number >= blkno that's not
@@ -492,18 +499,18 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 	 * started skipping blocks, we may as well skip everything up to the next
 	 * not-all-visible block.
 	 *
-	 * Note: if scan_all is true, we won't actually skip any pages; but we
+	 * Note: if scan_all is true, we might not actually skip any pages; but we
 	 * maintain next_not_all_visible_block anyway, so as to set up the
 	 * all_visible_according_to_vm flag correctly for each page.
 	 *
 	 * Note: The value returned by visibilitymap_get_status could be slightly
 	 * out-of-date, since we make this test before reading the corresponding
 	 * heap page or locking the buffer.  This is OK.  If we mistakenly think
-	 * that the page is all-visible when in fact the flag's just been cleared,
-	 * we might fail to vacuum the page.  But it's OK to skip pages when
-	 * scan_all is not set, so no great harm done; the next vacuum will find
-	 * them.  If we make the reverse mistake and vacuum a page unnecessarily,
-	 * it'll just be a no-op.
+	 * that the page is all-visible/all-frozen when in fact the flag's just 
+	 * been cleared, we might fail to vacuum the page.  But it's OK to skip
+	 * pages when scan_all is not set, so no great harm done; the next vacuum
+	 * will find them.  If we make the reverse mistake and vacuum a page
+	 * unnecessarily, it'll just be a no-op.
 	 *
 	 * We will scan the table's last page, at least to the extent of
 	 * determining whether it has tuples or not, even if it should be skipped
@@ -536,9 +543,13 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		bool		tupgone,
 					hastup;
 		int			prev_dead_count;
-		int			nfrozen;
+		int			nfrozen; /* # of tuple is frozen */
+		int			nalready_frozen; /* # of tuples is already frozen */
+		int			ntotal_frozen; /* # of frozen tuples in single page */
+		int			ntup_per_page;
 		Size		freespace;
 		bool		all_visible_according_to_vm;
+		bool		all_frozen_according_to_vm;
 		bool		all_visible;
 		bool		all_frozen = true;	/* provided all_visible is also true */
 		bool		has_dead_tuples;
@@ -570,13 +581,27 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 			else
 				skipping_all_visible_blocks = false;
 			all_visible_according_to_vm = false;
+			all_frozen_according_to_vm = false;
 		}
 		else
 		{
-			/* Current block is all-visible */
-			if (skipping_all_visible_blocks && !scan_all && !FORCE_CHECK_PAGE())
+			/*
+			 * This block is at least all-visible according to visibility map.
+			 * Weh check whether this block is all-frozen or not, to skipt to 
+			 * scan this page even if scan_all is true.
+			 */
+			bool	all_frozen = VM_ALL_FROZEN(onerel, blkno, &vmbuffer);
+
+			if (scan_all && all_frozen && !FORCE_CHECK_PAGE())
+			{
+				vacrelstats->vmskipped_frozen_pages++;
 				continue;
+			}
+			else if (skipping_all_visible_blocks && !scan_all && !FORCE_CHECK_PAGE())
+				continue;
+
 			all_visible_according_to_vm = true;
+			all_frozen_according_to_vm = all_frozen;
 		}
 
 		vacuum_delay_point();
@@ -793,6 +818,8 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		all_visible = true;
 		has_dead_tuples = false;
 		nfrozen = 0;
+		nalready_frozen = 0;
+		ntup_per_page = 0;
 		hastup = false;
 		prev_dead_count = vacrelstats->num_dead_tuples;
 		maxoff = PageGetMaxOffsetNumber(page);
@@ -947,6 +974,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 			else
 			{
 				num_tuples += 1;
+				ntup_per_page += 1;
 				hastup = true;
 
 				/*
@@ -997,6 +1025,9 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 			END_CRIT_SECTION();
 		}
 
+		/* Compute total number of frozen tuples in single page */
+		ntotal_frozen = nfrozen + nalready_frozen;
+
 		/*
 		 * If there are no indexes then we can vacuum the page right now
 		 * instead of doing a second scan.
@@ -1019,33 +1050,45 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 
 		freespace = PageGetHeapFreeSpace(page);
 
-		/* mark page all-visible, if appropriate */
-		if (all_visible && !all_visible_according_to_vm)
+		/* If this page is all visible, consider to set all-visible and all-frozen */
+		if (all_visible)
 		{
-			uint8	flags = VISIBILITYMAP_ALL_VISIBLE;
+			uint8 flags = 0;
 
-			/*
-			 * It should never be the case that the visibility map page is set
-			 * while the page-level bit is clear, but the reverse is allowed
-			 * (if checksums are not enabled).  Regardless, set the both bits
-			 * so that we get back in sync.
-			 *
-			 * NB: If the heap page is all-visible but the VM bit is not set,
-			 * we don't need to dirty the heap page.  However, if checksums
-			 * are enabled, we do need to make sure that the heap page is
-			 * dirtied before passing it to visibilitymap_set(), because it
-			 * may be logged.  Given that this situation should only happen in
-			 * rare cases after a crash, it is not worth optimizing.
-			 */
-			PageSetAllVisible(page);
-			if (all_frozen)
+			/* mark page all-visible, if appropriate */
+			if (all_visible && !all_visible_according_to_vm)
+			{
+				/*
+				 * It should never be the case that the visibility map page is set
+				 * while the page-level bit is clear, but the reverse is allowed
+				 * (if checksums are not enabled).  Regardless, set the both bits
+				 * so that we get back in sync.
+				 *
+				 * NB: If the heap page is all-visible but the VM bit is not set,
+				 * we don't need to dirty the heap page.  However, if checksums
+				 * are enabled, we do need to make sure that the heap page is
+				 * dirtied before passing it to visibilitymap_set(), because it
+				 * may be logged.  Given that this situation should only happen in
+				 * rare cases after a crash, it is not worth optimizing.
+				 */
+				PageSetAllVisible(page);
+				flags |= VISIBILITYMAP_ALL_VISIBLE;
+			}
+
+			/* Mark page as all-frozen, if all tuples are frozen and not marked yet */
+			if ((all_frozen || (ntotal_frozen = ntup_per_page)) &&
+				!all_frozen_according_to_vm)
 			{
 				PageSetAllFrozen(page);
 				flags |= VISIBILITYMAP_ALL_FROZEN;
 			}
-			MarkBufferDirty(buf);
-			visibilitymap_set(onerel, blkno, buf, InvalidXLogRecPtr,
-							  vmbuffer, visibility_cutoff_xid, flags);
+
+			if (flags)
+			{
+				MarkBufferDirty(buf);
+				visibilitymap_set(onerel, blkno, buf, InvalidXLogRecPtr,
+								  vmbuffer, visibility_cutoff_xid, flags);
+			}
 		}
 
 		/*
@@ -1058,7 +1101,12 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		else if (all_visible_according_to_vm && !PageIsAllVisible(page)
 				 && VM_ALL_VISIBLE(onerel, blkno, &vmbuffer))
 		{
-			elog(WARNING, "page is not marked all-visible but visibility map bit is set in relation \"%s\" page %u",
+			/* If the all-frozen bit is set then all-visible bit must be set */
+			if (all_frozen_according_to_vm)
+				Assert(VM_ALL_FROZEN(onerel, blkno, &vmbuffer) &&
+					   VM_ALL_VISIBLE(onerel, blkno, &vmbuffer));
+
+			elog(WARNING, "page is not marked all-visible (and all-frozen) but visibility map bit is set in relation \"%s\" page %u",
 				 relname, blkno);
 			visibilitymap_clear(onerel, blkno, vmbuffer);
 		}
@@ -1066,19 +1114,25 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		/*
 		 * It's possible for the value returned by GetOldestXmin() to move
 		 * backwards, so it's not wrong for us to see tuples that appear to
-		 * not be visible to everyone yet, while PD_ALL_VISIBLE is already
-		 * set. The real safe xmin value never moves backwards, but
+		 * not be visible to everyone yet, while PD_ALL_VISIBLE (and PD_ALL_FROZEN)
+		 * are already set. The real safe xmin value never moves backwards, but
 		 * GetOldestXmin() is conservative and sometimes returns a value
 		 * that's unnecessarily small, so if we see that contradiction it just
 		 * means that the tuples that we think are not visible to everyone yet
-		 * actually are, and the PD_ALL_VISIBLE flag is correct.
+		 * actually are, and the PD_ALL_VISIBLE (and PD_ALL_FROZEN) flag are
+		 * correct.
 		 *
 		 * There should never be dead tuples on a page with PD_ALL_VISIBLE
 		 * set, however.
 		 */
 		else if (PageIsAllVisible(page) && has_dead_tuples)
 		{
-			elog(WARNING, "page containing dead tuples is marked as all-visible in relation \"%s\" page %u",
+			/* If the all-frozen bit is set then all-visible bit must be set */
+			if (all_frozen_according_to_vm)
+				Assert(VM_ALL_FROZEN(onerel, blkno, &vmbuffer) &&
+					   VM_ALL_VISIBLE(onerel, blkno, &vmbuffer));
+
+			elog(WARNING, "page containing dead tuples is marked as all-visible (and all-frozen) in relation \"%s\" page %u",
 				 relname, blkno);
 			PageClearAllVisible(page);
 			MarkBufferDirty(buf);

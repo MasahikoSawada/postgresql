@@ -5984,7 +5984,7 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </term>
       <listitem>
        <para>
-        <command>VACUUM</> performs a whole-table scan if the table's
+        <command>VACUUM</> performs an eager freezing if the table's
         <structname>pg_class</>.<structfield>relfrozenxid</> field has reached
         the age specified by this setting.  The default is 150 million
         transactions.  Although users can set this value anywhere from zero to
@@ -6028,7 +6028,7 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </term>
       <listitem>
        <para>
-        <command>VACUUM</> performs a whole-table scan if the table's
+        <command>VACUUM</> performs an eager freezing if the table's
         <structname>pg_class</>.<structfield>relminmxid</> field has reached
         the age specified by this setting.  The default is 150 million multixacts.
         Although users can set this value anywhere from zero to two billions,
