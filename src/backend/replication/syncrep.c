@@ -794,11 +794,15 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 	{
 		syncgroup_scanner_init(*newval);
 		parse_rc = syncgroup_yyparse();
+		syncgroup_scanner_finish();
 
 		if (parse_rc != 0)
+		{
+			GUC_check_errcode(ERRCODE_SYNTAX_ERROR);
+			GUC_check_errdetail("invalid syntax: could not parse synchronous_standby_names: error code %d",
+								parse_rc);
 			return false;
-
-		syncgroup_scanner_finish();
+		}
 
 		/*
 		 * Any additional validation of standby names should go here.
@@ -829,10 +833,10 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 
 			if (!has_asterisk)
 			{
-				SyncRepClearStandbyGroupList(SyncRepStandbys);
-				ereport(ERROR,
-						(errcode(ERRCODE_CONFIG_FILE_ERROR),
-						 (errmsg_internal("The configured number of synchronous standbys exceeds the length of the group of standby names: %d", SyncRepStandbys->sync_num))));
+				GUC_check_errcode(ERRCODE_CONFIG_FILE_ERROR);
+				GUC_check_errdetail("The configured number of synchronous standbys exceeds the length of the group of standby names: %d",
+									SyncRepStandbys->sync_num);
+				return false;
 			}
 		}
 
@@ -868,8 +872,6 @@ assign_synchronous_commit(int newval, void *extra)
 void
 assign_synchronous_standby_names(const char *newval, void *extra)
 {
-	int	parse_rc;
-
 	/*
 	 * Before assign paramter, clear previous configuration,
 	 * if there is.
@@ -880,14 +882,7 @@ assign_synchronous_standby_names(const char *newval, void *extra)
 	if (newval != NULL && newval[0] != '\0')
 	{
 		syncgroup_scanner_init(newval);
-		parse_rc = syncgroup_yyparse();
-
-		if (parse_rc != 0)
-			ereport(ERROR,
-					(errcode(ERRCODE_SYNTAX_ERROR),
-					 (errmsg_internal("invalid syntax: could not parse synchronous_standby_names: error code %d",
-									  parse_rc))));
-
+		syncgroup_yyparse();
 		syncgroup_scanner_finish();
 	}
 }
