@@ -1,3 +1,4 @@
+
 =pod
 
 =head1 NAME
@@ -106,18 +107,15 @@ of finding port numbers, registering instances for cleanup, etc.
 
 sub new
 {
-	my $class  = shift;
-	my $name   = shift;
-	my $pghost = shift;
-	my $pgport = shift;
+	my ($class, $name, $pghost, $pgport) = @_;
 	my $testname = basename($0);
 	$testname =~ s/\.[^.]+$//;
-	my $self   = {
-		_port     => $pgport,
-		_host     => $pghost,
-		_basedir  => TestLib::tempdir("data_" . $name),
-		_name     => $name,
-		_logfile  => "$TestLib::log_path/${testname}_${name}.log" };
+	my $self = {
+		_port    => $pgport,
+		_host    => $pghost,
+		_basedir => TestLib::tempdir("data_" . $name),
+		_name    => $name,
+		_logfile => "$TestLib::log_path/${testname}_${name}.log" };
 
 	bless $self, $class;
 	$self->dump_info;
@@ -367,7 +365,7 @@ sub init
 	$params{hba_permit_replication} = 1
 	  unless defined $params{hba_permit_replication};
 	$params{allows_streaming} = 0 unless defined $params{allows_streaming};
-	$params{has_archiving} = 0 unless defined $params{has_archiving};
+	$params{has_archiving}    = 0 unless defined $params{has_archiving};
 	$params{allows_sync_rep} = 0 unless defined $params{allows_sync_rep};
 
 	mkdir $self->backup_dir;
@@ -410,7 +408,7 @@ sub init
 	close $conf;
 
 	$self->set_replication_conf if $params{hba_permit_replication};
-	$self->enable_archiving if $params{has_archiving};
+	$self->enable_archiving     if $params{has_archiving};
 }
 
 =pod
@@ -497,7 +495,7 @@ sub init_from_backup
 
 	$params{has_streaming} = 0 unless defined $params{has_streaming};
 	$params{hba_permit_replication} = 1
-	   unless defined $params{hba_permit_replication};
+	  unless defined $params{hba_permit_replication};
 	$params{has_restoring} = 0 unless defined $params{has_restoring};
 
 	print
@@ -519,7 +517,7 @@ sub init_from_backup
 		qq(
 port = $port
 ));
-	$self->set_replication_conf if $params{hba_permit_replication};
+	$self->set_replication_conf         if $params{hba_permit_replication};
 	$self->enable_streaming($root_node) if $params{has_streaming};
 	$self->enable_restoring($root_node) if $params{has_restoring};
 }
@@ -612,19 +610,19 @@ sub promote
 	my $logfile = $self->logfile;
 	my $name    = $self->name;
 	print "### Promoting node \"$name\"\n";
-	TestLib::system_log('pg_ctl', '-D', $pgdata, '-l', $logfile,
-						'promote');
+	TestLib::system_log('pg_ctl', '-D', $pgdata, '-l', $logfile, 'promote');
 }
 
 # Internal routine to enable streaming replication on a standby node.
 sub enable_streaming
 {
-	my ($self, $root_node)  = @_;
+	my ($self, $root_node) = @_;
 	my $root_connstr = $root_node->connstr;
-	my $name    = $self->name;
+	my $name         = $self->name;
 
 	print "### Enabling streaming replication for node \"$name\"\n";
-	$self->append_conf('recovery.conf', qq(
+	$self->append_conf(
+		'recovery.conf', qq(
 primary_conninfo='$root_connstr application_name=$name'
 standby_mode=on
 ));
@@ -633,7 +631,7 @@ standby_mode=on
 # Internal routine to enable archive recovery command on a standby node
 sub enable_restoring
 {
-	my ($self, $root_node)  = @_;
+	my ($self, $root_node) = @_;
 	my $path = $root_node->archive_dir;
 	my $name = $self->name;
 
@@ -646,11 +644,13 @@ sub enable_restoring
 	# first. Paths also need to be double-quoted to prevent failures where
 	# the path contains spaces.
 	$path =~ s{\\}{\\\\}g if ($TestLib::windows_os);
-	my $copy_command = $TestLib::windows_os ?
-		qq{copy "$path\\\\%f" "%p"} :
-		qq{cp $path/%f %p};
+	my $copy_command =
+	  $TestLib::windows_os
+	  ? qq{copy "$path\\\\%f" "%p"}
+	  : qq{cp $path/%f %p};
 
-	$self->append_conf('recovery.conf', qq(
+	$self->append_conf(
+		'recovery.conf', qq(
 restore_command = '$copy_command'
 standby_mode = on
 ));
@@ -672,12 +672,14 @@ sub enable_archiving
 	# first. Paths also need to be double-quoted to prevent failures where
 	# the path contains spaces.
 	$path =~ s{\\}{\\\\}g if ($TestLib::windows_os);
-	my $copy_command = $TestLib::windows_os ?
-		qq{copy "%p" "$path\\\\%f"} :
-		qq{cp %p $path/%f};
+	my $copy_command =
+	  $TestLib::windows_os
+	  ? qq{copy "%p" "$path\\\\%f"}
+	  : qq{cp %p $path/%f};
 
 	# Enable archive_mode and archive_command on node
-	$self->append_conf('postgresql.conf', qq(
+	$self->append_conf(
+		'postgresql.conf', qq(
 archive_mode = on
 archive_command = '$copy_command'
 ));
