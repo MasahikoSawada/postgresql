@@ -84,7 +84,7 @@ create_name_node(char *name)
 
 	/* Common information */
 	name_node->type = SYNC_REP_GROUP_NAME;
-	name_node->name = asc_tolower(name, strlen(name));
+	name_node->name = strdup(asc_tolower(name, strlen(name)));
 	name_node->next = NULL;
 
 	/* For GROUP node */

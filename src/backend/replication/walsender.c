@@ -2784,7 +2784,8 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 	{
 		sync_standbys = (int *) palloc(sizeof(int) * SyncRepStandbys->sync_num);
 		LWLockAcquire(SyncRepLock, LW_SHARED);
-		num_sync = SyncRepGetSyncStandbysUsingPriority(SyncRepStandbys, sync_standbys);
+		num_sync = SyncRepStandbys->SyncRepGetSyncStandbysFn(SyncRepStandbys,
+															 sync_standbys);
 		LWLockRelease(SyncRepLock);
 	}
 

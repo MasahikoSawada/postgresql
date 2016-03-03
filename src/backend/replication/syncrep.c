@@ -330,8 +330,12 @@ SyncRepCleanupAtProcExit(void)
 void
 SyncRepClearStandbyGroupList(SyncGroupNode *group)
 {
-	SyncGroupNode *node = group->members;
+	SyncGroupNode *node;
 
+	if (!group)
+		return;
+
+	node = group->members;
 	while (node != NULL)
 	{
 		SyncGroupNode *tmp = node->next;
@@ -410,7 +414,7 @@ SyncRepStandbyIsSync(volatile WalSnd *walsnd)
  * We obtain safe written and flush LSNs, and then release waiters using
  * these LSNs.
  *
- * Other policies are possible, which would change what we do here and
+ * Other policies are possible, which would change what we do here and what
  * perhaps also which information we store as well.
  */
 void
@@ -424,9 +428,9 @@ SyncRepReleaseWaiters(void)
 
 	/*
 	 * If this WALSender is serving a standby that is not on the list of
-	 * potential sync standbys then we have nothing to do. If we are still
-	 * starting up, still running base backup or the current flush position
-	 * is still invalid, then leave quickly also.
+	 * potential synchronous standbys then we have nothing to do. If we are
+	 * still starting up, still running base backup or the current flush
+	 *  position is still invalid, then leave quickly also.
 	 */
 	if (MyWalSnd->sync_standby_priority == 0 ||
 		MyWalSnd->state < WALSNDSTATE_STREAMING ||
@@ -622,8 +626,6 @@ SyncRepGetStandbyPriority(void)
 		for (node = SyncRepStandbys->members; node != NULL; node = node->next)
 		{
 			priority++;
-
-			elog(NOTICE, "node->name : %s, application_name : %s", node->name, application_name);
 
 			if (pg_strcasecmp(node->name, application_name) == 0 ||
 				pg_strcasecmp(node->name, "*") == 0)
