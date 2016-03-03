@@ -442,6 +442,7 @@ SyncRepReleaseWaiters(void)
 	if (!(SyncRepSyncedLsnAdvancedTo(&write_pos, &flush_pos)))
 	{
 		LWLockRelease(SyncRepLock);
+		announce_next_takeover = true;
 		return;
 	}
 

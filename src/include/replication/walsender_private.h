@@ -19,8 +19,6 @@
 #include "storage/shmem.h"
 #include "storage/spin.h"
 
-#define MAX_WALSENDER_NAME 8192
-
 typedef enum WalSndState
 {
 	WALSNDSTATE_STARTUP = 0,
