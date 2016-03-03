@@ -2825,7 +2825,7 @@ include_dir 'conf.d'
         using either of two syntaxes: a comma-separated list, or a more flexible syntax
         described in <xref linkend="synchronous-replication">.
         Transactions waiting for commit will be allowed to proceed after a
-        configurable subset of standby servers confirms receipt receipt of their data.
+        configurable subset of standby servers confirms receipt of their data.
         For the simple comma-separated list syntax, it is one server.
         The synchronous standbys will be those named in this parameter that are both
         currently connected and streaming data in real-time (as shown by a state

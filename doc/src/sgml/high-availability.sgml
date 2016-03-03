@@ -1038,7 +1038,7 @@ primary_slot_name = 'node_a_slot'
     write transaction will wait until confirmation is
     received that the commit has been written to the transaction log on disk
     of both the primary and standby servers. The only possibility that data
-    can be lost is if both the primary and the standbys suffer crashes at the
+    can be lost is if both the primary and the standbys suffer crash at the
     same time. This can provide a much higher level of durability, though only
     if the sysadmin is cautious about the placement and management of the these
     servers.  Waiting for confirmation increases the user's confidence that the
@@ -1134,7 +1134,7 @@ primary_slot_name = 'node_a_slot'
     </synopsis>
 
    <para>
-    This syntax allows us to to define a synchronous group that will wait for at
+    This syntax allows us to define a synchronous group that will wait for at
     least N standbys, and a comma-separated list of group members.  The special
     value <literal>*</> matches any standby. The number N must not be greater
     than the number of members listed in the group, unless <literal>*</> is
