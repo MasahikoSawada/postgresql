@@ -1027,10 +1027,10 @@ primary_slot_name = 'node_a_slot'
 
    <para>
     Synchronous replication offers the ability to confirm that all changes
-    made by a transcation have been transferred to one or more synchronous standby
-    server. This extends that standard levelof durability
+    made by a transaction have been transferred to one or more synchronous standby
+    server. This extends that standard level of durability
     offered by a transaction commit. This level of protection is referred
-    to as 2-safe replication in computer science theory.
+    to as group-safe replication in computer science theory.
    </para>
 
    <para>
@@ -1044,7 +1044,8 @@ primary_slot_name = 'node_a_slot'
     servers.  Waiting for confirmation increases the user's confidence that the
     changes will not be lost in the event of server crashes but it also
     necessarily increases the response time for the requesting transaction.
-    The minimum wait time is the roundtrip time between primary to standbys.
+    The minimum wait time is the roundtrip time between the primary and the
+    almost synchronous standby.
    </para>
 
    <para>
@@ -1125,7 +1126,7 @@ primary_slot_name = 'node_a_slot'
 
    <para>
     Multiple synchronous replication is set up by setting <xref linkend="guc-synchronous-standby-names">
-    using dedicated language. The syntax of dedicated language is following.
+    using the following syntax.
    </para>
     
     <synopsis>
@@ -1133,19 +1134,19 @@ primary_slot_name = 'node_a_slot'
     </synopsis>
 
    <para>
-    Using dedicated language, we can define a synchronous group with a number N.
-    synchronous group can have some members which are consdiered as synchronous standby using comma-separated list.
-    Any standby name is accepted at any position of its list, but '*' is accepted at only tailing of the standby list.
-    The leading N is a number which specifies that how many standbys the master server waits to commit for. This number
-    must be less than actual number of members of its group.
-    The listed standby are given highest priority from left defined starting with 1.
+    This syntax allows us to to define a synchronous group that will wait for at
+    least N standbys, and a comma-separated list of group members.  The special
+    value <literal>*</> matches any standby. The number N must not be greater
+    than the number of members listed in the group, unless <literal>*</> is
+    used.  Priority is given to servers in the order that the appear in the list.
+    The first named server has the highest priority.
    </para>
 
    <note>
     <para>
-    All ASCII characters except for special characters(',', '&quot', '[', ']', ' ') are allowed as standby name.
-    When these special characters are used as standby name, whole standby name string need to be written in
-    double-quoted representation.
+    All ASCII characters except for special characters(',', '&quot', '[', ']', ' ') are
+    allowed in unquoted standby names.  To use these special characters, the standby
+    name should be enclosed in double quotes.
     </para>
    </note>
 

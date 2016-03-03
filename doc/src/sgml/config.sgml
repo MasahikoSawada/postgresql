@@ -2821,17 +2821,18 @@ include_dir 'conf.d'
       </term>
       <listitem>
        <para>
-        Specifies a standby names that can support <firstterm>synchronous replication</> using
-        either two types of syntax; comma-separated list or dedicated language, as
+        Specifies the standby names that can support <firstterm>synchronous replication</>
+        using either of two syntaxes: a comma-separated list, or a more flexible syntax
         described in <xref linkend="synchronous-replication">.
-        Transcations waiting for commit will be allowed to proceed after the
-        specified number of standby servers confirms receipt of their data.
+        Transactions waiting for commit will be allowed to proceed after a
+        configurable subset of standby servers confirms receipt receipt of their data.
+        For the simple comma-separated list syntax, it is one server.
         The synchronous standbys will be those named in this parameter that are both
         currently connected and streaming data in real-time (as shown by a state
         of <literal>streaming</> in the
         <link linkend="monitoring-stats-views-table">
         <literal>pg_stat_replication</></link> view).
-        If the current any of synchronous standbys disconnects for whatever reason,
+        If the any of the current synchronous standbys disconnects for whatever reason,
         it will be replaced immediately with the next-highest-priority standby.
         Specifying more than one standby name can allow very high availability.
        </para>
@@ -2841,7 +2842,7 @@ include_dir 'conf.d'
         <varname>primary_conninfo</> of the standby's WAL receiver.  There is
         no mechanism to enforce uniqueness. For each specified standby name,
         only the specified count of standbys will be chosen to be synchronous
-        standbys, though exactly which one is indeterminate, the rest will
+        standbys, though exactly which ones is indeterminate.  The rest will
         represent potential synchronous standbys.
         The special entry <literal>*</> matches any
         <varname>application_name</>, including the default application name

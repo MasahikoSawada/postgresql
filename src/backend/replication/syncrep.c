@@ -34,13 +34,13 @@
  * synchronous standby it must have caught up with the primary; that may
  * take some time. Once caught up, the current highest priority standby
  * will release waiters from the queue.
- * In 9.5 we support the possibility to have multiple synchronous standbys,
- * as defined in synchronous_standby_names. Before on standby can become a
+ * In 9.6 we support the possibility to have multiple synchronous standbys,
+ * as defined in synchronous_standby_names. Before a standby can become a
  * synchronous standby it must have caught up with the primary;
  * that may take some time.
  *
  * Waiters will be released from the queue once the number of standbys
- * specified in synchronous_standby_names have caught.
+ * specified in synchronous_standby_names have processed the commit record.
  *
  * Portions Copyright (c) 2010-2016, PostgreSQL Global Development Group
  *
@@ -336,7 +336,9 @@ SyncRepClearStandbyGroupList(SyncGroupNode *group)
 	{
 		SyncGroupNode *tmp = node->next;
 
-		free(node);
+		if (node)
+			free(node);
+
 		node = tmp;
 	}
 }
@@ -378,7 +380,8 @@ SyncRepInitConfig(void)
 
 /*
  * Check whether specified standby is active, which means not only having
- * pid but also having any priority and valid flush position reported.
+ * pid but also having a non-zero priority (meaning it is configured as
+ * potential synchronous standby) and a valid flush position reported.
  */
 static bool
 SyncRepStandbyIsSync(volatile WalSnd *walsnd)
@@ -403,8 +406,9 @@ SyncRepStandbyIsSync(volatile WalSnd *walsnd)
 }
 
 /*
- * Update the LSNs on each queue based upon our latest state. This
- * implements a simple policy of first-valid-standby-releases-waiter.
+ * Update the LSNs on each queue based upon our latest state.
+ * We obtain safe written and flush LSNs, and then release waiters using
+ * these LSNs.
  *
  * Other policies are possible, which would change what we do here and what
  * perhaps also which information we store as well.
@@ -472,9 +476,10 @@ SyncRepReleaseWaiters(void)
 }
 
 /*
- * Return true if we have enough synchrononized standbys and the 'safe' written
- * flushed LSNs, which are LSNs assured in all standbys considered should be
- * synchronized.
+ * Return true if we have enough synchronous standbys. If true, also store
+ * the 'safe' write and flush position in the output parameters write_pos
+ * and flush_pos, but only if the standby managed by this walsender is one of
+ * the standbys that has reached each safe position respectively.
  */
 static bool
 SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
@@ -490,7 +495,7 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 	if (!got_lsns)
 		return false;
 
-	/* Check whether each LSN has advanced to */
+	/* Check whether this standby has reached the safe positions */
 	if (MyWalSnd->write >= safe_write_pos)
 		*write_pos = safe_write_pos;
 	if (MyWalSnd->flush >= safe_flush_pos)
@@ -501,7 +506,7 @@ SyncRepSyncedLsnAdvancedTo(XLogRecPtr *write_pos, XLogRecPtr *flush_pos)
 
 /*
  * Decide synced LSNs at this moment using priority method.
- * If there are not active standbys enough to determine LSNs, return false.
+ * If there are not enough active standby to determine LSNs, return false.
  */
 bool
 SyncRepGetSyncedLsnsUsingPriority(SyncGroupNode *group, XLogRecPtr *write_pos,
@@ -546,14 +551,14 @@ SyncRepGetSyncedLsnsUsingPriority(SyncGroupNode *group, XLogRecPtr *write_pos,
 }
 
 /*
- * Return the positions of the first group->sync_num synchronized standbys
+ * Write the positions of the first group->sync_num synchronous standbys
  * in group->member list into sync_list. sync_list is assumed to have enough
- * space for at least group->sync_num elements.
+ * space for at least group->sync_num elements. Return the number found.
  */
 int
 SyncRepGetSyncStandbysUsingPriority(SyncGroupNode *group, int *sync_list)
 {
-	int	target_priority = 1; /* lowest priority is 1 */
+	int	target_priority = 1; /* highest priority is 1 */
 	int	num = 0;
 	int i;
 
@@ -823,14 +828,14 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 			{
 				SyncRepClearStandbyGroupList(SyncRepStandbys);
 				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 (errmsg_internal("The number of group memebers must be less than its group waits."))));
+						(errcode(ERRCODE_CONFIG_FILE_ERROR),
+						 (errmsg_internal("The configured number of synchronous standbys exceeds the length of the group of standby names: %d", SyncRepStandbys->sync_num))));
 			}
 		}
 
 		/*
 		 * syncgroup_yyparse sets the global SyncRepStandbys as side effect.
-		 * But this function is required to just check, so frees SyncRepStandbyNanes
+		 * But this function is required to just check, so frees SyncRepStandbys
 		 * once parsing parameter.
 		 */
 		SyncRepClearStandbyGroupList(SyncRepStandbys);
@@ -877,10 +882,9 @@ assign_synchronous_standby_names(const char *newval, void *extra)
 		if (parse_rc != 0)
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
-					 (errmsg_internal("Invalid syntax. synchronous_standby_names parse returned %d",
+					 (errmsg_internal("invalid syntax: could not parse synchronous_standby_names: error code %d",
 									  parse_rc))));
 
-		GUC_check_errdetail("Invalid syntax");
 		syncgroup_scanner_finish();
 	}
 }
