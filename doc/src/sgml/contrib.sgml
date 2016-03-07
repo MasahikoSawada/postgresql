@@ -127,6 +127,7 @@ CREATE EXTENSION <replaceable>module_name</> FROM unpackaged;
  &pgbuffercache;
  &pgcrypto;
  &pgfreespacemap;
+ &pgvisibilitymap;
  &pgprewarm;
  &pgrowlocks;
  &pgstatstatements;

@@ -5,19 +5,19 @@
 
 -- Show visibility map information.
 CREATE FUNCTION pg_visibilitymap(regclass, bigint)
-RETURNS int4
+RETURNS int2
 AS 'MODULE_PATHNAME', 'pg_visibilitymap'
 LANGUAGE C STRICT;
 
 -- Show page status information.
 CREATE FUNCTION pg_page_flags(regclass, bigint)
-RETURNS int4
+RETURNS int2
 AS 'MODULE_PATHNAME', 'pg_page_flags'
 LANGUAGE C STRICT;
 
 -- pg_visibilitymap shows the visibility map bits for each block in a relation
 CREATE FUNCTION
-  pg_visibilitymap(rel regclass, blkno OUT bigint, mapbits OUT int4)
+  pg_visibilitymap(rel regclass, blkno OUT bigint, mapbits OUT int2)
 RETURNS SETOF RECORD
 AS $$
   SELECT blkno, pg_visibilitymap($1, blkno) AS mapbits
@@ -29,8 +29,8 @@ LANGUAGE SQL;
 -- block in a relation.  this is more expensive than pg_visibilitymap since
 -- we must read all of the pages.
 CREATE FUNCTION
-  pg_visibility(rel regclass, blkno OUT bigint, mapbits OUT int4,
-                pagebits OUT int4)
+  pg_visibility(rel regclass, blkno OUT bigint, mapbits OUT int2,
+                pagebits OUT int2)
 RETURNS SETOF RECORD
 AS $$
   SELECT blkno, pg_visibilitymap($1, blkno) AS mapbits,

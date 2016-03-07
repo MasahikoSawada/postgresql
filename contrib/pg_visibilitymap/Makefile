@@ -7,6 +7,8 @@ EXTENSION = pg_visibilitymap
 DATA = pg_visibilitymap--1.0.sql
 PGFILEDESC = "pg_visibilitymap - monitoring of visibility map"
 
+REGRESS = pg_visibilitymap
+
 ifdef USE_PGXS
 PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
