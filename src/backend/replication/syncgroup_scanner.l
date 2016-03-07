@@ -7,19 +7,18 @@
 /* No reason to constrain amount of data slurped */
 #define YY_READ_BUF_SIZE 16777216
 
-#define BUFSIZE 8192
-
 /* Handles to the buffer that the lexer uses internally */
 static YY_BUFFER_STATE scanbufhandle;
 
 /* Functions for handling double quoted string */
 static void init_xd_string(void);
-static char *xd_string_data(void);
-static void addlit_xd_string(char *ytext);
+static void addlit_xd_string(char *ytext, int yleng);
 static void addlitchar_xd_string(unsigned char ychar);
 
-static char  *scanbuf;
-static StringInfoData xd_string;
+static int   xd_size;
+static int   xd_len;
+static char *xd_string;
+static char *scanbuf;
 %}
 
 %option 8bit
@@ -66,10 +65,11 @@ xdinside	{dquoted_name}
 				addlitchar_xd_string('\"');
 		}
 <xd>{xdinside} {
-				addlit_xd_string(yytext);
+				addlit_xd_string(yytext, yyleng);
 		}
 <xd>{xdstop} {
-				yylval.str = xd_string_data();
+				xd_string[xd_len] = '\0';
+				yylval.str = strdup(xd_string);
 				BEGIN(INITIAL);
 				return NAME;
 		}
@@ -127,23 +127,34 @@ syncgroup_scanner_finish(void)
 static void
 init_xd_string()
 {
-	initStringInfo(&xd_string);
-}
-
-static char *
-xd_string_data(void)
-{
-	return xd_string.data;
+	xd_len = 0;
+	xd_size = NAMEDATALEN;
+	xd_string = (char *)malloc(sizeof(char) * NAMEDATALEN);
 }
 
 static void
-addlit_xd_string(char *ytext)
+addlit_xd_string(char *ytext, int yleng)
 {
-	appendStringInfoString(&xd_string, ytext);
+	/* Enlarge buffer if needed */
+	if ((xd_len + yleng) > NAMEDATALEN)
+	{
+		xd_string = realloc(xd_string, xd_size + NAMEDATALEN);
+		xd_size += NAMEDATALEN;
+	}
+
+	memcpy(xd_string + xd_len, ytext, yleng);
+	xd_len += yleng;
 }
 
 static void
 addlitchar_xd_string(unsigned char ychar)
 {
-	appendStringInfoChar(&xd_string, ychar);
+	if ((xd_len + 1) > NAMEDATALEN)
+	{
+		xd_string = realloc(xd_string, xd_size + NAMEDATALEN);
+		xd_size += NAMEDATALEN;
+	}
+
+	xd_string[xd_len] = ychar;
+	xd_len += 1;
 }

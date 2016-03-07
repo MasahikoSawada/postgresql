@@ -812,6 +812,16 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 		 * yet correctly set.
 		 */
 
+		{
+			SyncGroupNode *n;
+			elog(NOTICE, "=---- %s ----=", *newval);
+			for (n = SyncRepStandbys->members; n != NULL; n = n->next)
+			{
+				elog(NOTICE, "name = %s", n->name);
+			}
+			elog(NOTICE, "=----------------------------------------=");
+		}
+
 		/*
 		 * Check whether group sync_num is not exceeded to the number of its
 		 * member. But in case where there is standby having name '*',
