@@ -13,7 +13,7 @@ static YY_BUFFER_STATE scanbufhandle;
 /* Functions for handling double quoted string */
 static void init_xd_string(void);
 static void addlit_xd_string(char *ytext, int yleng);
-static void addlitchar_xd_string(unsigned char ychar);
+static void addlitchar_xd_string(char ychar);
 
 static int   xd_size;
 static int   xd_len;
@@ -147,7 +147,7 @@ addlit_xd_string(char *ytext, int yleng)
 }
 
 static void
-addlitchar_xd_string(unsigned char ychar)
+addlitchar_xd_string(char ychar)
 {
 	if ((xd_len + 1) > NAMEDATALEN)
 	{
