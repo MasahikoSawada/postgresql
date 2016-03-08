@@ -50,7 +50,11 @@ SPECIALMAPS = euc_cn_to_utf8.map utf8_to_euc_cn.map \
 	euc_tw_to_utf8.map utf8_to_euc_tw.map \
 	sjis_to_utf8.map utf8_to_sjis.map \
 	gb18030_to_utf8.map utf8_to_gb18030.map \
-	big5_to_utf8.map utf8_to_big5.map
+	big5_to_utf8.map utf8_to_big5.map \
+	euc_jis_2004_to_utf8.map euc_jis_2004_to_utf8_combined.map \
+	utf8_to_euc_jis_2004.map utf8_to_euc_jis_2004_combined.map \
+	shift_jis_2004_to_utf8.map shift_jis_2004_to_utf8_combined.map \
+	utf8_to_shift_jis_2004.map utf8_to_shift_jis_2004_combined.map
 
 MAPS = $(GENERICMAPS) $(SPECIALMAPS)
 
@@ -59,12 +63,13 @@ ISO8859TEXTS = 8859-2.TXT 8859-3.TXT 8859-4.TXT 8859-5.TXT \
 	8859-10.TXT 8859-13.TXT 8859-14.TXT 8859-15.TXT \
 	8859-16.TXT
 
-WINTEXTS = CP866.TXT CP874.TXT CP1250.TXT CP1251.TXT \
+WINTEXTS = CP866.TXT CP874.TXT CP936.TXT CP949.TXT \
+	CP1250.TXT CP1251.TXT \
 	CP1252.TXT CP1253.TXT CP1254.TXT CP1255.TXT \
 	CP1256.TXT CP1257.TXT CP1258.TXT
 
 GENERICTEXTS = $(ISO8859TEXTS) $(WINTEXTS) \
-	KOI8-R.TXT CP936.TXT CP949.TXT JOHAB.TXT
+	KOI8-R.TXT KOI8-U.TXT JOHAB.TXT
 
 all: $(MAPS)
 
@@ -90,6 +95,12 @@ gb18030_to_utf8.map utf8_to_gb18030.map: UCS_to_GB18030.pl gb-18030-2000.xml
 	$(PERL) $<
 
 big5_to_utf8.map utf8_to_big5.map: UCS_to_BIG5.pl BIG5.TXT CP950.TXT
+	$(PERL) $<
+
+euc_jis_2004_to_utf8.map euc_jis_2004_to_utf8_combined.map utf8_to_euc_jis_2004.map utf8_to_euc_jis_2004_combined.map: UCS_to_EUC_JIS_2004.pl euc-jis-2004-std.txt
+	$(PERL) $<
+
+shift_jis_2004_to_utf8.map shift_jis_2004_to_utf8_combined.map utf8_to_shift_jis_2004.map utf8_to_shift_jis_2004_combined.map: UCS_to_SHIFT_JIS_2004.pl sjis-0213-2004-std.txt
 	$(PERL) $<
 
 distclean: clean
