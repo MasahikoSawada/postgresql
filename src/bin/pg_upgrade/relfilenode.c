@@ -15,8 +15,10 @@
 #include "access/transam.h"
 
 
-static void transfer_single_new_db(FileNameMap *maps, int size, char *old_tablespace);
-static void transfer_relfile(FileNameMap *map, const char *suffix);
+static void transfer_single_new_db(pageCnvCtx *pageConverter,
+					   FileNameMap *maps, int size, char *old_tablespace);
+static void transfer_relfile(pageCnvCtx *pageConverter, FileNameMap *map,
+				 const char *suffix);
 
 
 /*
@@ -90,6 +92,7 @@ transfer_all_new_dbs(DbInfoArr *old_db_arr, DbInfoArr *new_db_arr,
 				   *new_db = NULL;
 		FileNameMap *mappings;
 		int			n_maps;
+		pageCnvCtx *pageConverter = NULL;
 
 		/*
 		 * Advance past any databases that exist in the new cluster but not in
@@ -113,7 +116,11 @@ transfer_all_new_dbs(DbInfoArr *old_db_arr, DbInfoArr *new_db_arr,
 		{
 			print_maps(mappings, n_maps, new_db->db_name);
 
-			transfer_single_new_db(mappings, n_maps, old_tablespace);
+#ifdef PAGE_CONVERSION
+			pageConverter = setupPageConverter();
+#endif
+			transfer_single_new_db(pageConverter, mappings, n_maps,
+								   old_tablespace);
 		}
 		/* We allocate something even for n_maps == 0 */
 		pg_free(mappings);
@@ -122,13 +129,45 @@ transfer_all_new_dbs(DbInfoArr *old_db_arr, DbInfoArr *new_db_arr,
 	return;
 }
 
+
+/*
+ * get_pg_database_relfilenode()
+ *
+ *	Retrieves the relfilenode for a few system-catalog tables.  We need these
+ *	relfilenodes later in the upgrade process.
+ */
+void
+get_pg_database_relfilenode(ClusterInfo *cluster)
+{
+	PGconn	   *conn = connectToServer(cluster, "template1");
+	PGresult   *res;
+	int			i_relfile;
+
+	res = executeQueryOrDie(conn,
+							"SELECT c.relname, c.relfilenode "
+							"FROM	pg_catalog.pg_class c, "
+							"		pg_catalog.pg_namespace n "
+							"WHERE	c.relnamespace = n.oid AND "
+							"		n.nspname = 'pg_catalog' AND "
+							"		c.relname = 'pg_database' "
+							"ORDER BY c.relname");
+
+	i_relfile = PQfnumber(res, "relfilenode");
+	cluster->pg_database_oid = atooid(PQgetvalue(res, 0, i_relfile));
+
+	PQclear(res);
+	PQfinish(conn);
+}
+
+
 /*
  * transfer_single_new_db()
  *
  * create links for mappings stored in "maps" array.
  */
 static void
-transfer_single_new_db(FileNameMap *maps, int size, char *old_tablespace)
+transfer_single_new_db(pageCnvCtx *pageConverter,
+					   FileNameMap *maps, int size, char *old_tablespace)
 {
 	int			mapnum;
 	bool		vm_crashsafe_match = true;
@@ -147,7 +186,7 @@ transfer_single_new_db(FileNameMap *maps, int size, char *old_tablespace)
 			strcmp(maps[mapnum].old_tablespace, old_tablespace) == 0)
 		{
 			/* transfer primary file */
-			transfer_relfile(&maps[mapnum], "");
+			transfer_relfile(pageConverter, &maps[mapnum], "");
 
 			/* fsm/vm files added in PG 8.4 */
 			if (GET_MAJOR_VERSION(old_cluster.major_version) >= 804)
@@ -155,9 +194,9 @@ transfer_single_new_db(FileNameMap *maps, int size, char *old_tablespace)
 				/*
 				 * Copy/link any fsm and vm files, if they exist
 				 */
-				transfer_relfile(&maps[mapnum], "_fsm");
+				transfer_relfile(pageConverter, &maps[mapnum], "_fsm");
 				if (vm_crashsafe_match)
-					transfer_relfile(&maps[mapnum], "_vm");
+					transfer_relfile(pageConverter, &maps[mapnum], "_vm");
 			}
 		}
 	}
@@ -170,7 +209,8 @@ transfer_single_new_db(FileNameMap *maps, int size, char *old_tablespace)
  * Copy or link file from old cluster to new one.
  */
 static void
-transfer_relfile(FileNameMap *map, const char *type_suffix)
+transfer_relfile(pageCnvCtx *pageConverter, FileNameMap *map,
+				 const char *type_suffix)
 {
 	const char *msg;
 	char		old_file[MAXPGPATH];
@@ -228,11 +268,15 @@ transfer_relfile(FileNameMap *map, const char *type_suffix)
 		/* Copying files might take some time, so give feedback. */
 		pg_log(PG_STATUS, "%s", old_file);
 
+		if ((user_opts.transfer_mode == TRANSFER_MODE_LINK) && (pageConverter != NULL))
+			pg_fatal("This upgrade requires page-by-page conversion, "
+					 "you must use copy mode instead of link mode.\n");
+
 		if (user_opts.transfer_mode == TRANSFER_MODE_COPY)
 		{
 			pg_log(PG_VERBOSE, "copying \"%s\" to \"%s\"\n", old_file, new_file);
 
-			if ((msg = copyAndUpdateFile(old_file, new_file, true)) != NULL)
+			if ((msg = copyAndUpdateFile(pageConverter, old_file, new_file, true)) != NULL)
 				pg_fatal("error while copying relation \"%s.%s\" (\"%s\" to \"%s\"): %s\n",
 						 map->nspname, map->relname, old_file, new_file, msg);
 		}
@@ -240,7 +284,7 @@ transfer_relfile(FileNameMap *map, const char *type_suffix)
 		{
 			pg_log(PG_VERBOSE, "linking \"%s\" to \"%s\"\n", old_file, new_file);
 
-			if ((msg = linkAndUpdateFile(old_file, new_file)) != NULL)
+			if ((msg = linkAndUpdateFile(pageConverter, old_file, new_file)) != NULL)
 				pg_fatal("error while creating link for relation \"%s.%s\" (\"%s\" to \"%s\"): %s\n",
 						 map->nspname, map->relname, old_file, new_file, msg);
 		}
