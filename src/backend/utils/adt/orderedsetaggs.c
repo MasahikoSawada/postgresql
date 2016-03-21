@@ -276,13 +276,13 @@ ordered_set_startup(FunctionCallInfo fcinfo, bool use_tuples)
 												   qstate->sortOperators,
 												   qstate->sortCollations,
 												   qstate->sortNullsFirsts,
-												   work_mem, false);
+												   work_mem, NULL, false);
 	else
 		osastate->sortstate = tuplesort_begin_datum(qstate->sortColType,
 													qstate->sortOperator,
 													qstate->sortCollation,
 													qstate->sortNullsFirst,
-													work_mem, false);
+													work_mem, NULL, false);
 
 	osastate->number_of_rows = 0;
 

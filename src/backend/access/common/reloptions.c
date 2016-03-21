@@ -282,6 +282,15 @@ static relopt_int intRelOpts[] =
 		},
 		-1, 0, 1024
 	},
+	{
+		{
+			"parallel_workers",
+			"Number of parallel processes that can be used to build this relation.",
+			RELOPT_KIND_BTREE,
+			AccessExclusiveLock
+		},
+		-1, 0, 1024
+	},
 
 	/* list terminator */
 	{{NULL}}

@@ -100,7 +100,8 @@ extern double IndexBuildHeapScan(Relation heapRelation,
 				   IndexInfo *indexInfo,
 				   bool allow_sync,
 				   IndexBuildCallback callback,
-				   void *callback_state);
+				   void *callback_state,
+				   HeapScanDesc scan);
 extern double IndexBuildHeapRangeScan(Relation heapRelation,
 						Relation indexRelation,
 						IndexInfo *indexInfo,
@@ -109,7 +110,8 @@ extern double IndexBuildHeapRangeScan(Relation heapRelation,
 						BlockNumber start_blockno,
 						BlockNumber end_blockno,
 						IndexBuildCallback callback,
-						void *callback_state);
+						void *callback_state,
+						HeapScanDesc scan);
 
 extern void validate_index(Oid heapId, Oid indexId, Snapshot snapshot);
 

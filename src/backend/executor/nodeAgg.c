@@ -567,7 +567,7 @@ initialize_phase(AggState *aggstate, int newphase)
 												  sortnode->collations,
 												  sortnode->nullsFirst,
 												  work_mem,
-												  false);
+												  NULL, false);
 	}
 
 	aggstate->current_phase = newphase;
@@ -636,7 +636,7 @@ initialize_aggregate(AggState *aggstate, AggStatePerTrans pertrans,
 									  pertrans->sortOperators[0],
 									  pertrans->sortCollations[0],
 									  pertrans->sortNullsFirst[0],
-									  work_mem, false);
+									  work_mem, NULL, false);
 		else
 			pertrans->sortstates[aggstate->current_set] =
 				tuplesort_begin_heap(pertrans->evaldesc,
@@ -645,7 +645,7 @@ initialize_aggregate(AggState *aggstate, AggStatePerTrans pertrans,
 									 pertrans->sortOperators,
 									 pertrans->sortCollations,
 									 pertrans->sortNullsFirst,
-									 work_mem, false);
+									 work_mem, NULL, false);
 	}
 
 	/*

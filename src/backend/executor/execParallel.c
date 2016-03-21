@@ -355,7 +355,7 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate, int nworkers)
 	pstmt_data = ExecSerializePlan(planstate->plan, estate);
 
 	/* Create a parallel context. */
-	pcxt = CreateParallelContext(ParallelQueryMain, nworkers);
+	pcxt = CreateParallelContext(ParallelQueryMain, nworkers, false);
 	pei->pcxt = pcxt;
 
 	/*

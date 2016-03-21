@@ -175,7 +175,7 @@ typedef struct vfd
 	File		lruMoreRecently;	/* doubly linked recency-of-use list */
 	File		lruLessRecently;
 	off_t		seekPos;		/* current logical file position */
-	off_t		fileSize;		/* current size of file (0 if not temporary) */
+	off_t		fileSize;		/* current size of file (0 if unified or not temporary) */
 	char	   *fileName;		/* name of file, or NULL for unused VFD */
 	/* NB: fileName is malloc'd, and must be free'd when closing the VFD */
 	int			fileFlags;		/* open(2) flags for (re)opening the file */
@@ -239,7 +239,8 @@ static AllocateDesc *allocatedDescs = NULL;
 
 /*
  * Number of temporary files opened during the current session;
- * this is used in generation of tempfile names.
+ * this is used in generation of tempfile names (except where the backend
+ * must have a unifiable set of temp files).
  */
 static long tempFileCounter = 0;
 
@@ -294,7 +295,9 @@ static File AllocateVfd(void);
 static void FreeVfd(File file);
 
 static int	FileAccess(File file);
-static File OpenTemporaryFileInTablespace(Oid tblspcOid, bool rejectError);
+static File OpenTemporaryFileInTablespace(Oid tblspcOid, bool ownWorker,
+			  bool rejectError, int leaderpid, long tempfileident, int worker,
+			  int segment);
 static bool reserveAllocatedDesc(void);
 static int	FreeDesc(AllocateDesc *desc);
 static struct dirent *ReadDirExtended(DIR *dir, const char *dirname, int elevel);
@@ -1291,11 +1294,35 @@ PathNameOpenFile(FileName fileName, int fileFlags, int fileMode)
  * outlive the transaction that created them, so this should be false -- but
  * if you need "somewhat" temporary storage, this might be useful. In either
  * case, the file is removed when the File is explicitly closed.
+ *
+ * Unless ownWorker is true, worker temp files are treated as process-temporary
+ * (the common case), and as such are closed and deleted at transaction end.
+ * Sometimes, temp files that are open and owned in worker processes may be
+ * needed within a leader process as temp files.  File handles will need to be
+ * closed/released at Xact end, like almost any temp file, but should not be
+ * deleted.  That's the responsibility on the owning, worker process.
+ *
+ * Callers that require unifiable files should specify a "leaderpid",
+ * "tempfileident", "worker", and "segment".  This is the leader PID, an
+ * identifier produced by calling GetTempFileIdentifier() in the leader,
+ * and an ordinal identifier for the worker sufficient to disambiguate the
+ * file across backends.
+ *
+ * Note that enforcement of temp_file_limit should not be broken for
+ * callers that unify worker temp files.  File size is tracked, and
+ * temp_file_limit is enforced, just as it is for any temp file, but
+ * starts from 0 regardless of the size of the original file (the
+ * convention is that unification passes around metadata about file sizes
+ * for its own purposes, but that's of no interest here).
  */
 File
-OpenTemporaryFile(bool interXact)
+OpenTemporaryFile(bool interXact, bool ownWorker, int leaderpid,
+				  long tempfileident, int worker, int segment)
 {
 	File		file = 0;
+
+	/* interXact and ownWorker should not both be requested */
+	Assert(!interXact || !ownWorker);
 
 	/*
 	 * If some temp tablespace(s) have been given to us, try to use the next
@@ -1304,14 +1331,24 @@ OpenTemporaryFile(bool interXact)
 	 *
 	 * BUT: if the temp file is slated to outlive the current transaction,
 	 * force it into the database's default tablespace, so that it will not
-	 * pose a threat to possible tablespace drop attempts.
+	 * pose a threat to possible tablespace drop attempts.  This isn't a
+	 * risk with the parallel worker case, because the leader and its
+	 * workers work within a single transaction.
 	 */
 	if (numTempTableSpaces > 0 && !interXact)
 	{
-		Oid			tblspcOid = GetNextTempTableSpace();
+		Oid			tblspcOid = GetNextTempTableSpace(worker);
 
+		/*
+		 * Note that we reject errors when there needs to be coordination
+		 * between leader and child processes.  Failing to do so would risk
+		 * having an inconsistent temporary file location between leader and
+		 * child processes;  that's supposed to be deterministic.
+		 */
 		if (OidIsValid(tblspcOid))
-			file = OpenTemporaryFileInTablespace(tblspcOid, false);
+			file = OpenTemporaryFileInTablespace(tblspcOid, ownWorker,
+												 leaderpid >= 0, leaderpid,
+												 tempfileident, worker, segment);
 	}
 
 	/*
@@ -1323,10 +1360,15 @@ OpenTemporaryFile(bool interXact)
 		file = OpenTemporaryFileInTablespace(MyDatabaseTableSpace ?
 											 MyDatabaseTableSpace :
 											 DEFAULTTABLESPACE_OID,
-											 true);
+											 ownWorker, true, leaderpid,
+											 tempfileident, worker, segment);
 
-	/* Mark it for deletion at close */
-	VfdCache[file].fdstate |= FD_TEMPORARY;
+	/*
+	 * Mark file for deletion at close if worker processes will not do so
+	 * instead
+	 */
+	if (ownWorker || worker == -1)
+		VfdCache[file].fdstate |= FD_TEMPORARY;
 
 	/* Register it with the current resource owner */
 	if (!interXact)
@@ -1349,11 +1391,14 @@ OpenTemporaryFile(bool interXact)
  * Subroutine for OpenTemporaryFile, which see for details.
  */
 static File
-OpenTemporaryFileInTablespace(Oid tblspcOid, bool rejectError)
+OpenTemporaryFileInTablespace(Oid tblspcOid, bool ownWorker, bool rejectError,
+							  int leaderpid, long tempfileident, int worker,
+							  int segment)
 {
 	char		tempdirpath[MAXPGPATH];
 	char		tempfilepath[MAXPGPATH];
 	File		file;
+	int			flags;
 
 	/*
 	 * Identify the tempfile directory for this tablespace.
@@ -1374,20 +1419,48 @@ OpenTemporaryFileInTablespace(Oid tblspcOid, bool rejectError)
 				 tblspcOid, TABLESPACE_VERSION_DIRECTORY, PG_TEMP_FILES_DIR);
 	}
 
+	flags = O_RDWR | O_CREAT | O_TRUNC | PG_BINARY;
+
 	/*
 	 * Generate a tempfile name that should be unique within the current
 	 * database instance.
 	 */
-	snprintf(tempfilepath, sizeof(tempfilepath), "%s/%s%d.%ld",
-			 tempdirpath, PG_TEMP_FILE_PREFIX, MyProcPid, tempFileCounter++);
+	if (worker == -1)
+	{
+		/*
+		 * Simple, serial case, or leader-owned file.  Don't bother to include
+		 * caller's segment number or tempfileident in filename.
+		 */
+		Assert(leaderpid == -1 || leaderpid == MyProcPid);
+		snprintf(tempfilepath, sizeof(tempfilepath), "%s/%s%d.%ld.local",
+				 tempdirpath, PG_TEMP_FILE_PREFIX, MyProcPid, tempFileCounter++);
+	}
+	else
+	{
+		/*
+		 * Generate a tempfile name that should be predictable, for later
+		 * unification of temp file state within worker processes.
+		 */
+		Assert(leaderpid >= 0);
+		Assert(segment >= 0);
+		snprintf(tempfilepath, sizeof(tempfilepath), "%s/%s%d.%ld.shared.%d.%d",
+				 tempdirpath, PG_TEMP_FILE_PREFIX, leaderpid, tempfileident,
+				 worker, segment);
+
+		/*
+		 * Don't truncate existing contents during unification.  At the
+		 * same time, ensure workers truncate files left over from a
+		 * previous hard crash.
+		 */
+		if (!ownWorker)
+			flags &= (~O_TRUNC);
+	}
 
 	/*
 	 * Open the file.  Note: we don't use O_EXCL, in case there is an orphaned
 	 * temp file that can be reused.
 	 */
-	file = PathNameOpenFile(tempfilepath,
-							O_RDWR | O_CREAT | O_TRUNC | PG_BINARY,
-							0600);
+	file = PathNameOpenFile(tempfilepath, flags, 0600);
 	if (file <= 0)
 	{
 		/*
@@ -1400,9 +1473,7 @@ OpenTemporaryFileInTablespace(Oid tblspcOid, bool rejectError)
 		 */
 		mkdir(tempdirpath, S_IRWXU);
 
-		file = PathNameOpenFile(tempfilepath,
-								O_RDWR | O_CREAT | O_TRUNC | PG_BINARY,
-								0600);
+		file = PathNameOpenFile(tempfilepath, flags, 0600);
 		if (file <= 0 && rejectError)
 			elog(ERROR, "could not create temporary file \"%s\": %m",
 				 tempfilepath);
@@ -1499,6 +1570,24 @@ FileClose(File file)
 	 * Return the Vfd slot to the free list
 	 */
 	FreeVfd(file);
+}
+
+/*
+ * FileGetSize - get size of file
+ *
+ * This will only work with temp files
+ */
+off_t
+FileGetSize(File file)
+{
+	Vfd		   *vfdP;
+
+	Assert(FileIsValid(file));
+	Assert(VfdCache[file].fdstate & FD_TEMPORARY);
+
+	vfdP = &VfdCache[file];
+
+	return vfdP->fileSize;
 }
 
 /*
@@ -2432,18 +2521,53 @@ TempTablespacesAreSet(void)
  *
  * Select the next temp tablespace to use.  A result of InvalidOid means
  * to use the current database's default tablespace.
+ *
+ * Caller may pass valid worker identifier (worker >= 0) to make
+ * selection of temp tablespace a function of ordinal worker number.
+ * This ensures determinism that is useful in making sure that a leader
+ * process can find its workers temp files.
  */
 Oid
-GetNextTempTableSpace(void)
+GetNextTempTableSpace(int worker)
 {
 	if (numTempTableSpaces > 0)
 	{
-		/* Advance nextTempTableSpace counter with wraparound */
-		if (++nextTempTableSpace >= numTempTableSpaces)
-			nextTempTableSpace = 0;
-		return tempTableSpaces[nextTempTableSpace];
+		int		useTempTablespace;
+
+		if (worker == -1)
+		{
+			/*
+			 * Simple, serial case.
+			 *
+			 * Advance nextTempTableSpace counter with wraparound
+			 */
+			if (++nextTempTableSpace >= numTempTableSpaces)
+				nextTempTableSpace = 0;
+
+			useTempTablespace = nextTempTableSpace;
+		}
+		else
+		{
+			/* Deterministic tablespace required for worker */
+			useTempTablespace = worker % numTempTableSpaces;
+		}
+		return tempTableSpaces[useTempTablespace];
 	}
 	return InvalidOid;
+}
+
+/*
+ * GetTempFileIdentifier
+ *
+ * Returns identifier within backend, usable for a group of temp files.
+ *
+ * OpenTemporaryFile() accepts a tempfileident argument, usable for
+ * distinguishing shared temp files.  This routine provides that identifier.
+ */
+long
+GetTempFileIdentifier(void)
+{
+	return tempFileCounter++;
 }
 
 

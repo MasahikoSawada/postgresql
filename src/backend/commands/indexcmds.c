@@ -363,6 +363,10 @@ DefineIndex(Oid relationId,
 	 * this will typically require the caller to have already locked the
 	 * relation.  To avoid lock upgrade hazards, that lock should be at least
 	 * as strong as the one we take here.
+	 *
+	 * NB: If the lock strength here ever changes, code that is run by parallel
+	 * workers under the control of certain particular ambuild functions will
+	 * need to be updated, too.
 	 */
 	lockmode = stmt->concurrent ? ShareUpdateExclusiveLock : ShareLock;
 	rel = heap_open(relationId, lockmode);

@@ -38,6 +38,7 @@ typedef struct ParallelHeapScanDescData
 	slock_t		phs_mutex;		/* mutual exclusion for block number fields */
 	BlockNumber phs_startblock; /* starting block number */
 	BlockNumber phs_cblock;		/* current block number */
+	bool		phs_snapshot_any;	/* SnapshotAny, not phs_snapshot_data? */
 	char		phs_snapshot_data[FLEXIBLE_ARRAY_MEMBER];
 }	ParallelHeapScanDescData;
 

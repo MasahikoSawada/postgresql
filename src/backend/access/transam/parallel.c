@@ -119,7 +119,8 @@ static void WaitForParallelWorkersToExit(ParallelContext *pcxt);
  * destroyed before exiting the current subtransaction.
  */
 ParallelContext *
-CreateParallelContext(parallel_worker_main_type entrypoint, int nworkers)
+CreateParallelContext(parallel_worker_main_type entrypoint, int nworkers,
+					  bool serializable_okay)
 {
 	MemoryContext oldcontext;
 	ParallelContext *pcxt;
@@ -142,7 +143,7 @@ CreateParallelContext(parallel_worker_main_type entrypoint, int nworkers)
 	 * workers, at least not until somebody enhances that mechanism to be
 	 * parallel-aware.
 	 */
-	if (IsolationIsSerializable())
+	if (IsolationIsSerializable() && !serializable_okay)
 		nworkers = 0;
 
 	/* We might be running in a short-lived memory context. */
@@ -180,7 +181,7 @@ CreateParallelContextForExternalFunction(char *library_name,
 	oldcontext = MemoryContextSwitchTo(TopTransactionContext);
 
 	/* Create the context. */
-	pcxt = CreateParallelContext(ParallelExtensionTrampoline, nworkers);
+	pcxt = CreateParallelContext(ParallelExtensionTrampoline, nworkers, false);
 	pcxt->library_name = pstrdup(library_name);
 	pcxt->function_name = pstrdup(function_name);
 

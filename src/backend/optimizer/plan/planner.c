@@ -237,10 +237,11 @@ standard_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	 * We can't use parallelism in serializable mode because the predicate
 	 * locking code is not parallel-aware.  It's not catastrophic if someone
 	 * tries to run a parallel plan in serializable mode; it just won't get
-	 * any workers and will run serially.  But it seems like a good heuristic
-	 * to assume that the same serialization level will be in effect at plan
-	 * time and execution time, so don't generate a parallel plan if we're in
-	 * serializable mode.
+	 * any workers and will run serially (since serializable mode is not
+	 * indicated as okay when CreateParallelContext() is called).  But it
+	 * seems like a good heuristic to assume that the same serialization level
+	 * will be in effect at plan time and execution time, so don't generate a
+	 * parallel plan if we're in serializable mode.
 	 */
 	if ((cursorOptions & CURSOR_OPT_PARALLEL_OK) != 0 &&
 		IsUnderPostmaster &&
@@ -5300,4 +5301,188 @@ plan_cluster_use_sort(Oid tableOid, Oid indexOid)
 									  NULL, 1.0);
 
 	return (seqScanAndSortPath.total_cost < indexScanPath->path.total_cost);
+}
+
+/*
+ * plan_create_index_workers
+ *		Use the planner to decide how many parallel workers CREATE INDEX
+ *      should use
+ *
+ * Return value of 0 may be due to it being unsafe to proceed, indicating
+ * that caller must not proceed.  Otherwise, return value is the number of
+ * parallel workers to use, which is only a hint.  In general, we assume
+ * that the leader process participates as a worker.
+ *
+ * There is one further special case:  A return value of -1 indicates that
+ * caller should use parallel sort infrastructure, but should launch only
+ * one worker, while not having the leader participate as a worker.  This
+ * special case is useful for testing purposes, but is bound to be slower
+ * than a conventional serial index build.  (This is indicated to caller
+ * when force_parallel_mode is set to "regress".)
+ *
+ * tableOid is the table that index is to be built on.  indexOid is the OID
+ * of a index to be created or reindexed (which is already known to be a
+ * btree index).
+ *
+ * Note: caller had better already hold some type of lock on the table and
+ * index.
+ */
+int
+plan_create_index_workers(Oid tableOid, Oid indexOid)
+{
+	PlannerInfo *root;
+	Query	   *query;
+	PlannerGlobal *glob;
+	RangeTblEntry *rte;
+	Relation	heap;
+	Relation	index;
+	int			parallel_workers;
+	int			min_parallel_workers;
+	int			parallel_threshold;
+	BlockNumber	heap_blocks;
+	double		tuples;
+	double		allvisfrac;
+	long		sort_threshold;
+
+	/*
+	 * Fast-path:  Return immediately when parallelism disabled.  Note that
+	 * we deliberately don't consider force_parallel_mode.
+	 */
+	if (max_parallel_workers_maintenance == 0)
+		return 0;
+
+	/* Set up largely-dummy planner state */
+	query = makeNode(Query);
+	query->commandType = CMD_SELECT;
+
+	glob = makeNode(PlannerGlobal);
+
+	root = makeNode(PlannerInfo);
+	root->parse = query;
+	root->glob = glob;
+	root->query_level = 1;
+	root->planner_cxt = CurrentMemoryContext;
+	root->wt_param_id = -1;
+
+	/* Build a minimal RTE for the rel */
+	rte = makeNode(RangeTblEntry);
+	rte->rtekind = RTE_RELATION;
+	rte->relid = tableOid;
+	rte->relkind = RELKIND_RELATION;	/* Don't be too picky. */
+	rte->lateral = false;
+	rte->inh = false;
+	rte->inFromCl = true;
+	query->rtable = list_make1(rte);
+
+	/* Set up RTE/RelOptInfo arrays */
+	setup_simple_rel_arrays(root);
+
+	heap = heap_open(tableOid, NoLock);
+	index = index_open(indexOid, NoLock);
+
+	/*
+	 * Determine if it's safe to proceed.
+	 *
+	 * Currently, parallel workers can't access the leader's temporary
+	 * tables.  Furthermore, any index predicate or index expressions must
+	 * be parallel safe.
+	 */
+	if (heap->rd_rel->relpersistence == RELPERSISTENCE_TEMP ||
+		!is_parallel_safe(root, (Node *) RelationGetIndexExpressions(index)) ||
+		!is_parallel_safe(root, (Node *) RelationGetIndexPredicate(index)))
+	{
+		parallel_workers = 0;
+		goto done;
+	}
+
+	if (force_parallel_mode == FORCE_PARALLEL_REGRESS)
+	{
+		/* Return special case value to caller */
+		parallel_workers = -1;
+		goto done;
+	}
+	/*
+	 * Establish a minimum number of workers to impose on top of either
+	 * reloption, or cost model proper, based on force_parallel_mode GUC.
+	 */
+	else if (force_parallel_mode == FORCE_PARALLEL_OFF)
+	{
+		/* Don't force parallelism */
+		min_parallel_workers =  0;
+	}
+	else
+	{
+		/* Force parallelism */
+		min_parallel_workers = 1;
+	}
+
+	/* Use parallel_workers reloption, if set */
+	parallel_workers = RelationGetParallelWorkers(index, -1);
+
+	if (parallel_workers >= 0)
+	{
+		/* force_parallel_mode may supersede reloption */
+		parallel_workers = Max(min_parallel_workers, parallel_workers);
+		goto done;
+	}
+
+	/*
+	 * Cost model proper.
+	 *
+	 * Parallel workers each receive an even share of the total
+	 * maintenance_work_mem allowance.
+	 *
+	 * If underlying table is too small to be worth a parallel sort, or if
+	 * one worker would have a very low share of maintenance_work_mem,
+	 * indicate that a serial sort should be used.
+	 *
+	 * XXX:  This should really be based off the estimated size of the
+	 * final index.
+	 */
+	estimate_rel_size(heap, NULL, &heap_blocks, &tuples, &allvisfrac);
+	sort_threshold = (maintenance_work_mem * 1024L) / BLCKSZ;
+	if (heap_blocks < (BlockNumber) min_parallel_relation_size ||
+		sort_threshold / 2 < (long) min_parallel_relation_size)
+	{
+		/* Use a serial sort (unless forced to use 1 worker) */
+		parallel_workers = min_parallel_workers;
+		goto done;
+	}
+
+	/*
+	 * Limit the number of parallel workers logarithmically based on the
+	 * size of the relation.
+	 *
+	 * This probably needs to be a good deal more sophisticated, but we
+	 * need something here for now.  For example, the width of index tuples
+	 * in the final index might be considered, or even the cardinality of
+	 * the leading index tuple attribute.
+	 */
+	parallel_workers = 1;
+	parallel_threshold = Max(min_parallel_relation_size, 1);
+	while (heap_blocks >= (BlockNumber) (parallel_threshold * 3))
+	{
+		parallel_workers++;
+		parallel_threshold *= 3;
+		if (parallel_threshold >= INT_MAX / 3)
+			break;			/* avoid overflow */
+
+		if ((parallel_workers + 1) * min_parallel_relation_size >=
+			sort_threshold)
+			break;
+	}
+
+	/* force_parallel_mode may supersede cost model */
+	parallel_workers = Max(min_parallel_workers, parallel_workers);
+done:
+	/*
+	 * In no case use more than max_parallel_workers_maintenance workers.
+	 * (This includes cases where force_parallel_mode is not turned off.)
+	 */
+	Assert(max_parallel_workers_maintenance > 0);
+	parallel_workers = Min(parallel_workers, max_parallel_workers_maintenance);
+	index_close(index, NoLock);
+	heap_close(heap, NoLock);
+
+	return parallel_workers;
 }

@@ -137,7 +137,8 @@ spgbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 											  ALLOCSET_DEFAULT_SIZES);
 
 	reltuples = IndexBuildHeapScan(heap, index, indexInfo, true,
-								   spgistBuildCallback, (void *) &buildstate);
+								   spgistBuildCallback, (void *) &buildstate,
+								   NULL);
 
 	MemoryContextDelete(buildstate.tmpCtx);
 

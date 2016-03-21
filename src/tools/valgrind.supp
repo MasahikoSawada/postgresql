@@ -120,6 +120,15 @@
 	fun:RelationMapFinishBootstrap
 }
 
+{
+	logtape_write
+	Memcheck:Param
+	write(buf)
+
+	...
+	fun:lts*Block
+}
+
 
 # gcc on ppc64 can generate a four-byte read to fetch the final "char" fields
 # of a FormData_pg_cast.  This is valid compiler behavior, because a proper

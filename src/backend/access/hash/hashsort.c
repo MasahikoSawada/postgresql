@@ -71,6 +71,7 @@ _h_spoolinit(Relation heap, Relation index, uint32 num_buckets)
 												   index,
 												   hspool->hash_mask,
 												   maintenance_work_mem,
+												   NULL,
 												   false);
 
 	return hspool;

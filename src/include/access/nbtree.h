@@ -20,6 +20,7 @@
 #include "access/xlogreader.h"
 #include "catalog/pg_index.h"
 #include "lib/stringinfo.h"
+#include "nodes/execnodes.h"
 #include "storage/bufmgr.h"
 
 /* There's room for a 16-bit vacuum cycle ID in BTPageOpaqueData */
@@ -760,14 +761,8 @@ extern bool btvalidate(Oid opclassoid);
 /*
  * prototypes for functions in nbtsort.c
  */
-typedef struct BTSpool BTSpool; /* opaque type known only within nbtsort.c */
-
-extern BTSpool *_bt_spoolinit(Relation heap, Relation index,
-			  bool isunique, bool isdead);
-extern void _bt_spooldestroy(BTSpool *btspool);
-extern void _bt_spool(BTSpool *btspool, ItemPointer self,
-		  Datum *values, bool *isnull);
-extern void _bt_leafbuild(BTSpool *btspool, BTSpool *spool2);
+extern IndexBuildResult *_bt_dobuild(Relation heap, Relation index,
+			IndexInfo *indexInfo);
 
 /*
  * prototypes for functions in nbtxlog.c

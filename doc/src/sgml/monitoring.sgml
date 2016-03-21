@@ -3111,13 +3111,14 @@ SELECT pg_stat_get_backend_pid(s.backendid) AS pid,
     </row>
     <row>
      <entry><literal>sort-start</literal></entry>
-     <entry><literal>(int, bool, int, int, bool)</literal></entry>
+     <entry><literal>(int, bool, int, int, bool, int)</literal></entry>
      <entry>Probe that fires when a sort operation is started.
       arg0 indicates heap, index or datum sort.
       arg1 is true for unique-value enforcement.
       arg2 is the number of key columns.
       arg3 is the number of kilobytes of work memory allowed.
-      arg4 is true if random access to the sort result is required.</entry>
+      arg4 is true if random access to the sort result is required.
+      arg5 indicates serial, parallel worker, or parallel leader sort.</entry>
     </row>
     <row>
      <entry><literal>sort-done</literal></entry>

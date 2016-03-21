@@ -891,7 +891,8 @@ copy_heap_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 	/* Set up sorting if wanted */
 	if (use_sort)
 		tuplesort = tuplesort_begin_cluster(oldTupDesc, OldIndex,
-											maintenance_work_mem, false);
+											maintenance_work_mem,
+											NULL, false);
 	else
 		tuplesort = NULL;
 
@@ -1518,6 +1519,11 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 	 * sense we are building new indexes rather than rebuilding existing ones,
 	 * because the new heap won't contain any HOT chains at all, let alone
 	 * broken ones, so it can't be necessary to set indcheckxmin.
+	 *
+	 * XXX:  Could there be problems where CLUSTER is run against a non-catalog
+	 * relation?  Parallel workers do not currently take the appropriate
+	 * REINDEX_REL_SUPPRESS_INDEX_USE actions, since they have independent
+	 * relcache entries.
 	 */
 	reindex_flags = REINDEX_REL_SUPPRESS_INDEX_USE;
 	if (check_constraints)

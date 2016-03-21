@@ -322,6 +322,37 @@ CREATE [ UNIQUE ] INDEX [ CONCURRENTLY ] [ [ IF NOT EXISTS ] <replaceable class=
    </variablelist>
 
    <para>
+    B-Tree indexes additionally accept this parameter:
+   </para>
+
+   <variablelist>
+   <varlistentry>
+    <term><literal>parallel_workers</> (<type>integer</>)</term>
+    <listitem>
+     <para>
+      This sets the number of workers that are requested to assist a
+      parallel build of the index.  In general, requests for workers
+      to build an index are capped at <xref
+      linkend="guc-max-parallel-workers-maintenance">.  If
+      <varname>parallel_workers</> is not set, the system will
+      determine a value using a cost model based on the underlying
+      total table size.  If the underlying table size is no larger
+      than <xref linkend="guc-min-parallel-relation-size">, this cost
+      model requests no worker processes.  However, the setting <xref
+      linkend="guc-min-parallel-relation-size"> does not affect the
+      number of workers initially requested for a parallel index build
+      when <varname>parallel_workers</> is set, since the cost model
+      is bypassed.
+     </para>
+     <para>
+      In all cases, the actual number of workers launched will be less
+      in the event of a temporary shortage of worker processes.
+     </para>
+    </listitem>
+   </varlistentry>
+   </variablelist>
+
+   <para>
     GiST indexes additionally accept this parameter:
    </para>
 
@@ -568,7 +599,16 @@ Indexes:
    dependent on the setting of <xref linkend="guc-maintenance-work-mem">.
    Larger values will reduce the time needed for index creation, so long
    as you don't make it larger than the amount of memory really available,
-   which would drive the machine into swapping.
+   which would drive the machine into swapping.  For index methods that
+   support building indexes in parallel (currently, only B-tree), each
+   parallel worker process and the leader process
+   <emphasis>collectively</> use working memory bound in size by
+   <varname>maintenance_work_mem</>.  Note that this differs from the
+   per-worker, per-node treatment of <varname>work_mem</> during
+   parallel query processing.  Ensuring that more worker processes may
+   be used, for example by increasing <xref
+   linkend="guc-max-parallel-workers-maintenance"> may also reduce the
+   time needed for index creation.
   </para>
 
   <para>
@@ -625,6 +665,14 @@ CREATE INDEX title_idx_nulls_low ON films (title NULLS FIRST);
    To create an index with non-default fill factor:
 <programlisting>
 CREATE UNIQUE INDEX title_idx ON films (title) WITH (fillfactor = 70);
+</programlisting>
+  </para>
+
+  <para>
+   To create an index, requesting a specific number of parallel
+   workers to cooperate with the leader process:
+<programlisting>
+CREATE UNIQUE INDEX title_idx ON films (title) WITH (parallel_workers = 2);
 </programlisting>
   </para>
 

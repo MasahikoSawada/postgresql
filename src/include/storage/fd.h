@@ -66,8 +66,10 @@ extern int	max_safe_fds;
 
 /* Operations on virtual Files --- equivalent to Unix kernel file ops */
 extern File PathNameOpenFile(FileName fileName, int fileFlags, int fileMode);
-extern File OpenTemporaryFile(bool interXact);
+extern File OpenTemporaryFile(bool interXact, bool ownWorker, int leaderpid,
+			  long tempfileident, int worker, int segment);
 extern void FileClose(File file);
+extern off_t FileGetSize(File file);
 extern int	FilePrefetch(File file, off_t offset, int amount);
 extern int	FileRead(File file, char *buffer, int amount);
 extern int	FileWrite(File file, char *buffer, int amount);
@@ -106,7 +108,8 @@ extern void set_max_safe_fds(void);
 extern void closeAllVfds(void);
 extern void SetTempTablespaces(Oid *tableSpaces, int numSpaces);
 extern bool TempTablespacesAreSet(void);
-extern Oid	GetNextTempTableSpace(void);
+extern Oid	GetNextTempTableSpace(int worker);
+extern long GetTempFileIdentifier(void);
 extern void AtEOXact_Files(void);
 extern void AtEOSubXact_Files(bool isCommit, SubTransactionId mySubid,
 				  SubTransactionId parentSubid);

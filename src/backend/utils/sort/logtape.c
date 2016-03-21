@@ -38,8 +38,9 @@
  * block.  In the same way second-level blocks are remembered in third-
  * level blocks, and so on if necessary (of course we're talking huge
  * amounts of data here).  The topmost indirect block of a given logical
- * tape is never actually written out to the physical file, but all lower-
- * level indirect blocks will be.
+ * tape is generally not written out to the physical file, but all lower-
+ * level indirect blocks will be (although certain callers may request
+ * that even it be written out, in order to serialize tapes).
  *
  * The initial write pass is guaranteed to fill the underlying file
  * perfectly sequentially, no matter how data is divided into logical tapes.
@@ -66,6 +67,16 @@
  * care that all calls for a single LogicalTapeSet are made in the same
  * palloc context.
  *
+ * To support parallel sort operations involving coordinated callers to
+ * tuplesort.c routines across multiple workers, it is necessary to unify
+ * each worker BufFile/tapeset into one single leader-wise logical tape
+ * set.  Workers should have produced one final materialized tape (their
+ * entire output) when this happens in leader; there will always be the same
+ * number of runs as input tapes, and the same number of input tapes as
+ * workers.  Seeking within the leader must compensate for the differing
+ * positions in indirect block metadata between worker BufFiles/materialized
+ * tapes, and the unified leader BufFile (unified tapeset).
+ *
  * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -77,7 +88,6 @@
 
 #include "postgres.h"
 
-#include "storage/buffile.h"
 #include "utils/logtape.h"
 
 /*
@@ -119,8 +129,16 @@ typedef struct LogicalTape
 	 * The total data volume in the logical tape is numFullBlocks * BLCKSZ +
 	 * lastBlockBytes.  BUT: we do not update lastBlockBytes during writing,
 	 * only at completion of a write phase.
+	 *
+	 * When unification of worker tapes is requested, an offset to the first
+	 * block in the worker tape is stored.  The offset is used to convert
+	 * from worker-wise indirect block numbers to leader-wise indirect block
+	 * numbers.  Note that a special tape is allocated for the leader to write
+	 * new data to, at the end of the logical, unified BufFile space, which the
+	 * leader is entitled to write to.
 	 */
 	long		numFullBlocks;	/* number of complete blocks in log tape */
+	long		offsetFirst;	/* offset to first block (for unification) */
 	int			lastBlockBytes; /* valid bytes in last (incomplete) block */
 
 	/*
@@ -141,11 +159,18 @@ typedef struct LogicalTape
  * space in a single underlying file.  (But that "file" may be multiple files
  * if needed to escape OS limits on file size; buffile.c handles that for us.)
  * The number of tapes is fixed at creation.
+ *
+ * There may be some number of "hole" blocks following unification of tapes,
+ * where accounting adds padding to handle requirements of BufFile
+ * reconstruction interface.  We count these, in order to compensate when
+ * reporting number of blocks used to caller, since they don't actually take
+ * up any space on disk.
  */
 struct LogicalTapeSet
 {
 	BufFile    *pfile;			/* underlying file for whole tape set */
-	long		nFileBlocks;	/* # of blocks used in underlying file */
+	long		nFileBlocks;	/* # of blocks logically allocated */
+	long		nHoleBlocks;	/* # of "hole" blocks */
 
 	/*
 	 * We store the numbers of recycled-and-available blocks in freeBlocks[].
@@ -178,15 +203,16 @@ static void ltsReleaseBlock(LogicalTapeSet *lts, long blocknum);
 static void ltsRecordBlockNum(LogicalTapeSet *lts, IndirectBlock *indirect,
 				  long blocknum);
 static long ltsRewindIndirectBlock(LogicalTapeSet *lts,
-					   IndirectBlock *indirect,
+					   IndirectBlock *indirect, long offset,
 					   bool freezing);
 static long ltsRewindFrozenIndirectBlock(LogicalTapeSet *lts,
-							 IndirectBlock *indirect);
+							 IndirectBlock *indirect, long offset);
 static long ltsRecallNextBlockNum(LogicalTapeSet *lts,
-					  IndirectBlock *indirect,
+					  IndirectBlock *indirect, long offset,
 					  bool frozen);
 static long ltsRecallPrevBlockNum(LogicalTapeSet *lts,
 					  IndirectBlock *indirect);
+static BufFilePiece *ltsTapeWorkerOffsets(int ntapes, TapeShare *tapes);
 static void ltsDumpBuffer(LogicalTapeSet *lts, LogicalTape *lt);
 
 
@@ -358,6 +384,7 @@ ltsRecordBlockNum(LogicalTapeSet *lts, IndirectBlock *indirect,
 static long
 ltsRewindIndirectBlock(LogicalTapeSet *lts,
 					   IndirectBlock *indirect,
+					   long offset,
 					   bool freezing)
 {
 	/* Handle case of never-written-to tape */
@@ -378,7 +405,8 @@ ltsRewindIndirectBlock(LogicalTapeSet *lts,
 
 		ltsWriteBlock(lts, indirblock, (void *) indirect->ptrs);
 		ltsRecordBlockNum(lts, indirect->nextup, indirblock);
-		indirblock = ltsRewindIndirectBlock(lts, indirect->nextup, freezing);
+		indirblock = ltsRewindIndirectBlock(lts, indirect->nextup, offset,
+											freezing);
 		Assert(indirblock != -1L);
 		ltsReadBlock(lts, indirblock, (void *) indirect->ptrs);
 		if (!freezing)
@@ -401,7 +429,8 @@ ltsRewindIndirectBlock(LogicalTapeSet *lts,
  */
 static long
 ltsRewindFrozenIndirectBlock(LogicalTapeSet *lts,
-							 IndirectBlock *indirect)
+							 IndirectBlock *indirect,
+							 long offset)
 {
 	/* Handle case of never-written-to tape */
 	if (indirect == NULL)
@@ -415,8 +444,10 @@ ltsRewindFrozenIndirectBlock(LogicalTapeSet *lts,
 	{
 		long		indirblock;
 
-		indirblock = ltsRewindFrozenIndirectBlock(lts, indirect->nextup);
+		indirblock = ltsRewindFrozenIndirectBlock(lts, indirect->nextup,
+												  offset);
 		Assert(indirblock != -1L);
+		indirblock += offset;
 		ltsReadBlock(lts, indirblock, (void *) indirect->ptrs);
 	}
 
@@ -438,6 +469,7 @@ ltsRewindFrozenIndirectBlock(LogicalTapeSet *lts,
 static long
 ltsRecallNextBlockNum(LogicalTapeSet *lts,
 					  IndirectBlock *indirect,
+					  long offset,
 					  bool frozen)
 {
 	/* Handle case of never-written-to tape */
@@ -451,9 +483,11 @@ ltsRecallNextBlockNum(LogicalTapeSet *lts,
 
 		if (indirect->nextup == NULL)
 			return -1L;			/* nothing left at this level */
-		indirblock = ltsRecallNextBlockNum(lts, indirect->nextup, frozen);
+		indirblock = ltsRecallNextBlockNum(lts, indirect->nextup, offset,
+										   frozen);
 		if (indirblock == -1L)
 			return -1L;			/* nothing left at this level */
+		indirblock += offset;
 		ltsReadBlock(lts, indirblock, (void *) indirect->ptrs);
 		if (!frozen)
 			ltsReleaseBlock(lts, indirblock);
@@ -502,6 +536,29 @@ ltsRecallPrevBlockNum(LogicalTapeSet *lts,
 	return indirect->ptrs[indirect->nextSlot - 1];
 }
 
+/*
+ * Allocate BufFile unification representation based on logtape.c
+ * unification representation
+ */
+static BufFilePiece *
+ltsTapeWorkerOffsets(int ntapes, TapeShare *tapes)
+{
+	BufFilePiece   *pieces;
+	int				i;
+
+	/*
+	 * Offsets are BufFile-based, not worker based, and so include tape 0,
+	 * which is leader's own temp BufFile
+	 */
+	pieces = (BufFilePiece *) palloc(sizeof(BufFilePiece) * ntapes);
+	for (i = 0; i < ntapes; i++)
+	{
+		pieces[i].offsetFirst = 0L;
+		pieces[i].bufFileSize = tapes[i].buffilesize;
+	}
+
+	return pieces;
+}
 
 /*
  * Create a set of logical tapes in a temporary underlying file.
@@ -509,20 +566,26 @@ ltsRecallPrevBlockNum(LogicalTapeSet *lts,
  * Each tape is initialized in write state.
  */
 LogicalTapeSet *
-LogicalTapeSetCreate(int ntapes)
+LogicalTapeSetCreate(int ntapes, BufFileOp ident, int workernum)
 {
 	LogicalTapeSet *lts;
 	LogicalTape *lt;
 	int			i;
 
 	/*
-	 * Create top-level struct including per-tape LogicalTape structs.
+	 * Create top-level struct including per-tape LogicalTape structs.  Only
+	 * ask for unifiable BufFile in parallel case.
 	 */
 	Assert(ntapes > 0);
 	lts = (LogicalTapeSet *) palloc(offsetof(LogicalTapeSet, tapes) +
 									ntapes * sizeof(LogicalTape));
-	lts->pfile = BufFileCreateTemp(false);
+	if (ident.leaderPid == -1)
+		lts->pfile = BufFileCreateTemp(false);
+	else
+		lts->pfile = BufFileCreateUnifiable(ident, workernum);
+
 	lts->nFileBlocks = 0L;
+	lts->nHoleBlocks = 0L;
 	lts->forgetFreeSpace = false;
 	lts->blocksSorted = true;	/* a zero-length array is sorted ... */
 	lts->freeBlocksLen = 32;	/* reasonable initial guess */
@@ -544,12 +607,175 @@ LogicalTapeSetCreate(int ntapes)
 		lt->frozen = false;
 		lt->dirty = false;
 		lt->numFullBlocks = 0L;
+		lt->offsetFirst = 0L;
 		lt->lastBlockBytes = 0;
 		lt->buffer = NULL;
 		lt->curBlockNumber = 0L;
 		lt->pos = 0;
 		lt->nbytes = 0;
 	}
+	return lts;
+}
+
+/*
+ * Unify a set of logical tapes from temporary underlying files.
+ *
+ * Caller should be leader process.  Final tape in logical tapeset is allocated
+ * as owned by that process.
+ *
+ * Final tape is initialized in write state, since it exists to give tuplesort
+ * leader the ability to merge worker tapes to produce a signal materialized
+ * tape containing sorted output.  Every other tape is initialized in read
+ * state.
+ */
+LogicalTapeSet *
+LogicalTapeSetUnify(int ntapes, BufFileOp ident, TapeShare *tapes)
+{
+	LogicalTapeSet *lts;
+	LogicalTape	   *lt = NULL;
+	BufFilePiece   *pieces;
+	long			nPhysicalBlocks = 0L;
+	int				i;
+
+	/*
+	 * Create top-level struct including per-tape LogicalTape structs.
+	 * Also, generate BufFile offset workspace for all tapes in unified
+	 * tapeset.
+	 *
+	 * Use these to unify BufFiles from worker temp files, based on the size
+	 * of worker BufFiles recorded by workers during freezing.  Also,
+	 * arrange to reserve the end of underlying BufFile space as usable by
+	 * final/leader-owned tape.  This is needed when tuplesort.c needs to
+	 * produce a final serialized output tape as part of a parallel sort
+	 * operation.
+	 */
+	Assert(ntapes >= 2);
+	lts = (LogicalTapeSet *) palloc(offsetof(LogicalTapeSet, tapes) +
+									ntapes * sizeof(LogicalTape));
+	pieces = ltsTapeWorkerOffsets(ntapes, tapes);
+	lts->pfile = BufFileUnify(ident, ntapes, pieces);
+
+	/*
+	 * Do not manage free space.  We always read from worker tapes, which are
+	 * opened as frozen.  It would not be okay to reuse space within tapes
+	 * actually owned by workers, per BufFile unification contract.  Leader
+	 * merge will never require multiple passes, and so will never have
+	 * reclaimable free space across the range in the BufFile space that it
+	 * owns, so leader cannot reclaim space there early.
+	 *
+	 * As a consequence of only being permitted to write to the leader
+	 * controlled range, parallel sorts that require a final materialized tape
+	 * will use approximately twice the disk space for temp files compared to
+	 * a more or less equivalent serial sort.  This is deemed acceptable,
+	 * since it is far rarer in practice for parallel sort operations to
+	 * require a final materialized output tape.  Note that this does not
+	 * apply to any merge process required by workers, which may reuse space
+	 * eagerly, just like conventional serial external sorts, and so
+	 * typically, parallel sorts consume approximately the same amount of disk
+	 * blocks as a more or less equivalent serial sort, even when workers must
+	 * perform some merging to produce input to the leader.
+	 *
+	 * Initialize free space state, just to be consistent.
+	 */
+	lts->forgetFreeSpace = true;
+	lts->blocksSorted = true;
+	lts->freeBlocksLen = 1;
+	lts->freeBlocks = (long *) palloc(lts->freeBlocksLen * sizeof(long));
+	lts->nFreeBlocks = 0;
+	lts->nTapes = ntapes;
+
+	/* Initialize per-tape structs */
+	for (i = 0; i < ntapes; i++)
+	{
+		uint32			nlevels = tapes[i].nlevels;
+		IndirectBlock  *top,
+					   *prev;
+		long			indirblock;
+
+		lt = &lts->tapes[i];
+		lt->indirect = NULL;
+		lt->dirty = false;
+		lt->offsetFirst = pieces[i].offsetFirst;
+		lt->lastBlockBytes = 0;
+		lt->buffer = NULL;
+		lt->curBlockNumber = 0L;
+		lt->pos = 0;
+		lt->nbytes = 0;
+
+		/*
+		 * Don't treat leader tape, the final tape, as a worker tape in final
+		 * iteration.  It receives similar processing below, outside of loop.
+		 */
+		if (i == ntapes - 1)
+			break;
+
+		/* Worker tape special handling */
+		lt->writing = false;
+		lt->frozen = true;
+		lt->numFullBlocks = pieces[i].bufFileSize / BLCKSZ;
+		nPhysicalBlocks += lt->numFullBlocks;
+
+		/*
+		 * Read in top level indirect block at end of file.  This is
+		 * only available when worker tape was serialized by
+		 * LogicalTapeFreeze().
+		 *
+		 * Note that there is an ongoing need to compensate for worker-wise
+		 * indirect block numbers when reading from the unified tapeset.  It
+		 * would be insufficient to just apply a per-tape, leader-wise
+		 * offset-to-first-block to the indirect blocks that are immediately
+		 * read into memory here, because there may be further indirect blocks
+		 * stored on disk.  The leader tape handles this a little differently
+		 * below.
+		 */
+		top = (IndirectBlock *) palloc(sizeof(IndirectBlock));
+		top->nextSlot = 0;
+		top->nextup = NULL;
+		lt->buffer = (char *) palloc(BLCKSZ);
+		indirblock = lt->offsetFirst + (lt->numFullBlocks - 1);
+		ltsReadBlock(lts, indirblock, (void *) top->ptrs);
+
+		/* Read in lower levels, if any */
+		prev = top;
+		while (--nlevels > 0)
+		{
+			IndirectBlock  *cur;
+
+			/* Next level up should use second slot from here on */
+			prev->nextSlot = 1;
+
+			/* Read next down indirect block */
+			cur = (IndirectBlock *) palloc(sizeof(IndirectBlock));
+			cur->nextSlot = 0;
+			cur->nextup = prev;
+			indirblock = lt->offsetFirst + prev->ptrs[0];
+			ltsReadBlock(lts, indirblock, (void *) cur->ptrs);
+			prev = cur;
+		}
+		lt->indirect = prev;
+	}
+	pfree(pieces);
+
+	/* Leader tape (final tape) special handling */
+	lt->writing = true;
+	lt->frozen = false;
+	lt->numFullBlocks = 0;
+
+	/*
+	 * Rather than always applying an offset, the leader tape's current block
+	 * is set to the end of all worker tape space.  This may include padding
+	 * that was added by BufFile unification's implementation.
+	 *
+	 * This works because the leader alone may write to the BufFile, and there
+	 * are definitely no leader indirection blocks on disk that might need to
+	 * be interpreted with an offset later (the leader has yet to write to its
+	 * tape).  Since unified tapesets never remember free space, new blocks
+	 * always come from extending the BufFile space at the end.
+	 */
+	lts->nFileBlocks = lt->curBlockNumber = lt->offsetFirst;
+	lt->offsetFirst = 0L;
+	lts->nHoleBlocks = lts->nFileBlocks - nPhysicalBlocks;
+
 	return lts;
 }
 
@@ -625,6 +851,8 @@ LogicalTapeWrite(LogicalTapeSet *lts, int tapenum,
 	Assert(tapenum >= 0 && tapenum < lts->nTapes);
 	lt = &lts->tapes[tapenum];
 	Assert(lt->writing);
+	/* Leader should not write to worker's tape */
+	Assert(lt->offsetFirst == 0);
 
 	/* Allocate data buffer and first indirect block on first write */
 	if (lt->buffer == NULL)
@@ -698,7 +926,8 @@ LogicalTapeRewind(LogicalTapeSet *lts, int tapenum, bool forWrite)
 				ltsDumpBuffer(lts, lt);
 			lt->lastBlockBytes = lt->nbytes;
 			lt->writing = false;
-			datablocknum = ltsRewindIndirectBlock(lts, lt->indirect, false);
+			datablocknum = ltsRewindIndirectBlock(lts, lt->indirect,
+												  lt->offsetFirst, false);
 		}
 		else
 		{
@@ -707,8 +936,11 @@ LogicalTapeRewind(LogicalTapeSet *lts, int tapenum, bool forWrite)
 			 * pass.
 			 */
 			Assert(lt->frozen);
-			datablocknum = ltsRewindFrozenIndirectBlock(lts, lt->indirect);
+			datablocknum = ltsRewindFrozenIndirectBlock(lts, lt->indirect,
+														lt->offsetFirst);
 		}
+		if (datablocknum != -1L)
+			datablocknum += lt->offsetFirst;
 		/* Read the first block, or reset if tape is empty */
 		lt->curBlockNumber = 0L;
 		lt->pos = 0;
@@ -750,6 +982,7 @@ LogicalTapeRewind(LogicalTapeSet *lts, int tapenum, bool forWrite)
 		lt->writing = true;
 		lt->dirty = false;
 		lt->numFullBlocks = 0L;
+		lt->offsetFirst = 0L;
 		lt->lastBlockBytes = 0;
 		lt->curBlockNumber = 0L;
 		lt->pos = 0;
@@ -780,12 +1013,14 @@ LogicalTapeRead(LogicalTapeSet *lts, int tapenum,
 		{
 			/* Try to load more data into buffer. */
 			long		datablocknum = ltsRecallNextBlockNum(lts, lt->indirect,
+															 lt->offsetFirst,
 															 lt->frozen);
 
 			if (datablocknum == -1L)
 				break;			/* EOF */
 			lt->curBlockNumber++;
 			lt->pos = 0;
+			datablocknum += lt->offsetFirst;
 			ltsReadBlock(lts, datablocknum, (void *) lt->buffer);
 			if (!lt->frozen)
 				ltsReleaseBlock(lts, datablocknum);
@@ -821,12 +1056,24 @@ LogicalTapeRead(LogicalTapeSet *lts, int tapenum,
  * tape is rewound (after rewind is too late!).  It performs a rewind
  * and switch to read mode "for free".  An immediately following rewind-
  * for-read call is OK but not necessary.
+ *
+ * tuplesort workers can request that their tapeset be serialized, so that
+ * even the top-level indirect block is stored on disk for later
+ * unification.  This requires that some state be passed to the leader about
+ * the serialized tape.  The convention is that one tape is produced as
+ * output by each worker, which may have been produced by doing some amount
+ * of merging of intermediate runs within the worker.
+ *
+ * Returns value concerning final input-to-leader tape which can be used by
+ * LogicalTapeSetUnify later (there must be only one such tape in a
+ * worker's tapeset).  This is of no interest to !serialize callers.
  */
-void
-LogicalTapeFreeze(LogicalTapeSet *lts, int tapenum)
+TapeShare
+LogicalTapeFreeze(LogicalTapeSet *lts, int tapenum, bool serialize)
 {
 	LogicalTape *lt;
 	long		datablocknum;
+	TapeShare	result;
 
 	Assert(tapenum >= 0 && tapenum < lts->nTapes);
 	lt = &lts->tapes[tapenum];
@@ -841,7 +1088,34 @@ LogicalTapeFreeze(LogicalTapeSet *lts, int tapenum)
 	lt->lastBlockBytes = lt->nbytes;
 	lt->writing = false;
 	lt->frozen = true;
-	datablocknum = ltsRewindIndirectBlock(lts, lt->indirect, true);
+	datablocknum = ltsRewindIndirectBlock(lts, lt->indirect,
+										  lt->offsetFirst, true);
+
+	/* Caller is returned metadata for serialization if requested. */
+	result.nlevels = 0;
+	result.buffilesize = 0;
+	if (serialize)
+	{
+		IndirectBlock 	   *top = lt->indirect;
+		long				indirblockTop;
+		uint32				nlevels = 1;
+
+		/* Find top of tape's indirect-block hierarchy */
+		while (top->nextup != NULL)
+		{
+			top = top->nextup;
+			nlevels++;
+		}
+
+		/* Top level indirect block is always at end of BufFile */
+		indirblockTop = lts->nFileBlocks++;
+		/* Write out to final block */
+		ltsWriteBlock(lts, indirblockTop, (void *) top->ptrs);
+
+		/* Will return information needed for leader's unification */
+		result.nlevels = nlevels;
+	}
+
 	/* Read the first block, or reset if tape is empty */
 	lt->curBlockNumber = 0L;
 	lt->pos = 0;
@@ -852,6 +1126,15 @@ LogicalTapeFreeze(LogicalTapeSet *lts, int tapenum)
 		lt->nbytes = (lt->curBlockNumber < lt->numFullBlocks) ?
 			BLCKSZ : lt->lastBlockBytes;
 	}
+
+	/*
+	 * Do this last, to take into account top-level indirect block serialize
+	 * case must write out
+	 */
+	if (serialize)
+		result.buffilesize = BufFileGetSize(lts->pfile);
+
+	return result;
 }
 
 /*
@@ -975,6 +1258,7 @@ LogicalTapeSeek(LogicalTapeSet *lts, int tapenum,
 	while (lt->curBlockNumber < blocknum)
 	{
 		long		datablocknum = ltsRecallNextBlockNum(lts, lt->indirect,
+														 lt->offsetFirst,
 														 lt->frozen);
 
 		if (datablocknum == -1L)
@@ -1012,5 +1296,5 @@ LogicalTapeTell(LogicalTapeSet *lts, int tapenum,
 long
 LogicalTapeSetBlocks(LogicalTapeSet *lts)
 {
-	return lts->nFileBlocks;
+	return lts->nFileBlocks - lts->nHoleBlocks;
 }

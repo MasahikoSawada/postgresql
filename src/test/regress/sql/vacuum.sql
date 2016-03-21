@@ -50,6 +50,10 @@ CREATE FUNCTION do_analyze() RETURNS VOID VOLATILE LANGUAGE SQL
 	AS 'ANALYZE pg_am';
 CREATE FUNCTION wrap_do_analyze(c INT) RETURNS INT IMMUTABLE LANGUAGE SQL
 	AS 'SELECT $1 FROM do_analyze()';
+-- Disable force_parallel_mode briefly, to ensure stable output when it happens
+-- to be in effect.  If we did not do this, errors raised would concern running
+-- ANALYZE in parallel mode.
+SET force_parallel_mode = off;
 CREATE INDEX ON vaccluster(wrap_do_analyze(i));
 INSERT INTO vaccluster VALUES (1), (2);
 ANALYZE vaccluster;
@@ -62,5 +66,6 @@ VACUUM FULL vactst;
 
 VACUUM (DISABLE_PAGE_SKIPPING) vaccluster;
 
+RESET force_parallel_mode;
 DROP TABLE vaccluster;
 DROP TABLE vactst;

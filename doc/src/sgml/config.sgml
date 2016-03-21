@@ -1994,6 +1994,37 @@ include_dir 'conf.d'
        </listitem>
       </varlistentry>
 
+      <varlistentry id="guc-max-parallel-workers-maintenance" xreflabel="max_parallel_workers_maintenance">
+       <term><varname>max_parallel_workers_maintenance</varname> (<type>integer</type>)
+       <indexterm>
+        <primary><varname>max_parallel_workers_maintenance</> configuration parameter</primary>
+       </indexterm>
+       </term>
+       <listitem>
+        <para>
+         Sets the maximum number of workers that can be started by a
+         single utility command, currently limited to <command>CREATE
+         INDEX</> for B-Tree indexes.  Parallel workers are taken from
+         the pool of processes established by <xref
+         linkend="guc-max-worker-processes">.  Note that the requested
+         number of workers may not actually be available at runtime.
+         If this occurs, the utility operation will run with fewer
+         workers than expected, which may be inefficient.  The default
+         value is 2.  Setting this value to 0 disables the use of
+         parallel workers by utility statements.
+        </para>
+        <para>
+         Note that <varname>max_parallel_workers_maintenance</> does not set
+         the maximum number of worker processes used for DDL operations such
+         as <command>CREATE INDEX</> when the <varname>parallel_workers</>
+         <emphasis>index</> storage parameter has been explicitly set.  The
+         <varname>parallel_workers</> index storage parameter bypasses a cost
+         model that dynamically estimates the optimal number of parallel
+         workers to request.
+        </para>
+       </listitem>
+      </varlistentry>
+
       <varlistentry id="guc-max-parallel-workers-per-gather" xreflabel="max_parallel_workers_per_gather">
        <term><varname>max_parallel_workers_per_gather</varname> (<type>integer</type>)
        <indexterm>
@@ -4127,6 +4158,13 @@ SELECT * FROM parent WHERE key = 2400;
         the <literal>Gather</> nodes added to plans by this setting are hidden
         in <literal>EXPLAIN</> output so that the output matches what
         would be obtained if this setting were turned <literal>off</>.
+        Finally, for parallel B-Tree index build operations, the parallel sort
+        is forced to request exactly one parallel worker process even in cases
+        where requesting more (or fewer) is expected to have a performance
+        benefit.  Furthermore, the parallel sort leader process will not
+        participate in scanning the underlying table, making the index build
+        deterministic in terms of the precise division of tasks among
+        processes.
        </para>
       </listitem>
      </varlistentry>

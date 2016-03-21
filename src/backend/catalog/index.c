@@ -849,7 +849,7 @@ index_create(Relation heapRelation,
 	Assert(indexRelationId == RelationGetRelid(indexRelation));
 
 	/*
-	 * Obtain exclusive lock on it.  Although no other backends can see it
+	 * Obtain exclusive lock on it.  Although no other transactions can see it
 	 * until we commit, this prevents deadlock-risk complaints from lock
 	 * manager in cases such as CLUSTER.
 	 */
@@ -2156,13 +2156,14 @@ IndexBuildHeapScan(Relation heapRelation,
 				   IndexInfo *indexInfo,
 				   bool allow_sync,
 				   IndexBuildCallback callback,
-				   void *callback_state)
+				   void *callback_state,
+				   HeapScanDesc scan)
 {
 	return IndexBuildHeapRangeScan(heapRelation, indexRelation,
 								   indexInfo, allow_sync,
 								   false,
 								   0, InvalidBlockNumber,
-								   callback, callback_state);
+								   callback, callback_state, scan);
 }
 
 /*
@@ -2184,11 +2185,11 @@ IndexBuildHeapRangeScan(Relation heapRelation,
 						BlockNumber start_blockno,
 						BlockNumber numblocks,
 						IndexBuildCallback callback,
-						void *callback_state)
+						void *callback_state,
+						HeapScanDesc scan)
 {
 	bool		is_system_catalog;
 	bool		checking_uniqueness;
-	HeapScanDesc scan;
 	HeapTuple	heapTuple;
 	Datum		values[INDEX_MAX_KEYS];
 	bool		isnull[INDEX_MAX_KEYS];
@@ -2198,7 +2199,8 @@ IndexBuildHeapRangeScan(Relation heapRelation,
 	EState	   *estate;
 	ExprContext *econtext;
 	Snapshot	snapshot;
-	TransactionId OldestXmin;
+	bool		need_register_snapshot = true;
+	TransactionId OldestXmin = InvalidTransactionId; /* not for CONCURRENTLY + bootstrap cases */
 	BlockNumber root_blkno = InvalidBlockNumber;
 	OffsetNumber root_offsets[MaxHeapTuplesPerPage];
 
@@ -2236,34 +2238,54 @@ IndexBuildHeapRangeScan(Relation heapRelation,
 		ExecPrepareExpr((Expr *) indexInfo->ii_Predicate,
 						estate);
 
-	/*
-	 * Prepare for scan of the base relation.  In a normal index build, we use
-	 * SnapshotAny because we must retrieve all tuples and do our own time
-	 * qual checks (because we have to index RECENTLY_DEAD tuples). In a
-	 * concurrent build, or during bootstrap, we take a regular MVCC snapshot
-	 * and index whatever's live according to that.
-	 */
-	if (IsBootstrapProcessingMode() || indexInfo->ii_Concurrent)
+	if (!IsBootstrapProcessingMode() && !indexInfo->ii_Concurrent)
 	{
-		snapshot = RegisterSnapshot(GetTransactionSnapshot());
-		OldestXmin = InvalidTransactionId;		/* not used */
+		OldestXmin = GetOldestXmin(heapRelation, true);
 
-		/* "any visible" mode is not compatible with this */
-		Assert(!anyvisible);
+		/*
+		 * We won't need to register a snapshot (and haven't already, in the
+		 * parallel/"scan != NULL" case)
+		 */
+		need_register_snapshot = false;
+	}
+
+	if (!scan)
+	{
+		/*
+		 * Prepare for scan of the base relation.  In a normal index build, we
+		 * use SnapshotAny because we must retrieve all tuples and do our own
+		 * time qual checks (because we have to index RECENTLY_DEAD tuples).
+		 * In a concurrent build, or during bootstrap, we take a regular MVCC
+		 * snapshot and index whatever's live according to that.
+		 */
+		if (need_register_snapshot)
+		{
+			snapshot = RegisterSnapshot(GetTransactionSnapshot());
+
+			/* "any visible" mode is not compatible with this */
+			Assert(!anyvisible);
+		}
+		else
+		{
+			snapshot = SnapshotAny;
+			need_register_snapshot = false;
+			/* okay to ignore lazy VACUUMs here */
+		}
+		scan =
+			heap_beginscan_strat(heapRelation,	/* relation */
+								 snapshot,		/* snapshot */
+								 0,				/* number of keys */
+								 NULL,			/* scan key */
+								 true,			/* buffer access strategy OK */
+								 allow_sync);	/* syncscan OK? */
 	}
 	else
 	{
-		snapshot = SnapshotAny;
-		/* okay to ignore lazy VACUUMs here */
-		OldestXmin = GetOldestXmin(heapRelation, true);
+		/* parallel caller did this for us (it manages its own scan) */
+		need_register_snapshot = false;
+		/* so we do our own timequal check below: */
+		snapshot = scan->rs_snapshot;
 	}
-
-	scan = heap_beginscan_strat(heapRelation,	/* relation */
-								snapshot,		/* snapshot */
-								0,		/* number of keys */
-								NULL,	/* scan key */
-								true,	/* buffer access strategy OK */
-								allow_sync);	/* syncscan OK? */
 
 	/* set our scan endpoints */
 	if (!allow_sync)
@@ -2595,7 +2617,7 @@ IndexBuildHeapRangeScan(Relation heapRelation,
 	heap_endscan(scan);
 
 	/* we can now forget our snapshot, if set */
-	if (IsBootstrapProcessingMode() || indexInfo->ii_Concurrent)
+	if (need_register_snapshot)
 		UnregisterSnapshot(snapshot);
 
 	ExecDropSingleTupleTableSlot(slot);
@@ -2840,7 +2862,7 @@ validate_index(Oid heapId, Oid indexId, Snapshot snapshot)
 	state.tuplesort = tuplesort_begin_datum(INT8OID, Int8LessOperator,
 											InvalidOid, false,
 											maintenance_work_mem,
-											false);
+											NULL, false);
 	state.htups = state.itups = state.tups_inserted = 0;
 
 	(void) index_bulk_delete(&ivinfo, NULL,
