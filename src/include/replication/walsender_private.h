@@ -32,6 +32,7 @@ typedef enum WalSndState
  */
 typedef struct WalSnd
 {
+	int		slotno;			/* index of this slot in WalSnd array */
 	pid_t		pid;			/* this walsender's process id, or 0 */
 	WalSndState state;			/* this walsender's state */
 	XLogRecPtr	sentPtr;		/* WAL has been sent up to this point */

@@ -1027,24 +1027,25 @@ primary_slot_name = 'node_a_slot'
 
    <para>
     Synchronous replication offers the ability to confirm that all changes
-    made by a transaction have been transferred to one synchronous standby
-    server. This extends the standard level of durability
+    made by a transaction have been transferred to one or more synchronous standby
+    server. This extends that standard level of durability
     offered by a transaction commit. This level of protection is referred
-    to as 2-safe replication in computer science theory.
+    to as group-safe replication in computer science theory.
    </para>
 
    <para>
     When requesting synchronous replication, each commit of a
     write transaction will wait until confirmation is
     received that the commit has been written to the transaction log on disk
-    of both the primary and standby server. The only possibility that data
-    can be lost is if both the primary and the standby suffer crashes at the
+    of both the primary and standby servers. The only possibility that data
+    can be lost is if both the primary and the standbys suffer crash at the
     same time. This can provide a much higher level of durability, though only
-    if the sysadmin is cautious about the placement and management of the two
+    if the sysadmin is cautious about the placement and management of the these
     servers.  Waiting for confirmation increases the user's confidence that the
     changes will not be lost in the event of server crashes but it also
     necessarily increases the response time for the requesting transaction.
-    The minimum wait time is the roundtrip time between primary to standby.
+    The minimum wait time is the roundtrip time between the primary and the
+    slowest synchronous standby.
    </para>
 
    <para>
@@ -1112,6 +1113,42 @@ primary_slot_name = 'node_a_slot'
     shutdown until all outstanding WAL records are transferred to the currently
     connected standby servers.
    </para>
+
+   </sect3>
+
+   <sect3 id="synchronous-replication-multiple-synchronization">
+    <title>Multiple Synchronous Replication</title>
+
+   <para>
+    Setting up synchronous standby at multiple locations bring us high availability.
+    It ensures that modified data will be replicated to multiple synchronous standbys.
+   </para>
+
+   <para>
+    Multiple synchronous replication is set up by setting <xref linkend="guc-synchronous-standby-names">
+    using the following syntax.
+   </para>
+    
+    <synopsis>
+        synchronous_standby_names = '<replaceable class="PARAMETER">N</replaceable> [ <replaceable class="PARAMETER">node</replaceable> [, ...] ]'
+    </synopsis>
+
+   <para>
+    This syntax allows us to define a synchronous group that will wait for at
+    least N standbys, and a comma-separated list of group members.  The special
+    value <literal>*</> matches any standby. The number N must not be greater
+    than the number of members listed in the group, unless <literal>*</> is
+    used.  Priority is given to servers in the order that they appear in the list.
+    The first named server has the highest priority.
+   </para>
+
+   <note>
+    <para>
+    All ASCII characters except for special characters(',', '&quot', '[', ']', ' ') are
+    allowed in unquoted standby names.  To use these special characters, the standby
+    name should be enclosed in double quotes.
+    </para>
+   </note>
 
    </sect3>
 
