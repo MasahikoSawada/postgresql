@@ -555,7 +555,7 @@ SyncRepGetSyncStandbys(void)
 
 		/*
 		 * If the priority is equal to 1, consider this standby as sync
-		 * and append it to the result. Otherwise append this standby
+		 * and append it to the result list. Otherwise append this standby
 		 * to the pending list to check if it's actually sync or not later.
 		 */
 		if (this_priority == 1)
