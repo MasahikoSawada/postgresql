@@ -292,6 +292,7 @@ extern void pg_ltoa(int32 l, char *a);
 extern void pg_lltoa(int64 ll, char *a);
 extern char *pg_ltostr_zeropad(char *str, int32 value, int32 minwidth);
 extern char *pg_ltostr(char *str, int32 value);
+extern uint64 pg_strtouint64(const char *str, char **endptr, int base);
 
 /*
  *		Per-opclass comparison functions for new btrees.  These are
@@ -509,6 +510,7 @@ extern Datum pg_typeof(PG_FUNCTION_ARGS);
 extern Datum pg_collation_for(PG_FUNCTION_ARGS);
 extern Datum pg_relation_is_updatable(PG_FUNCTION_ARGS);
 extern Datum pg_column_is_updatable(PG_FUNCTION_ARGS);
+extern Datum parse_ident(PG_FUNCTION_ARGS);
 
 /* oid.c */
 extern Datum oidin(PG_FUNCTION_ARGS);

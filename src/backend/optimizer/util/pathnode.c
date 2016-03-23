@@ -929,7 +929,7 @@ create_seqscan_path(PlannerInfo *root, RelOptInfo *rel,
 
 	pathnode->pathtype = T_SeqScan;
 	pathnode->parent = rel;
-	pathnode->pathtarget = &(rel->reltarget);
+	pathnode->pathtarget = rel->reltarget;
 	pathnode->param_info = get_baserel_parampathinfo(root, rel,
 													 required_outer);
 	pathnode->parallel_aware = parallel_degree > 0 ? true : false;
@@ -953,7 +953,7 @@ create_samplescan_path(PlannerInfo *root, RelOptInfo *rel, Relids required_outer
 
 	pathnode->pathtype = T_SampleScan;
 	pathnode->parent = rel;
-	pathnode->pathtarget = &(rel->reltarget);
+	pathnode->pathtarget = rel->reltarget;
 	pathnode->param_info = get_baserel_parampathinfo(root, rel,
 													 required_outer);
 	pathnode->parallel_aware = false;
@@ -1010,7 +1010,7 @@ create_index_path(PlannerInfo *root,
 
 	pathnode->path.pathtype = indexonly ? T_IndexOnlyScan : T_IndexScan;
 	pathnode->path.parent = rel;
-	pathnode->path.pathtarget = &(rel->reltarget);
+	pathnode->path.pathtarget = rel->reltarget;
 	pathnode->path.param_info = get_baserel_parampathinfo(root, rel,
 														  required_outer);
 	pathnode->path.parallel_aware = false;
@@ -1059,7 +1059,7 @@ create_bitmap_heap_path(PlannerInfo *root,
 
 	pathnode->path.pathtype = T_BitmapHeapScan;
 	pathnode->path.parent = rel;
-	pathnode->path.pathtarget = &(rel->reltarget);
+	pathnode->path.pathtarget = rel->reltarget;
 	pathnode->path.param_info = get_baserel_parampathinfo(root, rel,
 														  required_outer);
 	pathnode->path.parallel_aware = false;
@@ -1089,7 +1089,7 @@ create_bitmap_and_path(PlannerInfo *root,
 
 	pathnode->path.pathtype = T_BitmapAnd;
 	pathnode->path.parent = rel;
-	pathnode->path.pathtarget = &(rel->reltarget);
+	pathnode->path.pathtarget = rel->reltarget;
 	pathnode->path.param_info = NULL;	/* not used in bitmap trees */
 
 	/*
@@ -1125,7 +1125,7 @@ create_bitmap_or_path(PlannerInfo *root,
 
 	pathnode->path.pathtype = T_BitmapOr;
 	pathnode->path.parent = rel;
-	pathnode->path.pathtarget = &(rel->reltarget);
+	pathnode->path.pathtarget = rel->reltarget;
 	pathnode->path.param_info = NULL;	/* not used in bitmap trees */
 
 	/*
@@ -1160,7 +1160,7 @@ create_tidscan_path(PlannerInfo *root, RelOptInfo *rel, List *tidquals,
 
 	pathnode->path.pathtype = T_TidScan;
 	pathnode->path.parent = rel;
-	pathnode->path.pathtarget = &(rel->reltarget);
+	pathnode->path.pathtarget = rel->reltarget;
 	pathnode->path.param_info = get_baserel_parampathinfo(root, rel,
 														  required_outer);
 	pathnode->path.parallel_aware = false;
@@ -1192,7 +1192,7 @@ create_append_path(RelOptInfo *rel, List *subpaths, Relids required_outer,
 
 	pathnode->path.pathtype = T_Append;
 	pathnode->path.parent = rel;
-	pathnode->path.pathtarget = &(rel->reltarget);
+	pathnode->path.pathtarget = rel->reltarget;
 	pathnode->path.param_info = get_appendrel_parampathinfo(rel,
 															required_outer);
 	pathnode->path.parallel_aware = false;
@@ -1251,7 +1251,7 @@ create_merge_append_path(PlannerInfo *root,
 
 	pathnode->path.pathtype = T_MergeAppend;
 	pathnode->path.parent = rel;
-	pathnode->path.pathtarget = &(rel->reltarget);
+	pathnode->path.pathtarget = rel->reltarget;
 	pathnode->path.param_info = get_appendrel_parampathinfo(rel,
 															required_outer);
 	pathnode->path.parallel_aware = false;
@@ -1328,7 +1328,8 @@ create_merge_append_path(PlannerInfo *root,
  * jointree.
  */
 ResultPath *
-create_result_path(RelOptInfo *rel, PathTarget *target, List *quals)
+create_result_path(PlannerInfo *root, RelOptInfo *rel,
+				   PathTarget *target, List *resconstantqual)
 {
 	ResultPath *pathnode = makeNode(ResultPath);
 
@@ -1340,23 +1341,22 @@ create_result_path(RelOptInfo *rel, PathTarget *target, List *quals)
 	pathnode->path.parallel_safe = rel->consider_parallel;
 	pathnode->path.parallel_degree = 0;
 	pathnode->path.pathkeys = NIL;
-	pathnode->quals = quals;
+	pathnode->quals = resconstantqual;
 
 	/* Hardly worth defining a cost_result() function ... just do it */
 	pathnode->path.rows = 1;
 	pathnode->path.startup_cost = target->cost.startup;
 	pathnode->path.total_cost = target->cost.startup +
 		cpu_tuple_cost + target->cost.per_tuple;
+	if (resconstantqual)
+	{
+		QualCost	qual_cost;
 
-	/*
-	 * In theory we should include the qual eval cost as well, but at present
-	 * that doesn't accomplish much except duplicate work that will be done
-	 * again in make_result; since this is only used for degenerate cases,
-	 * nothing interesting will be done with the path cost values.
-	 *
-	 * XXX should refactor so that make_result does not do costing work, at
-	 * which point this will need to do it honestly.
-	 */
+		cost_qual_eval(&qual_cost, resconstantqual, root);
+		/* resconstantqual is evaluated once at startup */
+		pathnode->path.startup_cost += qual_cost.startup + qual_cost.per_tuple;
+		pathnode->path.total_cost += qual_cost.startup + qual_cost.per_tuple;
+	}
 
 	return pathnode;
 }
@@ -1375,7 +1375,7 @@ create_material_path(RelOptInfo *rel, Path *subpath)
 
 	pathnode->path.pathtype = T_Material;
 	pathnode->path.parent = rel;
-	pathnode->path.pathtarget = &(rel->reltarget);
+	pathnode->path.pathtarget = rel->reltarget;
 	pathnode->path.param_info = subpath->param_info;
 	pathnode->path.parallel_aware = false;
 	pathnode->path.parallel_safe = rel->consider_parallel &&
@@ -1440,7 +1440,7 @@ create_unique_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 
 	pathnode->path.pathtype = T_Unique;
 	pathnode->path.parent = rel;
-	pathnode->path.pathtarget = &(rel->reltarget);
+	pathnode->path.pathtarget = rel->reltarget;
 	pathnode->path.param_info = subpath->param_info;
 	pathnode->path.parallel_aware = false;
 	pathnode->path.parallel_safe = rel->consider_parallel &&
@@ -1645,10 +1645,12 @@ translate_sub_tlist(List *tlist, int relid)
  * create_gather_path
  *	  Creates a path corresponding to a gather scan, returning the
  *	  pathnode.
+ *
+ * 'rows' may optionally be set to override row estimates from other sources.
  */
 GatherPath *
 create_gather_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
-				   Relids required_outer)
+				   PathTarget *target, Relids required_outer, double *rows)
 {
 	GatherPath *pathnode = makeNode(GatherPath);
 
@@ -1656,7 +1658,7 @@ create_gather_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 
 	pathnode->path.pathtype = T_Gather;
 	pathnode->path.parent = rel;
-	pathnode->path.pathtarget = &(rel->reltarget);
+	pathnode->path.pathtarget = target;
 	pathnode->path.param_info = get_baserel_parampathinfo(root, rel,
 														  required_outer);
 	pathnode->path.parallel_aware = false;
@@ -1674,7 +1676,7 @@ create_gather_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 		pathnode->single_copy = true;
 	}
 
-	cost_gather(pathnode, root, rel, pathnode->path.param_info);
+	cost_gather(pathnode, root, rel, pathnode->path.param_info, rows);
 
 	return pathnode;
 }
@@ -1692,7 +1694,7 @@ create_subqueryscan_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 
 	pathnode->path.pathtype = T_SubqueryScan;
 	pathnode->path.parent = rel;
-	pathnode->path.pathtarget = &(rel->reltarget);
+	pathnode->path.pathtarget = rel->reltarget;
 	pathnode->path.param_info = get_baserel_parampathinfo(root, rel,
 														  required_outer);
 	pathnode->path.parallel_aware = false;
@@ -1720,7 +1722,7 @@ create_functionscan_path(PlannerInfo *root, RelOptInfo *rel,
 
 	pathnode->pathtype = T_FunctionScan;
 	pathnode->parent = rel;
-	pathnode->pathtarget = &(rel->reltarget);
+	pathnode->pathtarget = rel->reltarget;
 	pathnode->param_info = get_baserel_parampathinfo(root, rel,
 													 required_outer);
 	pathnode->parallel_aware = false;
@@ -1746,7 +1748,7 @@ create_valuesscan_path(PlannerInfo *root, RelOptInfo *rel,
 
 	pathnode->pathtype = T_ValuesScan;
 	pathnode->parent = rel;
-	pathnode->pathtarget = &(rel->reltarget);
+	pathnode->pathtarget = rel->reltarget;
 	pathnode->param_info = get_baserel_parampathinfo(root, rel,
 													 required_outer);
 	pathnode->parallel_aware = false;
@@ -1771,7 +1773,7 @@ create_ctescan_path(PlannerInfo *root, RelOptInfo *rel, Relids required_outer)
 
 	pathnode->pathtype = T_CteScan;
 	pathnode->parent = rel;
-	pathnode->pathtarget = &(rel->reltarget);
+	pathnode->pathtarget = rel->reltarget;
 	pathnode->param_info = get_baserel_parampathinfo(root, rel,
 													 required_outer);
 	pathnode->parallel_aware = false;
@@ -1797,7 +1799,7 @@ create_worktablescan_path(PlannerInfo *root, RelOptInfo *rel,
 
 	pathnode->pathtype = T_WorkTableScan;
 	pathnode->parent = rel;
-	pathnode->pathtarget = &(rel->reltarget);
+	pathnode->pathtarget = rel->reltarget;
 	pathnode->param_info = get_baserel_parampathinfo(root, rel,
 													 required_outer);
 	pathnode->parallel_aware = false;
@@ -1813,16 +1815,19 @@ create_worktablescan_path(PlannerInfo *root, RelOptInfo *rel,
 
 /*
  * create_foreignscan_path
- *	  Creates a path corresponding to a scan of a foreign table or
- *	  a foreign join, returning the pathnode.
+ *	  Creates a path corresponding to a scan of a foreign table, foreign join,
+ *	  or foreign upper-relation processing, returning the pathnode.
  *
  * This function is never called from core Postgres; rather, it's expected
- * to be called by the GetForeignPaths or GetForeignJoinPaths function of
- * a foreign data wrapper.  We make the FDW supply all fields of the path,
- * since we do not have any way to calculate them in core.
+ * to be called by the GetForeignPaths, GetForeignJoinPaths, or
+ * GetForeignUpperPaths function of a foreign data wrapper.  We make the FDW
+ * supply all fields of the path, since we do not have any way to calculate
+ * them in core.  However, there is a usually-sane default for the pathtarget
+ * (rel->reltarget), so we let a NULL for "target" select that.
  */
 ForeignPath *
 create_foreignscan_path(PlannerInfo *root, RelOptInfo *rel,
+						PathTarget *target,
 						double rows, Cost startup_cost, Cost total_cost,
 						List *pathkeys,
 						Relids required_outer,
@@ -1833,7 +1838,7 @@ create_foreignscan_path(PlannerInfo *root, RelOptInfo *rel,
 
 	pathnode->path.pathtype = T_ForeignScan;
 	pathnode->path.parent = rel;
-	pathnode->path.pathtarget = &(rel->reltarget);
+	pathnode->path.pathtarget = target ? target : rel->reltarget;
 	pathnode->path.param_info = get_baserel_parampathinfo(root, rel,
 														  required_outer);
 	pathnode->path.parallel_aware = false;
@@ -1966,7 +1971,7 @@ create_nestloop_path(PlannerInfo *root,
 
 	pathnode->path.pathtype = T_NestLoop;
 	pathnode->path.parent = joinrel;
-	pathnode->path.pathtarget = &(joinrel->reltarget);
+	pathnode->path.pathtarget = joinrel->reltarget;
 	pathnode->path.param_info =
 		get_joinrel_parampathinfo(root,
 								  joinrel,
@@ -2029,7 +2034,7 @@ create_mergejoin_path(PlannerInfo *root,
 
 	pathnode->jpath.path.pathtype = T_MergeJoin;
 	pathnode->jpath.path.parent = joinrel;
-	pathnode->jpath.path.pathtarget = &(joinrel->reltarget);
+	pathnode->jpath.path.pathtarget = joinrel->reltarget;
 	pathnode->jpath.path.param_info =
 		get_joinrel_parampathinfo(root,
 								  joinrel,
@@ -2091,7 +2096,7 @@ create_hashjoin_path(PlannerInfo *root,
 
 	pathnode->jpath.path.pathtype = T_HashJoin;
 	pathnode->jpath.path.parent = joinrel;
-	pathnode->jpath.path.pathtarget = &(joinrel->reltarget);
+	pathnode->jpath.path.pathtarget = joinrel->reltarget;
 	pathnode->jpath.path.param_info =
 		get_joinrel_parampathinfo(root,
 								  joinrel,
@@ -2162,7 +2167,7 @@ create_projection_path(PlannerInfo *root,
 
 	/*
 	 * The Result node's cost is cpu_tuple_cost per row, plus the cost of
-	 * evaluating the tlist.
+	 * evaluating the tlist.  There is no qual to worry about.
 	 */
 	pathnode->path.rows = subpath->rows;
 	pathnode->path.startup_cost = subpath->startup_cost + target->cost.startup;
@@ -2218,6 +2223,36 @@ apply_projection_to_path(PlannerInfo *root,
 	path->startup_cost += target->cost.startup - oldcost.startup;
 	path->total_cost += target->cost.startup - oldcost.startup +
 		(target->cost.per_tuple - oldcost.per_tuple) * path->rows;
+
+	/*
+	 * If the path happens to be a Gather path, we'd like to arrange for the
+	 * subpath to return the required target list so that workers can help
+	 * project. But if there is something that is not parallel-safe in the
+	 * target expressions, then we can't.
+	 */
+	if (IsA(path, GatherPath) &&
+		!has_parallel_hazard((Node *) target->exprs, false))
+	{
+		GatherPath *gpath = (GatherPath *) path;
+
+		/*
+		 * We always use create_projection_path here, even if the subpath is
+		 * projection-capable, so as to avoid modifying the subpath in place.
+		 * It seems unlikely at present that there could be any other
+		 * references to the subpath anyway, but better safe than sorry.
+		 * (create_projection_plan will only insert a Result node if the
+		 * subpath is not projection-capable, so we only include the cost of
+		 * that node if it will actually be inserted.  This is a bit grotty
+		 * but we can improve it later if it seems important.)
+		 */
+		if (!is_projection_capable_path(gpath->subpath))
+			gpath->path.total_cost += cpu_tuple_cost * gpath->subpath->rows;
+		gpath->subpath = (Path *)
+			create_projection_path(root,
+								   gpath->subpath->parent,
+								   gpath->subpath,
+								   target);
+	}
 
 	return path;
 }
@@ -2384,6 +2419,8 @@ create_upper_unique_path(PlannerInfo *root,
  * 'qual' is the HAVING quals if any
  * 'aggcosts' contains cost info about the aggregate functions to be computed
  * 'numGroups' is the estimated number of groups (1 if not grouping)
+ * 'combineStates' is set to true if the Agg node should combine agg states
+ * 'finalizeAggs' is set to false if the Agg node should not call the finalfn
  */
 AggPath *
 create_agg_path(PlannerInfo *root,
@@ -2394,7 +2431,9 @@ create_agg_path(PlannerInfo *root,
 				List *groupClause,
 				List *qual,
 				const AggClauseCosts *aggcosts,
-				double numGroups)
+				double numGroups,
+				bool combineStates,
+				bool finalizeAggs)
 {
 	AggPath    *pathnode = makeNode(AggPath);
 
@@ -2417,6 +2456,8 @@ create_agg_path(PlannerInfo *root,
 	pathnode->numGroups = numGroups;
 	pathnode->groupClause = groupClause;
 	pathnode->qual = qual;
+	pathnode->finalizeAggs = finalizeAggs;
+	pathnode->combineStates = combineStates;
 
 	cost_agg(&pathnode->path, root,
 			 aggstrategy, aggcosts,
@@ -2438,13 +2479,12 @@ create_agg_path(PlannerInfo *root,
  *
  * GroupingSetsPath represents sorted grouping with one or more grouping sets.
  * The input path's result must be sorted to match the last entry in
- * rollup_groupclauses, and groupColIdx[] identifies its sort columns.
+ * rollup_groupclauses.
  *
  * 'rel' is the parent relation associated with the result
  * 'subpath' is the path representing the source of data
  * 'target' is the PathTarget to be computed
  * 'having_qual' is the HAVING quals if any
- * 'groupColIdx' is an array of indexes of grouping columns in the source data
  * 'rollup_lists' is a list of grouping sets
  * 'rollup_groupclauses' is a list of grouping clauses for grouping sets
  * 'agg_costs' contains cost info about the aggregate functions to be computed
@@ -2456,7 +2496,6 @@ create_groupingsets_path(PlannerInfo *root,
 						 Path *subpath,
 						 PathTarget *target,
 						 List *having_qual,
-						 AttrNumber *groupColIdx,
 						 List *rollup_lists,
 						 List *rollup_groupclauses,
 						 const AggClauseCosts *agg_costs,
@@ -2487,7 +2526,6 @@ create_groupingsets_path(PlannerInfo *root,
 	else
 		pathnode->path.pathkeys = NIL;
 
-	pathnode->groupColIdx = groupColIdx;
 	pathnode->rollup_groupclauses = rollup_groupclauses;
 	pathnode->rollup_lists = rollup_lists;
 	pathnode->qual = having_qual;
@@ -2879,7 +2917,7 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->path.pathtype = T_ModifyTable;
 	pathnode->path.parent = rel;
 	/* pathtarget is not interesting, just make it minimally valid */
-	pathnode->path.pathtarget = &(rel->reltarget);
+	pathnode->path.pathtarget = rel->reltarget;
 	/* For now, assume we are above any joins, so no parameterization */
 	pathnode->path.param_info = NULL;
 	pathnode->path.parallel_aware = false;

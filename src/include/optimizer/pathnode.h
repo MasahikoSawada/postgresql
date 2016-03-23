@@ -68,13 +68,14 @@ extern MergeAppendPath *create_merge_append_path(PlannerInfo *root,
 						 List *subpaths,
 						 List *pathkeys,
 						 Relids required_outer);
-extern ResultPath *create_result_path(RelOptInfo *rel,
-				   PathTarget *target, List *quals);
+extern ResultPath *create_result_path(PlannerInfo *root, RelOptInfo *rel,
+				   PathTarget *target, List *resconstantqual);
 extern MaterialPath *create_material_path(RelOptInfo *rel, Path *subpath);
 extern UniquePath *create_unique_path(PlannerInfo *root, RelOptInfo *rel,
 				   Path *subpath, SpecialJoinInfo *sjinfo);
 extern GatherPath *create_gather_path(PlannerInfo *root,
-				   RelOptInfo *rel, Path *subpath, Relids required_outer);
+				   RelOptInfo *rel, Path *subpath, PathTarget *target,
+				   Relids required_outer, double *rows);
 extern SubqueryScanPath *create_subqueryscan_path(PlannerInfo *root,
 						 RelOptInfo *rel, Path *subpath,
 						 List *pathkeys, Relids required_outer);
@@ -87,6 +88,7 @@ extern Path *create_ctescan_path(PlannerInfo *root, RelOptInfo *rel,
 extern Path *create_worktablescan_path(PlannerInfo *root, RelOptInfo *rel,
 						  Relids required_outer);
 extern ForeignPath *create_foreignscan_path(PlannerInfo *root, RelOptInfo *rel,
+						PathTarget *target,
 						double rows, Cost startup_cost, Cost total_cost,
 						List *pathkeys,
 						Relids required_outer,
@@ -167,13 +169,14 @@ extern AggPath *create_agg_path(PlannerInfo *root,
 				List *groupClause,
 				List *qual,
 				const AggClauseCosts *aggcosts,
-				double numGroups);
+				double numGroups,
+				bool combineStates,
+				bool finalizeAggs);
 extern GroupingSetsPath *create_groupingsets_path(PlannerInfo *root,
 						 RelOptInfo *rel,
 						 Path *subpath,
 						 PathTarget *target,
 						 List *having_qual,
-						 AttrNumber *groupColIdx,
 						 List *rollup_lists,
 						 List *rollup_groupclauses,
 						 const AggClauseCosts *agg_costs,

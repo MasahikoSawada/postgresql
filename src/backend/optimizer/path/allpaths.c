@@ -936,7 +936,7 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		/*
 		 * CE failed, so finish copying/modifying targetlist and join quals.
 		 *
-		 * Note: the resulting childrel->reltarget.exprs may contain arbitrary
+		 * NB: the resulting childrel->reltarget->exprs may contain arbitrary
 		 * expressions, which otherwise would not occur in a rel's targetlist.
 		 * Code that might be looking at an appendrel child must cope with
 		 * such.  (Normally, a rel's targetlist would only include Vars and
@@ -947,9 +947,9 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 			adjust_appendrel_attrs(root,
 								   (Node *) rel->joininfo,
 								   appinfo);
-		childrel->reltarget.exprs = (List *)
+		childrel->reltarget->exprs = (List *)
 			adjust_appendrel_attrs(root,
-								   (Node *) rel->reltarget.exprs,
+								   (Node *) rel->reltarget->exprs,
 								   appinfo);
 
 		/*
@@ -994,7 +994,7 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		Assert(childrel->rows > 0);
 
 		parent_rows += childrel->rows;
-		parent_size += childrel->reltarget.width * childrel->rows;
+		parent_size += childrel->reltarget->width * childrel->rows;
 
 		/*
 		 * Accumulate per-column estimates too.  We need not do anything for
@@ -1004,8 +1004,8 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		 *
 		 * By construction, child's targetlist is 1-to-1 with parent's.
 		 */
-		forboth(parentvars, rel->reltarget.exprs,
-				childvars, childrel->reltarget.exprs)
+		forboth(parentvars, rel->reltarget->exprs,
+				childvars, childrel->reltarget->exprs)
 		{
 			Var		   *parentvar = (Var *) lfirst(parentvars);
 			Node	   *childvar = (Node *) lfirst(childvars);
@@ -1040,7 +1040,7 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 
 		Assert(parent_rows > 0);
 		rel->rows = parent_rows;
-		rel->reltarget.width = rint(parent_size / parent_rows);
+		rel->reltarget->width = rint(parent_size / parent_rows);
 		for (i = 0; i < nattrs; i++)
 			rel->attr_widths[i] = rint(parent_attrsizes[i] / parent_rows);
 
@@ -1515,7 +1515,7 @@ set_dummy_rel_pathlist(RelOptInfo *rel)
 {
 	/* Set dummy size estimates --- we leave attr_widths[] as zeroes */
 	rel->rows = 0;
-	rel->reltarget.width = 0;
+	rel->reltarget->width = 0;
 
 	/* Discard any pre-existing paths; no further need for them */
 	rel->pathlist = NIL;
@@ -1771,7 +1771,7 @@ set_function_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 		 * not reference the ordinality column, or at least not in any way
 		 * that would be interesting for sorting.
 		 */
-		foreach(lc, rel->reltarget.exprs)
+		foreach(lc, rel->reltarget->exprs)
 		{
 			Var		   *node = (Var *) lfirst(lc);
 
@@ -1968,7 +1968,8 @@ generate_gather_paths(PlannerInfo *root, RelOptInfo *rel)
 	 */
 	cheapest_partial_path = linitial(rel->partial_pathlist);
 	simple_gather_path = (Path *)
-		create_gather_path(root, rel, cheapest_partial_path, NULL);
+		create_gather_path(root, rel, cheapest_partial_path, rel->reltarget,
+						   NULL, NULL);
 	add_path(rel, simple_gather_path);
 }
 
@@ -2509,9 +2510,7 @@ qual_is_pushdown_safe(Query *subquery, Index rti, Node *qual,
 	 * Examine all Vars used in clause; since it's a restriction clause, all
 	 * such Vars must refer to subselect output columns.
 	 */
-	vars = pull_var_clause(qual,
-						   PVC_REJECT_AGGREGATES,
-						   PVC_INCLUDE_PLACEHOLDERS);
+	vars = pull_var_clause(qual, PVC_INCLUDE_PLACEHOLDERS);
 	foreach(vl, vars)
 	{
 		Var		   *var = (Var *) lfirst(vl);
@@ -2719,7 +2718,7 @@ remove_unused_subquery_outputs(Query *subquery, RelOptInfo *rel)
 	 * isn't computed for inheritance child rels, cf set_append_rel_size().
 	 * (XXX might be worth changing that sometime.)
 	 */
-	pull_varattnos((Node *) rel->reltarget.exprs, rel->relid, &attrs_used);
+	pull_varattnos((Node *) rel->reltarget->exprs, rel->relid, &attrs_used);
 
 	/* Add all the attributes used by un-pushed-down restriction clauses. */
 	foreach(lc, rel->baserestrictinfo)
@@ -3030,7 +3029,7 @@ debug_print_rel(PlannerInfo *root, RelOptInfo *rel)
 
 	printf("RELOPTINFO (");
 	print_relids(rel->relids);
-	printf("): rows=%.0f width=%d\n", rel->rows, rel->reltarget.width);
+	printf("): rows=%.0f width=%d\n", rel->rows, rel->reltarget->width);
 
 	if (rel->baserestrictinfo)
 	{

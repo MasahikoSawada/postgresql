@@ -2119,8 +2119,9 @@ lo_import 152801
           column name on the left and the data on the right. This mode is
           useful if the data wouldn't fit on the screen in the
           normal <quote>horizontal</quote> mode.  In the auto setting, the
-          expanded mode is used whenever the query output is wider than the
-          screen, otherwise the regular mode is used.  The auto setting is only
+          expanded mode is used whenever the query output has more than one
+          column and is wider than the screen; otherwise, the regular mode is
+          used.  The auto setting is only
           effective in the aligned and wrapped formats.  In other formats, it
           always behaves as if the expanded mode is off.
           </para>
@@ -2672,9 +2673,11 @@ testdb=&gt; <userinput>\setenv LESS -imx4F</userinput>
         <term><literal>\watch [ <replaceable class="parameter">seconds</replaceable> ]</literal></term>
         <listitem>
         <para>
-        Repeatedly execute the current query buffer (like <literal>\g</>)
+        Repeatedly execute the current query buffer (as <literal>\g</> does)
         until interrupted or the query fails.  Wait the specified number of
-        seconds (default 2) between executions.
+        seconds (default 2) between executions.  Each query result is
+        displayed with a header that includes the <literal>\pset title</>
+        string (if any), the time as of query start, and the delay interval.
         </para>
         </listitem>
       </varlistentry>

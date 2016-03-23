@@ -760,7 +760,7 @@ CheckSlotRequirements(void)
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 (errmsg("replication slots can only be used if max_replication_slots > 0"))));
 
-	if (wal_level < WAL_LEVEL_ARCHIVE)
+	if (wal_level < WAL_LEVEL_REPLICA)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("replication slots can only be used if wal_level >= archive")));
@@ -1095,7 +1095,7 @@ SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel)
 	START_CRIT_SECTION();
 
 	fsync_fname(path, false);
-	fsync_fname((char *) dir, true);
+	fsync_fname(dir, true);
 	fsync_fname("pg_replslot", true);
 
 	END_CRIT_SECTION();

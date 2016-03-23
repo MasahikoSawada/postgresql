@@ -31,6 +31,7 @@
 #include "optimizer/prep.h"
 #include "optimizer/subselect.h"
 #include "optimizer/tlist.h"
+#include "optimizer/var.h"
 #include "parser/parse_relation.h"
 #include "parser/parsetree.h"
 #include "rewrite/rewriteManip.h"
@@ -908,6 +909,7 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 	subroot->append_rel_list = NIL;
 	subroot->rowMarks = NIL;
 	memset(subroot->upper_rels, 0, sizeof(subroot->upper_rels));
+	memset(subroot->upper_targets, 0, sizeof(subroot->upper_targets));
 	subroot->processed_tlist = NIL;
 	subroot->grouping_map = NULL;
 	subroot->minmax_aggs = NIL;
