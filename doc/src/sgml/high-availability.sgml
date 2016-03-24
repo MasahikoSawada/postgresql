@@ -1027,10 +1027,12 @@ primary_slot_name = 'node_a_slot'
 
    <para>
     Synchronous replication offers the ability to confirm that all changes
-    made by a transaction have been transferred to one or more synchronous standby
-    server. This extends that standard level of durability
+    made by a transaction have been transferred to one or more synchronous
+    standby servers. This extends that standard level of durability
     offered by a transaction commit. This level of protection is referred
-    to as 2-safe replication in computer science theory.
+    to as 2-safe replication in computer science theory, and group-1-safe
+    (group-safe and 1-safe) when <varname>synchronous_commit</> is set to
+    more than <literal>remote_write</>.
    </para>
 
    <para>
@@ -1113,42 +1115,6 @@ primary_slot_name = 'node_a_slot'
     shutdown until all outstanding WAL records are transferred to the currently
     connected standby servers.
    </para>
-
-   </sect3>
-
-   <sect3 id="synchronous-replication-multiple-synchronization">
-    <title>Multiple Synchronous Replication</title>
-
-   <para>
-    Setting up synchronous standby at multiple locations bring us high availability.
-    It ensures that modified data will be replicated to multiple synchronous standbys.
-   </para>
-
-   <para>
-    Multiple synchronous replication is set up by setting <xref linkend="guc-synchronous-standby-names">
-    using the following syntax.
-   </para>
-    
-    <synopsis>
-        synchronous_standby_names = '<replaceable class="PARAMETER">N</replaceable> [ <replaceable class="PARAMETER">node</replaceable> [, ...] ]'
-    </synopsis>
-
-   <para>
-    This syntax allows us to define a synchronous group that will wait for at
-    least N standbys, and a comma-separated list of group members.  The special
-    value <literal>*</> matches any standby. The number N must not be greater
-    than the number of members listed in the group, unless <literal>*</> is
-    used.  Priority is given to servers in the order that they appear in the list.
-    The first named server has the highest priority.
-   </para>
-
-   <note>
-    <para>
-    All ASCII characters except for special characters(',', '&quot', '[', ']', ' ') are
-    allowed in unquoted standby names.  To use these special characters, the standby
-    name should be enclosed in double quotes.
-    </para>
-   </note>
 
    </sect3>
 
@@ -2362,6 +2328,52 @@ LOG:  database system is ready to accept read only connections
    </para>
   </sect2>
 
+ </sect1>
+
+ <sect1 id="dedicated-language-for-multi-sync-replication">
+  <title>Dedicated language for multiple synchronous replication</title>
+
+  <indexterm zone="high-availability">
+   <primary>Dedicated language for multiple synchornous replication</primary>
+  </indexterm>
+
+  <sect2 id="dedicated-language-for-multi-sync-replication-description">
+   <title>Description</title>
+   <para>
+    Multiple synchronous replication is set up flexibly by setting
+    <xref linkend="guc-synchronous-standby-names"> using the following syntax.
+   </para>
+
+   <synopsis>
+    synchronous_standby_names = '<replaceable class="PARAMETER">N</replaceable> [ <replaceable class="PARAMETER">node_name</replaceable> [, ...] ]'
+   </synopsis>
+
+   <para>
+    This syntax allows us to define a synchronous group that will wait for at
+    least N standbys of them, and a comma-separated list of group members that are surrounded by
+    '[' and ']'.  The special value <literal>*</> for server name matches any standby.
+    By surrounding list of group members using '[' and ']', synchronous standbys are chosen from
+    that group using by priority method.
+   </para>
+
+   <note>
+    <para>
+     All ASCII characters except for special characters(',', '&quot', '[', ']', ' ') are
+     allowed in unquoted standby names.  To use these special characters, the standby
+     name should be enclosed in double quotes.
+    </para>
+   </note>
+  </sect2>
+
+  <sect2 id="dedicated-language-for-multi-sync-replication-priority">
+   <title>Prioirty Method</title>
+   <para>
+    The synchronous priority is given to standby servers in the order that they appear in the list.
+    The first named server has the highest priority. The priority method chooses synchronous standbys
+    from group members using synchronous priority of each standbys. The master server ensures that
+    modified data will be replicated to N highest priority standbys at that moment.
+   </para>
+  </sect2>
  </sect1>
 
 </chapter>

@@ -2904,7 +2904,7 @@ include_dir 'conf.d'
        <para>
         Specifies the standby names that can support <firstterm>synchronous replication</>
         using either of two syntaxes: a comma-separated list, or a more flexible syntax
-        described in <xref linkend="synchronous-replication">.
+        described in <xref linkend="dedicated-language-for-multi-sync-replication">.
         Transactions waiting for commit will be allowed to proceed after a
         configurable subset of standby servers confirms receipt of their data.
         For the simple comma-separated list syntax, it is one server.
