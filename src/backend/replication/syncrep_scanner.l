@@ -53,10 +53,10 @@ static int	syncrep_flex_fatal(const char *msg);
  */
 %x xd
 
-space		[ \t\n\r\f]
+space		[ \t\n\r\f\v]
 
 undquoted_start	[^ ,\[\]\"]
-undquoted_cont		[^ ,\[\]]
+undquoted_cont		[^,\[\] \t\n\r\f\v]
 undquoted_name    {undquoted_start}{undquoted_cont}*
 dquoted_name		[^\"]+
 
