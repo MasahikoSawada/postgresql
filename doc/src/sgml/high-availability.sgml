@@ -2353,7 +2353,7 @@ LOG:  database system is ready to accept read only connections
     least N standbys of them, and a comma-separated list of group members that are surrounded by
     '[' and ']'.  The special value <literal>*</> for server name matches any standby.
     By surrounding list of group members using '[' and ']', synchronous standbys are chosen from
-    that group using by priority method.
+    that group using priority method.
    </para>
 
    <note>
