@@ -1030,7 +1030,7 @@ primary_slot_name = 'node_a_slot'
     made by a transaction have been transferred to one or more synchronous standby
     server. This extends that standard level of durability
     offered by a transaction commit. This level of protection is referred
-    to as group-safe replication in computer science theory.
+    to as 2-safe replication in computer science theory.
    </para>
 
    <para>
