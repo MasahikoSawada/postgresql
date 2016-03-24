@@ -516,7 +516,7 @@ SyncRepGetSyncStandbys(void)
 	int	lowest_priority;
 	int	next_highest_priority;
 	int	this_priority;
-	int	priority;
+	int	target_priority;
 	int	i;
 	WalSnd	*walsnd;
 
@@ -593,8 +593,8 @@ SyncRepGetSyncStandbys(void)
 	/*
 	 * Find the sync standbys from the pending list.
 	 */
-	priority = next_highest_priority;
-	while (priority <= lowest_priority)
+	target_priority = next_highest_priority;
+	while (target_priority <= lowest_priority)
 	{
 		ListCell	*cell;
 		ListCell	*prev = NULL;
@@ -610,7 +610,7 @@ SyncRepGetSyncStandbys(void)
 			next = lnext(cell);
 
 			this_priority = walsnd->sync_standby_priority;
-			if (this_priority == priority)
+			if (this_priority == target_priority)
 			{
 				result = lappend_int(result, i);
 				if (list_length(result) == SyncRepConfig->num_sync)
@@ -634,7 +634,7 @@ SyncRepGetSyncStandbys(void)
 			prev = cell;
 		}
 
-		priority = next_highest_priority;
+		target_priority = next_highest_priority;
 	}
 
 	return result;
