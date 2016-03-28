@@ -57,8 +57,8 @@ $node_standby_1->stop;
 $node_standby_2->stop;
 $node_standby_3->stop;
 
-# Change the synchronous_standby_names = '2[standby1,standby2,standby3]' and check sync_state.
-$node_master->psql('postgres', "ALTER SYSTEM SET synchronous_standby_names = '2[standby1,standby2,standby3]';");
+# Change the synchronous_standby_names = '2(standby1,standby2,standby3)' and check sync_state.
+$node_master->psql('postgres', "ALTER SYSTEM SET synchronous_standby_names = '2(standby1,standby2,standby3)';");
 $node_master->reload;
 
 $node_standby_2->start;
@@ -78,8 +78,8 @@ $result = $node_master->safe_psql('postgres', $check_sql);
 print "$result \n";
 is($result, "standby1|1|sync\nstandby2|2|sync\nstandby3|3|potential\nstandby4|0|async", 'checked for synchronous standbys state transition 2');
 
-# Change the synchronous_standby_names = '2[standby1,*,standby2]' and check sync_state
-$node_master->psql('postgres', "ALTER SYSTEM SET synchronous_standby_names = '2[standby1,*,standby2]';");
+# Change the synchronous_standby_names = '2(standby1,*,standby2)' and check sync_state
+$node_master->psql('postgres', "ALTER SYSTEM SET synchronous_standby_names = '2(standby1,*,standby2)';");
 $node_master->reload;
 
 # Standby1 and standby2 should be 'sync', and sync_priority of standby2 should be 2, not 3.
@@ -87,8 +87,8 @@ $result = $node_master->safe_psql('postgres', $check_sql);
 print "$result \n";
 is($result, "standby1|1|sync\nstandby2|2|sync\nstandby3|2|potential\nstandby4|2|potential", 'checked for synchronous standbys state with asterisk 1');
 
-# Change the synchronous_standby_names = '2[*]' and check sync state
-$node_master->psql('postgres', "ALTER SYSTEM SET synchronous_standby_names = '2[*]';");
+# Change the synchronous_standby_names = '2(*)' and check sync state
+$node_master->psql('postgres', "ALTER SYSTEM SET synchronous_standby_names = '2(*)';");
 $node_master->reload;
 
 # Since standby2 and standby3 have more higher index number of WalSnd array, these standbys should be 'sync' instead of standby1.

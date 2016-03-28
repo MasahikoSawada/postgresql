@@ -2345,20 +2345,20 @@ LOG:  database system is ready to accept read only connections
    </para>
 
    <synopsis>
-    synchronous_standby_names = '<replaceable class="PARAMETER">N</replaceable> [ <replaceable class="PARAMETER">node_name</replaceable> [, ...] ]'
+    synchronous_standby_names = '<replaceable class="PARAMETER">N</replaceable> ( <replaceable class="PARAMETER">node_name</replaceable> [, ...] )'
    </synopsis>
 
    <para>
     This syntax allows us to define a synchronous group that will wait for at
     least N standbys of them, and a comma-separated list of group members that are surrounded by
-    '[' and ']'.  The special value <literal>*</> for server name matches any standby.
-    By surrounding list of group members using '[' and ']', synchronous standbys are chosen from
+    parantheses.  The special value <literal>*</> for server name matches any standby.
+    By surrounding list of group members using parantheses, synchronous standbys are chosen from
     that group using priority method.
    </para>
 
    <note>
     <para>
-     All ASCII characters except for special characters(',', '&quot', '[', ']', ' ') are
+     All ASCII characters except for special characters(',', '&quot', '(', ')', ' ') are
      allowed in unquoted standby names.  To use these special characters, the standby
      name should be enclosed in double quotes.
     </para>

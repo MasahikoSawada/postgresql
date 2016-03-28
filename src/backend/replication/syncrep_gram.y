@@ -60,7 +60,7 @@ result:
 ;
 standby_config:
 		standby_list				{ $$ = create_syncrep_config("1", $1); }
-		| NUM '[' standby_list ']'		{ $$ = create_syncrep_config($1, $3); }
+		| NUM '(' standby_list ')'		{ $$ = create_syncrep_config($1, $3); }
 ;
 standby_list:
 		standby_name				{ $$ = list_make1($1);}

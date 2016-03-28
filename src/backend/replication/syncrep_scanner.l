@@ -55,8 +55,8 @@ static int	syncrep_flex_fatal(const char *msg);
 
 space		[ \t\n\r\f\v]
 
-undquoted_start	[^ ,\[\]\"]
-undquoted_cont		[^,\[\] \t\n\r\f\v]
+undquoted_start	[^ ,\(\)\"]
+undquoted_cont		[^,\(\) \t\n\r\f\v]
 undquoted_name    {undquoted_start}{undquoted_cont}*
 dquoted_name		[^\"]+
 
@@ -86,8 +86,8 @@ xdinside		{dquoted_name}
 				return NAME;
 		}
 ","			{ return ','; }
-"["			{ return '['; }
-"]"			{ return ']'; }
+"("			{ return '('; }
+")"			{ return ')'; }
 [1-9][0-9]*	{
 				yylval.str = pstrdup(yytext);
 				return NUM;
