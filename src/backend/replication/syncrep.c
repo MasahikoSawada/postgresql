@@ -598,13 +598,16 @@ SyncRepGetSyncStandbys(void)
 	{
 		ListCell	*cell;
 		ListCell	*prev = NULL;
+		ListCell	*next;
 
 		next_highest_priority = lowest_priority + 1;
 
-		foreach (cell, pending)
+		for (cell = list_head(pending); cell != NULL; cell = next)
 		{
 			i = lfirst_int(cell);
 			walsnd = &WalSndCtl->walsnds[i];
+
+			next = lnext(cell);
 
 			this_priority = walsnd->sync_standby_priority;
 			if (this_priority == target_priority)
