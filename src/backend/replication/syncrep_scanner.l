@@ -162,13 +162,11 @@ syncrep_scanstr(const char *str)
 	else
 	{
 		/*
-		 * Regain control after a fatal, internal flex error.  It may have
-		 * corrupted parser state.  Consequently, abandon the file, but trust
-		 * that the state remains sane enough for yy_delete_buffer().
+		 * Control after a fatal, internal flex error.  It may have
+		 * corrupted parser state.  Call internal fatal error, and exit.
 		 */
-		elog(LOG, "%s", syncrep_flex_fatal_errmsg);
-		ret = false;
-		goto cleanup;
+		syncrep_scanner_finish();
+		elog(FATAL, "%s", syncrep_flex_fatal_errmsg);
 	}
 
 	syncrep_scanner_init(str);
