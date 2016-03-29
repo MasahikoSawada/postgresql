@@ -166,7 +166,7 @@ syncrep_scanstr(const char *str)
 		 * corrupted parser state.  Consequently, abandon the file, but trust
 		 * that the state remains sane enough for yy_delete_buffer().
 		 */
-		elog(IsUnderPostmaster ? DEBUG2 : LOG, "%s", syncrep_flex_fatal_errmsg);
+		elog(LOG, "%s", syncrep_flex_fatal_errmsg);
 		ret = false;
 		goto cleanup;
 	}
