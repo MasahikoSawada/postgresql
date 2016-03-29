@@ -79,6 +79,8 @@ print "$result \n";
 is($result, "standby1|1|sync\nstandby2|2|sync\nstandby3|3|potential\nstandby4|0|async", 'checked for synchronous standbys state transition 2');
 
 # Change the synchronous_standby_names = '2(standby1,*,standby2)' and check sync_state
+# '2(standby1,*,standby2' value does not make sense actually but synchronous_standby_names can accept such value.
+# This test is for checking backward compatibility.
 $node_master->psql('postgres', "ALTER SYSTEM SET synchronous_standby_names = '2(standby1,*,standby2)';");
 $node_master->reload;
 
