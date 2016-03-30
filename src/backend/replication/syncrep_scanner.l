@@ -174,7 +174,7 @@ syncrep_scanstr(const char *str)
 
 	if (parse_res != 0)
 		ret = false;
-cleanup:
+
 	syncrep_scanner_finish();
 	return ret;
 }
