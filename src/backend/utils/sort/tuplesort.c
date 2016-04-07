@@ -108,7 +108,7 @@
  * code we determine the number of tapes M on the basis of workMem: we want
  * workMem/M to be large enough that we read a fair amount of data each time
  * we preread from a tape, so as to maintain the locality of access described
- * above.  Nonetheless, with large workMem we can have many tapes.
+ * above.  Nonetheless, with large workMem we can have a few hundred tapes.
  *
  *
  * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
@@ -230,6 +230,7 @@ typedef enum
  * tape during a preread cycle (see discussion at top of file).
  */
 #define MINORDER		6		/* minimum merge order */
+#define MAXORDER		500		/* maximum merge order */
 #define TAPE_BUFFER_OVERHEAD		(BLCKSZ * 3)
 #define MERGE_BUFFER_SIZE			(BLCKSZ * 32)
 
@@ -2274,8 +2275,22 @@ tuplesort_merge_order(int64 allowedMem)
 	mOrder = (allowedMem - TAPE_BUFFER_OVERHEAD) /
 		(MERGE_BUFFER_SIZE + TAPE_BUFFER_OVERHEAD);
 
-	/* Even in minimum memory, use at least a MINORDER merge */
+	/*
+	 * Even in minimum memory, use at least a MINORDER merge.  Also cap the
+	 * maximum merge order to MAXORDER.
+	 *
+	 * When allowedMem is significantly lower than what is required for an
+	 * internal sort, it is unlikely that there are benefits to increasing the
+	 * number of tapes beyond Knuth's "sweet spot" of 7.  Furthermore, in the
+	 * common case where there turns out to be less than MAXORDER initial runs,
+	 * the overhead per-tape if we were not to cap could be significant with
+	 * high allowedMem.  Significantly more tapes can be useful if they can
+	 * enable doing all merging on-the-fly, but the merge heap is rather cache
+	 * inefficient if there are too many tapes (with one run); multiple passes
+	 * seem preferable.
+	 */
 	mOrder = Max(mOrder, MINORDER);
+	mOrder = Min(mOrder, MAXORDER);
 
 	return mOrder;
 }
