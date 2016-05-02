@@ -17,7 +17,7 @@
 
 #include <time.h>
 
-#include "access/nbtree.h"
+#include "access/nbtree2.h"
 #include "access/reloptions.h"
 #include "access/relscan.h"
 #include "miscadmin.h"
@@ -59,7 +59,7 @@ static bool _bt_check_rowcompare(ScanKey skey,
  *		The result is intended for use with _bt_compare().
  */
 ScanKey
-_bt_mkscankey(Relation rel, IndexTuple itup)
+_bt2_mkscankey(Relation rel, IndexTuple itup)
 {
 	ScanKey		skey;
 	TupleDesc	itupdesc;
@@ -79,6 +79,7 @@ _bt_mkscankey(Relation rel, IndexTuple itup)
 		Datum		arg;
 		bool		null;
 		int			flags;
+		uint16		abbrevkey;
 
 		/*
 		 * We can use the cached (default) support procs since no cross-type
@@ -87,14 +88,16 @@ _bt_mkscankey(Relation rel, IndexTuple itup)
 		procinfo = index_getprocinfo(rel, i + 1, BTORDER_PROC);
 		arg = index_getattr(itup, i + 1, itupdesc, &null);
 		flags = (null ? SK_ISNULL : 0) | (indoption[i] << SK_BT_INDOPTION_SHIFT);
-		ScanKeyEntryInitializeWithInfo(&skey[i],
+		abbrevkey = int32AbbrevConvert(arg);
+		ScanKeyEntryInitializeWithInfo2(&skey[i],
 									   flags,
 									   (AttrNumber) (i + 1),
 									   InvalidStrategy,
 									   InvalidOid,
 									   rel->rd_indcollation[i],
 									   procinfo,
-									   arg);
+									   arg,
+									   abbrevkey);
 	}
 
 	return skey;

@@ -115,3 +115,24 @@ ScanKeyEntryInitializeWithInfo(ScanKey entry,
 	entry->sk_argument = argument;
 	fmgr_info_copy(&entry->sk_func, finfo, CurrentMemoryContext);
 }
+
+void
+ScanKeyEntryInitializeWithInfo2(ScanKey entry,
+							   int flags,
+							   AttrNumber attributeNumber,
+							   StrategyNumber strategy,
+							   Oid subtype,
+							   Oid collation,
+							   FmgrInfo *finfo,
+							   Datum argument,
+							   uint16 abbrevkey)
+{
+	entry->sk_flags = flags;
+	entry->sk_attno = attributeNumber;
+	entry->sk_strategy = strategy;
+	entry->sk_subtype = subtype;
+	entry->sk_collation = collation;
+	entry->sk_argument = argument;
+	entry->sk_abbrevkey = abbrevkey;
+	fmgr_info_copy(&entry->sk_func, finfo, CurrentMemoryContext);
+}

@@ -30,6 +30,16 @@ typedef struct ItemIdData
 
 typedef ItemIdData *ItemId;
 
+typedef struct ItemIdDataWIthAbbrevKey
+{
+	unsigned	lp_off:15,
+				lp_flags:2,
+				lp_len:15;
+	uint16		lp_abbrevkey;
+} ItemIdDataWithAbbrevKey;
+
+typedef ItemIdDataWithAbbrevKey *ItemIdWithAbbrevKey;
+	
 /*
  * lp_flags has these possible states.  An UNUSED line pointer is available
  * for immediate re-use, the other states are not.
@@ -69,6 +79,12 @@ typedef uint16 ItemLength;
  */
 #define ItemIdGetFlags(itemId) \
    ((itemId)->lp_flags)
+
+/*
+ *		ItemIdGetAbbrevKey
+ */
+#define	ItemIdGetAbbrevKey(itemIdWithAbbrevKey) \
+	((itemIdWithAbbrevKey)->lp_abbrevkey)
 
 /*
  *		ItemIdGetRedirect
@@ -141,6 +157,14 @@ typedef uint16 ItemLength;
 	(itemId)->lp_flags = LP_NORMAL, \
 	(itemId)->lp_off = (off), \
 	(itemId)->lp_len = (len) \
+)
+
+#define ItemIdWithAbbrevKeySetNormal(itemId, off, len, abbrevkey) \
+( \
+		(itemId)->lp_flags = LP_NORMAL, \
+		(itemId)->lp_off = (off), \
+		(itemId)->lp_len = (len), \
+		(itemId)->lp_abbrevkey = (abbrevkey) \
 )
 
 /*

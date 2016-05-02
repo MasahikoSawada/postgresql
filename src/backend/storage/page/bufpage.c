@@ -324,6 +324,161 @@ PageAddItem(Page page,
 }
 
 /*
+ * PageAddItemWithAbbrevKey
+ */
+OffsetNumber
+PageAddItemWithAbbrevKey(Page page,
+						 Item item,
+						 Size size,
+						 OffsetNumber offsetNumber,
+						 bool overwrite,
+						 bool is_heap,
+						 uint16 abbrevkey)
+{
+	PageHeader	phdr = (PageHeader) page;
+	Size		alignedSize;
+	int			lower;
+	int			upper;
+	ItemIdWithAbbrevKey		itemId;
+	OffsetNumber limit;
+	bool		needshuffle = false;
+
+	/*
+	 * Be wary about corrupted page pointers
+	 */
+	if (phdr->pd_lower < SizeOfPageHeaderDataWithAbbrevKey ||
+		phdr->pd_lower > phdr->pd_upper ||
+		phdr->pd_upper > phdr->pd_special ||
+		phdr->pd_special > BLCKSZ)
+		ereport(PANIC,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("corrupted page pointers: lower = %u, upper = %u, special = %u",
+						phdr->pd_lower, phdr->pd_upper, phdr->pd_special)));
+
+	/*
+	 * Select offsetNumber to place the new item at
+	 */
+	limit = OffsetNumberNext(PageWithAbbrevKeyGetMaxOffsetNumber(page));
+
+	/* was offsetNumber passed in? */
+	if (OffsetNumberIsValid(offsetNumber))
+	{
+		/* yes, check it */
+		if (overwrite)
+		{
+			if (offsetNumber < limit)
+			{
+				itemId = PageGetItemIdWithAbbrevKey(phdr, offsetNumber);
+				if (ItemIdIsUsed(itemId) || ItemIdHasStorage(itemId))
+				{
+					elog(WARNING, "will not overwrite a used ItemId");
+					return InvalidOffsetNumber;
+				}
+			}
+		}
+		else
+		{
+			if (offsetNumber < limit)
+				needshuffle = true;		/* need to move existing linp's */
+		}
+	}
+	else
+	{
+		/* offsetNumber was not passed in, so find a free slot */
+		/* if no free slot, we'll put it at limit (1st open slot) */
+		if (PageHasFreeLinePointers(phdr))
+		{
+			/*
+			 * Look for "recyclable" (unused) ItemId.  We check for no storage
+			 * as well, just to be paranoid --- unused items should never have
+			 * storage.
+			 */
+			for (offsetNumber = 1; offsetNumber < limit; offsetNumber++)
+			{
+				itemId = PageGetItemIdWithAbbrevKey(phdr, offsetNumber);
+				if (!ItemIdIsUsed(itemId) && !ItemIdHasStorage(itemId))
+					break;
+			}
+			if (offsetNumber >= limit)
+			{
+				/* the hint is wrong, so reset it */
+				PageClearHasFreeLinePointers(phdr);
+			}
+		}
+		else
+		{
+			/* don't bother searching if hint says there's no free slot */
+			offsetNumber = limit;
+		}
+	}
+
+	if (offsetNumber > limit)
+	{
+		elog(WARNING, "specified item offset is too large");
+		return InvalidOffsetNumber;
+	}
+
+	if (is_heap && offsetNumber > MaxHeapTuplesPerPage)
+	{
+		elog(WARNING, "can't put more than MaxHeapTuplesPerPage items in a heap page");
+		return InvalidOffsetNumber;
+	}
+
+	/*
+	 * Compute new lower and upper pointers for page, see if it'll fit.
+	 *
+	 * Note: do arithmetic as signed ints, to avoid mistakes if, say,
+	 * alignedSize > pd_upper.
+	 */
+	if (offsetNumber == limit || needshuffle)
+		lower = phdr->pd_lower + sizeof(ItemIdData);
+	else
+		lower = phdr->pd_lower;
+
+	alignedSize = MAXALIGN(size);
+
+	upper = (int) phdr->pd_upper - (int) alignedSize;
+
+	if (lower > upper)
+		return InvalidOffsetNumber;
+
+	/*
+	 * OK to insert the item.  First, shuffle the existing pointers if needed.
+	 */
+	itemId = PageGetItemIdWithAbbrevKey(phdr, offsetNumber);
+
+	if (needshuffle)
+		memmove(itemId + 1, itemId,
+				(limit - offsetNumber) * sizeof(ItemIdData));
+
+	/* set the item pointer */
+	ItemIdWithAbbrevKeySetNormal(itemId, upper, size, abbrevkey);
+
+	/*
+	 * Items normally contain no uninitialized bytes.  Core bufpage consumers
+	 * conform, but this is not a necessary coding rule; a new index AM could
+	 * opt to depart from it.  However, data type input functions and other
+	 * C-language functions that synthesize datums should initialize all
+	 * bytes; datumIsEqual() relies on this.  Testing here, along with the
+	 * similar check in printtup(), helps to catch such mistakes.
+	 *
+	 * Values of the "name" type retrieved via index-only scans may contain
+	 * uninitialized bytes; see comment in btrescan().  Valgrind will report
+	 * this as an error, but it is safe to ignore.
+	 */
+	VALGRIND_CHECK_MEM_IS_DEFINED(item, size);
+
+	/* copy the item's data onto the page */
+	memcpy((char *) page + upper, item, size);
+
+	/* adjust page header */
+	phdr->pd_lower = (LocationIndex) lower;
+	phdr->pd_upper = (LocationIndex) upper;
+
+	return offsetNumber;
+}
+
+/*
  * PageGetTempPage
  *		Get a temporary page in local memory for special processing.
  *		The returned page is not initialized at all; caller must do that.
@@ -578,6 +733,28 @@ PageGetFreeSpace(Page page)
 	if (space < (int) sizeof(ItemIdData))
 		return 0;
 	space -= sizeof(ItemIdData);
+
+	return (Size) space;
+}
+
+/*
+ * PageGetFreeSpaceWithAbbrKey
+ */
+Size
+PageWithAbbrevKeyGetFreeSpace(Page page)
+{
+	int			space;
+
+	/*
+	 * Use signed arithmetic here so that we behave sensibly if pd_lower >
+	 * pd_upper.
+	 */
+	space = (int) ((PageHeader) page)->pd_upper -
+		(int) ((PageHeader) page)->pd_lower;
+
+	if (space < (int) sizeof(ItemIdDataWithAbbrevKey))
+		return 0;
+	space -= sizeof(ItemIdDataWithAbbrevKey);
 
 	return (Size) space;
 }

@@ -653,15 +653,15 @@ typedef BTScanOpaqueData *BTScanOpaque;
 /*
  * prototypes for functions in nbtree.c (external entry points for btree)
  */
-extern Datum bthandler(PG_FUNCTION_ARGS);
+extern Datum bt2handler(PG_FUNCTION_ARGS);
 extern IndexBuildResult *btbuild(Relation heap, Relation index,
 		struct IndexInfo *indexInfo);
 extern void btbuildempty(Relation index);
-extern bool btinsert(Relation rel, Datum *values, bool *isnull,
+extern bool bt2insert(Relation rel, Datum *values, bool *isnull,
 		 ItemPointer ht_ctid, Relation heapRel,
 		 IndexUniqueCheck checkUnique);
 extern IndexScanDesc btbeginscan(Relation rel, int nkeys, int norderbys);
-extern bool btgettuple(IndexScanDesc scan, ScanDirection dir);
+extern bool bt2gettuple(IndexScanDesc scan, ScanDirection dir);
 extern int64 btgetbitmap(IndexScanDesc scan, TIDBitmap *tbm);
 extern void btrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 		 ScanKey orderbys, int norderbys);
@@ -681,8 +681,8 @@ extern bool btcanreturn(Relation index, int attno);
  */
 extern bool _bt2_doinsert(Relation rel, IndexTuple itup,
 			 IndexUniqueCheck checkUnique, Relation heapRel);
-extern Buffer _bt_getstackbuf(Relation rel, BTStack stack, int access);
-extern void _bt_finish_split(Relation rel, Buffer bbuf, BTStack stack);
+extern Buffer _bt2_getstackbuf(Relation rel, BTStack stack, int access);
+extern void _bt2_finish_split(Relation rel, Buffer bbuf, BTStack stack);
 
 /*
  * prototypes for functions in nbtpage.c
@@ -708,15 +708,15 @@ extern int	_bt_pagedel(Relation rel, Buffer buf);
 /*
  * prototypes for functions in nbtsearch.c
  */
-extern BTStack _bt_search(Relation rel,
+extern BTStack _bt2_search(Relation rel,
 		   int keysz, ScanKey scankey, bool nextkey,
 		   Buffer *bufP, int access, Snapshot snapshot);
-extern Buffer _bt_moveright(Relation rel, Buffer buf, int keysz,
+extern Buffer _bt2_moveright(Relation rel, Buffer buf, int keysz,
 			  ScanKey scankey, bool nextkey, bool forupdate, BTStack stack,
 			  int access, Snapshot snapshot);
-extern OffsetNumber _bt_binsrch(Relation rel, Buffer buf, int keysz,
+extern OffsetNumber _bt2_binsrch(Relation rel, Buffer buf, int keysz,
 			ScanKey scankey, bool nextkey);
-extern int32 _bt_compare(Relation rel, int keysz, ScanKey scankey,
+extern int32 _bt2_compare(Relation rel, int keysz, ScanKey scankey,
 			Page page, OffsetNumber offnum);
 extern bool _bt_first(IndexScanDesc scan, ScanDirection dir);
 extern bool _bt_next(IndexScanDesc scan, ScanDirection dir);
@@ -726,7 +726,7 @@ extern Buffer _bt_get_endpoint(Relation rel, uint32 level, bool rightmost,
 /*
  * prototypes for functions in nbtutils.c
  */
-extern ScanKey _bt_mkscankey(Relation rel, IndexTuple itup);
+extern ScanKey _bt2_mkscankey(Relation rel, IndexTuple itup);
 extern ScanKey _bt_mkscankey_nodata(Relation rel);
 extern void _bt_freeskey(ScanKey skey);
 extern void _bt_freestack(BTStack stack);

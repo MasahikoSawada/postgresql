@@ -81,7 +81,7 @@ static void btvacuumpage(BTVacState *vstate, BlockNumber blkno,
  * and callbacks.
  */
 Datum
-bthandler(PG_FUNCTION_ARGS)
+bt2handler(PG_FUNCTION_ARGS)
 {
 	IndexAmRoutine *amroutine = makeNode(IndexAmRoutine);
 
@@ -102,7 +102,7 @@ bthandler(PG_FUNCTION_ARGS)
 
 	amroutine->ambuild = btbuild;
 	amroutine->ambuildempty = btbuildempty;
-	amroutine->aminsert = btinsert;
+	amroutine->aminsert = bt2insert; /* XXX */
 	amroutine->ambulkdelete = btbulkdelete;
 	amroutine->amvacuumcleanup = btvacuumcleanup;
 	amroutine->amcanreturn = btcanreturn;
@@ -111,7 +111,7 @@ bthandler(PG_FUNCTION_ARGS)
 	amroutine->amvalidate = btvalidate;
 	amroutine->ambeginscan = btbeginscan;
 	amroutine->amrescan = btrescan;
-	amroutine->amgettuple = btgettuple;
+	amroutine->amgettuple = bt2gettuple; /* XXX */
 	amroutine->amgetbitmap = btgetbitmap;
 	amroutine->amendscan = btendscan;
 	amroutine->ammarkpos = btmarkpos;
@@ -264,7 +264,7 @@ btbuildempty(Relation index)
  *		new tuple, and put it there.
  */
 bool
-btinsert(Relation rel, Datum *values, bool *isnull,
+bt2insert(Relation rel, Datum *values, bool *isnull,
 		 ItemPointer ht_ctid, Relation heapRel,
 		 IndexUniqueCheck checkUnique)
 {
@@ -275,7 +275,7 @@ btinsert(Relation rel, Datum *values, bool *isnull,
 	itup = index_form_tuple(RelationGetDescr(rel), values, isnull);
 	itup->t_tid = *ht_ctid;
 
-	result = _bt_doinsert(rel, itup, checkUnique, heapRel);
+	result = _bt2_doinsert(rel, itup, checkUnique, heapRel);
 
 	pfree(itup);
 
@@ -286,7 +286,7 @@ btinsert(Relation rel, Datum *values, bool *isnull,
  *	btgettuple() -- Get the next tuple in the scan.
  */
 bool
-btgettuple(IndexScanDesc scan, ScanDirection dir)
+bt2gettuple(IndexScanDesc scan, ScanDirection dir)
 {
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 	bool		res;

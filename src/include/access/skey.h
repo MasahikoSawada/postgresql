@@ -70,6 +70,7 @@ typedef struct ScanKeyData
 	Oid			sk_collation;	/* collation to use, if needed */
 	FmgrInfo	sk_func;		/* lookup info for function to call */
 	Datum		sk_argument;	/* data to compare */
+	uint16		sk_abbrevkey;	/* leading attribute abbreviated key */
 } ScanKeyData;
 
 typedef ScanKeyData *ScanKey;
@@ -148,5 +149,14 @@ extern void ScanKeyEntryInitializeWithInfo(ScanKey entry,
 							   Oid collation,
 							   FmgrInfo *finfo,
 							   Datum argument);
+extern void ScanKeyEntryInitializeWithInfo2(ScanKey entry,
+							   int flags,
+							   AttrNumber attributeNumber,
+							   StrategyNumber strategy,
+							   Oid subtype,
+							   Oid collation,
+							   FmgrInfo *finfo,
+							   Datum argument,
+							   uint16 abbrevkey);
 
 #endif   /* SKEY_H */

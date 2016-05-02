@@ -159,7 +159,23 @@ typedef struct PageHeaderData
 	ItemIdData	pd_linp[FLEXIBLE_ARRAY_MEMBER]; /* line pointer array */
 } PageHeaderData;
 
+typedef struct PageHeaderDataWIthAbbrevKey
+{
+	/* XXX LSN is member of *any* block, not only page-organized ones */
+	PageXLogRecPtr pd_lsn;		/* LSN: next byte after last byte of xlog
+								 * record for last change to this page */
+	uint16		pd_checksum;	/* checksum */
+	uint16		pd_flags;		/* flag bits, see below */
+	LocationIndex pd_lower;		/* offset to start of free space */
+	LocationIndex pd_upper;		/* offset to end of free space */
+	LocationIndex pd_special;	/* offset to start of special space */
+	uint16		pd_pagesize_version;
+	TransactionId pd_prune_xid; /* oldest prunable XID, or zero if none */
+	ItemIdDataWithAbbrevKey	pd_linp[FLEXIBLE_ARRAY_MEMBER]; /* line pointer with abbrev key array */
+} PageHeaderDataWithAbbrevKey;
+
 typedef PageHeaderData *PageHeader;
+typedef PageHeaderDataWithAbbrevKey *PageHeaderWithAbbrevKey;
 
 /*
  * pd_flags contains the following flag bits.  Undefined bits are initialized
@@ -211,6 +227,7 @@ typedef PageHeaderData *PageHeader;
  * line pointer(s) do not count as part of header
  */
 #define SizeOfPageHeaderData (offsetof(PageHeaderData, pd_linp))
+#define SizeOfPageHeaderDataWithAbbrevKey (offsetof(PageHeaderDataWithAbbrevKey, pd_linp))
 
 /*
  * PageIsEmpty
@@ -231,6 +248,12 @@ typedef PageHeaderData *PageHeader;
  */
 #define PageGetItemId(page, offsetNumber) \
 	((ItemId) (&((PageHeader) (page))->pd_linp[(offsetNumber) - 1]))
+
+/*
+ * PageGetItemIdWithAbbrevKey
+ */
+#define PageGetItemIdWithAbbrevKey(page, offsetNumber) \
+	((ItemIdWithAbbrevKey) (&((PageHeaderWithAbbrevKey) (page))->pd_linp[(offsetNumber) - 1]))
 
 /*
  * PageGetContents
@@ -327,6 +350,17 @@ PageValidateSpecialPointer(Page page)
 )
 
 /*
+ * PageWithAbbrevKeyGetSpecialPointer
+ */
+#define PageWithAbbrevKeyGetSpecialPointer(page) \
+( \
+		AssertMacro(PageIsValid(page)), \
+		AssertMacro(((PageHeaderWithAbbrevKey) (page))->pd_special <= BLCKSZ), \
+		AssertMacro(((PageHeaderWithAbbrevKey) (page))->pd_special >= SizeOfPageHeaderDataWithAbbrevKey), \
+		(char *) ((char *) (page) + ((PageHeaderWithAbbrevKey) (page))->pd_special) \
+)
+
+/*
  * PageGetItem
  *		Retrieves an item on the given page.
  *
@@ -355,6 +389,14 @@ PageValidateSpecialPointer(Page page)
 	(((PageHeader) (page))->pd_lower <= SizeOfPageHeaderData ? 0 : \
 	 ((((PageHeader) (page))->pd_lower - SizeOfPageHeaderData) \
 	  / sizeof(ItemIdData)))
+
+/*
+ * PageWithAbbrevKeyGetMaxOffsetNumber
+ */
+#define PageWithAbbrevKeyGetMaxOffsetNumber(page) \
+	(((PageHeaderWithAbbrevKey) (page))->pd_lower <= SizeOfPageHeaderDataWithAbbrevKey ? 0 : \
+	  ((((PageHeaderWithAbbrevKey) (page))->pd_lower - SizeOfPageHeaderDataWithAbbrevKey) \
+	   / sizeof(ItemIdDataWithAbbrevKey)))
 
 /*
  * Additional macros for access to page headers. (Beware multiple evaluation
@@ -412,12 +454,15 @@ extern void PageInit(Page page, Size pageSize, Size specialSize);
 extern bool PageIsVerified(Page page, BlockNumber blkno);
 extern OffsetNumber PageAddItem(Page page, Item item, Size size,
 			OffsetNumber offsetNumber, bool overwrite, bool is_heap);
+extern OffsetNumber PageAddItemWithAbbrevKey(Page page, Item item, Size size,
+			OffsetNumber offsetNumber, bool overwrite, bool is_heap, uint16 abbrevkey);
 extern Page PageGetTempPage(Page page);
 extern Page PageGetTempPageCopy(Page page);
 extern Page PageGetTempPageCopySpecial(Page page);
 extern void PageRestoreTempPage(Page tempPage, Page oldPage);
 extern void PageRepairFragmentation(Page page);
 extern Size PageGetFreeSpace(Page page);
+extern Size PageWithAbbrevKeyGetFreeSpace(Page page);
 extern Size PageGetExactFreeSpace(Page page);
 extern Size PageGetHeapFreeSpace(Page page);
 extern void PageIndexTupleDelete(Page page, OffsetNumber offset);

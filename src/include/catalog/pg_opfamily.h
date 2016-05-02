@@ -81,6 +81,8 @@ DATA(insert OID = 1975 (	405		network_ops		PGNSP PGUID ));
 DATA(insert OID = 3550 (	783		network_ops		PGNSP PGUID ));
 DATA(insert OID = 1976 (	403		integer_ops		PGNSP PGUID ));
 #define INTEGER_BTREE_FAM_OID 1976
+DATA(insert OID =  3402 (	3401	integer_pos		PGNSP PGUID ));
+#define INTEGER_BTREE2_FAM_OID 3402
 DATA(insert OID = 1977 (	405		integer_ops		PGNSP PGUID ));
 DATA(insert OID = 1982 (	403		interval_ops	PGNSP PGUID ));
 DATA(insert OID = 1983 (	405		interval_ops	PGNSP PGUID ));

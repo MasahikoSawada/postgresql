@@ -15,7 +15,7 @@
 
 #include "postgres.h"
 
-#include "access/nbtree.h"
+#include "access/nbtree2.h"
 #include "access/relscan.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -65,7 +65,7 @@ _bt_drop_lock_and_maybe_pin(IndexScanDesc scan, BTScanPos sp)
 
 
 /*
- *	_bt_search() -- Search the tree for a particular scankey,
+ *	_bt2_search() -- Search the tree for a particular scankey,
  *		or more precisely for the first leaf page it could be on.
  *
  * The passed scankey must be an insertion-type scankey (see nbtree/README),
@@ -90,7 +90,7 @@ _bt_drop_lock_and_maybe_pin(IndexScanDesc scan, BTScanPos sp)
  * any incomplete splits encountered during the search will be finished.
  */
 BTStack
-_bt_search(Relation rel, int keysz, ScanKey scankey, bool nextkey,
+_bt2_search(Relation rel, int keysz, ScanKey scankey, bool nextkey,
 		   Buffer *bufP, int access, Snapshot snapshot)
 {
 	BTStack		stack_in = NULL;
@@ -108,7 +108,7 @@ _bt_search(Relation rel, int keysz, ScanKey scankey, bool nextkey,
 		Page		page;
 		BTPageOpaque opaque;
 		OffsetNumber offnum;
-		ItemId		itemid;
+		ItemIdWithAbbrevKey		itemid;
 		IndexTuple	itup;
 		BlockNumber blkno;
 		BlockNumber par_blkno;
@@ -126,13 +126,13 @@ _bt_search(Relation rel, int keysz, ScanKey scankey, bool nextkey,
 		 * if the leaf page is split and we insert to the parent page).  But
 		 * this is a good opportunity to finish splits of internal pages too.
 		 */
-		*bufP = _bt_moveright(rel, *bufP, keysz, scankey, nextkey,
+		*bufP = _bt2_moveright(rel, *bufP, keysz, scankey, nextkey,
 							  (access == BT_WRITE), stack_in,
 							  BT_READ, snapshot);
 
 		/* if this is a leaf page, we're done */
 		page = BufferGetPage(*bufP);
-		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+		opaque = (BTPageOpaque) PageWithAbbrevKeyGetSpecialPointer(page);
 		if (P_ISLEAF(opaque))
 			break;
 
@@ -140,8 +140,8 @@ _bt_search(Relation rel, int keysz, ScanKey scankey, bool nextkey,
 		 * Find the appropriate item on the internal page, and get the child
 		 * page that it points to.
 		 */
-		offnum = _bt_binsrch(rel, *bufP, keysz, scankey, nextkey);
-		itemid = PageGetItemId(page, offnum);
+		offnum = _bt2_binsrch(rel, *bufP, keysz, scankey, nextkey);
+		itemid = PageGetItemIdWithAbbrevKey(page, offnum);
 		itup = (IndexTuple) PageGetItem(page, itemid);
 		blkno = ItemPointerGetBlockNumber(&(itup->t_tid));
 		par_blkno = BufferGetBlockNumber(*bufP);
@@ -173,7 +173,7 @@ _bt_search(Relation rel, int keysz, ScanKey scankey, bool nextkey,
 }
 
 /*
- *	_bt_moveright() -- move right in the btree if necessary.
+ *	_bt2_moveright() -- move right in the btree if necessary.
  *
  * When we follow a pointer to reach a page, it is possible that
  * the page has changed in the meanwhile.  If this happens, we're
@@ -207,7 +207,7 @@ _bt_search(Relation rel, int keysz, ScanKey scankey, bool nextkey,
  * positioning for an insert or delete, so NULL is used for those cases.
  */
 Buffer
-_bt_moveright(Relation rel,
+_bt2_moveright(Relation rel,
 			  Buffer buf,
 			  int keysz,
 			  ScanKey scankey,
@@ -240,9 +240,11 @@ _bt_moveright(Relation rel,
 
 	for (;;)
 	{
+		int res;
+		
 		page = BufferGetPage(buf);
 		TestForOldSnapshot(snapshot, rel, page);
-		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+		opaque = (BTPageOpaque) PageWithAbbrevKeyGetSpecialPointer(page);
 
 		if (P_RIGHTMOST(opaque))
 			break;
@@ -262,7 +264,7 @@ _bt_moveright(Relation rel,
 			}
 
 			if (P_INCOMPLETE_SPLIT(opaque))
-				_bt_finish_split(rel, buf, stack);
+				_bt2_finish_split(rel, buf, stack);
 			else
 				_bt_relbuf(rel, buf);
 
@@ -271,7 +273,9 @@ _bt_moveright(Relation rel,
 			continue;
 		}
 
-		if (P_IGNORE(opaque) || _bt_compare(rel, keysz, scankey, page, P_HIKEY) >= cmpval)
+		res = _bt2_compare(rel, keysz, scankey, page, P_HIKEY);
+		
+		if (P_IGNORE(opaque) || res >= cmpval)
 		{
 			/* step right one page */
 			buf = _bt_relandgetbuf(rel, buf, opaque->btpo_next, access);
@@ -289,7 +293,7 @@ _bt_moveright(Relation rel,
 }
 
 /*
- *	_bt_binsrch() -- Do a binary search for a key on a particular page.
+ *	_bt2_binsrch() -- Do a binary search for a key on a particular page.
  *
  * The passed scankey must be an insertion-type scankey (see nbtree/README),
  * but it can omit the rightmost column(s) of the index.
@@ -298,12 +302,12 @@ _bt_moveright(Relation rel,
  * item >= scankey.  When nextkey is true, we are looking for the first
  * item strictly greater than scankey.
  *
- * On a leaf page, _bt_binsrch() returns the OffsetNumber of the first
+ * On a leaf page, _bt2_binsrch() returns the OffsetNumber of the first
  * key >= given scankey, or > scankey if nextkey is true.  (NOTE: in
  * particular, this means it is possible to return a value 1 greater than the
  * number of keys on the page, if the scankey is > all keys on the page.)
  *
- * On an internal (non-leaf) page, _bt_binsrch() returns the OffsetNumber
+ * On an internal (non-leaf) page, _bt2_binsrch() returns the OffsetNumber
  * of the last key < given scankey, or last key <= given scankey if nextkey
  * is true.  (Since _bt_compare treats the first data key of such a page as
  * minus infinity, there will be at least one key < scankey, so the result
@@ -312,11 +316,11 @@ _bt_moveright(Relation rel,
  * (or leaf keys > given scankey when nextkey is true).
  *
  * This procedure is not responsible for walking right, it just examines
- * the given page.  _bt_binsrch() has no lock or refcount side effects
+ * the given page.  _bt2_binsrch() has no lock or refcount side effects
  * on the buffer.
  */
 OffsetNumber
-_bt_binsrch(Relation rel,
+_bt2_binsrch(Relation rel,
 			Buffer buf,
 			int keysz,
 			ScanKey scankey,
@@ -330,10 +334,10 @@ _bt_binsrch(Relation rel,
 				cmpval;
 
 	page = BufferGetPage(buf);
-	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+	opaque = (BTPageOpaque) PageWithAbbrevKeyGetSpecialPointer(page);
 
 	low = P_FIRSTDATAKEY(opaque);
-	high = PageGetMaxOffsetNumber(page);
+	high = PageWithAbbrevKeyGetMaxOffsetNumber(page);
 
 	/*
 	 * If there are no keys on the page, return the first available slot. Note
@@ -367,8 +371,8 @@ _bt_binsrch(Relation rel,
 
 		/* We have low <= mid < high, so mid points at a real slot */
 
-		result = _bt_compare(rel, keysz, scankey, page, mid);
-
+		result = _bt2_compare(rel, keysz, scankey, page, mid);
+		
 		if (result >= cmpval)
 			low = mid + 1;
 		else
@@ -395,7 +399,7 @@ _bt_binsrch(Relation rel,
 }
 
 /*----------
- *	_bt_compare() -- Compare scankey to a particular tuple on the page.
+ *	_bt2_compare() -- Compare scankey to a particular tuple on the page.
  *
  * The passed scankey must be an insertion-type scankey (see nbtree/README),
  * but it can omit the rightmost column(s) of the index.
@@ -421,16 +425,16 @@ _bt_binsrch(Relation rel,
  *----------
  */
 int32
-_bt_compare(Relation rel,
+_bt2_compare(Relation rel,
 			int keysz,
 			ScanKey scankey,
 			Page page,
 			OffsetNumber offnum)
 {
 	TupleDesc	itupdesc = RelationGetDescr(rel);
-	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-	IndexTuple	itup;
-	int			i;
+	BTPageOpaque opaque = (BTPageOpaque) PageWithAbbrevKeyGetSpecialPointer(page);
+	ItemIdWithAbbrevKey	itemId;
+	uint16		abbrevkey;
 
 	/*
 	 * Force result ">" if target item is first data item on an internal page
@@ -439,73 +443,92 @@ _bt_compare(Relation rel,
 	if (!P_ISLEAF(opaque) && offnum == P_FIRSTDATAKEY(opaque))
 		return 1;
 
-	itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, offnum));
-
 	/*
-	 * The scan key is set up with the attribute number associated with each
-	 * term in the key.  It is important that, if the index is multi-key, the
-	 * scan contain the first k key attributes, and that they be in order.  If
-	 * you think about how multi-key ordering works, you'll understand why
-	 * this is.
-	 *
-	 * We don't test for violation of this condition here, however.  The
-	 * initial setup for the index scan had better have gotten it right (see
-	 * _bt_first).
+	 * Compare itemid on internal pages using abbreviated key in advance.
 	 */
-
-	for (i = 1; i <= keysz; i++)
+	if (!P_ISLEAF(opaque))
 	{
-		Datum		datum;
-		bool		isNull;
-		int32		result;
+		itemId = PageGetItemIdWithAbbrevKey(page, offnum);
+		abbrevkey = ItemIdGetAbbrevKey(itemId);
 
-		datum = index_getattr(itup, scankey->sk_attno, itupdesc, &isNull);
-
-		/* see comments about NULLs handling in btbuild */
-		if (scankey->sk_flags & SK_ISNULL)		/* key is NULL */
-		{
-			if (isNull)
-				result = 0;		/* NULL "=" NULL */
-			else if (scankey->sk_flags & SK_BT_NULLS_FIRST)
-				result = -1;	/* NULL "<" NOT_NULL */
-			else
-				result = 1;		/* NULL ">" NOT_NULL */
-		}
-		else if (isNull)		/* key is NOT_NULL and item is NULL */
-		{
-			if (scankey->sk_flags & SK_BT_NULLS_FIRST)
-				result = 1;		/* NOT_NULL ">" NULL */
-			else
-				result = -1;	/* NOT_NULL "<" NULL */
-		}
+		if (scankey->sk_abbrevkey < abbrevkey) /* Compare abbrevkey and fast return */
+			return -1;
+		else if (scankey->sk_abbrevkey > abbrevkey)
+			return 1;
 		else
-		{
-			/*
-			 * The sk_func needs to be passed the index value as left arg and
-			 * the sk_argument as right arg (they might be of different
-			 * types).  Since it is convenient for callers to think of
-			 * _bt_compare as comparing the scankey to the index item, we have
-			 * to flip the sign of the comparison result.  (Unless it's a DESC
-			 * column, in which case we *don't* flip the sign.)
-			 */
-			result = DatumGetInt32(FunctionCall2Coll(&scankey->sk_func,
-													 scankey->sk_collation,
-													 datum,
-													 scankey->sk_argument));
-
-			if (!(scankey->sk_flags & SK_BT_DESC))
-				result = -result;
-		}
-
-		/* if the keys are unequal, return the difference */
-		if (result != 0)
-			return result;
-
-		scankey++;
+			return 0;
 	}
+	else /* Compare leaf page wihch does not have abbrev key */
+	{
+		int i;
+		IndexTuple	itup;
+		itup = (IndexTuple) PageGetItem(page, PageGetItemIdWithAbbrevKey(page, offnum));
 
-	/* if we get here, the keys are equal */
-	return 0;
+		/*
+		 * The scan key is set up with the attribute number associated with each
+		 * term in the key.  It is important that, if the index is multi-key, the
+		 * scan contain the first k key attributes, and that they be in order.  If
+		 * you think about how multi-key ordering works, you'll understand why
+		 * this is.
+		 *
+		 * We don't test for violation of this condition here, however.  The
+		 * initial setup for the index scan had better have gotten it right (see
+		 * _bt_first).
+		 */
+
+		for (i = 1; i <= keysz; i++)
+		{
+			Datum		datum;
+			bool		isNull;
+			int32		result;
+
+			datum = index_getattr(itup, scankey->sk_attno, itupdesc, &isNull);
+
+			/* see comments about NULLs handling in btbuild */
+			if (scankey->sk_flags & SK_ISNULL)		/* key is NULL */
+			{
+				if (isNull)
+					result = 0;		/* NULL "=" NULL */
+				else if (scankey->sk_flags & SK_BT_NULLS_FIRST)
+					result = -1;	/* NULL "<" NOT_NULL */
+				else
+					result = 1;		/* NULL ">" NOT_NULL */
+			}
+			else if (isNull)		/* key is NOT_NULL and item is NULL */
+			{
+				if (scankey->sk_flags & SK_BT_NULLS_FIRST)
+					result = 1;		/* NOT_NULL ">" NULL */
+				else
+					result = -1;	/* NOT_NULL "<" NULL */
+			}
+			else
+			{
+				/*
+				 * The sk_func needs to be passed the index value as left arg and
+				 * the sk_argument as right arg (they might be of different
+				 * types).  Since it is convenient for callers to think of
+				 * _bt_compare as comparing the scankey to the index item, we have
+				 * to flip the sign of the comparison result.  (Unless it's a DESC
+				 * column, in which case we *don't* flip the sign.)
+				 */
+				result = DatumGetInt32(FunctionCall2Coll(&scankey->sk_func,
+														 scankey->sk_collation,
+														 datum,
+														 scankey->sk_argument));
+
+				if (!(scankey->sk_flags & SK_BT_DESC))
+					result = -result;
+			}
+
+			/* if the keys are unequal, return the difference */
+			if (result != 0)
+				return result;
+
+			scankey++;
+		}
+		
+		return 0;
+	}
 }
 
 /*
@@ -890,7 +913,7 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	 * where we need to start the scan, and set flag variables to control the
 	 * code below.
 	 *
-	 * If nextkey = false, _bt_search and _bt_binsrch will locate the first
+	 * If nextkey = false, _bt2_search and _bt2_binsrch will locate the first
 	 * item >= scan key.  If nextkey = true, they will locate the first
 	 * item > scan key.
 	 *
@@ -980,7 +1003,7 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	 * Use the manufactured insertion scan key to descend the tree and
 	 * position ourselves on the target leaf page.
 	 */
-	stack = _bt_search(rel, keysCount, scankeys, nextkey, &buf, BT_READ,
+	stack = _bt2_search(rel, keysCount, scankeys, nextkey, &buf, BT_READ,
 					   scan->xs_snapshot);
 
 	/* don't need to keep the stack around... */
@@ -1014,7 +1037,7 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	so->markItemIndex = -1;		/* ditto */
 
 	/* position to the precise item on the page */
-	offnum = _bt_binsrch(rel, buf, keysCount, scankeys, nextkey);
+	offnum = _bt2_binsrch(rel, buf, keysCount, scankeys, nextkey);
 
 	/*
 	 * If nextkey = false, we are positioned at the first item >= scan key, or
@@ -1669,7 +1692,7 @@ _bt_endpoint(IndexScanDesc scan, ScanDirection dir)
 
 	/*
 	 * Scan down to the leftmost or rightmost leaf page.  This is a simplified
-	 * version of _bt_search().  We don't maintain a stack since we know we
+	 * version of _bt2_search().  We don't maintain a stack since we know we
 	 * won't need it.
 	 */
 	buf = _bt_get_endpoint(rel, 0, ScanDirectionIsBackward(dir), scan->xs_snapshot);
