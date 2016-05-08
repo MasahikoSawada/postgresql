@@ -138,7 +138,7 @@ static BufferAccessStrategy vac_strategy;
 
 /* non-export function prototypes */
 static void lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
-			   Relation *Irel, int nindexes, bool aggressive);
+			   Relation *Irel, int nindexes, bool aggressive, bool scan_all);
 static void lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats);
 static bool lazy_check_needs_freeze(Buffer buf, bool *hastup);
 static void lazy_vacuum_index(Relation indrel,
@@ -185,6 +185,7 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	double		read_rate,
 				write_rate;
 	bool		aggressive;		/* should we scan all unfrozen pages? */
+	bool		scan_all;		/* should we scan all pages forcibly? */
 	bool		scanned_all_unfrozen;	/* actually scanned all such pages? */
 	TransactionId xidFullScanLimit;
 	MultiXactId mxactFullScanLimit;
@@ -233,6 +234,9 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	aggressive |= MultiXactIdPrecedesOrEquals(onerel->rd_rel->relminmxid,
 											  mxactFullScanLimit);
 
+	/* If SCAN_ALL option is specified, we have to scan all pages forcibly */
+	scan_all = options & VACOPT_SCANALL;
+
 	vacrelstats = (LVRelStats *) palloc0(sizeof(LVRelStats));
 
 	vacrelstats->old_rel_pages = onerel->rd_rel->relpages;
@@ -246,14 +250,14 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	vacrelstats->hasindex = (nindexes > 0);
 
 	/* Do the vacuuming */
-	lazy_scan_heap(onerel, vacrelstats, Irel, nindexes, aggressive);
+	lazy_scan_heap(onerel, vacrelstats, Irel, nindexes, aggressive, scan_all);
 
 	/* Done with indexes */
 	vac_close_indexes(nindexes, Irel, NoLock);
 
 	/*
-	 * Compute whether we actually scanned the whole relation. If we did, we
-	 * can adjust relfrozenxid and relminmxid.
+	 * Compute whether we actually scanned the whole relation. If we did,
+	 * we can adjust relfrozenxid and relminmxid.
 	 *
 	 * NB: We need to check this before truncating the relation, because that
 	 * will change ->rel_pages.
@@ -261,7 +265,7 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	if ((vacrelstats->scanned_pages + vacrelstats->frozenskipped_pages)
 		< vacrelstats->rel_pages)
 	{
-		Assert(!aggressive);
+		Assert(!aggressive && !scan_all);
 		scanned_all_unfrozen = false;
 	}
 	else
@@ -442,7 +446,7 @@ vacuum_log_cleanup_info(Relation rel, LVRelStats *vacrelstats)
  */
 static void
 lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
-			   Relation *Irel, int nindexes, bool aggressive)
+			   Relation *Irel, int nindexes, bool aggressive, bool scan_all)
 {
 	BlockNumber nblocks,
 				blkno;
@@ -512,6 +516,10 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 	 * all-visible, but we can still skip pages that are all-frozen, since
 	 * such pages do not need freezing and do not affect the value that we can
 	 * safely set for relfrozenxid or relminmxid.
+	 *
+	 * When scan_all is set, we have to scan all pages forcibly while ignoring
+	 * visibility map status, and then we can safely set for relfrozenxid or
+	 * relminmxid.
 	 *
 	 * Before entering the main loop, establish the invariant that
 	 * next_unskippable_block is the next block number >= blkno that's not we
@@ -639,11 +647,12 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 			/*
 			 * The current block is potentially skippable; if we've seen a
 			 * long enough run of skippable blocks to justify skipping it, and
-			 * we're not forced to check it, then go ahead and skip.
-			 * Otherwise, the page must be at least all-visible if not
-			 * all-frozen, so we can set all_visible_according_to_vm = true.
+			 * SCAN_ALL option is not specified, and we're not forced to check it,
+			 * then go ahead and skip. Otherwise, the page must be at least
+			 * all-visible if not all-frozen, so we can set
+			 * all_visible_according_to_vm = true.
 			 */
-			if (skipping_blocks && !FORCE_CHECK_PAGE())
+			if (skipping_blocks && !scan_all && !FORCE_CHECK_PAGE())
 			{
 				/*
 				 * Tricky, tricky.  If this is in aggressive vacuum, the page
@@ -1316,6 +1325,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 									"Skipped %u pages due to buffer pins.\n",
 									vacrelstats->pinskipped_pages),
 					 vacrelstats->pinskipped_pages);
+
 	appendStringInfo(&buf, ngettext("%u page is entirely empty.\n",
 									"%u pages are entirely empty.\n",
 									empty_pages),
