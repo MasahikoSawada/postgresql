@@ -21,7 +21,7 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-VACUUM [ ( { FULL | FREEZE | VERBOSE | ANALYZE } [, ...] ) ] [ <replaceable class="PARAMETER">table_name</replaceable> [ (<replaceable class="PARAMETER">column_name</replaceable> [, ...] ) ] ]
+VACUUM [ ( { FULL | FREEZE | VERBOSE | ANALYZE } [, ...] | SCAN_ALL ) ] [ <replaceable class="PARAMETER">table_name</replaceable> [ (<replaceable class="PARAMETER">column_name</replaceable> [, ...] ) ] ]
 VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ <replaceable class="PARAMETER">table_name</replaceable> ]
 VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] ANALYZE [ <replaceable class="PARAMETER">table_name</replaceable> [ (<replaceable class="PARAMETER">column_name</replaceable> [, ...] ) ] ]
 </synopsis>
@@ -119,6 +119,15 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] ANALYZE [ <replaceable class="PARAMETER">
     </listitem>
    </varlistentry>
 
+   <varlistentry>
+    <term><literal>SCAN_ALL</literal></term>
+    <listitem>
+     <para>
+      Selects forcibly full page scanning vacuum while ignoring visibility map.
+     </para>
+    </listitem>
+   </varlistentry>
+   
    <varlistentry>
     <term><literal>ANALYZE</literal></term>
     <listitem>

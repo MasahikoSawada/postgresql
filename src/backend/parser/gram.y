@@ -287,7 +287,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				create_extension_opt_item alter_extension_opt_item
 
 %type <ival>	opt_lock lock_type cast_context
-%type <ival>	vacuum_option_list vacuum_option_elem
+%type <ival>	vacuum_option vacuum_option_list vacuum_option_elem
 %type <boolean>	opt_or_replace
 				opt_grant_grant_option opt_grant_admin_option
 				opt_nowait opt_if_exists opt_with_data
@@ -626,7 +626,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	RESET RESTART RESTRICT RETURNING RETURNS REVOKE RIGHT ROLE ROLLBACK ROLLUP
 	ROW ROWS RULE
 
-	SAVEPOINT SCHEMA SCROLL SEARCH SECOND_P SECURITY SELECT SEQUENCE SEQUENCES
+	SAVEPOINT SCHEMA SCROLL SCAN_ALL SEARCH SECOND_P SECURITY SELECT SEQUENCE SEQUENCES
 	SERIALIZABLE SERVER SESSION SESSION_USER SET SETS SETOF SHARE SHOW
 	SIMILAR SIMPLE SKIP SMALLINT SNAPSHOT SOME SQL_P STABLE STANDALONE_P START
 	STATEMENT STATISTICS STDIN STDOUT STORAGE STRICT_P STRIP_P SUBSTRING
@@ -9339,7 +9339,7 @@ VacuumStmt: VACUUM opt_full opt_freeze opt_verbose
 						n->options |= VACOPT_VERBOSE;
 					$$ = (Node *)n;
 				}
-			| VACUUM '(' vacuum_option_list ')'
+			| VACUUM '(' vacuum_option ')'
 				{
 					VacuumStmt *n = makeNode(VacuumStmt);
 					n->options = VACOPT_VACUUM | $3;
@@ -9347,7 +9347,7 @@ VacuumStmt: VACUUM opt_full opt_freeze opt_verbose
 					n->va_cols = NIL;
 					$$ = (Node *) n;
 				}
-			| VACUUM '(' vacuum_option_list ')' qualified_name opt_name_list
+			| VACUUM '(' vacuum_option ')' qualified_name opt_name_list
 				{
 					VacuumStmt *n = makeNode(VacuumStmt);
 					n->options = VACOPT_VACUUM | $3;
@@ -9357,6 +9357,11 @@ VacuumStmt: VACUUM opt_full opt_freeze opt_verbose
 						n->options |= VACOPT_ANALYZE;
 					$$ = (Node *) n;
 				}
+		;
+
+vacuum_option:
+			vacuum_option_list								{ $$ = $1; }
+			| SCAN_ALL										{ $$ = VACOPT_SCANALL; }
 		;
 
 vacuum_option_list:
@@ -9411,7 +9416,6 @@ opt_full:	FULL									{ $$ = TRUE; }
 opt_freeze: FREEZE									{ $$ = TRUE; }
 			| /*EMPTY*/								{ $$ = FALSE; }
 		;
-
 opt_name_list:
 			'(' name_list ')'						{ $$ = $2; }
 			| /*EMPTY*/								{ $$ = NIL; }
@@ -14083,6 +14087,7 @@ type_func_name_keyword:
 			| OUTER_P
 			| OVERLAPS
 			| RIGHT
+			| SCAN_ALL
 			| SIMILAR
 			| TABLESAMPLE
 			| VERBOSE

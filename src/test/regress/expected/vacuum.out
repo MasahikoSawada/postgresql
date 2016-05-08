@@ -58,6 +58,7 @@ SELECT * FROM vactst;
 
 VACUUM (FULL, FREEZE) vactst;
 VACUUM (ANALYZE, FULL) vactst;
+VACUUM (SCAN_ALL) vactst;
 CREATE TABLE vaccluster (i INT PRIMARY KEY);
 ALTER TABLE vaccluster CLUSTER ON vaccluster_pkey;
 CLUSTER vaccluster;
