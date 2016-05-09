@@ -5,7 +5,7 @@
 #
 #-------------------------------------------------------------------------
 
-subdir = src/backend/access/nbtree
+subdir = src/backend/access/nbtree2
 top_builddir = ../../../..
 include $(top_builddir)/src/Makefile.global
 

@@ -22,7 +22,7 @@
  */
 #include "postgres.h"
 
-#include "access/nbtree.h"
+#include "access/nbtree2.h"
 #include "access/transam.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"

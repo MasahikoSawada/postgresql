@@ -1700,7 +1700,8 @@ BuildSpeculativeIndexInfo(Relation index, IndexInfo *ii)
 	 */
 	Assert(ii->ii_Unique);
 
-	if (index->rd_rel->relam != BTREE_AM_OID)
+	if (index->rd_rel->relam != BTREE_AM_OID &&
+		index->rd_rel->relam != BTREE2_AM_OID)
 		elog(ERROR, "unexpected non-btree speculative unique index");
 
 	ii->ii_UniqueOps = (Oid *) palloc(sizeof(Oid) * ncols);

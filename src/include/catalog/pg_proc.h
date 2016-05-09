@@ -553,6 +553,8 @@ DESCR("convert float4 to int4");
 /* Index access method handlers */
 DATA(insert OID = 330 (  bthandler		PGNSP PGUID 12 1 0 0 0 f f f f t f v s 1 0 325 "2281" _null_ _null_ _null_ _null_ _null_	bthandler _null_ _null_ _null_ ));
 DESCR("btree index access method handler");
+DATA(insert OID = 33343 (  bt2handler		PGNSP PGUID 12 1 0 0 0 f f f f t f v s 1 0 325 "2281" _null_ _null_ _null_ _null_ _null_	bt2handler _null_ _null_ _null_ ));
+DESCR("btree2 index access method handler");
 DATA(insert OID = 331 (  hashhandler	PGNSP PGUID 12 1 0 0 0 f f f f t f v s 1 0 325 "2281" _null_ _null_ _null_ _null_ _null_	hashhandler _null_ _null_ _null_ ));
 DESCR("hash index access method handler");
 DATA(insert OID = 332 (  gisthandler	PGNSP PGUID 12 1 0 0 0 f f f f t f v s 1 0 325 "2281" _null_ _null_ _null_ _null_ _null_	gisthandler _null_ _null_ _null_ ));

@@ -50,6 +50,27 @@ static bool _bt_check_rowcompare(ScanKey skey,
 					 IndexTuple tuple, TupleDesc tupdesc,
 					 ScanDirection dir, bool *continuescan);
 
+/*
+ * Convert int32 value to uint16 abbreviated key value.
+ */
+inline uint16
+int32AbbrevConvert(int32 arg)
+{
+	/*
+	 * For now, optimize for positive representation.
+	 */
+	if (arg >= 0)
+	{
+		uint32	nosign = arg;
+		
+		/*
+		 * Return approzimation of value
+		 */
+		return (uint16) (nosign / (UINT32_MAX / UINT16_MAX));
+	}
+
+	return 0;
+}
 
 /*
  * _bt_mkscankey
@@ -95,6 +116,50 @@ _bt_mkscankey(Relation rel, IndexTuple itup)
 									   rel->rd_indcollation[i],
 									   procinfo,
 									   arg);
+	}
+
+	return skey;
+}
+ScanKey
+_bt2_mkscankey(Relation rel, IndexTuple itup)
+{
+	ScanKey		skey;
+	TupleDesc	itupdesc;
+	int			natts;
+	int16	   *indoption;
+	int			i;
+
+	itupdesc = RelationGetDescr(rel);
+	natts = RelationGetNumberOfAttributes(rel);
+	indoption = rel->rd_indoption;
+
+	skey = (ScanKey) palloc(natts * sizeof(ScanKeyData));
+
+	for (i = 0; i < natts; i++)
+	{
+		FmgrInfo   *procinfo;
+		Datum		arg;
+		bool		null;
+		int			flags;
+		uint16		abbrevkey;
+
+		/*
+		 * We can use the cached (default) support procs since no cross-type
+		 * comparison can be needed.
+		 */
+		procinfo = index_getprocinfo(rel, i + 1, BTORDER_PROC);
+		arg = index_getattr(itup, i + 1, itupdesc, &null);
+		flags = (null ? SK_ISNULL : 0) | (indoption[i] << SK_BT_INDOPTION_SHIFT);
+		abbrevkey = int32AbbrevConvert(arg);
+		ScanKeyEntryInitializeWithInfo2(&skey[i],
+									   flags,
+									   (AttrNumber) (i + 1),
+									   InvalidStrategy,
+									   InvalidOid,
+									   rel->rd_indcollation[i],
+									   procinfo,
+									   arg,
+									   abbrevkey);
 	}
 
 	return skey;

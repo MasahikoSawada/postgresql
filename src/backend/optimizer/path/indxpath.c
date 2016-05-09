@@ -2391,7 +2391,8 @@ match_rowcompare_to_indexcol(IndexOptInfo *index,
 	Oid			expr_coll;
 
 	/* Forget it if we're not dealing with a btree index */
-	if (index->relam != BTREE_AM_OID)
+	if (index->relam != BTREE_AM_OID &&
+		index->relam != BTREE2_AM_OID)
 		return false;
 
 	/*
@@ -2837,7 +2838,8 @@ ec_member_matches_indexcol(PlannerInfo *root, RelOptInfo *rel,
 	 * generate_implied_equalities_for_column; see
 	 * match_eclass_clauses_to_index.
 	 */
-	if (index->relam == BTREE_AM_OID &&
+	if ((index->relam == BTREE_AM_OID ||
+		 index->relam == BTREE2_AM_OID) &&
 		!list_member_oid(ec->ec_opfamilies, curFamily))
 		return false;
 

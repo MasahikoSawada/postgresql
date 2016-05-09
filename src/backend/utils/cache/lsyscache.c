@@ -225,7 +225,8 @@ get_ordering_op_properties(Oid opno,
 		Form_pg_amop aform = (Form_pg_amop) GETSTRUCT(tuple);
 
 		/* must be btree */
-		if (aform->amopmethod != BTREE_AM_OID)
+		if (aform->amopmethod != BTREE_AM_OID &&
+			aform->amopmethod != BTREE2_AM_OID)
 			continue;
 
 		if (aform->amopstrategy == BTLessStrategyNumber ||
@@ -317,7 +318,8 @@ get_ordering_op_for_equality_op(Oid opno, bool use_lhs_type)
 		Form_pg_amop aform = (Form_pg_amop) GETSTRUCT(tuple);
 
 		/* must be btree */
-		if (aform->amopmethod != BTREE_AM_OID)
+		if (aform->amopmethod != BTREE_AM_OID &&
+			aform->amopmethod != BTREE2_AM_OID)
 			continue;
 
 		if (aform->amopstrategy == BTEqualStrategyNumber)
@@ -378,7 +380,8 @@ get_mergejoin_opfamilies(Oid opno)
 		Form_pg_amop aform = (Form_pg_amop) GETSTRUCT(tuple);
 
 		/* must be btree equality */
-		if (aform->amopmethod == BTREE_AM_OID &&
+		if ((aform->amopmethod == BTREE_AM_OID ||
+			 aform->amopmethod == BTREE2_AM_OID) &&
 			aform->amopstrategy == BTEqualStrategyNumber)
 			result = lappend_oid(result, aform->amopfamily);
 	}
@@ -614,7 +617,8 @@ get_op_btree_interpretation(Oid opno)
 		StrategyNumber op_strategy;
 
 		/* must be btree */
-		if (op_form->amopmethod != BTREE_AM_OID)
+		if (op_form->amopmethod != BTREE_AM_OID &&
+			op_form->amopmethod != BTREE2_AM_OID)
 			continue;
 
 		/* Get the operator's btree strategy number */
@@ -652,7 +656,8 @@ get_op_btree_interpretation(Oid opno)
 				StrategyNumber op_strategy;
 
 				/* must be btree */
-				if (op_form->amopmethod != BTREE_AM_OID)
+				if (op_form->amopmethod != BTREE_AM_OID &&
+					op_form->amopmethod != BTREE2_AM_OID)
 					continue;
 
 				/* Get the operator's btree strategy number */
@@ -715,6 +720,7 @@ equality_ops_are_compatible(Oid opno1, Oid opno2)
 
 		/* must be btree or hash */
 		if (op_form->amopmethod == BTREE_AM_OID ||
+			op_form->amopmethod == BTREE2_AM_OID ||
 			op_form->amopmethod == HASH_AM_OID)
 		{
 			if (op_in_opfamily(opno2, op_form->amopfamily))

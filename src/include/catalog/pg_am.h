@@ -83,7 +83,7 @@ DESCR("SP-GiST index access method");
 DATA(insert OID = 3580 (  brin		brinhandler i ));
 DESCR("block range index (BRIN) access method");
 #define BRIN_AM_OID 3580
-DATA(insert OID = 3401 ( nbtree2	bt2handler	i ));
+DATA(insert OID = 3401 ( btree2	bt2handler	i ));
 DESCR("b-tree with abbreviated key index access method");
 #define	BTREE2_AM_OID 3401
 

@@ -6415,7 +6415,8 @@ ATAddForeignKeyConstraint(AlteredTableInfo *tab, Relation rel,
 		 * strategy number is equality.  (Is it reasonable to insist that
 		 * every such index AM use btree's number for equality?)
 		 */
-		if (amid != BTREE_AM_OID)
+		if (amid != BTREE_AM_OID &&
+			amid != BTREE2_AM_OID)
 			elog(ERROR, "only b-tree indexes are supported for foreign keys");
 		eqstrategy = BTEqualStrategyNumber;
 
