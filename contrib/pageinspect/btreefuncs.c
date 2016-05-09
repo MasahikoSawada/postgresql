@@ -39,6 +39,8 @@
 PG_FUNCTION_INFO_V1(bt_metap);
 PG_FUNCTION_INFO_V1(bt_page_items);
 PG_FUNCTION_INFO_V1(bt_page_stats);
+PG_FUNCTION_INFO_V1(bt2_page_items);
+PG_FUNCTION_INFO_V1(bt2_page_stats);
 
 #define IS_INDEX(r) ((r)->rd_rel->relkind == RELKIND_INDEX)
 #define IS_BTREE(r) ((r)->rd_rel->relam == BTREE_AM_OID || (r)->rd_rel->relam == BTREE2_AM_OID)
@@ -237,6 +239,150 @@ bt_page_stats(PG_FUNCTION_ARGS)
 	PG_RETURN_DATUM(result);
 }
 
+static void
+GetBT2PageStatistics(BlockNumber blkno, Buffer buffer, BTPageStat *stat)
+{
+	Page		page = BufferGetPage(buffer);
+	PageHeader	phdr = (PageHeader) page;
+	OffsetNumber maxoff = PageGetMaxOffsetNumber(page);
+	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+	int			item_size = 0;
+	int			off;
+
+	stat->blkno = blkno;
+
+	stat->max_avail = BLCKSZ - (BLCKSZ - phdr->pd_special + SizeOfPageHeaderDataWithAbbrevKey);
+
+	stat->dead_items = stat->live_items = 0;
+
+	stat->page_size = PageGetPageSize(page);
+
+	/* page type (flags) */
+	if (P_ISDELETED(opaque))
+	{
+		stat->type = 'd';
+		stat->btpo.xact = opaque->btpo.xact;
+		return;
+	}
+	else if (P_IGNORE(opaque))
+		stat->type = 'e';
+	else if (P_ISLEAF(opaque))
+		stat->type = 'l';
+	else if (P_ISROOT(opaque))
+		stat->type = 'r';
+	else
+		stat->type = 'i';
+
+	/* btpage opaque data */
+	stat->btpo_prev = opaque->btpo_prev;
+	stat->btpo_next = opaque->btpo_next;
+	stat->btpo.level = opaque->btpo.level;
+	stat->btpo_flags = opaque->btpo_flags;
+	stat->btpo_cycleid = opaque->btpo_cycleid;
+
+	/* count live and dead tuples, and free space */
+	for (off = FirstOffsetNumber; off <= maxoff; off++)
+	{
+		IndexTuple	itup;
+
+		ItemIdWithAbbrevKey		id = PageGetItemIdWithAbbrevKey(page, off);
+
+		itup = (IndexTuple) PageGetItem(page, id);
+
+		item_size += IndexTupleSize(itup);
+
+		if (!ItemIdIsDead(id))
+			stat->live_items++;
+		else
+			stat->dead_items++;
+	}
+	stat->free_size = PageWithAbbrevKeyGetFreeSpace(page);
+
+	if ((stat->live_items + stat->dead_items) > 0)
+		stat->avg_item_size = item_size / (stat->live_items + stat->dead_items);
+	else
+		stat->avg_item_size = 0;
+}
+
+Datum
+bt2_page_stats(PG_FUNCTION_ARGS)
+{
+	text	   *relname = PG_GETARG_TEXT_P(0);
+	uint32		blkno = PG_GETARG_UINT32(1);
+	Buffer		buffer;
+	Relation	rel;
+	RangeVar   *relrv;
+	Datum		result;
+	HeapTuple	tuple;
+	TupleDesc	tupleDesc;
+	int			j;
+	char	   *values[11];
+	BTPageStat	stat;
+
+	if (!superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 (errmsg("must be superuser to use pageinspect functions"))));
+
+	relrv = makeRangeVarFromNameList(textToQualifiedNameList(relname));
+	rel = relation_openrv(relrv, AccessShareLock);
+
+	if (!IS_INDEX(rel) || !IS_BTREE(rel))
+		elog(ERROR, "relation \"%s\" is not a btree index",
+			 RelationGetRelationName(rel));
+
+	/*
+	 * Reject attempts to read non-local temporary relations; we would be
+	 * likely to get wrong data since we have no visibility into the owning
+	 * session's local buffers.
+	 */
+	if (RELATION_IS_OTHER_TEMP(rel))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot access temporary tables of other sessions")));
+
+	if (blkno == 0)
+		elog(ERROR, "block 0 is a meta page");
+
+	CHECK_RELATION_BLOCK_RANGE(rel, blkno);
+
+	buffer = ReadBuffer(rel, blkno);
+	LockBuffer(buffer, BUFFER_LOCK_SHARE);
+
+	/* keep compiler quiet */
+	stat.btpo_prev = stat.btpo_next = InvalidBlockNumber;
+	stat.btpo_flags = stat.free_size = stat.avg_item_size = 0;
+
+	GetBT2PageStatistics(blkno, buffer, &stat);
+
+	UnlockReleaseBuffer(buffer);
+	relation_close(rel, AccessShareLock);
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupleDesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	j = 0;
+	values[j++] = psprintf("%d", stat.blkno);
+	values[j++] = psprintf("%c", stat.type);
+	values[j++] = psprintf("%d", stat.live_items);
+	values[j++] = psprintf("%d", stat.dead_items);
+	values[j++] = psprintf("%d", stat.avg_item_size);
+	values[j++] = psprintf("%d", stat.page_size);
+	values[j++] = psprintf("%d", stat.free_size);
+	values[j++] = psprintf("%d", stat.btpo_prev);
+	values[j++] = psprintf("%d", stat.btpo_next);
+	values[j++] = psprintf("%d", (stat.type == 'd') ? stat.btpo.xact : stat.btpo.level);
+	values[j++] = psprintf("%d", stat.btpo_flags);
+
+	tuple = BuildTupleFromCStrings(TupleDescGetAttInMetadata(tupleDesc),
+								   values);
+
+	result = HeapTupleGetDatum(tuple);
+
+	PG_RETURN_DATUM(result);
+}
+
 /*-------------------------------------------------------
  * bt_page_items()
  *
@@ -375,6 +521,150 @@ bt_page_items(PG_FUNCTION_ARGS)
 		dlen = IndexTupleSize(itup) - IndexInfoFindDataOffset(itup->t_info);
 		dump = palloc0(dlen * 3 + 1);
 		values[j] = dump;
+		for (off = 0; off < dlen; off++)
+		{
+			if (off > 0)
+				*dump++ = ' ';
+			sprintf(dump, "%02x", *(ptr + off) & 0xff);
+			dump += 2;
+		}
+
+		tuple = BuildTupleFromCStrings(fctx->attinmeta, values);
+		result = HeapTupleGetDatum(tuple);
+
+		uargs->offset = uargs->offset + 1;
+
+		SRF_RETURN_NEXT(fctx, result);
+	}
+	else
+	{
+		pfree(uargs->page);
+		pfree(uargs);
+		SRF_RETURN_DONE(fctx);
+	}
+}
+
+Datum
+bt2_page_items(PG_FUNCTION_ARGS)
+{
+	text	   *relname = PG_GETARG_TEXT_P(0);
+	uint32		blkno = PG_GETARG_UINT32(1);
+	Datum		result;
+	char	   *values[6];
+	HeapTuple	tuple;
+	FuncCallContext *fctx;
+	MemoryContext mctx;
+	struct user_args *uargs;
+
+	if (!superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 (errmsg("must be superuser to use pageinspect functions"))));
+
+	if (SRF_IS_FIRSTCALL())
+	{
+		RangeVar   *relrv;
+		Relation	rel;
+		Buffer		buffer;
+		BTPageOpaque opaque;
+		TupleDesc	tupleDesc;
+
+		fctx = SRF_FIRSTCALL_INIT();
+
+		relrv = makeRangeVarFromNameList(textToQualifiedNameList(relname));
+		rel = relation_openrv(relrv, AccessShareLock);
+
+		if (!IS_INDEX(rel) || !IS_BTREE(rel))
+			elog(ERROR, "relation \"%s\" is not a btree index",
+				 RelationGetRelationName(rel));
+
+		/*
+		 * Reject attempts to read non-local temporary relations; we would be
+		 * likely to get wrong data since we have no visibility into the
+		 * owning session's local buffers.
+		 */
+		if (RELATION_IS_OTHER_TEMP(rel))
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				errmsg("cannot access temporary tables of other sessions")));
+
+		if (blkno == 0)
+			elog(ERROR, "block 0 is a meta page");
+
+		CHECK_RELATION_BLOCK_RANGE(rel, blkno);
+
+		buffer = ReadBuffer(rel, blkno);
+		LockBuffer(buffer, BUFFER_LOCK_SHARE);
+
+		/*
+		 * We copy the page into local storage to avoid holding pin on the
+		 * buffer longer than we must, and possibly failing to release it at
+		 * all if the calling query doesn't fetch all rows.
+		 */
+		mctx = MemoryContextSwitchTo(fctx->multi_call_memory_ctx);
+
+		uargs = palloc(sizeof(struct user_args));
+
+		uargs->page = palloc(BLCKSZ);
+		memcpy(uargs->page, BufferGetPage(buffer), BLCKSZ);
+
+		UnlockReleaseBuffer(buffer);
+		relation_close(rel, AccessShareLock);
+
+		uargs->offset = FirstOffsetNumber;
+
+		opaque = (BTPageOpaque) PageGetSpecialPointer(uargs->page);
+
+		if (P_ISDELETED(opaque))
+			elog(NOTICE, "page is deleted");
+
+		fctx->max_calls = PageGetMaxOffsetNumber(uargs->page);
+
+		/* Build a tuple descriptor for our result type */
+		if (get_call_result_type(fcinfo, NULL, &tupleDesc) != TYPEFUNC_COMPOSITE)
+			elog(ERROR, "return type must be a row type");
+
+		fctx->attinmeta = TupleDescGetAttInMetadata(tupleDesc);
+
+		fctx->user_fctx = uargs;
+
+		MemoryContextSwitchTo(mctx);
+	}
+
+	fctx = SRF_PERCALL_SETUP();
+	uargs = fctx->user_fctx;
+
+	if (fctx->call_cntr < fctx->max_calls)
+	{
+		ItemIdWithAbbrevKey		id;
+		IndexTuple	itup;
+		int			j;
+		int			off;
+		int			dlen;
+		char	   *dump;
+		char	   *ptr;
+
+		id = PageGetItemIdWithAbbrevKey(uargs->page, uargs->offset);
+
+		if (!ItemIdIsValid(id))
+			elog(ERROR, "invalid ItemId");
+
+		itup = (IndexTuple) PageGetItem(uargs->page, id);
+
+		j = 0;
+		values[j++] = psprintf("%d", uargs->offset); //itemoffset
+		values[j++] = psprintf("(%u,%u)",
+							   BlockIdGetBlockNumber(&(itup->t_tid.ip_blkid)),
+							   itup->t_tid.ip_posid); //ctid
+		values[j++] = psprintf("%d", (int) IndexTupleSize(itup)); //itemlen
+		values[j++] = psprintf("%c", IndexTupleHasNulls(itup) ? 't' : 'f'); //nulls
+		values[j++] = psprintf("%c", IndexTupleHasVarwidths(itup) ? 't' : 'f'); //vars
+		values[j++] = psprintf("%u", ItemIdGetAbbrevKey(id)); // abbrevkey
+
+		ptr = (char *) itup + IndexInfoFindDataOffset(itup->t_info);
+		dlen = IndexTupleSize(itup) - IndexInfoFindDataOffset(itup->t_info);
+		dump = palloc0(dlen * 3 + 1);
+		values[j] = dump; // data
 		for (off = 0; off < dlen; off++)
 		{
 			if (off > 0)
