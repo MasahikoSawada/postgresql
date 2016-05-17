@@ -3037,7 +3037,8 @@ include_dir 'conf.d'
         This parameter specifies a list of standby servers using
         either of the following syntaxes:
 <synopsis>
-<replaceable class="parameter">num_sync</replaceable> ( <replaceable class="parameter">standby_name</replaceable> [, ...] )
+[FIRST] <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="parameter">standby_name</replaceable> [, ...] )
+ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="parameter">standby_name</replaceable> [, ...] )
 <replaceable class="parameter">standby_name</replaceable> [, ...]
 </synopsis>
         where <replaceable class="parameter">num_sync</replaceable> is
@@ -3048,10 +3049,13 @@ include_dir 'conf.d'
         <literal>3 (s1, s2, s3, s4)</> makes transaction commits wait
         until their WAL records are received by three higher-priority standbys
         chosen from standby servers <literal>s1</>, <literal>s2</>,
-        <literal>s3</> and <literal>s4</>.
+        <literal>s3</> and <literal>s4</>. On the other hand,
+        <literal> ANY 3 (s1, s2, s3, s4)</> makes transaction commits wait
+        until their WAL records are received by at least three standbys from
+        four listed servers.
         </para>
         <para>
-        The second syntax was used before <productname>PostgreSQL</>
+        The third syntax was used before <productname>PostgreSQL</>
         version 9.6 and is still supported. It's the same as the first syntax
         with <replaceable class="parameter">num_sync</replaceable> equal to 1.
         For example, <literal>1 (s1, s2)</> and
