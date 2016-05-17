@@ -54,6 +54,7 @@ digit			[0-9]
 ident_start		[A-Za-z\200-\377_]
 ident_cont		[A-Za-z\200-\377_0-9\$]
 identifier		{ident_start}{ident_cont}*
+any_ident		any|ANY|Any
 
 dquote			\"
 xdstart			{dquote}
@@ -64,6 +65,10 @@ xdinside		[^"]+
 %%
 {space}+	{ /* ignore */ }
 
+{any_ident}	{
+				yylval.str = pstrdup(yytext);
+				return ANY;
+		}
 {xdstart}	{
 				initStringInfo(&xdbuf);
 				BEGIN(xd);

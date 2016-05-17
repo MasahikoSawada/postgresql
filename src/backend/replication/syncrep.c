@@ -76,9 +76,9 @@ char	   *SyncRepStandbyNames;
 #define SyncStandbysDefined() \
 	(SyncRepStandbyNames != NULL && SyncRepStandbyNames[0] != '\0')
 
-static bool announce_next_takeover = true;
+SyncRepConfigData *SyncRepConfig = NULL;
 
-static SyncRepConfigData *SyncRepConfig = NULL;
+static bool announce_next_takeover = true;
 static int	SyncRepWaitMode = SYNC_REP_NO_WAIT;
 
 static void SyncRepQueueInsert(int mode);
@@ -89,7 +89,12 @@ static bool SyncRepGetOldestSyncRecPtr(XLogRecPtr *writePtr,
 						   XLogRecPtr *flushPtr,
 						   XLogRecPtr *applyPtr,
 						   bool *am_sync);
+static bool SyncRepGetNNewestSyncRecPtr(XLogRecPtr *writePtr,
+						   XLogRecPtr *flushPtr,
+						   XLogRecPtr *applyPtr,
+						   int pos, bool *am_sync);
 static int	SyncRepGetStandbyPriority(void);
+static int	cmp_lsn(const void *a, const void *b);
 
 #ifdef USE_ASSERT_CHECKING
 static bool SyncRepQueueIsOrderedByLSN(int mode);
@@ -391,7 +396,7 @@ SyncRepReleaseWaiters(void)
 	XLogRecPtr	writePtr;
 	XLogRecPtr	flushPtr;
 	XLogRecPtr	applyPtr;
-	bool		got_oldest;
+	bool		got_recptr;
 	bool		am_sync;
 	int			numwrite = 0;
 	int			numflush = 0;
@@ -418,11 +423,16 @@ SyncRepReleaseWaiters(void)
 	LWLockAcquire(SyncRepLock, LW_EXCLUSIVE);
 
 	/*
-	 * Check whether we are a sync standby or not, and calculate the oldest
-	 * positions among all sync standbys.
+	 * Check whether we are a sync standby or not, and calculate the synced
+	 * positions among all sync standbys using method.
 	 */
-	got_oldest = SyncRepGetOldestSyncRecPtr(&writePtr, &flushPtr,
-											&applyPtr, &am_sync);
+	if (SyncRepConfig->sync_method == SYNC_REP_PRIORITY)
+		got_recptr = SyncRepGetOldestSyncRecPtr(&writePtr, &flushPtr,
+											 &applyPtr, &am_sync);
+	else /* Quroum method */
+		got_recptr = SyncRepGetNNewestSyncRecPtr(&writePtr, &flushPtr,
+											  &applyPtr, SyncRepConfig->num_sync,
+											  &am_sync);
 
 	/*
 	 * If we are managing a sync standby, though we weren't prior to this,
@@ -440,7 +450,7 @@ SyncRepReleaseWaiters(void)
 	 * If the number of sync standbys is less than requested or we aren't
 	 * managing a sync standby then just leave.
 	 */
-	if (!got_oldest || !am_sync)
+	if (!got_recptr || !am_sync)
 	{
 		LWLockRelease(SyncRepLock);
 		announce_next_takeover = !am_sync;
@@ -473,6 +483,88 @@ SyncRepReleaseWaiters(void)
 		 numwrite, (uint32) (writePtr >> 32), (uint32) writePtr,
 		 numflush, (uint32) (flushPtr >> 32), (uint32) flushPtr,
 		 numapply, (uint32) (applyPtr >> 32), (uint32) applyPtr);
+}
+
+/*
+ * Calculate the 'pos' newest Write, Flush and Apply positions among sync standbys.
+ *
+ * Return false if the number of sync standbys is less than
+ * synchronous_standby_names specifies. Otherwise return true and
+ * store the 'pos' newest positions into *writePtr, *flushPtr, *applyPtr.
+ *
+ * On return, *am_sync is set to true if this walsender is connecting to
+ * sync standby. Otherwise it's set to false.
+ */
+static bool
+SyncRepGetNNewestSyncRecPtr(XLogRecPtr *writePtr, XLogRecPtr *flushPtr,
+						XLogRecPtr *applyPtr, int pos, bool *am_sync)
+{
+	XLogRecPtr	*write_array;
+	XLogRecPtr	*flush_array;
+	XLogRecPtr	*apply_array;
+	List	   *sync_standbys;
+	ListCell   *cell;
+	int			len;
+	int			i = 0;
+
+	*writePtr = InvalidXLogRecPtr;
+	*flushPtr = InvalidXLogRecPtr;
+	*applyPtr = InvalidXLogRecPtr;
+	*am_sync = false;
+
+	/* Get standbys that are considered as synchronous at this moment */
+	sync_standbys = SyncRepGetSyncStandbys(am_sync);
+
+	/*
+	 * Quick exit if we are not managing a sync standby or there are not
+	 * enough synchronous standbys.
+	 */
+	if (!(*am_sync) ||
+		SyncRepConfig == NULL ||
+		list_length(sync_standbys) < SyncRepConfig->num_sync)
+	{
+		list_free(sync_standbys);
+		return false;
+	}
+
+	len = list_length(sync_standbys);
+	write_array = (XLogRecPtr *) palloc(sizeof(XLogRecPtr) * len);
+	flush_array = (XLogRecPtr *) palloc(sizeof(XLogRecPtr) * len);
+	apply_array = (XLogRecPtr *) palloc(sizeof(XLogRecPtr) * len);
+
+	/*
+	 * Scan through all sync standbys and calculate 'pos' Newest
+	 * Write, Flush and Apply positions.
+	 */
+	foreach (cell, sync_standbys)
+	{
+		WalSnd *walsnd = &WalSndCtl->walsnds[lfirst_int(cell)];
+
+		SpinLockAcquire(&walsnd->mutex);
+		write_array[i] = walsnd->write;
+		flush_array[i]= walsnd->flush;
+		apply_array[i] = walsnd->flush;
+		SpinLockRelease(&walsnd->mutex);
+
+		i++;
+	}
+
+	/* Sort each arrays to get 'pos' newest element */
+	qsort(write_array, len, sizeof(XLogRecPtr), cmp_lsn);
+	qsort(flush_array, len, sizeof(XLogRecPtr), cmp_lsn);
+	qsort(apply_array, len, sizeof(XLogRecPtr), cmp_lsn);
+
+	/* Get 'pos' newest Write, Flush, Apply positions */
+	*writePtr = write_array[pos - 1];
+	*flushPtr = flush_array[pos - 1];
+	*applyPtr = apply_array[pos - 1];
+
+	pfree(write_array);
+	pfree(flush_array);
+	pfree(apply_array);
+	list_free(sync_standbys);
+
+	return true;
 }
 
 /*
@@ -513,12 +605,12 @@ SyncRepGetOldestSyncRecPtr(XLogRecPtr *writePtr, XLogRecPtr *flushPtr,
 	}
 
 	/*
-	 * Scan through all sync standbys and calculate the oldest Write, Flush
-	 * and Apply positions.
+	 * Scan through all sync standbys and calculate the oldest
+	 * Write, Flush and Apply positions.
 	 */
-	foreach(cell, sync_standbys)
+	foreach (cell, sync_standbys)
 	{
-		WalSnd	   *walsnd = &WalSndCtl->walsnds[lfirst_int(cell)];
+		WalSnd *walsnd = &WalSndCtl->walsnds[lfirst_int(cell)];
 		XLogRecPtr	write;
 		XLogRecPtr	flush;
 		XLogRecPtr	apply;
@@ -542,17 +634,91 @@ SyncRepGetOldestSyncRecPtr(XLogRecPtr *writePtr, XLogRecPtr *flushPtr,
 }
 
 /*
- * Return the list of sync standbys, or NIL if no sync standby is connected.
- *
- * If there are multiple standbys with the same priority,
- * the first one found is selected preferentially.
- * The caller must hold SyncRepLock.
+ * Return the list of sync standbys using according to synchornous method,
+ * or NIL if no sync standby is connected. The caller must hold SyncRepLock.
  *
  * On return, *am_sync is set to true if this walsender is connecting to
  * sync standby. Otherwise it's set to false.
  */
 List *
-SyncRepGetSyncStandbys(bool *am_sync)
+SyncRepGetSyncStandbys(bool	*am_sync)
+{
+	Assert(SyncRepConfig->sync_method == SYNC_REP_PRIORITY ||
+		   SyncRepConfig->sync_method == SYNC_REP_QUORUM);
+
+	/* Set default result */
+	if (am_sync != NULL)
+		*am_sync = false;
+
+	/* Quick exit if sync replication is not requested */
+	if (SyncRepConfig == NULL)
+		return NIL;
+
+	if (SyncRepConfig->sync_method == SYNC_REP_PRIORITY)
+		return SyncRepGetSyncStandbysPriority(am_sync);
+	else
+		return SyncRepGetSyncStandbysQuorum(am_sync);
+}
+
+/*
+ * Return the list of sync standbys using quorum method, or
+ * NIL if no sync standby is connected. In quorum method, all standby
+ * priorities are same, that is 1. So this function returns the list of
+ * standbys except for the standbys which are not active, or connected
+ * as async.
+ *
+ * On return, *am_sync is set to true if this walsender is connecting to
+ * sync standby. Otherwise it's set to false.
+ */
+List *
+SyncRepGetSyncStandbysQuorum(bool *am_sync)
+{
+	List	*result = NIL;
+	int i;
+
+	for (i = 0; i < max_wal_senders; i++)
+	{
+		volatile WalSnd *walsnd = &WalSndCtl->walsnds[i];
+
+		/* Must be active */
+		if (walsnd->pid == 0)
+			continue;
+
+		/* Must be streaming */
+		if (walsnd->state != WALSNDSTATE_STREAMING)
+			continue;
+
+		/* Must be synchronous */
+		if (walsnd->sync_standby_priority == 0)
+			continue;
+
+		/* Must have a valid flush position */
+		if (XLogRecPtrIsInvalid(walsnd->flush))
+			continue;
+
+		/*
+		 * Consider this standby as candidate of sync and append
+		 * it to the result.
+		 */
+		result = lappend_int(result, i);
+		if (am_sync != NULL && walsnd == MyWalSnd)
+			*am_sync = true;
+	}
+
+	return result;
+}
+
+/*
+ * Return the list of sync standbys using priority method, or
+ * NIL if no sync standby is connected. In priority method,
+ * if there are multiple standbys with the same priority,
+ * the first one found is selected perferentially.
+ *
+ * On return, *am_sync is set to true if this walsender is connecting to
+ * sync standby. Otherwise it's set to false.
+ */
+List *
+SyncRepGetSyncStandbysPriority(bool *am_sync)
 {
 	List	   *result = NIL;
 	List	   *pending = NIL;
@@ -564,14 +730,6 @@ SyncRepGetSyncStandbys(bool *am_sync)
 	bool		am_in_pending = false;
 	volatile WalSnd *walsnd;	/* Use volatile pointer to prevent code
 								 * rearrangement */
-
-	/* Set default result */
-	if (am_sync != NULL)
-		*am_sync = false;
-
-	/* Quick exit if sync replication is not requested */
-	if (SyncRepConfig == NULL)
-		return NIL;
 
 	lowest_priority = SyncRepConfig->nmembers;
 	next_highest_priority = lowest_priority + 1;
@@ -754,6 +912,10 @@ SyncRepGetStandbyPriority(void)
 		standby_name += strlen(standby_name) + 1;
 	}
 
+	/* In quroum method, all sync standby priorities are always 1 */
+	if (found && SyncRepConfig->sync_method == SYNC_REP_QUORUM)
+		priority = 1;
+
 	return (found ? priority : 0);
 }
 
@@ -895,6 +1057,20 @@ SyncRepQueueIsOrderedByLSN(int mode)
 	return true;
 }
 #endif
+
+static int
+cmp_lsn(const void *a, const void *b)
+{
+	XLogRecPtr lsn1 = *((const XLogRecPtr *) a);
+	XLogRecPtr lsn2 = *((const XLogRecPtr *) b);
+
+	if (lsn1 > lsn2)
+		return 1;
+	else if (lsn1 == lsn2)
+		return 0;
+	else
+		return -1;
+}
 
 /*
  * ===========================================================
