@@ -1747,8 +1747,8 @@ psql_completion(const char *text, int start, int end)
 	}
 	/* If we have ALTER TABLE <sth> SET, provide list of attributes and '(' */
 	else if (Matches4("ALTER", "TABLE", MatchAny, "SET"))
-		COMPLETE_WITH_LIST7("(", "LOGGED", "SCHEMA", "TABLESPACE", "UNLOGGED",
-							"WITH", "WITHOUT");
+		COMPLETE_WITH_LIST8("(", "LOGGED", "SCHEMA", "TABLESPACE", "UNLOGGED",
+							"WITH", "WITHOUT", "READ");
 
 	/*
 	 * If we have ALTER TABLE <sth> SET TABLESPACE provide a list of
@@ -1762,6 +1762,9 @@ psql_completion(const char *text, int start, int end)
 	/* If we have ALTER TABLE <sth> SET WITHOUT provide CLUSTER or OIDS */
 	else if (Matches5("ALTER", "TABLE", MatchAny, "SET", "WITHOUT"))
 		COMPLETE_WITH_LIST2("CLUSTER", "OIDS");
+	/* If we have ALTER TABLE <sth> SET READ provide ONLY or WRITE */
+	else if (Matches5("ALTER", "TABLE", MatchAny, "SET", "READ"))
+		COMPLETE_WITH_LIST2("ONLY", "WRITE");
 	/* ALTER TABLE <foo> RESET */
 	else if (Matches4("ALTER", "TABLE", MatchAny, "RESET"))
 		COMPLETE_WITH_CONST("(");

@@ -2168,6 +2168,20 @@ alter_table_cmd:
 					n->subtype = AT_SetUnLogged;
 					$$ = (Node *)n;
 				}
+			/* ALTER TABLE <name> SET READ ONLY */
+			| SET READ ONLY
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_SetReadOnly;
+					$$ = (Node *)n;
+				}
+			/* ALTER TABLE <name> SET READ WRITE */
+			| SET READ WRITE
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_SetReadWrite;
+					$$ = (Node *)n;
+				}
 			/* ALTER TABLE <name> ENABLE TRIGGER <trig> */
 			| ENABLE_P TRIGGER name
 				{

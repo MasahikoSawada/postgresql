@@ -402,6 +402,9 @@ static void change_owner_recurse_to_sequences(Oid relationOid,
 static ObjectAddress ATExecClusterOn(Relation rel, const char *indexName,
 				LOCKMODE lockmode);
 static void ATExecDropCluster(Relation rel, LOCKMODE lockmode);
+static void ATExecSetReadOnly(Relation rel);
+static void ATExecSetReadWrite(Relation rel);
+static void change_relreadonly(Oid relOid, bool flag);
 static bool ATPrepChangePersistence(Relation rel, bool toLogged);
 static void ATPrepSetTableSpace(AlteredTableInfo *tab, Relation rel,
 					char *tablespacename, LOCKMODE lockmode);
@@ -3045,6 +3048,14 @@ AlterTableGetLockLevel(List *cmds)
 				break;
 
 				/*
+				 * Changing read only ???
+				 */
+			case AT_SetReadOnly:
+			case AT_SetReadWrite:
+				cmd_lockmode = ShareRowExclusiveLock;
+				break;
+
+				/*
 				 * Rel options are more complex than first appears. Options
 				 * are set here for tables, views and indexes; for historical
 				 * reasons these can all be used with ALTER TABLE, so we can't
@@ -3304,6 +3315,14 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			/* This command never recurses */
 			ATPrepSetTableSpace(tab, rel, cmd->name, lockmode);
 			pass = AT_PASS_MISC;	/* doesn't actually matter */
+			break;
+		case AT_SetReadOnly:	/* SET READ ONLY */
+			ATSimplePermissions(rel, ATT_TABLE);
+			pass = AT_PASS_MISC;
+			break;
+		case AT_SetReadWrite:	/* SET READ WRITE */
+			ATSimplePermissions(rel, ATT_TABLE);
+			pass = AT_PASS_MISC;
 			break;
 		case AT_SetRelOptions:	/* SET (...) */
 		case AT_ResetRelOptions:		/* RESET (...) */
@@ -3607,6 +3626,12 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			/*
 			 * Nothing to do here; Phase 3 does the work
 			 */
+			break;
+		case AT_SetReadOnly:	/* SET READ ONLY */
+			ATExecSetReadOnly(rel);
+			break;
+		case AT_SetReadWrite:	/* SET READ WRITE */
+			ATExecSetReadWrite(rel);
 			break;
 		case AT_SetRelOptions:	/* SET (...) */
 		case AT_ResetRelOptions:		/* RESET (...) */
@@ -9308,6 +9333,74 @@ static void
 ATExecDropCluster(Relation rel, LOCKMODE lockmode)
 {
 	mark_index_clustered(rel, InvalidOid, false);
+}
+
+/*
+ * ALTER TABLE SET READ ONLY
+ *
+ * Update relreadonly of table to true. If table has toast table then
+ * also be changed to true as well.
+ */
+static void
+ATExecSetReadOnly(Relation rel)
+{
+	Oid	relid;
+	Oid	toast_relid;
+
+	relid = RelationGetRelid(rel);
+	Assert(OidIsValid(relid));
+
+	/* Change value of relreadonly of pg_class to true */
+	change_relreadonly(relid, true);
+
+	/* If relation has TOAST table then change readonly flag as well */
+	toast_relid = rel->rd_rel->reltoastrelid;
+	if (OidIsValid(toast_relid))
+		change_relreadonly(toast_relid, true);
+}
+
+static void
+change_relreadonly(Oid relOid, bool flag)
+{
+	Relation		relationRelation;
+	HeapTuple		tuple;
+	Form_pg_class	classtuple;
+
+	relationRelation = heap_open(RelationRelationId, RowExclusiveLock);
+	tuple = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(relOid));
+
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache look up field for relation %u", relOid);
+
+	classtuple = (Form_pg_class) GETSTRUCT(tuple);
+	classtuple->relreadonly = flag;
+
+	simple_heap_update(relationRelation, &tuple->t_self, tuple);
+	CatalogUpdateIndexes(relationRelation, tuple);
+
+	heap_freetuple(tuple);
+	heap_close(relationRelation, RowExclusiveLock);
+}
+
+/*
+ * ALTER TABLE SET READ WRITE
+ */
+static void
+ATExecSetReadWrite(Relation rel)
+{
+	Oid	relid;
+	Oid	toast_relid;
+
+	relid = RelationGetRelid(rel);
+	Assert(OidIsValid(relid));
+
+	/* Change value of relreadonly of pg_class to true */
+	change_relreadonly(relid, false);
+
+	/* If relation has TOAST table then change readonly flag as well */
+	toast_relid = rel->rd_rel->reltoastrelid;
+	if (OidIsValid(toast_relid))
+		change_relreadonly(toast_relid, false);
 }
 
 /*

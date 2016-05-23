@@ -1524,6 +1524,8 @@ typedef enum AlterTableType
 	AT_DisableRowSecurity,		/* DISABLE ROW SECURITY */
 	AT_ForceRowSecurity,		/* FORCE ROW SECURITY */
 	AT_NoForceRowSecurity,		/* NO FORCE ROW SECURITY */
+	AT_SetReadOnly,				/* SET READ ONLY */
+	AT_SetReadWrite,			/* SET READ WRITE */
 	AT_GenericOptions			/* OPTIONS (...) */
 } AlterTableType;
 

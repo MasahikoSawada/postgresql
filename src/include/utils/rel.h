@@ -431,6 +431,13 @@ typedef struct ViewOptions
 	((relation)->rd_rel->relpersistence == RELPERSISTENCE_PERMANENT)
 
 /*
+ * RelationIsReadOnly
+ *		True if relation is read-only table.
+ */
+#define RelationIsReadOnly(relation) \
+	((relation)->rd_rel->relreadonly)
+
+/*
  * RelationUsesLocalBuffers
  *		True if relation's pages are stored in local buffers.
  */

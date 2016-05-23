@@ -69,6 +69,8 @@ ALTER TABLE ALL IN TABLESPACE <replaceable class="PARAMETER">name</replaceable> 
     SET WITHOUT OIDS
     SET TABLESPACE <replaceable class="PARAMETER">new_tablespace</replaceable>
     SET { LOGGED | UNLOGGED }
+    SET READ ONLY
+    SET READ WRITE
     SET ( <replaceable class="PARAMETER">storage_parameter</replaceable> = <replaceable class="PARAMETER">value</replaceable> [, ... ] )
     RESET ( <replaceable class="PARAMETER">storage_parameter</replaceable> [, ... ] )
     INHERIT <replaceable class="PARAMETER">parent_table</replaceable>
@@ -545,6 +547,25 @@ ALTER TABLE ALL IN TABLESPACE <replaceable class="PARAMETER">name</replaceable> 
     </listitem>
    </varlistentry>
 
+   <varlistentry>
+    <term><literal>SET READ ONLY</literal></term>
+    <listitem>
+     <para>
+      This form changes the table to read-only table which is not allowed to
+      execute modifiyng operation such as INSERT, DELETE, UPDATE.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>SET READ WRITE</literal></term>
+    <listitem>
+     <para>
+      This form changes the table to read-write table which is allowed any changes.
+     </para>
+    </listitem>
+   </varlistentry>
+   
    <varlistentry>
     <term><literal>SET ( <replaceable class="PARAMETER">storage_parameter</replaceable> = <replaceable class="PARAMETER">value</replaceable> [, ... ] )</literal></term>
     <listitem>

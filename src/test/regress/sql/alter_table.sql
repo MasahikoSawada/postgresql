@@ -718,6 +718,18 @@ insert into child (a, b) values (NULL, 'foo');
 drop table child;
 drop table parent;
 
+-- test read-only table
+create table readonly (a int);
+alter table readonly set read only;
+insert into readonly values(1); -- error
+update readonly set a = 2; -- error
+delete from readonly; -- error
+alter table readonly set read write;
+insert into readonly values(1);
+update readonly set a = 2;
+delete from readonly;
+drop table readonly;
+
 -- test setting and removing default values
 create table def_test (
 	c1	int4 default 5,

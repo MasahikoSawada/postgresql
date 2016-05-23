@@ -1019,7 +1019,11 @@ CheckValidResultRel(Relation resultRel, CmdType operation)
 	switch (resultRel->rd_rel->relkind)
 	{
 		case RELKIND_RELATION:
-			/* OK */
+			if (RelationIsReadOnly(resultRel))
+				ereport(ERROR,
+						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+						 errmsg("cannnot change read-only table \"%s\"",
+								RelationGetRelationName(resultRel))));
 			break;
 		case RELKIND_SEQUENCE:
 			ereport(ERROR,
