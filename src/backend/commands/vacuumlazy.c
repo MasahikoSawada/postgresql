@@ -42,8 +42,10 @@
 #include "access/heapam_xlog.h"
 #include "access/htup_details.h"
 #include "access/multixact.h"
+#include "access/parallel.h"
 #include "access/transam.h"
 #include "access/visibilitymap.h"
+#include "access/xact.h"
 #include "access/xlog.h"
 #include "catalog/catalog.h"
 #include "catalog/storage.h"
@@ -98,33 +100,12 @@
  */
 #define SKIP_PAGES_THRESHOLD	((BlockNumber) 32)
 
-typedef struct LVRelStats
-{
-	/* hasindex = true means two-pass strategy; false means one-pass */
-	bool		hasindex;
-	/* Overall statistics about rel */
-	BlockNumber old_rel_pages;	/* previous value of pg_class.relpages */
-	BlockNumber rel_pages;		/* total number of pages */
-	BlockNumber scanned_pages;	/* number of pages we examined */
-	BlockNumber pinskipped_pages;		/* # of pages we skipped due to a pin */
-	BlockNumber frozenskipped_pages;	/* # of frozen pages we skipped */
-	double		scanned_tuples; /* counts only tuples on scanned pages */
-	double		old_rel_tuples; /* previous value of pg_class.reltuples */
-	double		new_rel_tuples; /* new estimated total # of tuples */
-	double		new_dead_tuples;	/* new estimated total # of dead tuples */
-	BlockNumber pages_removed;
-	double		tuples_deleted;
-	BlockNumber nonempty_pages; /* actually, last nonempty page + 1 */
-	/* List of TIDs of tuples we intend to delete */
-	/* NB: this list is ordered by TID address */
-	int			num_dead_tuples;	/* current # of entries */
-	int			max_dead_tuples;	/* # slots allocated in array */
-	ItemPointer dead_tuples;	/* array of ItemPointerData */
-	int			num_index_scans;
-	TransactionId latestRemovedXid;
-	bool		lock_waiter_detected;
-} LVRelStats;
+/* The number of blocks each worker process */
+#define VACUUM_BLOCKS_PER_WORKER 32672
 
+/* DSM key for block-level parallel vacuum */
+#define VACUUM_KEY_TASK	50
+#define VACUUM_KEY_ORIGIN 51
 
 /* A few variables that don't seem worth passing around as parameters */
 static int	elevel = -1;
@@ -137,8 +118,8 @@ static BufferAccessStrategy vac_strategy;
 
 
 /* non-export function prototypes */
-static void lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
-			   Relation *Irel, int nindexes, bool aggressive);
+//static void lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
+//			   Relation *Irel, int nindexes, bool aggressive);
 static void lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats);
 static bool lazy_check_needs_freeze(Buffer buf, bool *hastup);
 static void lazy_vacuum_index(Relation indrel,
@@ -160,6 +141,18 @@ static bool lazy_tid_reaped(ItemPointer itemptr, void *state);
 static int	vac_cmp_itemptr(const void *left, const void *right);
 static bool heap_page_is_all_visible(Relation rel, Buffer buf,
 					 TransactionId *visibility_cutoff_xid, bool *all_frozen);
+
+/* block-level parallel vacuum functions */
+static void parallel_lazy_scan_heap(Relation rel, LVRelStats *vacrelstats,
+								   bool aggressive, int wnum);
+static void vacuum_worker(dsm_segment *seg, shm_toc *toc);
+static void lazy_scan_heap_worker(Relation onerel, LVRelStats *vacrelstats,
+								  Relation *Irel, int nindexes, bool aggressive,
+								  BlockNumber begin, BlockNumber nblocks,
+								  shm_mq_handle *mqh);
+static void gather_vacuum_worker_info(LVRelStats *vacrelstats,
+									  shm_mq_handle **handles, int wnum);
+static void finish_vacuum_workers(ParallelContext *pcxt);
 
 
 /*
@@ -194,6 +187,7 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	double		new_live_tuples;
 	TransactionId new_frozen_xid;
 	MultiXactId new_min_multi;
+	int			wnum;
 
 	Assert(params != NULL);
 
@@ -244,9 +238,23 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	/* Open all indexes of the relation */
 	vac_open_indexes(onerel, RowExclusiveLock, &nindexes, &Irel);
 	vacrelstats->hasindex = (nindexes > 0);
+	//vacrelstats->hasindex = (list_length(RelationGetIndexList(relation)) > 0);
 
 	/* Do the vacuuming */
-	lazy_scan_heap(onerel, vacrelstats, Irel, nindexes, aggressive);
+	/* Do parallel */
+	if (vacuum_parallel_workers > 0)
+	{
+		wnum = RelationGetNumberOfBlocks(onerel) / VACUUM_BLOCKS_PER_WORKER + 1;
+		parallel_lazy_scan_heap(onerel, vacrelstats, aggressive, wnum);
+	}
+	else
+		lazy_scan_heap_worker(onerel, vacrelstats, Irel, nindexes, aggressive,
+							  0, RelationGetNumberOfBlocks(onerel), NULL);
+
+	/*
+	 * FinishLazyVacuumWorkers(vacrelstats);
+	 */
+
 
 	/* Done with indexes */
 	vac_close_indexes(nindexes, Irel, NoLock);
@@ -425,6 +433,128 @@ vacuum_log_cleanup_info(Relation rel, LVRelStats *vacrelstats)
 }
 
 /*
+ * Launch 'wnum' block-level parallel vacuum workers to vacuum. Return list of
+ * message queue handles of each worker.
+ */
+static void
+parallel_lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats, bool aggressive,
+						int wnum)
+{
+	ParallelContext	*pcxt;
+	VacuumTask	*task;
+	shm_mq_handle **handles;
+	void	*origin;
+	int size = 0;
+	int	i;
+
+	EnterParallelMode();
+
+	/* Create parallel context and initialize it */
+	pcxt = CreateParallelContext(vacuum_worker, wnum);
+
+	size += BUFFERALIGN(sizeof(VacuumTask)); /* For Task */
+	size += BUFFERALIGN(sizeof(LVRelStats) * pcxt->nworkers); /* For origin */
+
+	shm_toc_estimate_chunk(&pcxt->estimator, size);
+	shm_toc_estimate_keys(&pcxt->estimator, 2);
+	InitializeParallelDSM(pcxt);
+
+	/* Initialize task space */
+	task = (VacuumTask *)shm_toc_allocate(pcxt->toc, sizeof(VacuumTask));
+	shm_toc_insert(pcxt->toc, VACUUM_KEY_TASK, task);
+
+	task->relid = RelationGetRelid(onerel);
+	memcpy(&(task->vacrelstats), vacrelstats, sizeof(LVRelStats));
+	task->aggressive = aggressive;
+	task->oldestxmin = OldestXmin;
+	task->freezelimit = FreezeLimit;
+	task->multixactcutoff = MultiXactCutoff;
+
+	/* Initialize message queue space */
+	origin = (int *)shm_toc_allocate(pcxt->toc, sizeof(LVRelStats) * pcxt->nworkers);
+	shm_toc_insert(pcxt->toc, VACUUM_KEY_ORIGIN, origin);
+
+	handles = (shm_mq_handle **) palloc(pcxt->nworkers * sizeof(shm_mq_handle *));
+	for (i = 0; i < pcxt->nworkers; i++)
+	{
+		shm_mq	*mq;
+
+		mq = shm_mq_create((char *)origin + i * sizeof(LVRelStats), sizeof(LVRelStats));
+		shm_mq_set_receiver(mq, MyProc);
+		handles[i] = shm_mq_attach(mq, pcxt->seg, NULL);
+	}
+
+	LaunchParallelWorkers(pcxt);
+
+	gather_vacuum_worker_info(vacrelstats, handles, wnum);
+
+	finish_vacuum_workers(pcxt);
+}
+
+static void
+vacuum_worker(dsm_segment *seg, shm_toc *toc)
+{
+	VacuumTask	*task;
+	Relation	rel;
+	BlockNumber	begin;
+	BlockNumber	nblocks;
+	LVRelStats	*vacrelstats;
+	shm_mq			*mq;
+	shm_mq_handle 	*mqh;
+	char 			*shm_origin;
+	int			nindexes;
+	Relation	*Irel;
+
+	/* Set up task information */
+	task = (VacuumTask *)shm_toc_lookup(toc, VACUUM_KEY_TASK);
+	vacrelstats = &(task->vacrelstats);
+	OldestXmin = task->oldestxmin;
+	FreezeLimit = task->freezelimit;
+	MultiXactCutoff = task->multixactcutoff;
+
+	shm_origin = (char *)shm_toc_lookup(toc, VACUUM_KEY_ORIGIN);
+	mq = (shm_mq *)(shm_origin + ParallelWorkerNumber * sizeof(LVRelStats));
+	shm_mq_set_sender(mq, MyProc);
+	mqh = shm_mq_attach(mq, seg, NULL);
+	shm_mq_wait_for_attach(mqh);
+
+	/*
+	 * If 5 wokers process a relation which is consist of 1000 blocks,
+	 * each worker should process;
+	 *   0 - 199 : worker 1
+	 * 200 - 399 : worker 2
+	 * 400 - 599 : worker 3
+	 * 600 - 799 : worker 4
+	 * 800 - 999 : worker 5
+	 *
+	 * Open heap relation with NoLock and corresponding index relations
+	 * with RowExclusiveLock.
+	 */
+	rel = heap_open(task->relid, NoLock);
+	vac_open_indexes(rel, NoLock, &nindexes, &Irel);
+
+	nblocks = VACUUM_BLOCKS_PER_WORKER;
+	begin = VACUUM_BLOCKS_PER_WORKER * ParallelWorkerNumber;
+
+	if ((begin + nblocks) > RelationGetNumberOfBlocks(rel))
+		nblocks = RelationGetNumberOfBlocks(rel) - begin;
+
+	elog(NOTICE, "(%d) begin : %u, nblocks : %u, rel : %d",
+		 ParallelWorkerNumber, begin, nblocks,
+		 RelationGetNumberOfBlocks(rel));
+
+	lazy_scan_heap_worker(rel, vacrelstats, Irel, nindexes, task->aggressive,
+						  begin, nblocks, mqh);
+
+	heap_close(rel, NoLock);
+}
+
+static void
+lazy_scan_heap_worker(Relation onerel, LVRelStats *vacrelstats,
+					  Relation	*Irel, int nindexes, bool aggressive,
+					  BlockNumber begin, BlockNumber nblocks,
+					  shm_mq_handle *mqh)
+/*
  *	lazy_scan_heap() -- scan an open heap relation
  *
  *		This routine prunes each page in the heap, which will among other
@@ -440,12 +570,16 @@ vacuum_log_cleanup_info(Relation rel, LVRelStats *vacrelstats)
  *		dead line pointers need only be retained until all index pointers that
  *		reference them have been killed.
  */
-static void
-lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
-			   Relation *Irel, int nindexes, bool aggressive)
+//static void
+//lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
+//			   Relation *Irel, int nindexes, bool aggressive)
 {
-	BlockNumber nblocks,
-				blkno;
+
+	//elog(NOTICE, "Enter worker routine");
+	//pg_usleep(20 * 1000L * 1000L);
+	/* Do vacuum from 'begin' to for 'nblocks' blocks */
+
+	BlockNumber blkno;
 	HeapTupleData tuple;
 	char	   *relname;
 	BlockNumber empty_pages,
@@ -483,7 +617,6 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 	indstats = (IndexBulkDeleteResult **)
 		palloc0(nindexes * sizeof(IndexBulkDeleteResult *));
 
-	nblocks = RelationGetNumberOfBlocks(onerel);
 	vacrelstats->rel_pages = nblocks;
 	vacrelstats->scanned_pages = 0;
 	vacrelstats->nonempty_pages = 0;
@@ -568,7 +701,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 	else
 		skipping_blocks = false;
 
-	for (blkno = 0; blkno < nblocks; blkno++)
+	for (blkno = begin; blkno < nblocks; blkno++)
 	{
 		Buffer		buf;
 		Page		page;
@@ -1330,6 +1463,66 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 					vacrelstats->scanned_pages, nblocks),
 			 errdetail_internal("%s", buf.data)));
 	pfree(buf.data);
+
+	if (vacuum_parallel_workers > 0)
+	{
+		/* Send a message */
+		if (shm_mq_send(mqh, sizeof(LVRelStats), vacrelstats, false) != SHM_MQ_SUCCESS)
+		{
+			ereport(ERROR,
+					(errmsg("worker %d failed to send a meesage to the backend",
+							ParallelWorkerNumber)));
+		}
+	}
+}
+
+static void
+gather_vacuum_worker_info(LVRelStats *vacrelstats, shm_mq_handle **handles, int wnum)
+{
+	int	i;
+
+	for (i = 0; i < wnum; i++)
+	{
+		void	*msg;
+		Size	msglen;
+		LVRelStats *wstats;
+
+		if (shm_mq_receive(handles[i], &msglen, &msg, false) != SHM_MQ_SUCCESS)
+		{
+			ereport(ERROR,
+					(errmsg("could not receive a message from queue")));
+		}
+
+		/* Check if received valid data from queue */
+		if (msglen != sizeof(LVRelStats))
+		{
+			ereport(ERROR,
+					(errmsg("received a invalid message from queue")));
+		}
+
+		/*
+		 * Successed to receiving.
+		 * Gather information using each worker's info.
+		 */
+		wstats = (LVRelStats *)msg;
+
+		vacrelstats->rel_pages += wstats->rel_pages;
+		vacrelstats->scanned_pages += wstats->scanned_pages;
+		vacrelstats->pinskipped_pages += wstats->pinskipped_pages;
+		vacrelstats->frozenskipped_pages += wstats->frozenskipped_pages;
+		vacrelstats->scanned_tuples += wstats->scanned_tuples;
+		vacrelstats->new_rel_tuples += wstats->new_rel_tuples;
+		vacrelstats->pages_removed += wstats->pages_removed;
+		vacrelstats->nonempty_pages += wstats->nonempty_pages;
+	}
+}
+
+static void
+finish_vacuum_workers(ParallelContext *pcxt)
+{
+	WaitForParallelWorkersToFinish(pcxt);
+	DestroyParallelContext(pcxt);
+	ExitParallelMode();
 }
 
 
