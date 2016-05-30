@@ -2677,6 +2677,16 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"vacuum_blocks_per_woker", PGC_USERSET, RESOURCES_ASYNCHRONOUS,
+			gettext_noop("Sets the number of parallel worker for vacuum."),
+			NULL
+		},
+		&vacuum_blocks_per_worker,
+		100, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"autovacuum_work_mem", PGC_SIGHUP, RESOURCES_MEM,
 			gettext_noop("Sets the maximum memory to be used by each autovacuum worker process."),
 			NULL,

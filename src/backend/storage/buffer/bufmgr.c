@@ -1739,6 +1739,7 @@ UnpinBuffer(BufferDesc *buf, bool fixOwner)
 				buf_state &= ~BM_PIN_COUNT_WAITER;
 				UnlockBufHdr(buf, buf_state);
 				ProcSendSignal(wait_backend_pid);
+				elog(NOTICE, "    [%d] -> [%d]", MyProcPid, wait_backend_pid);
 			}
 			else
 				UnlockBufHdr(buf, buf_state);
@@ -3625,6 +3626,10 @@ LockBufferForCleanup(Buffer buffer)
 		/* Failed, so mark myself as waiting for pincount 1 */
 		if (buf_state & BM_PIN_COUNT_WAITER)
 		{
+			elog(NOTICE, "block %u, refcount %d, relfilenode %d, fork %d",
+				 BufferGetBlockNumber(buffer), BUF_STATE_GET_REFCOUNT(buf_state),
+				 bufHdr->tag.rnode, bufHdr->tag.forkNum);
+			pg_usleep(30 * 1000L * 1000L);
 			UnlockBufHdr(bufHdr, buf_state);
 			LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
 			elog(ERROR, "multiple backends attempting to wait for pincount 1");
@@ -3662,9 +3667,14 @@ LockBufferForCleanup(Buffer buffer)
 		 * better be safe.
 		 */
 		buf_state = LockBufHdr(bufHdr);
+		elog(NOTICE, "[%d] wait_pid %d, mypid %d, state %d, refcount %d",
+			 MyProcPid, bufHdr->wait_backend_pid, MyProcPid,
+			 buf_state & BM_PIN_COUNT_WAITER,
+			 BUF_STATE_GET_REFCOUNT(buf_state));
 		if ((buf_state & BM_PIN_COUNT_WAITER) != 0 &&
 			bufHdr->wait_backend_pid == MyProcPid)
 			buf_state &= ~BM_PIN_COUNT_WAITER;
+
 		UnlockBufHdr(bufHdr, buf_state);
 
 		PinCountWaitBuf = NULL;

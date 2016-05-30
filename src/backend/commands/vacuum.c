@@ -59,6 +59,7 @@ int			vacuum_freeze_table_age;
 int			vacuum_multixact_freeze_min_age;
 int			vacuum_multixact_freeze_table_age;
 int			vacuum_parallel_workers;
+int			vacuum_blocks_per_worker;
 
 
 /* A few variables that don't seem worth passing around as parameters */

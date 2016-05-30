@@ -100,8 +100,7 @@
  */
 #define SKIP_PAGES_THRESHOLD	((BlockNumber) 32)
 
-/* The number of blocks each worker process */
-#define VACUUM_BLOCKS_PER_WORKER 32672
+//#define VACUUM_BLOCKS_PER_WORKER 32672
 
 /* DSM key for block-level parallel vacuum */
 #define VACUUM_KEY_TASK	50
@@ -238,23 +237,19 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	/* Open all indexes of the relation */
 	vac_open_indexes(onerel, RowExclusiveLock, &nindexes, &Irel);
 	vacrelstats->hasindex = (nindexes > 0);
-	//vacrelstats->hasindex = (list_length(RelationGetIndexList(relation)) > 0);
+	//vacrelstats->hasindex = true;
+	//vacrelstats->hasindex = (list_length(RelationGetIndexList(onerel)) > 0);
 
 	/* Do the vacuuming */
 	/* Do parallel */
 	if (vacuum_parallel_workers > 0)
 	{
-		wnum = RelationGetNumberOfBlocks(onerel) / VACUUM_BLOCKS_PER_WORKER + 1;
+		wnum = RelationGetNumberOfBlocks(onerel) / vacuum_blocks_per_worker + 1;
 		parallel_lazy_scan_heap(onerel, vacrelstats, aggressive, wnum);
 	}
 	else
 		lazy_scan_heap_worker(onerel, vacrelstats, Irel, nindexes, aggressive,
 							  0, RelationGetNumberOfBlocks(onerel), NULL);
-
-	/*
-	 * FinishLazyVacuumWorkers(vacrelstats);
-	 */
-
 
 	/* Done with indexes */
 	vac_close_indexes(nindexes, Irel, NoLock);
@@ -531,22 +526,19 @@ vacuum_worker(dsm_segment *seg, shm_toc *toc)
 	 * with RowExclusiveLock.
 	 */
 	rel = heap_open(task->relid, NoLock);
-	vac_open_indexes(rel, NoLock, &nindexes, &Irel);
+	vac_open_indexes(rel, RowExclusiveLock, &nindexes, &Irel);
 
-	nblocks = VACUUM_BLOCKS_PER_WORKER;
-	begin = VACUUM_BLOCKS_PER_WORKER * ParallelWorkerNumber;
+	nblocks = vacuum_blocks_per_worker;
+	begin = vacuum_blocks_per_worker * ParallelWorkerNumber;
 
 	if ((begin + nblocks) > RelationGetNumberOfBlocks(rel))
 		nblocks = RelationGetNumberOfBlocks(rel) - begin;
-
-	elog(NOTICE, "(%d) begin : %u, nblocks : %u, rel : %d",
-		 ParallelWorkerNumber, begin, nblocks,
-		 RelationGetNumberOfBlocks(rel));
 
 	lazy_scan_heap_worker(rel, vacrelstats, Irel, nindexes, task->aggressive,
 						  begin, nblocks, mqh);
 
 	heap_close(rel, NoLock);
+	vac_close_indexes(nindexes, Irel, NoLock);
 }
 
 static void
@@ -575,10 +567,13 @@ lazy_scan_heap_worker(Relation onerel, LVRelStats *vacrelstats,
 //			   Relation *Irel, int nindexes, bool aggressive)
 {
 
-	//elog(NOTICE, "Enter worker routine");
+	elog(NOTICE, "[%d] Enter worker routine", MyProcPid);
 	//pg_usleep(20 * 1000L * 1000L);
 	/* Do vacuum from 'begin' to for 'nblocks' blocks */
 
+	elog(NOTICE, "[%d] (%d) begin: %d, nblocks: %d, end:%d",
+		 MyProcPid, ParallelWorkerNumber, begin, nblocks, begin + nblocks);
+	
 	BlockNumber blkno;
 	HeapTupleData tuple;
 	char	   *relname;
@@ -1810,6 +1805,7 @@ lazy_cleanup_index(Relation indrel,
 	 * Now update statistics in pg_class, but only if the index says the count
 	 * is accurate.
 	 */
+	/*
 	if (!stats->estimated_count)
 		vac_update_relstats(indrel,
 							stats->num_pages,
@@ -1819,7 +1815,7 @@ lazy_cleanup_index(Relation indrel,
 							InvalidTransactionId,
 							InvalidMultiXactId,
 							false);
-
+	*/
 	ereport(elevel,
 			(errmsg("index \"%s\" now contains %.0f row versions in %u pages",
 					RelationGetRelationName(indrel),
