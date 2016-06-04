@@ -2104,6 +2104,136 @@ The commands accepted in walsender mode are:
 
 </sect1>
 
+<sect1 id="protocol-logical-replication">
+ <title>Logical Streaming Replication Protocol</title>
+
+ <para>
+  This section describes the logical replication protocol which is the message
+  flow started by the <literal>START_REPLICATION</literal>
+  <literal>SLOT</literal> <replaceable class="parameter">slot_name</>
+  <literal>LOGICAL</literal> replication command.
+ </para>
+
+ <para>
+  The logical streaming replication protocol builds on the primitives of
+  physical streaming replication protocol.
+ </para>
+
+ <sect2 id="protocol-logical-replication-params">
+  <title>Logical Streaming Replication Parameters</title>
+
+  <para>
+   The logical replication  <literal>START_REPLICATION</literal> command
+   accepts following parameters:
+
+   <variablelist>
+    <varlistentry>
+     <term>
+      proto_version
+     </term>
+     <listitem>
+      <para>
+       Protocol version. Currently only version <literal>1</literal> is
+       supported.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>
+      encoding
+     </term>
+     <listitem>
+      <para>
+       Name of the encoding. This currently correspond to the encoding of the
+       server.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term>
+      publication_names
+     </term>
+     <listitem>
+      <para>
+       Comma separated list of publication names for which to subscribe
+       (receive changes). See
+       <xref linkend="logical-replication-publication"> for more info.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+
+  </para>
+ </sect2>
+
+ <sect2 id="protocol-logical-messages">
+  <title>Logical Replication Protocol Messages</title>
+
+  <para>
+   The individual protocol messages are discussed in the following
+   sub-sections. Individual messages are describer in
+   <xref linkend="protocol-logicalrep-message-formats"> section.
+  </para>
+
+  <para>
+   All top-level protocol messages begin with a message type byte.
+   While represented in code as a character, this is a signed byte with no
+   associated encoding.
+  </para>
+
+  <para>
+   Since the streaming replication protocol supplies a message length there
+   is no need for top-level protocol messages to embed a length in their
+   header.
+  </para>
+
+ </sect2>
+
+ <sect2 id="protocol-logical-messages-flow">
+  <title>Logical Replication Protocol Message Flow</title>
+
+  <para>
+   With the exception of the <literal>START_REPLICATION</literal> command and
+   the replay progress messages, all information flows only from the backend
+   to the frontend.
+  </para>
+
+  <para>
+   The logical replication protocol sends individual transactions one by one.
+   This means that all messages between two Begin and Commit messages all
+   belong to the same transaction.
+  </para>
+
+  <para>
+   Every sent transaction contains zero or more DML messages (Insert,
+   Update, Delete) and in case of cascaded setup it can also contain Origin
+   messages. The origin message indicated that the transaction originated on
+   different replication node. Since replication node in the scope of logical
+   replication protocol can be pretty much anything, the only identifier
+   is the origin name. It's downstream responsibility to handle this as
+   needed (if needed). The Origin message is always sent before any DML
+   messages in the transaction.
+  </para>
+
+  <para>
+   Every DML message contains arbitraty relation id, which can be mapped to
+   an id in the Relation messages. The Relation describe the schema of the
+   given relation. The Relation message is sent for a given relation either
+   because it's the first time we send DML message for given relation in
+   current session or because the relation definition has changed since the
+   last Relation message was sent for it. The protocol assumes that the client
+   is capable of caching the metadata for as many relations as needed.
+  </para>
+
+  <para>
+  </para>
+
+ </sect2>
+
+</sect1>
+
 <sect1 id="protocol-message-types">
 <title>Message Data Types</title>
 
@@ -5128,6 +5258,588 @@ needs; in particular it should break long lines as needed.  Newline characters
 appearing in the error message fields should be treated as paragraph breaks,
 not line breaks.
 </para>
+
+</sect1>
+
+<sect1 id="protocol-logicalrep-message-formats">
+<title>Logical Replication Message Formats</title>
+
+<para>
+This section describes the detailed format of each logical replication message.
+These messages are returned either by replication slot SQL interface or by
+WalSender. In case of WalSender they are encapsulated inside the replication
+protocol WAL messages as described in <xref linkend="protocol-replication">
+section and generaly obey same message flow as physical replication.
+</para>
+
+<variablelist>
+
+<varlistentry>
+<term>
+Begin
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('B')
+</term>
+<listitem>
+<para>
+                Identifies the message as a begin message.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int64
+</term>
+<listitem>
+<para>
+                The final LSN of the transaction.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int64
+</term>
+<listitem>
+<para>
+                Commit timestamp of the transaction.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32
+</term>
+<listitem>
+<para>
+                Xid of the transaction.
+</para>
+</listitem>
+</varlistentry>
+
+</variablelist>
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+Commit
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('C')
+</term>
+<listitem>
+<para>
+                Identifies the message as a commit message.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int64
+</term>
+<listitem>
+<para>
+                The LSN of the commit.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int64
+</term>
+<listitem>
+<para>
+                The end LSN of the transaction.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int64
+</term>
+<listitem>
+<para>
+                Commit timestamp of the transaction.
+</para>
+</listitem>
+</varlistentry>
+
+</variablelist>
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+Origin
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('O')
+</term>
+<listitem>
+<para>
+                Identifies the message as an origin message.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int64
+</term>
+<listitem>
+<para>
+                The LSN of the commit on the origin server.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int8
+</term>
+<listitem>
+<para>
+                Length of the origin name (including the NULL-termination
+                character).
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        String
+</term>
+<listitem>
+<para>
+                Name of the origin.
+</para>
+</listitem>
+</varlistentry>
+
+</variablelist>
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+Relation
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('R')
+</term>
+<listitem>
+<para>
+                Identifies the message as an relation message.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32
+</term>
+<listitem>
+<para>
+                Id of the relation.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int8
+</term>
+<listitem>
+<para>
+                Length of the namespace name (including the NULL-termination
+                character).
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        String
+</term>
+<listitem>
+<para>
+                Namespace.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int8
+</term>
+<listitem>
+<para>
+                Length of the relation name (including the NULL-termination
+                character).
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        String
+</term>
+<listitem>
+<para>
+                Relation name.
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+
+</para>
+
+<para>
+This message is always followed by Attributes message.
+</para>
+
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+Attrinutes
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('A')
+</term>
+<listitem>
+<para>
+                Identifies the message as an attributes message.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int16
+</term>
+<listitem>
+<para>
+                Number of columns.
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+        Next, the following submessage appears for each column:
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('C')
+</term>
+<listitem>
+<para>
+                Start of column block.
+</para>
+</listitem>
+</varlistentry><varlistentry>
+<term>
+        Int8
+</term>
+<listitem>
+<para>
+                Flags for the column. Currently can be either 0 for no flags
+                or one which marks the column as part of the key.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int8
+</term>
+<listitem>
+<para>
+                Length of column name (including the NULL-termination
+                character).
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        String
+</term>
+<listitem>
+<para>
+                Name of the column.
+</para>
+</listitem>
+</varlistentry>
+
+</variablelist>
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+Insert
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('I')
+</term>
+<listitem>
+<para>
+                Identifies the message as an insert message.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32
+</term>
+<listitem>
+<para>
+                Id of the relation corresponding to the id in the relation
+                message.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Byte1('N')
+</term>
+<listitem>
+<para>
+                Identifies the following TupleData message as a new tuple.
+</para>
+</listitem>
+</varlistentry>
+
+</variablelist>
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+Update
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('U')
+</term>
+<listitem>
+<para>
+                Identifies the message as an update message.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32
+</term>
+<listitem>
+<para>
+                Id of the relation corresponding to the id in the relation
+                message.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Byte1('O')
+</term>
+<listitem>
+<para>
+                Identifies the following TupleData message as a old tuple.
+                This field is optional and is only present if table in which
+                the update happened has REPLICA IDENTITY set to FULL or when
+                the REPLICA IDENTITY index values have changed.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Byte1('N')
+</term>
+<listitem>
+<para>
+                Identifies the following TupleData message as a new tuple.
+</para>
+</listitem>
+</varlistentry>
+
+</variablelist>
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+Delete
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('D')
+</term>
+<listitem>
+<para>
+                Identifies the message as a delete message.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32
+</term>
+<listitem>
+<para>
+                Id of the relation corresponding to the id in the relation
+                message.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Byte1('O')
+</term>
+<listitem>
+<para>
+                Identifies the following TupleData message as the old tuple
+                (deleted tuple).
+</para>
+</listitem>
+</varlistentry>
+
+</variablelist>
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+TupleData
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('T')
+</term>
+<listitem>
+<para>
+                Identifies the message as an tuple data message.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int16
+</term>
+<listitem>
+<para>
+                Number of columns.
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+        Next, one of the following submessages appears for each column:
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('n')
+</term>
+<listitem>
+<para>
+                Idenfifies the data as NULL value.
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+        Or
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('u')
+</term>
+<listitem>
+<para>
+                Idenfifies unchanged TOASTed value (the actual value is not
+                sent).
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+        Or
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('t')
+</term>
+<listitem>
+<para>
+                Idenfifies the data as text formatted value.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32
+</term>
+<listitem>
+<para>
+                Length of the column value.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        String
+</term>
+<listitem>
+<para>
+                The text value.
+</para>
+</listitem>
+</varlistentry>
+
+</variablelist>
+</para>
+</listitem>
+</varlistentry>
+
+</variablelist>
 
 </sect1>
 
