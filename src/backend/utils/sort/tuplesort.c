@@ -162,9 +162,9 @@ bool		optimize_bounded_sort = true;
  * The objects we actually sort are SortTuple structs.  These contain
  * a pointer to the tuple proper (might be a MinimalTuple or IndexTuple),
  * which is a separate palloc chunk --- we assume it is just one chunk and
- * can be freed by a simple pfree() (except during final on-the-fly merge,
- * when memory is used in batch).  SortTuples also contain the tuple's
- * first key column in Datum/nullflag format, and an index integer.
+ * can be freed by a simple pfree() (except during final merge, when memory
+ * is used in batch).  SortTuples also contain the tuple's first key column
+ * in Datum/nullflag format, and an index integer.
  *
  * Storing the first key column lets us save heap_getattr or index_getattr
  * calls during tuple comparisons.  We could extract and save all the key
@@ -333,9 +333,9 @@ struct Tuplesortstate
 	/*
 	 * Memory for tuples is sometimes allocated in batch, rather than
 	 * incrementally.  This implies that incremental memory accounting has
-	 * been abandoned.  Currently, this only happens for the final on-the-fly
-	 * merge step.  Large batch allocations can store tuples (e.g.
-	 * IndexTuples) without palloc() fragmentation and other overhead.
+	 * been abandoned.  Currently, this happens for any final merge step.
+	 * Large batch allocations can store tuples (e.g. IndexTuples) without
+	 * palloc() fragmentation and other overhead.
 	 */
 	bool		batchUsed;
 
@@ -382,8 +382,8 @@ struct Tuplesortstate
 	int			mergefirstfree; /* first slot never used in this merge */
 
 	/*
-	 * Per-tape batch state, when final on-the-fly merge consumes memory from
-	 * just a few large allocations.
+	 * Per-tape batch state, when final merge consumes memory from just a
+	 * few large allocations.
 	 *
 	 * Aside from the general benefits of performing fewer individual retail
 	 * palloc() calls, this also helps make merging more cache efficient,
@@ -552,8 +552,9 @@ static bool consider_abort_common(Tuplesortstate *state);
 static bool useselection(Tuplesortstate *state);
 static void inittapes(Tuplesortstate *state);
 static void selectnewtape(Tuplesortstate *state);
+static bool alloneruntapes(Tuplesortstate *state);
 static void mergeruns(Tuplesortstate *state);
-static void mergeonerun(Tuplesortstate *state);
+static void mergeonerun(Tuplesortstate *state, int destTape, bool finalMerge);
 static void beginmerge(Tuplesortstate *state, bool finalMergeBatch);
 static void batchmemtuples(Tuplesortstate *state);
 static void mergebatch(Tuplesortstate *state, int64 spacePerTape);
@@ -1996,10 +1997,10 @@ tuplesort_gettuple_common(Tuplesortstate *state, bool forward,
 					/*
 					 * out of preloaded data on this tape, try to read more
 					 *
-					 * Unlike mergeonerun(), we only preload from the single
-					 * tape that's run dry, though not before preparing its
-					 * batch memory for a new round of sequential consumption.
-					 * See mergepreread() comments.
+					 * Unlike mergeonerun()'s non-final case, we only preload
+					 * from the single tape that's run dry, though not before
+					 * preparing its batch memory for a new round of sequential
+					 * consumption.  See mergepreread() comments.
 					 */
 					if (state->batchUsed)
 						mergebatchone(state, srcTape, stup, should_free);
@@ -2481,6 +2482,26 @@ selectnewtape(Tuplesortstate *state)
 }
 
 /*
+ * Is there just one (real or dummy) run left on each input tape?
+ *
+ * If so, then only one merge pass remains before final output is generated.
+ * Various optimizations are therefore applicable.
+ */
+static bool
+alloneruntapes(Tuplesortstate *state)
+{
+	int			tapenum;
+
+	for (tapenum = 0; tapenum < state->tapeRange; tapenum++)
+	{
+		if (state->tp_runs[tapenum] + state->tp_dummy[tapenum] != 1)
+			return false;
+	}
+
+	return true;
+}
+
+/*
  * mergeruns -- merge all the completed initial runs.
  *
  * This implements steps D5, D6 of Algorithm D.  All input data has
@@ -2536,33 +2557,20 @@ mergeruns(Tuplesortstate *state)
 	for (;;)
 	{
 		/*
-		 * At this point we know that tape[T] is empty.  If there's just one
-		 * (real or dummy) run left on each input tape, then only one merge
-		 * pass remains.  If we don't have to produce a materialized sorted
-		 * tape, we can stop at this point and do the final merge on-the-fly.
+		 * At this point we know that tape[T] is empty.  We can do a final
+		 * on-the-fly merge if caller does not require that output be
+		 * materialized to tape.  There must also be only one (real or
+		 * dummy) run per input tape.
 		 */
-		if (!state->randomAccess)
+		if (!state->randomAccess && alloneruntapes(state))
 		{
-			bool		allOneRun = true;
-
 			Assert(state->tp_runs[state->tapeRange] == 0);
-			for (tapenum = 0; tapenum < state->tapeRange; tapenum++)
-			{
-				if (state->tp_runs[tapenum] + state->tp_dummy[tapenum] != 1)
-				{
-					allOneRun = false;
-					break;
-				}
-			}
-			if (allOneRun)
-			{
-				/* Tell logtape.c we won't be writing anymore */
-				LogicalTapeSetForgetFreeSpace(state->tapeset);
-				/* Initialize for the final merge pass */
-				beginmerge(state, state->tuples);
-				state->status = TSS_FINALMERGE;
-				return;
-			}
+			/* Tell logtape.c we won't be writing anymore */
+			LogicalTapeSetForgetFreeSpace(state->tapeset);
+			/* Initialize for the final merge pass */
+			beginmerge(state, state->tuples);
+			state->status = TSS_FINALMERGE;
+			return;
 		}
 
 		/* Step D5: merge runs onto tape[T] until tape[P] is empty */
@@ -2587,7 +2595,23 @@ mergeruns(Tuplesortstate *state)
 					state->tp_dummy[tapenum]--;
 			}
 			else
-				mergeonerun(state);
+			{
+				/*
+				 * Merge one run from each input tape, except ones with
+				 * dummy runs.
+				 *
+				 * This is the inner loop of Algorithm D step D5.  We know
+				 * that the output tape is TAPE[T].
+				 */
+				int		destTape = state->tp_tapenum[state->tapeRange];
+
+				mergeonerun(state, destTape, alloneruntapes(state));
+
+				/*
+				 * Increment the output tape's count of real runs.
+				 */
+				state->tp_runs[state->tapeRange]++;
+			}
 		}
 
 		/* Step D6: decrease level */
@@ -2619,6 +2643,19 @@ mergeruns(Tuplesortstate *state)
 	}
 
 	/*
+	 * Disable batch memory use (usually, it will have been used for final
+	 * mergeonerun() call).  This is needed because READTUP() routines called
+	 * by TSS_SORTEDONTAPE processing still need retail palloc() allocations
+	 * to store tuples.  Besides, TSS_SORTEDONTAPE is not an effective target
+	 * for batch memory optimization.
+	 *
+	 * There is no further need for conventional memory accounting now:
+	 * LACKMEM() will not be tested, and so it's okay that it would be
+	 * inaccurate if tested.
+	 */
+	state->batchUsed = false;
+
+	/*
 	 * Done.  Knuth says that the result is on TAPE[1], but since we exited
 	 * the loop without performing the last iteration of step D6, we have not
 	 * rearranged the tape unit assignment, and therefore the result is on
@@ -2632,15 +2669,21 @@ mergeruns(Tuplesortstate *state)
 }
 
 /*
- * Merge one run from each input tape, except ones with dummy runs.
+ * Merge one run from each input tape.
  *
- * This is the inner loop of Algorithm D step D5.  We know that the
- * output tape is TAPE[T].
+ * Dummy runs are conceptually merged in preference to "real" runs (i.e. we
+ * decrement the dummy run count rather than merge a run, if any dummy runs
+ * are to be had).
+ *
+ * destTape argument is physical tape number.  "Empty" tapes should still have
+ * one dummy run.
+ *
+ * finalMerge argument causes merge to use batch memory when that optimization
+ * is applicable.
  */
 static void
-mergeonerun(Tuplesortstate *state)
+mergeonerun(Tuplesortstate *state, int destTape, bool finalMerge)
 {
-	int			destTape = state->tp_tapenum[state->tapeRange];
 	int			srcTape;
 	int			tupIndex;
 	SortTuple  *tup;
@@ -2648,10 +2691,17 @@ mergeonerun(Tuplesortstate *state)
 				spaceFreed;
 
 	/*
+	 * This routine may, if asked, perform the merge using batch memory,
+	 * but that should happen only for the final merge
+	 */
+	Assert(!state->batchUsed);
+	Assert(!finalMerge || alloneruntapes(state));
+
+	/*
 	 * Start the merge by loading one tuple from each active source tape into
 	 * the heap.  We can also decrease the input run/dummy run counts.
 	 */
-	beginmerge(state, false);
+	beginmerge(state, finalMerge && state->tuples);
 
 	/*
 	 * Execute merge by repeatedly extracting lowest tuple in heap, writing it
@@ -2664,18 +2714,60 @@ mergeonerun(Tuplesortstate *state)
 		priorAvail = state->availMem;
 		srcTape = state->memtuples[0].tupindex;
 		WRITETUP(state, destTape, &state->memtuples[0]);
-		/* writetup adjusted total free space, now fix per-tape space */
+		/*
+		 * writetup adjusted total free space, now fix per-tape space.
+		 * Note that this does nothing in the batchUsed case.
+		 */
 		spaceFreed = state->availMem - priorAvail;
 		state->mergeavailmem[srcTape] += spaceFreed;
 		if ((tupIndex = state->mergenext[srcTape]) == 0)
 		{
 			/* out of preloaded data on this tape, try to read more */
-			mergepreread(state);
+			if (state->batchUsed)
+				mergebatchone(state, srcTape, NULL, NULL);
+
+			/*
+			 * During final merge, only load from one tape.
+			 *
+			 * The use of batch memory is not compatible with reloading
+			 * before an input tape has run out of tuples preloaded into
+			 * memory; doing so before then would necessitate fixing-up
+			 * many SortTuples in memory for the next round of preloading
+			 * (not a maximum of one tuple, which is all routines like
+			 * mergebatchone() need to consider).  Always preload one tape
+			 * at a time for the final merge (even when batch memory
+			 * optimization happens to not be applicable, just to be
+			 * consistent).
+			 *
+			 * Not loading from every tape here does have a downside:
+			 * logtape.c would prefer a usage pattern characterized by
+			 * reading and writing as much as possible (from as many tapes
+			 * as possible) alternately, as described by mergepreread()
+			 * comments.  However, final merges performed here have
+			 * similar characteristics to final on-the-fly merges anyway
+			 * (they just can't be performed on-the-fly because a final
+			 * materialized tape is required).  In particular, they are
+			 * similar in that there will be a uniform number of runs per
+			 * tape (one run per tape), and have runs which are typically
+			 * equisized, with fewer active tapes.  Note also that there
+			 * was still a mergepreread() call for the first preload for
+			 * such finalMerge cases, and so there is a significant "head
+			 * start" for reads (over the need for logtape.c freespace for
+			 * writes to destTape).
+			 */
+			if (finalMerge)
+				mergeprereadone(state, srcTape);
+			else
+				mergepreread(state);
+
 			/* if still no data, we've reached end of run on this tape */
 			if ((tupIndex = state->mergenext[srcTape]) == 0)
 			{
 				/* remove the written-out tuple from the heap */
 				tuplesort_heap_delete_top(state, false);
+				/* Free tape's buffer */
+				if (state->batchUsed)
+					mergebatchfreetape(state, srcTape, NULL, NULL);
 				continue;
 			}
 		}
@@ -2697,20 +2789,21 @@ mergeonerun(Tuplesortstate *state)
 	}
 
 	/*
-	 * Reset tuple memory.  We've freed all of the tuples that we previously
-	 * allocated, but AllocSetFree will have put those chunks of memory on
-	 * particular free lists, bucketed by size class.  Thus, although all of
-	 * that memory is free, it is effectively fragmented.  Resetting the
-	 * context gets us out from under that problem.
+	 * Reset tuple memory for !batchUsed case.  We've freed all of the
+	 * tuples that we previously allocated, but AllocSetFree will have put
+	 * those chunks of memory on particular free lists, bucketed by size
+	 * class.  Thus, although all of that memory is free, it is effectively
+	 * fragmented.  Resetting the context gets us out from under that
+	 * problem.
 	 */
-	MemoryContextReset(state->tuplecontext);
+	if (!state->batchUsed)
+		MemoryContextReset(state->tuplecontext);
 
 	/*
 	 * When the heap empties, we're done.  Write an end-of-run marker on the
-	 * output tape, and increment its count of real runs.
+	 * output tape.
 	 */
 	markrunend(state, destTape);
-	state->tp_runs[state->tapeRange]++;
 
 #ifdef TRACE_SORT
 	if (trace_sort)
@@ -2727,8 +2820,10 @@ mergeonerun(Tuplesortstate *state)
  * as many tuples as we can from each active input tape, and finally
  * fill the merge heap with the first tuple from each active tape.
  *
- * finalMergeBatch indicates if this is the beginning of a final on-the-fly
- * merge where a batched allocation of tuple memory is required.
+ * finalMergeBatch indicates if batch memory should be used.  This is
+ * appropriate for the final merge, where the number of tapes/runs
+ * involved is known to be fixed, and so a large per-tape allocation can
+ * be continually reused throughout merging.
  */
 static void
 beginmerge(Tuplesortstate *state, bool finalMergeBatch)
@@ -2802,7 +2897,7 @@ beginmerge(Tuplesortstate *state, bool finalMergeBatch)
 	 * Preallocate tuple batch memory for each tape.  This is the memory used
 	 * for tuples themselves (not SortTuples), so it's never used by
 	 * pass-by-value datum sorts.  Memory allocation is performed here at most
-	 * once per sort, just in advance of the final on-the-fly merge step.
+	 * once per sort, just in advance of the final merge step.
 	 */
 	if (finalMergeBatch)
 		mergebatch(state, spacePerTape);
@@ -2843,12 +2938,12 @@ beginmerge(Tuplesortstate *state, bool finalMergeBatch)
 				 * Report how effective batchmemtuples() was in balancing the
 				 * number of slots against the need for memory for the
 				 * underlying tuples (e.g. IndexTuples).  The big preread of
-				 * all tapes when switching to FINALMERGE state should be
-				 * fairly representative of memory utilization during the
-				 * final merge step, and in any case is the only point at
-				 * which all tapes are guaranteed to have depleted either
-				 * their batch memory allowance or slot allowance.  Ideally,
-				 * both will be completely depleted for every tape by now.
+				 * all tapes ahead of the final merge should be fairly
+				 * representative of memory utilization during merging itself,
+				 * and in any case is the only point at which all tapes are
+				 * guaranteed to have depleted either their batch memory
+				 * allowance or slot allowance.  Ideally, both will be
+				 * completely depleted for every tape by now.
 				 */
 				usedSpaceKB = (state->mergecurrent[srcTape] -
 							   state->mergetuples[srcTape] + 1023) / 1024;
@@ -2878,7 +2973,10 @@ beginmerge(Tuplesortstate *state, bool finalMergeBatch)
  * average tuple size for the "final" grow_memtuples() call, which includes
  * palloc overhead.  During the final merge pass, where we will arrange to
  * squeeze out the palloc overhead, we might need more slots in the memtuples
- * array.
+ * array.  Note that this final merge pass need not formally be a final
+ * on-the-fly merge pass;  it need only be the final merge pass, when the total
+ * number of tapes/runs to be merged is settled (e.g., case where randomAccess
+ * caller requires materialized tape).
  *
  * To make that happen, arrange for the amount of remaining memory to be
  * exactly equal to the palloc overhead multiplied by the current size of
@@ -2962,8 +3060,8 @@ batchmemtuples(Tuplesortstate *state)
  * mergebatch - initialize tuple memory in batch
  *
  * This allows sequential access to sorted tuples buffered in memory from
- * tapes/runs on disk during a final on-the-fly merge step.  Note that the
- * memory is not used for SortTuples, but for the underlying tuples (e.g.
+ * tapes/runs on disk during the final merge step.  Note that the memory is
+ * not used for SortTuples, but for the underlying tuples (e.g.
  * MinimalTuples).
  *
  * Note that when batch memory is used, there is a simple division of space
@@ -3016,8 +3114,14 @@ mergebatch(Tuplesortstate *state, int64 spacePerTape)
  * tape.  All that actually occurs is that the state for the source tape is
  * reset to indicate that all memory may be reused.
  *
- * This routine must deal with fixing up the tuple that is about to be returned
- * to the client, due to "overflow" allocations.
+ * This routine may have to deal with fixing up the tuple that is about to be
+ * returned to the client, due to "overflow" allocations.  Alternatively, it
+ * will actually pfree overflow memory allocated through a retail palloc(),
+ * since passing no tuple for fix-up indicates that there is no further need
+ * for the contents of overflow memory.
+ *
+ * Callers that don't have a tuple that is about to be passed back to
+ * tuplesort caller should pass NULL for both rtup and should_free arguments.
  */
 static void
 mergebatchone(Tuplesortstate *state, int srcTape, SortTuple *rtup,
@@ -3030,6 +3134,8 @@ mergebatchone(Tuplesortstate *state, int srcTape, SortTuple *rtup,
 	 * from tape, just removed from the top of the heap.  Special steps around
 	 * memory management must be performed for that tuple, to make sure it
 	 * isn't overwritten early.
+	 *
+	 * (This is only required for final on-the-fly merges, though.)
 	 */
 	if (!state->mergeoverflow[srcTape])
 	{
@@ -3047,7 +3153,8 @@ mergebatchone(Tuplesortstate *state, int srcTape, SortTuple *rtup,
 				tupLen);
 
 		/* Make SortTuple at top of the merge heap point to new tuple */
-		rtup->tuple = (void *) state->mergecurrent[srcTape];
+		if (rtup)
+			rtup->tuple = (void *) state->mergecurrent[srcTape];
 
 		state->mergetail[srcTape] = state->mergecurrent[srcTape];
 		state->mergecurrent[srcTape] += tupLen;
@@ -3062,7 +3169,17 @@ mergebatchone(Tuplesortstate *state, int srcTape, SortTuple *rtup,
 		state->mergecurrent[srcTape] = state->mergetuples[srcTape];
 		state->mergetail[srcTape] = state->mergetuples[srcTape];
 
-		if (rtup->tuple)
+		if (!should_free)
+		{
+			/*
+			 * When no tuple is to be returned to tuplesort caller, we must
+			 * free overflow memory ourselves (the tuple will have been
+			 * written out already in this case)
+			 */
+			Assert(state->status != TSS_FINALMERGE);
+			pfree(state->mergeoverflow[srcTape]);
+		}
+		else if (rtup->tuple)
 		{
 			Assert(rtup->tuple == (void *) state->mergeoverflow[srcTape]);
 			/* Caller should free palloc'd tuple */
@@ -3076,25 +3193,28 @@ mergebatchone(Tuplesortstate *state, int srcTape, SortTuple *rtup,
  * mergebatchfreetape - handle final clean-up for batch memory once tape is
  * about to become exhausted
  *
- * All tuples are returned from tape, but a single final tuple, *rtup, is to be
- * passed back to caller.  Free tape's batch allocation buffer while ensuring
- * that the final tuple is managed appropriately.
+ * All tuples are returned from tape, but a single final tuple, *rtup, may be
+ * about to be passed back to caller.  Free tape's batch allocation buffer
+ * while ensuring that the final tuple, if any, is managed appropriately.
+ *
+ * Callers that don't have a tuple that is about to be passed back to
+ * tuplesort caller should pass NULL for both rtup and should_free arguments.
  */
 static void
 mergebatchfreetape(Tuplesortstate *state, int srcTape, SortTuple *rtup,
 				   bool *should_free)
 {
 	Assert(state->batchUsed);
-	Assert(state->status == TSS_FINALMERGE);
 
 	/*
 	 * Tuple may or may not already be an overflow allocation from
 	 * mergebatchone()
 	 */
-	if (!*should_free && rtup->tuple)
+	if (should_free && !*should_free && rtup->tuple)
 	{
 		/*
-		 * Final tuple still in tape's batch allocation.
+		 * Final tuple still in tape's batch allocation (final on-the-fly merge
+		 * case only).
 		 *
 		 * Return palloc()'d copy to caller, and have it freed in a similar
 		 * manner to overflow allocation.  Otherwise, we'd free batch memory
@@ -3105,6 +3225,7 @@ mergebatchfreetape(Tuplesortstate *state, int srcTape, SortTuple *rtup,
 		Size		tuplen;
 		void	   *oldTuple = rtup->tuple;
 
+		Assert(state->status == TSS_FINALMERGE);
 		tuplen = state->mergecurrent[srcTape] - state->mergetail[srcTape];
 		rtup->tuple = MemoryContextAlloc(state->sortcontext, tuplen);
 		MOVETUP(rtup->tuple, oldTuple, tuplen);
@@ -3119,8 +3240,9 @@ mergebatchfreetape(Tuplesortstate *state, int srcTape, SortTuple *rtup,
  * mergebatchalloc - allocate memory for one tuple using a batch memory
  * "logical allocation".
  *
- * This is used for the final on-the-fly merge phase only.  READTUP() routines
- * receive memory from here in place of palloc() and USEMEM() calls.
+ * This is used for the final merge phase only (may not be final on-the-fly
+ * merge).  READTUP() routines receive memory from here in place of palloc()
+ * and USEMEM() calls.
  *
  * Tuple tapenum is passed, ensuring each tape's tuples are stored in sorted,
  * contiguous order (while allowing safe reuse of memory made available to
@@ -3131,7 +3253,7 @@ mergebatchfreetape(Tuplesortstate *state, int srcTape, SortTuple *rtup,
  * general, only mergebatch* functions know about how memory returned from
  * here should be freed, and this function's caller must ensure that batch
  * memory management code will definitely have the opportunity to do the right
- * thing during the final on-the-fly merge.
+ * thing during the final merge.
  */
 static void *
 mergebatchalloc(Tuplesortstate *state, int tapenum, Size tuplen)
@@ -3184,20 +3306,21 @@ mergebatchalloc(Tuplesortstate *state, int tapenum, Size tuplen)
  * is at least one preread tuple available from each unexhausted input tape.
  *
  * We invoke this routine at the start of a merge pass for initial load,
- * and then whenever any tape's preread data runs out.  Note that we load
- * as much data as possible from all tapes, not just the one that ran out.
- * This is because logtape.c works best with a usage pattern that alternates
- * between reading a lot of data and writing a lot of data, so whenever we
- * are forced to read, we should fill working memory completely.
+ * and then whenever any tape's preread data runs out (provided merge step
+ * is not final merge step).  Note that we load as much data as possible
+ * from all tapes, not just the one that ran out.  This is because
+ * logtape.c works best with a usage pattern that alternates between
+ * reading a lot of data and writing a lot of data, so whenever we are
+ * forced to read, we should fill working memory completely.
  *
- * In FINALMERGE state, we *don't* use this routine, but instead just preread
- * from the single tape that ran dry.  There's no read/write alternation in
- * that state and so no point in scanning through all the tapes to fix one.
- * (Moreover, there may be quite a lot of inactive tapes in that state, since
- * we might have had many fewer runs than tapes.  In a regular tape-to-tape
- * merge we can expect most of the tapes to be active.  Plus, only
- * FINALMERGE state has to consider memory management for a batch
- * allocation.)
+ * In final merge cases (not necessarily performed on-the-fly) we *don't*
+ * use this routine beyond our initial preload, but instead just preread
+ * from the single tape that ran dry.  There's often no read/write
+ * alternation in that state and so no point in scanning through all the
+ * tapes to fix one.  (Moreover, there may be quite a lot of inactive tapes
+ * when that happens, since we might have had many fewer runs than tapes.
+ * In a regular tape-to-tape merge we can expect most of the tapes to be
+ * active.)
  */
 static void
 mergepreread(Tuplesortstate *state)
@@ -3235,8 +3358,8 @@ mergeprereadone(Tuplesortstate *state, int srcTape)
 	state->availMem = state->mergeavailmem[srcTape];
 
 	/*
-	 * When batch memory is used if final on-the-fly merge, only mergeoverflow
-	 * test is relevant; otherwise, only LACKMEM() test is relevant.
+	 * When batch memory is used, only mergeoverflow test is relevant;
+	 * otherwise, only LACKMEM() test is relevant.
 	 */
 	while ((state->mergeavailslots[srcTape] > 0 &&
 			state->mergeoverflow[srcTape] == NULL && !LACKMEM(state)) ||
@@ -3920,11 +4043,10 @@ markrunend(Tuplesortstate *state, int tapenum)
  * memory and account for that, or consume from tape's batch
  * allocation.
  *
- * Memory returned here in the final on-the-fly merge case is recycled
- * from tape's batch allocation.  Otherwise, callers must pfree() or
- * reset tuple child memory context, and account for that with a
- * FREEMEM().  Currently, this only ever needs to happen in WRITETUP()
- * routines.
+ * Memory returned here during the final merge is recycled from tape's batch
+ * allocation.  Otherwise, callers must pfree() or reset tuple child memory
+ * context, and account for that with a FREEMEM().  Currently, this only
+ * ever needs to happen in WRITETUP() routines.
  */
 static void *
 readtup_alloc(Tuplesortstate *state, int tapenum, Size tuplen)
@@ -3932,11 +4054,11 @@ readtup_alloc(Tuplesortstate *state, int tapenum, Size tuplen)
 	if (state->batchUsed)
 	{
 		/*
-		 * No USEMEM() call, because during final on-the-fly merge accounting
-		 * is based on tape-private state. ("Overflow" allocations are
-		 * detected as an indication that a new round or preloading is
-		 * required. Preloading marks existing contents of tape's batch buffer
-		 * for reuse.)
+		 * No USEMEM() call, because during the final merge accounting is
+		 * based on tape-private state. ("Overflow" allocations are detected
+		 * as an indication that a new round or preloading is required.
+		 * Preloading marks existing contents of tape's batch buffer for
+		 * reuse.)
 		 */
 		return mergebatchalloc(state, tapenum, tuplen);
 	}
@@ -4115,9 +4237,11 @@ writetup_heap(Tuplesortstate *state, int tapenum, SortTuple *stup)
 	if (state->randomAccess)	/* need trailing length word? */
 		LogicalTapeWrite(state->tapeset, tapenum,
 						 (void *) &tuplen, sizeof(tuplen));
-
-	FREEMEM(state, GetMemoryChunkSpace(tuple));
-	heap_free_minimal_tuple(tuple);
+	if (!state->batchUsed)
+	{
+		FREEMEM(state, GetMemoryChunkSpace(tuple));
+		heap_free_minimal_tuple(tuple);
+	}
 }
 
 static void
@@ -4359,8 +4483,11 @@ writetup_cluster(Tuplesortstate *state, int tapenum, SortTuple *stup)
 		LogicalTapeWrite(state->tapeset, tapenum,
 						 &tuplen, sizeof(tuplen));
 
-	FREEMEM(state, GetMemoryChunkSpace(tuple));
-	heap_freetuple(tuple);
+	if (!state->batchUsed)
+	{
+		FREEMEM(state, GetMemoryChunkSpace(tuple));
+		heap_freetuple(tuple);
+	}
 }
 
 static void
@@ -4674,8 +4801,11 @@ writetup_index(Tuplesortstate *state, int tapenum, SortTuple *stup)
 		LogicalTapeWrite(state->tapeset, tapenum,
 						 (void *) &tuplen, sizeof(tuplen));
 
-	FREEMEM(state, GetMemoryChunkSpace(tuple));
-	pfree(tuple);
+	if (!state->batchUsed)
+	{
+		FREEMEM(state, GetMemoryChunkSpace(tuple));
+		pfree(tuple);
+	}
 }
 
 static void
@@ -4770,7 +4900,7 @@ writetup_datum(Tuplesortstate *state, int tapenum, SortTuple *stup)
 		LogicalTapeWrite(state->tapeset, tapenum,
 						 (void *) &writtenlen, sizeof(writtenlen));
 
-	if (stup->tuple)
+	if (stup->tuple && !state->batchUsed)
 	{
 		FREEMEM(state, GetMemoryChunkSpace(stup->tuple));
 		pfree(stup->tuple);
