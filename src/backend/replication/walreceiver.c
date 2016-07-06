@@ -51,6 +51,7 @@
 #include "access/transam.h"
 #include "access/xlog_internal.h"
 #include "catalog/pg_type.h"
+#include "fmgr.h"
 #include "funcapi.h"
 #include "libpq/pqformat.h"
 #include "libpq/pqsignal.h"
@@ -73,16 +74,9 @@ int			wal_receiver_status_interval;
 int			wal_receiver_timeout;
 bool		hot_standby_feedback;
 
-/* libpqreceiver hooks to these when loaded */
-walrcv_connect_type walrcv_connect = NULL;
-walrcv_get_conninfo_type walrcv_get_conninfo = NULL;
-walrcv_identify_system_type walrcv_identify_system = NULL;
-walrcv_startstreaming_type walrcv_startstreaming = NULL;
-walrcv_endstreaming_type walrcv_endstreaming = NULL;
-walrcv_readtimelinehistoryfile_type walrcv_readtimelinehistoryfile = NULL;
-walrcv_receive_type walrcv_receive = NULL;
-walrcv_send_type walrcv_send = NULL;
-walrcv_disconnect_type walrcv_disconnect = NULL;
+/* filled by libpqreceiver when loaded */
+static WalReceiverConnAPI *wrcapi = NULL;
+static WalReceiverConnHandle *wrchandle = NULL;
 
 #define NAPTIME_PER_CYCLE 100	/* max sleep time between cycles (100ms) */
 
@@ -202,6 +196,7 @@ WalReceiverMain(void)
 	WalRcvData *walrcv = WalRcv;
 	TimestampTz last_recv_timestamp;
 	bool		ping_sent;
+	walrcvconn_init_fn walrcvconn_init;
 
 	/*
 	 * WalRcv should be set up already (if we are a backend, we inherit this
@@ -284,15 +279,24 @@ WalReceiverMain(void)
 	sigdelset(&BlockSig, SIGQUIT);
 
 	/* Load the libpq-specific functions */
-	load_file("libpqwalreceiver", false);
-	if (walrcv_connect == NULL ||
-		walrcv_get_conninfo == NULL ||
-		walrcv_startstreaming == NULL ||
-		walrcv_endstreaming == NULL ||
-		walrcv_identify_system == NULL ||
-		walrcv_readtimelinehistoryfile == NULL ||
-		walrcv_receive == NULL || walrcv_send == NULL ||
-		walrcv_disconnect == NULL)
+	wrcapi = palloc0(sizeof(WalReceiverConnAPI));
+
+	walrcvconn_init = (walrcvconn_init_fn)
+		load_external_function("libpqwalreceiver",
+							   "_PG_walreceirver_conn_init", false, NULL);
+
+	if (walrcvconn_init == NULL)
+		elog(ERROR, "libpqwalreceiver does not declare _PG_walreceirver_conn_init symbol");
+
+	wrchandle = walrcvconn_init(wrcapi);
+	if (wrcapi->connect == NULL ||
+		wrcapi->get_conninfo == NULL ||
+		wrcapi->startstreaming_physical == NULL ||
+		wrcapi->endstreaming == NULL ||
+		wrcapi->identify_system == NULL ||
+		wrcapi->readtimelinehistoryfile == NULL ||
+		wrcapi->receive == NULL || wrcapi->send == NULL ||
+		wrcapi->disconnect == NULL)
 		elog(ERROR, "libpqwalreceiver didn't initialize correctly");
 
 	/*
@@ -306,14 +310,14 @@ WalReceiverMain(void)
 
 	/* Establish the connection to the primary for XLOG streaming */
 	EnableWalRcvImmediateExit();
-	walrcv_connect(conninfo);
+	wrcapi->connect(wrchandle, conninfo, false, "walreceiver");
 	DisableWalRcvImmediateExit();
 
 	/*
 	 * Save user-visible connection string.  This clobbers the original
 	 * conninfo, for security.
 	 */
-	tmp_conninfo = walrcv_get_conninfo();
+	tmp_conninfo = wrcapi->get_conninfo(wrchandle);
 	SpinLockAcquire(&walrcv->mutex);
 	memset(walrcv->conninfo, 0, MAXCONNINFO);
 	if (tmp_conninfo)
@@ -332,7 +336,7 @@ WalReceiverMain(void)
 		 * IDENTIFY_SYSTEM replication command,
 		 */
 		EnableWalRcvImmediateExit();
-		walrcv_identify_system(&primaryTLI);
+		wrcapi->identify_system(wrchandle, &primaryTLI);
 		DisableWalRcvImmediateExit();
 
 		/*
@@ -369,7 +373,8 @@ WalReceiverMain(void)
 		 * on the new timeline.
 		 */
 		ThisTimeLineID = startpointTLI;
-		if (walrcv_startstreaming(startpointTLI, startpoint,
+		if (wrcapi->startstreaming_physical(wrchandle, startpointTLI,
+											startpoint,
 								  slotname[0] != '\0' ? slotname : NULL))
 		{
 			if (first_stream)
@@ -421,7 +426,7 @@ WalReceiverMain(void)
 				}
 
 				/* See if we can read data immediately */
-				len = walrcv_receive(&buf, &wait_fd);
+				len = wrcapi->receive(wrchandle, &buf, &wait_fd);
 				if (len != 0)
 				{
 					/*
@@ -452,7 +457,7 @@ WalReceiverMain(void)
 							endofwal = true;
 							break;
 						}
-						len = walrcv_receive(&buf, &wait_fd);
+						len = wrcapi->receive(wrchandle, &buf, &wait_fd);
 					}
 
 					/* Let the master know that we received some data. */
@@ -568,7 +573,7 @@ WalReceiverMain(void)
 			 * our side, too.
 			 */
 			EnableWalRcvImmediateExit();
-			walrcv_endstreaming(&primaryTLI);
+			wrcapi->endstreaming(wrchandle, &primaryTLI);
 			DisableWalRcvImmediateExit();
 
 			/*
@@ -723,7 +728,7 @@ WalRcvFetchTimeLineHistoryFiles(TimeLineID first, TimeLineID last)
 							tli)));
 
 			EnableWalRcvImmediateExit();
-			walrcv_readtimelinehistoryfile(tli, &fname, &content, &len);
+			wrcapi->readtimelinehistoryfile(wrchandle, tli, &fname, &content, &len);
 			DisableWalRcvImmediateExit();
 
 			/*
@@ -775,8 +780,8 @@ WalRcvDie(int code, Datum arg)
 	SpinLockRelease(&walrcv->mutex);
 
 	/* Terminate the connection gracefully. */
-	if (walrcv_disconnect != NULL)
-		walrcv_disconnect();
+	if (wrcapi->disconnect != NULL)
+		wrcapi->disconnect(wrchandle);
 
 	/* Wake up the startup process to notice promptly that we're gone */
 	WakeupRecovery();
@@ -1146,7 +1151,7 @@ XLogWalRcvSendReply(bool force, bool requestReply)
 		 (uint32) (applyPtr >> 32), (uint32) applyPtr,
 		 requestReply ? " (reply requested)" : "");
 
-	walrcv_send(reply_message.data, reply_message.len);
+	wrcapi->send(wrchandle, reply_message.data, reply_message.len);
 }
 
 /*
@@ -1224,7 +1229,7 @@ XLogWalRcvSendHSFeedback(bool immed)
 	pq_sendint64(&reply_message, GetCurrentIntegerTimestamp());
 	pq_sendint(&reply_message, xmin, 4);
 	pq_sendint(&reply_message, nextEpoch, 4);
-	walrcv_send(reply_message.data, reply_message.len);
+	wrcapi->send(wrchandle, reply_message.data, reply_message.len);
 	if (TransactionIdIsValid(xmin))
 		master_has_standby_xmin = true;
 	else

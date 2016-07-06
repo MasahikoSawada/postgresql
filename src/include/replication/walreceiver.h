@@ -133,33 +133,56 @@ typedef struct
 
 extern WalRcvData *WalRcv;
 
+struct WalReceiverConnHandle;
+typedef struct WalReceiverConnHandle WalReceiverConnHandle;
+
 /* libpqwalreceiver hooks */
-typedef void (*walrcv_connect_type) (char *conninfo);
-extern PGDLLIMPORT walrcv_connect_type walrcv_connect;
+typedef void (*walrcvconn_connect_fn) (
+									WalReceiverConnHandle *handle,
+									char *conninfo, bool logical,
+									const char *connname);
+typedef char *(*walrcvconn_get_conninfo_fn) (WalReceiverConnHandle *handle);
+typedef void (*walrcvconn_identify_system_fn) (WalReceiverConnHandle *handle,
+											   TimeLineID *primary_tli);
+typedef void (*walrcvconn_readtimelinehistoryfile_fn) (
+									WalReceiverConnHandle *handle,
+									TimeLineID tli, char **filename,
+									char **content, int *size);
+typedef char *(*walrcvconn_create_slot_fn) (
+									WalReceiverConnHandle *handle,
+									char *slotname, bool logical,
+									XLogRecPtr *lsn);
+typedef bool (*walrcvconn_startstreaming_physical_fn) (
+									WalReceiverConnHandle *handle,
+									TimeLineID tli, XLogRecPtr startpoint,
+									char *slotname);
+typedef bool (*walrcvconn_startstreaming_logical_fn) (
+									WalReceiverConnHandle *handle,
+									XLogRecPtr startpoint, char *slotname,
+									char *options);
+typedef void (*walrcvconn_endstreaming_fn) (WalReceiverConnHandle *handle,
+											TimeLineID *next_tli);
+typedef int (*walrcvconn_receive_fn) (WalReceiverConnHandle *handle,
+									  char **buffer, pgsocket *wait_fd);
+typedef void (*walrcvconn_send_fn) (WalReceiverConnHandle *handle,
+									const char *buffer, int nbytes);
+typedef void (*walrcvconn_disconnect_fn) (WalReceiverConnHandle *handle);
 
-typedef char *(*walrcv_get_conninfo_type) (void);
-extern PGDLLIMPORT walrcv_get_conninfo_type walrcv_get_conninfo;
+typedef struct WalReceiverConnAPI {
+	walrcvconn_connect_fn					connect;
+	walrcvconn_get_conninfo_fn				get_conninfo;
+	walrcvconn_identify_system_fn			identify_system;
+	walrcvconn_readtimelinehistoryfile_fn	readtimelinehistoryfile;
+	walrcvconn_create_slot_fn				create_slot;
+	walrcvconn_startstreaming_physical_fn	startstreaming_physical;
+	walrcvconn_startstreaming_logical_fn	startstreaming_logical;
+	walrcvconn_endstreaming_fn				endstreaming;
+	walrcvconn_receive_fn					receive;
+	walrcvconn_send_fn						send;
+	walrcvconn_disconnect_fn				disconnect;
+} WalReceiverConnAPI;
 
-typedef void (*walrcv_identify_system_type) (TimeLineID *primary_tli);
-extern PGDLLIMPORT walrcv_identify_system_type walrcv_identify_system;
-
-typedef void (*walrcv_readtimelinehistoryfile_type) (TimeLineID tli, char **filename, char **content, int *size);
-extern PGDLLIMPORT walrcv_readtimelinehistoryfile_type walrcv_readtimelinehistoryfile;
-
-typedef bool (*walrcv_startstreaming_type) (TimeLineID tli, XLogRecPtr startpoint, char *slotname);
-extern PGDLLIMPORT walrcv_startstreaming_type walrcv_startstreaming;
-
-typedef void (*walrcv_endstreaming_type) (TimeLineID *next_tli);
-extern PGDLLIMPORT walrcv_endstreaming_type walrcv_endstreaming;
-
-typedef int (*walrcv_receive_type) (char **buffer, pgsocket *wait_fd);
-extern PGDLLIMPORT walrcv_receive_type walrcv_receive;
-
-typedef void (*walrcv_send_type) (const char *buffer, int nbytes);
-extern PGDLLIMPORT walrcv_send_type walrcv_send;
-
-typedef void (*walrcv_disconnect_type) (void);
-extern PGDLLIMPORT walrcv_disconnect_type walrcv_disconnect;
+typedef WalReceiverConnHandle *(*walrcvconn_init_fn)(WalReceiverConnAPI *wrconn);
 
 /* prototypes for functions in walreceiver.c */
 extern void WalReceiverMain(void) pg_attribute_noreturn();
