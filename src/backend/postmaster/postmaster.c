@@ -113,6 +113,7 @@
 #include "postmaster/pgarch.h"
 #include "postmaster/postmaster.h"
 #include "postmaster/syslogger.h"
+#include "replication/logicalworker.h"
 #include "replication/walsender.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
@@ -416,6 +417,7 @@ static void maybe_start_bgworker(void);
 static bool CreateOptsFile(int argc, char *argv[], char *fullprogname);
 static pid_t StartChildProcess(AuxProcType type);
 static void StartAutovacuumWorker(void);
+static void register_internal_bgworkers(void);
 static void InitPostmasterDeathWatchHandle(void);
 
 /*
@@ -931,6 +933,12 @@ PostmasterMain(int argc, char *argv[])
 	if (EnableSSL)
 		secure_initialize();
 #endif
+
+	/*
+	 * Register internal bgworkers before we give external modules chance
+	 * to do the same.
+	 */
+	register_internal_bgworkers();
 
 	/*
 	 * process any libraries that should be preloaded at postmaster start
@@ -5648,6 +5656,39 @@ assign_backendlist_entry(RegisteredBgWorker *rw)
 	rw->rw_child_slot = bn->child_slot;
 
 	return true;
+}
+
+/*
+ * Register internal background workers.
+ *
+ * This is here mainly because the permanent bgworkers are normally allowed
+ * to be registered only when share preload libraries are loaded which does
+ * not work for the internal ones.
+ */
+static void
+register_internal_bgworkers(void)
+{
+	internal_bgworker_registration_in_progress = true;
+
+	/* Register the logical replication worker launcher if appropriate. */
+	if (!IsBinaryUpgrade && max_logical_replication_workers > 0)
+	{
+		BackgroundWorker bgw;
+
+		bgw.bgw_flags =	BGWORKER_SHMEM_ACCESS |
+			BGWORKER_BACKEND_DATABASE_CONNECTION;
+		bgw.bgw_start_time = BgWorkerStart_RecoveryFinished;
+		bgw.bgw_main = ApplyLauncherMain;
+		snprintf(bgw.bgw_name, BGW_MAXLEN,
+				 "logical replication launcher");
+		bgw.bgw_restart_time = 5;
+		bgw.bgw_notify_pid = 0;
+		bgw.bgw_main_arg = (Datum) 0;
+
+		RegisterBackgroundWorker(&bgw);
+	}
+
+	internal_bgworker_registration_in_progress = false;
 }
 
 /*

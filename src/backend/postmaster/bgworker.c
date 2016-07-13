@@ -93,6 +93,9 @@ struct BackgroundWorkerHandle
 
 static BackgroundWorkerArray *BackgroundWorkerData;
 
+/* Enables registration of internal background workers. */
+bool internal_bgworker_registration_in_progress = false;
+
 /*
  * Calculate shared memory needed.
  */
@@ -745,7 +748,8 @@ RegisterBackgroundWorker(BackgroundWorker *worker)
 		ereport(DEBUG1,
 		 (errmsg("registering background worker \"%s\"", worker->bgw_name)));
 
-	if (!process_shared_preload_libraries_in_progress)
+	if (!process_shared_preload_libraries_in_progress &&
+		!internal_bgworker_registration_in_progress)
 	{
 		if (!IsUnderPostmaster)
 			ereport(LOG,

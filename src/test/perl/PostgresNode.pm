@@ -414,8 +414,16 @@ sub init
 
 	if ($params{allows_streaming})
 	{
-		print $conf "wal_level = replica\n";
+		if ($params{allows_streaming} eq "logical")
+		{
+			print $conf "wal_level = logical\n";
+		}
+		else
+		{
+			print $conf "wal_level = replica\n";
+		}
 		print $conf "max_wal_senders = 5\n";
+		print $conf "max_replication_slots = 5\n";
 		print $conf "wal_keep_segments = 20\n";
 		print $conf "max_wal_size = 128MB\n";
 		print $conf "shared_buffers = 1MB\n";

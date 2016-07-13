@@ -232,7 +232,7 @@ ExecCheckTIDVisible(EState *estate,
  *		Returns RETURNING result if any, otherwise NULL.
  * ----------------------------------------------------------------
  */
-static TupleTableSlot *
+TupleTableSlot *
 ExecInsert(ModifyTableState *mtstate,
 		   TupleTableSlot *slot,
 		   TupleTableSlot *planSlot,
@@ -536,7 +536,7 @@ ExecInsert(ModifyTableState *mtstate,
  *		Returns RETURNING result if any, otherwise NULL.
  * ----------------------------------------------------------------
  */
-static TupleTableSlot *
+TupleTableSlot *
 ExecDelete(ItemPointer tupleid,
 		   HeapTuple oldtuple,
 		   TupleTableSlot *planSlot,
@@ -794,7 +794,7 @@ ldelete:;
  *		Returns RETURNING result if any, otherwise NULL.
  * ----------------------------------------------------------------
  */
-static TupleTableSlot *
+TupleTableSlot *
 ExecUpdate(ItemPointer tupleid,
 		   HeapTuple oldtuple,
 		   TupleTableSlot *slot,

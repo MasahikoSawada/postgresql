@@ -142,8 +142,9 @@ typedef void (*walrcvconn_connect_fn) (
 									char *conninfo, bool logical,
 									const char *connname);
 typedef char *(*walrcvconn_get_conninfo_fn) (WalReceiverConnHandle *handle);
-typedef void (*walrcvconn_identify_system_fn) (WalReceiverConnHandle *handle,
-											   TimeLineID *primary_tli);
+typedef char *(*walrcvconn_identify_system_fn) (WalReceiverConnHandle *handle,
+												TimeLineID *primary_tli,
+												char **dbname);
 typedef void (*walrcvconn_readtimelinehistoryfile_fn) (
 									WalReceiverConnHandle *handle,
 									TimeLineID tli, char **filename,
@@ -152,6 +153,9 @@ typedef char *(*walrcvconn_create_slot_fn) (
 									WalReceiverConnHandle *handle,
 									char *slotname, bool logical,
 									XLogRecPtr *lsn);
+typedef void (*walrcvconn_drop_slot_fn) (
+									WalReceiverConnHandle *handle,
+									char *slotname);
 typedef bool (*walrcvconn_startstreaming_physical_fn) (
 									WalReceiverConnHandle *handle,
 									TimeLineID tli, XLogRecPtr startpoint,
@@ -174,6 +178,7 @@ typedef struct WalReceiverConnAPI {
 	walrcvconn_identify_system_fn			identify_system;
 	walrcvconn_readtimelinehistoryfile_fn	readtimelinehistoryfile;
 	walrcvconn_create_slot_fn				create_slot;
+	walrcvconn_drop_slot_fn					drop_slot;
 	walrcvconn_startstreaming_physical_fn	startstreaming_physical;
 	walrcvconn_startstreaming_logical_fn	startstreaming_logical;
 	walrcvconn_endstreaming_fn				endstreaming;

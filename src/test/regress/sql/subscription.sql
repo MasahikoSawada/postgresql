@@ -8,7 +8,7 @@ CREATE SUBSCRIPTION testsub CONNECTION 'foo';
 -- fail - no connection
 CREATE SUBSCRIPTION testsub PUBLICATION foo;
 
-CREATE SUBSCRIPTION testsub PUBLICATION testpub CONNECTION 'testconn' INITIALLY DISABLED;
+CREATE SUBSCRIPTION testsub PUBLICATION testpub CONNECTION 'testconn' INITIALLY DISABLED NOCREATE_SLOT;
 
 \dRs+
 
@@ -31,4 +31,6 @@ ALTER SUBSCRIPTION testsub DISABLE;
 
 COMMIT;
 
+SET client_min_messages TO 'error';
 DROP SUBSCRIPTION testsub;
+RESET client_min_messages;

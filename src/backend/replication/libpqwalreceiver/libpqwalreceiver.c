@@ -52,14 +52,16 @@ PGDLLEXPORT WalReceiverConnHandle *_PG_walreceirver_conn_init(WalReceiverConnAPI
 static void libpqrcv_connect(WalReceiverConnHandle *handle, char *conninfo,
 							 bool logical, const char *connname);
 static char *libpqrcv_get_conninfo(WalReceiverConnHandle *handle);
-static void libpqrcv_identify_system(WalReceiverConnHandle *handle,
-									 TimeLineID *primary_tli);
+static char *libpqrcv_identify_system(WalReceiverConnHandle *handle,
+									  TimeLineID *primary_tli,
+									  char **dbname);
 static void libpqrcv_readtimelinehistoryfile(WalReceiverConnHandle *handle,
 											 TimeLineID tli, char **filename,
 											 char **content, int *len);
 static char *libpqrcv_create_slot(WalReceiverConnHandle *handle,
 								  char *slotname, bool logical,
 								  XLogRecPtr *lsn);
+static void libpqrcv_drop_slot(WalReceiverConnHandle *handle, char *slotname);
 static bool libpqrcv_startstreaming_physical(WalReceiverConnHandle *handle,
 								 TimeLineID tli, XLogRecPtr startpoint,
 								 char *slotname);
@@ -96,6 +98,7 @@ _PG_walreceirver_conn_init(WalReceiverConnAPI *wrcapi)
 	wrcapi->identify_system = libpqrcv_identify_system;
 	wrcapi->readtimelinehistoryfile = libpqrcv_readtimelinehistoryfile;
 	wrcapi->create_slot = libpqrcv_create_slot;
+	wrcapi->drop_slot = libpqrcv_drop_slot;
 	wrcapi->startstreaming_physical = libpqrcv_startstreaming_physical;
 	wrcapi->startstreaming_logical = libpqrcv_startstreaming_logical;
 	wrcapi->endstreaming = libpqrcv_endstreaming;
@@ -199,13 +202,13 @@ libpqrcv_get_conninfo(WalReceiverConnHandle *handle)
  * Check that primary's system identifier matches ours, and fetch the current
  * timeline ID of the primary.
  */
-static void
+static char *
 libpqrcv_identify_system(WalReceiverConnHandle *handle,
-						 TimeLineID *primary_tli)
+						 TimeLineID *primary_tli,
+						 char **dbname)
 {
+	char	   *sysid;
 	PGresult   *res;
-	char	   *primary_sysid;
-	char		standby_sysid[32];
 
 	/*
 	 * Get the system identifier and timeline ID as a DataRow message from the
@@ -231,24 +234,19 @@ libpqrcv_identify_system(WalReceiverConnHandle *handle,
 				 errdetail("Could not identify system: got %d rows and %d fields, expected %d rows and %d or more fields.",
 						   ntuples, nfields, 3, 1)));
 	}
-	primary_sysid = PQgetvalue(res, 0, 0);
+	sysid = pstrdup(PQgetvalue(res, 0, 0));
 	*primary_tli = pg_atoi(PQgetvalue(res, 0, 1), 4, 0);
-
-	/*
-	 * Confirm that the system identifier of the primary is the same as ours.
-	 */
-	snprintf(standby_sysid, sizeof(standby_sysid), UINT64_FORMAT,
-			 GetSystemIdentifier());
-	if (strcmp(primary_sysid, standby_sysid) != 0)
+	if (dbname)
 	{
-		primary_sysid = pstrdup(primary_sysid);
-		PQclear(res);
-		ereport(ERROR,
-				(errmsg("database system identifier differs between the primary and standby"),
-				 errdetail("The primary's identifier is %s, the standby's identifier is %s.",
-						   primary_sysid, standby_sysid)));
+		if (PQgetisnull(res, 0, 3))
+			*dbname = NULL;
+		else
+			*dbname = pstrdup(PQgetvalue(res, 0, 3));
 	}
+
 	PQclear(res);
+
+	return sysid;
 }
 
 /*
@@ -274,7 +272,7 @@ libpqrcv_create_slot(WalReceiverConnHandle *handle, char *slotname,
 
 	if (PQresultStatus(res) != PGRES_TUPLES_OK)
 	{
-		elog(FATAL, "could not crate replication slot \"%s\": %s\n",
+		elog(ERROR, "could not crate replication slot \"%s\": %s\n",
 			 slotname, PQerrorMessage(handle->streamConn));
 	}
 
@@ -287,6 +285,28 @@ libpqrcv_create_slot(WalReceiverConnHandle *handle, char *slotname,
 	return snapshot;
 }
 
+/*
+ * Drop replication slot.
+ */
+static void
+libpqrcv_drop_slot(WalReceiverConnHandle *handle, char *slotname)
+{
+	PGresult	   *res;
+	char			cmd[256];
+
+	snprintf(cmd, sizeof(cmd),
+			 "DROP_REPLICATION_SLOT \"%s\"", slotname);
+
+	res = libpqrcv_PQexec(handle, cmd);
+
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+	{
+		elog(ERROR, "could not drop replication slot \"%s\": %s\n",
+			 slotname, PQerrorMessage(handle->streamConn));
+	}
+
+	PQclear(res);
+}
 
 /*
  * Start streaming WAL data from given startpoint and timeline.
@@ -353,7 +373,7 @@ libpqrcv_startstreaming_logical(WalReceiverConnHandle *handle,
 					 (uint32) (startpoint >> 32),
 					 (uint32) startpoint);
 
-	/* Send options */
+	/* Add options */
 	if (options)
 		appendStringInfo(&cmd, "( %s )", options);
 
@@ -585,12 +605,16 @@ libpqrcv_PQexec(WalReceiverConnHandle *handle, const char *query)
 		{
 			/*
 			 * We don't need to break down the sleep into smaller increments,
-			 * and check for interrupts after each nap, since we can just
-			 * elog(FATAL) within SIGTERM signal handler if the signal arrives
-			 * in the middle of establishment of replication connection.
+			 * since we'll get interrupted by signals and can either handle
+			 * interrupts here or  elog(FATAL) within SIGTERM signal handler
+			 * if the signal arrives in the middle of establishment of
+			 * replication connection.
 			 */
 			if (!libpq_select(handle, -1))
+			{
+				CHECK_FOR_INTERRUPTS();
 				continue;		/* interrupted */
+			}
 			if (PQconsumeInput(handle->streamConn) == 0)
 				return NULL;	/* trouble */
 		}

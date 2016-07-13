@@ -8724,6 +8724,15 @@ subscription_create_opt_item:
 								 errmsg("unrecognized subscription option \"%s\"", $1),
 									 parser_errposition(@2)));
 				}
+			| IDENT
+				{
+					if (strcmp($1, "create_slot") == 0)
+						$$ = makeDefElem("create_slot",
+										 (Node *)makeInteger(TRUE), @1);
+					else if (strcmp($1, "nocreate_slot") == 0)
+						$$ = makeDefElem("create_slot",
+										 (Node *)makeInteger(FALSE), @1);
+				}
 		;
 
 subscription_opt_item:

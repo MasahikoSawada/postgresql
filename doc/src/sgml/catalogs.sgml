@@ -5155,7 +5155,8 @@
 
   <para>
    The <structname>pg_publication</structname> catalog contains
-   all publications created in the database.
+   all publications created in the database.  For more on publications
+   see <xref linkend="logical-replication-publication">.
   </para>
 
   <table>
@@ -6081,7 +6082,8 @@
 
   <para>
    The <structname>pg_subscription</structname> catalog contains
-   all existing logical replication subscriptions.
+   all existing logical replication subscriptions.  For more information
+   about logical replication see <xref linkend="logical-replication">.
   </para>
 
   <para>
@@ -6156,7 +6158,8 @@
       <entry><structfield>subpublications</structfield></entry>
       <entry><type>name[]</type></entry>
       <entry></entry>
-      <entry>Array of subscribed publication names.
+      <entry>Array of subscribed publication names. For more on publications
+       see <xref linkend="logical-replication-publication">.
       </entry>
      </row>
     </tbody>

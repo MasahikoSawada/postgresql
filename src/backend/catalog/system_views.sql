@@ -685,6 +685,20 @@ CREATE VIEW pg_stat_wal_receiver AS
     FROM pg_stat_get_wal_receiver() s
     WHERE s.pid IS NOT NULL;
 
+CREATE VIEW pg_stat_subscription AS
+    SELECT
+			su.oid as subid,
+			su.subname,
+			st.pid,
+			st.received_lsn,
+			st.last_msg_send_time,
+			st.last_msg_receipt_time,
+			st.latest_end_lsn,
+			st.latest_end_time
+    FROM pg_subscription su
+            LEFT JOIN pg_stat_get_subscription(NULL) st
+                      ON (st.subid = su.oid);
+
 CREATE VIEW pg_stat_ssl AS
     SELECT
             S.pid,

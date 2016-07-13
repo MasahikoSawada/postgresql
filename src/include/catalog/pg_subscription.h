@@ -21,6 +21,13 @@
 #define SubscriptionRelationId			6100
 #define SubscriptionRelation_Rowtype_Id	6101
 
+/* ----------------
+ * Technicaly, the subscriptions live inside the database so shared catalog
+ * seems weird, but the replication launcher process needs to access all of
+ * then to be able to start the workers so we have to put them in a shared,
+ * nailed catalogs.
+ * ----------------
+ */
 CATALOG(pg_subscription,6100) BKI_SHARED_RELATION BKI_ROWTYPE_OID(6101) BKI_SCHEMA_MACRO
 {
 	Oid			subdbid;			/* Database the subscription is in. */

@@ -331,12 +331,25 @@ WalReceiverMain(void)
 	first_stream = true;
 	for (;;)
 	{
+		char	   *primary_sysid;
+		char		standby_sysid[32];
+
 		/*
 		 * Check that we're connected to a valid server using the
-		 * IDENTIFY_SYSTEM replication command,
+		 * IDENTIFY_SYSTEM replication command.
 		 */
 		EnableWalRcvImmediateExit();
-		wrcapi->identify_system(wrchandle, &primaryTLI);
+		primary_sysid =wrcapi->identify_system(wrchandle, &primaryTLI, NULL);
+
+		snprintf(standby_sysid, sizeof(standby_sysid), UINT64_FORMAT,
+				 GetSystemIdentifier());
+		if (strcmp(primary_sysid, standby_sysid) != 0)
+		{
+			ereport(ERROR,
+					(errmsg("database system identifier differs between the primary and standby"),
+					 errdetail("The primary's identifier is %s, the standby's identifier is %s.",
+							   primary_sysid, standby_sysid)));
+		}
 		DisableWalRcvImmediateExit();
 
 		/*

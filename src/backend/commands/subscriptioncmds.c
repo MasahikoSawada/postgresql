@@ -28,14 +28,24 @@
 #include "catalog/pg_type.h"
 #include "catalog/pg_subscription.h"
 
+#include "commands/dbcommands.h"
 #include "commands/defrem.h"
+#include "commands/replicationcmds.h"
 
 #include "executor/spi.h"
 
 #include "nodes/makefuncs.h"
 
+#include "replication/logical.h"
+#include "replication/logicalproto.h"
+#include "replication/logicalworker.h"
+#include "replication/origin.h"
 #include "replication/reorderbuffer.h"
-#include "commands/replicationcmds.h"
+#include "replication/logicalworker.h"
+#include "replication/walreceiver.h"
+
+#include "storage/ipc.h"
+#include "storage/proc.h"
 
 #include "utils/array.h"
 #include "utils/builtins.h"
@@ -60,12 +70,15 @@ check_subscription_permissions(void)
 static void
 parse_subscription_options(List *options,
 						   bool *enabled_given, bool *enabled,
-						   char **conninfo, List **publications)
+						   bool *create_slot, char **conninfo,
+						   List **publications)
 {
 	ListCell   *lc;
+	bool		create_slot_given = false;
 
 	*enabled_given = false;
 	*enabled = true;
+	*create_slot = true;
 	*conninfo = NULL;
 	*publications = NIL;
 
@@ -83,6 +96,16 @@ parse_subscription_options(List *options,
 
 			*enabled_given = true;
 			*enabled = defGetBoolean(defel);
+		}
+		else if (strcmp(defel->defname, "create_slot") == 0)
+		{
+			if (create_slot_given)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+
+			create_slot_given = true;
+			*create_slot = defGetBoolean(defel);
 		}
 		else if (strcmp(defel->defname, "conninfo") == 0)
 		{
@@ -180,7 +203,9 @@ CreateSubscription(CreateSubscriptionStmt *stmt)
 	HeapTuple	tup;
 	bool		enabled_given;
 	bool		enabled;
+	bool		create_slot;
 	char	   *conninfo;
+	char	   *slotname;
 	List	   *publications;
 
 	check_subscription_permissions();
@@ -200,7 +225,8 @@ CreateSubscription(CreateSubscriptionStmt *stmt)
 
 	/* Parse and check options. */
 	parse_subscription_options(stmt->options, &enabled_given, &enabled,
-							   &conninfo, &publications);
+							   &create_slot, &conninfo, &publications);
+	slotname = stmt->subname;
 
 	/* TODO: improve error messages here. */
 	if (conninfo == NULL)
@@ -219,7 +245,7 @@ CreateSubscription(CreateSubscriptionStmt *stmt)
 
 	values[Anum_pg_subscription_subdbid - 1] = ObjectIdGetDatum(MyDatabaseId);
 	values[Anum_pg_subscription_subname - 1] =
-		DirectFunctionCall1(namein, CStringGetDatum(stmt->subname));
+		DirectFunctionCall1(namein, CStringGetDatum(slotname));
 	values[Anum_pg_subscription_subenabled - 1] = BoolGetDatum(enabled);
 	values[Anum_pg_subscription_subconninfo - 1] =
 		CStringGetTextDatum(conninfo);
@@ -235,9 +261,80 @@ CreateSubscription(CreateSubscriptionStmt *stmt)
 	CatalogUpdateIndexes(rel, tup);
 	heap_freetuple(tup);
 
-	ObjectAddressSet(myself, SubscriptionRelationId, subid);
+	if (create_slot)
+	{
+		TimeLineID	startpointTLI;
+		char	   *publisher_sysid;
+		char	   *publisher_dbname;
+		char		my_sysid[32];
+		XLogRecPtr	lsn;
+		WalReceiverConnHandle  *wrchandle;
+		WalReceiverConnAPI	   *wrcapi;
+		walrcvconn_init_fn		walrcvconn_init;
+
+		/*
+		 * Now that the catalog update is done, try to reserve slot at the
+		 * provider node using replication connection.
+		 */
+		wrcapi = palloc0(sizeof(WalReceiverConnAPI));
+
+		walrcvconn_init = (walrcvconn_init_fn)
+			load_external_function("libpqwalreceiver",
+								   "_PG_walreceirver_conn_init", false, NULL);
+
+		if (walrcvconn_init == NULL)
+			elog(ERROR, "libpqwalreceiver does not declare _PG_walreceirver_conn_init symbol");
+
+		wrchandle = walrcvconn_init(wrcapi);
+		if (wrcapi->connect == NULL ||
+			wrcapi->create_slot == NULL)
+			elog(ERROR, "libpqwalreceiver didn't initialize correctly");
+
+		/* Try to connect to the publisher. */
+		wrcapi->connect(wrchandle, conninfo, true, stmt->subname);
+
+		/* Identify the instance and check if it's not the same database. */
+		publisher_sysid = wrcapi->identify_system(wrchandle, &startpointTLI,
+												  &publisher_dbname);
+		snprintf(my_sysid, sizeof(my_sysid), UINT64_FORMAT,
+				 GetSystemIdentifier());
+		if (strcmp(publisher_sysid, my_sysid) == 0 &&
+			startpointTLI == ThisTimeLineID &&
+			strcmp(publisher_dbname, get_database_name(MyDatabaseId)) == 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 (errmsg("the connection info provided points to the current database"))));
+
+		/*
+		 * Create the replication slot on remote side for our newly created
+		 * subscription.
+		 *
+		 * Note, we can't cleanup slot in case of failure as reason for
+		 * failure might be already existing slot of the same name and we
+		 * don't want to drop somebody else's slot by mistake.
+		 */
+		wrcapi->create_slot(wrchandle, slotname, true, &lsn);
+		ereport(NOTICE,
+				(errmsg("created replication slot \"%s\" on provider",
+						slotname)));
+		/*
+		 * Setup replication origin tracking.
+		 * TODO: do this only when it does not already exist?
+		 */
+		replorigin_create(slotname);
+
+		/* And we are done with the remote side. */
+		wrcapi->disconnect(wrchandle);
+	}
 
 	heap_close(rel, RowExclusiveLock);
+
+	/* Make the changes visible. */
+	CommandCounterIncrement();
+
+	ApplyLauncherWakeupOnCommit();
+
+	ObjectAddressSet(myself, SubscriptionRelationId, subid);
 
 	return myself;
 }
@@ -257,6 +354,7 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 	Oid			subid;
 	bool		enabled_given;
 	bool		enabled;
+	bool		create_slot;
 	char	   *conninfo;
 	List	   *publications;
 
@@ -278,6 +376,7 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 
 	/* Parse options. */
 	parse_subscription_options(stmt->options, &enabled_given, &enabled,
+							   &create_slot  /* not used */,
 							   &conninfo, &publications);
 
 	/* Form a new tuple. */
@@ -316,6 +415,11 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 	heap_freetuple(tup);
 	heap_close(rel, RowExclusiveLock);
 
+	/* Make the changes visible. */
+	CommandCounterIncrement();
+
+	ApplyLauncherWakeupOnCommit();
+
 	return myself;
 }
 
@@ -327,6 +431,18 @@ DropSubscriptionById(Oid subid)
 {
 	Relation	rel;
 	HeapTuple	tup;
+	Datum		datum;
+	bool		isnull;
+	char	   *subname;
+	char	   *conninfo;
+	char	   *slotname;
+	RepOriginId	originid;
+	MemoryContext			tmpctx,
+							oldctx;
+	WalReceiverConnHandle  *wrchandle = NULL;
+	WalReceiverConnAPI	   *wrcapi = NULL;
+	walrcvconn_init_fn		walrcvconn_init;
+	LogicalRepWorker	   *worker;
 
 	check_subscription_permissions();
 
@@ -337,9 +453,135 @@ DropSubscriptionById(Oid subid)
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for subscription %u", subid);
 
+	/*
+	 * Create temporary memory context to keep copy of subscription
+	 * info needed later in the execution.
+	 */
+	tmpctx = AllocSetContextCreate(TopMemoryContext,
+										  "DropSubscription Ctx",
+										  ALLOCSET_DEFAULT_MINSIZE,
+										  ALLOCSET_DEFAULT_INITSIZE,
+										  ALLOCSET_DEFAULT_MAXSIZE);
+	oldctx = MemoryContextSwitchTo(tmpctx);
+
+	/* Get subname */
+	datum = SysCacheGetAttr(SUBSCRIPTIONOID, tup,
+							Anum_pg_subscription_subname, &isnull);
+	Assert(!isnull);
+	subname = pstrdup(NameStr(*DatumGetName(datum)));
+
+	/* Get conninfo */
+	datum = SysCacheGetAttr(SUBSCRIPTIONOID, tup,
+							Anum_pg_subscription_subconninfo, &isnull);
+	Assert(!isnull);
+	conninfo = pstrdup(TextDatumGetCString(datum));
+
+	/* Get slotname */
+	datum = SysCacheGetAttr(SUBSCRIPTIONOID, tup,
+							Anum_pg_subscription_subslotname, &isnull);
+	Assert(!isnull);
+	slotname = pstrdup(NameStr(*DatumGetName(datum)));
+
+	MemoryContextSwitchTo(oldctx);
+
+	/* Remove the tuple from catalog. */
 	simple_heap_delete(rel, &tup->t_self);
 
-	ReleaseSysCache(tup);
+	/* Protect against launcher restarting the worker. */
+	LWLockAcquire(LogicalRepLauncherLock, LW_EXCLUSIVE);
 
-	heap_close(rel, RowExclusiveLock);
+	/* Kill the apply worker so that the slot becomes accessible. */
+	LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
+	worker = logicalrep_worker_find(subid);
+	if (worker)
+		logicalrep_worker_stop(worker);
+	LWLockRelease(LogicalRepWorkerLock);
+
+	/* Wait for apply process to die. */
+	for (;;)
+	{
+		int	rc;
+
+		CHECK_FOR_INTERRUPTS();
+
+		LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
+		if (logicalrep_worker_count(subid) < 1)
+		{
+			LWLockRelease(LogicalRepWorkerLock);
+			break;
+		}
+		LWLockRelease(LogicalRepWorkerLock);
+
+		/* Wait for more work. */
+		rc = WaitLatch(&MyProc->procLatch,
+					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
+					   1000L);
+
+		/* emergency bailout if postmaster has died */
+		if (rc & WL_POSTMASTER_DEATH)
+			proc_exit(1);
+
+		ResetLatch(&MyProc->procLatch);
+	}
+
+	/* Remove the origin trakicking. */
+	originid = replorigin_by_name(slotname, true);
+	if (originid != InvalidRepOriginId)
+		replorigin_drop(originid);
+
+	/*
+	 * Now that the catalog update is done, try to reserve slot at the
+	 * provider node using replication connection.
+	 */
+	wrcapi = palloc0(sizeof(WalReceiverConnAPI));
+
+	walrcvconn_init = (walrcvconn_init_fn)
+		load_external_function("libpqwalreceiver",
+							   "_PG_walreceirver_conn_init", false, NULL);
+
+	if (walrcvconn_init == NULL)
+		elog(ERROR, "libpqwalreceiver does not declare _PG_walreceirver_conn_init symbol");
+
+	wrchandle = walrcvconn_init(wrcapi);
+	if (wrcapi->connect == NULL ||
+		wrcapi->drop_slot == NULL)
+		elog(ERROR, "libpqwalreceiver didn't initialize correctly");
+
+	/*
+	 * We must ignore error as that would make it impossible to drop
+	 * subscription when provider is down.
+	 */
+	oldctx = CurrentMemoryContext;
+	PG_TRY();
+	{
+		wrcapi->connect(wrchandle, conninfo, true, subname);
+		wrcapi->drop_slot(wrchandle, slotname);
+		ereport(NOTICE,
+				(errmsg("dropped replication slot \"%s\" on provider",
+						slotname)));
+		wrcapi->disconnect(wrchandle);
+	}
+	PG_CATCH();
+	{
+		MemoryContext	ectx;
+		ErrorData	   *edata;
+
+		ectx = MemoryContextSwitchTo(oldctx);
+		/* Save error info */
+		edata = CopyErrorData();
+		MemoryContextSwitchTo(ectx);
+		FlushErrorState();
+
+		ereport(WARNING,
+				(errmsg("there was problem dropping the replication slot "
+						"\"%s\" on provider", slotname),
+				 errdetail("The error was: %s", edata->message),
+				 errhint("You may have to drop it manually")));
+		FreeErrorData(edata);
+	}
+	PG_END_TRY();
+
+	/* Cleanup. */
+	ReleaseSysCache(tup);
+	heap_close(rel, NoLock);
 }

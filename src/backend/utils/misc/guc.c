@@ -58,6 +58,7 @@
 #include "postmaster/postmaster.h"
 #include "postmaster/syslogger.h"
 #include "postmaster/walwriter.h"
+#include "replication/logicalworker.h"
 #include "replication/slot.h"
 #include "replication/syncrep.h"
 #include "replication/walreceiver.h"
@@ -171,6 +172,7 @@ static const char *show_tcp_keepalives_interval(void);
 static const char *show_tcp_keepalives_count(void);
 static bool check_maxconnections(int *newval, void **extra, GucSource source);
 static bool check_max_worker_processes(int *newval, void **extra, GucSource source);
+static bool check_max_logical_replication_workers(int *newval, void **extra, GucSource source);
 static bool check_autovacuum_max_workers(int *newval, void **extra, GucSource source);
 static bool check_autovacuum_work_mem(int *newval, void **extra, GucSource source);
 static bool check_effective_io_concurrency(int *newval, void **extra, GucSource source);
@@ -2475,6 +2477,18 @@ static struct config_int ConfigureNamesInt[] =
 		&max_worker_processes,
 		8, 0, MAX_BACKENDS,
 		check_max_worker_processes, NULL, NULL
+	},
+
+	{
+		{"max_logical_replication_workers",
+			PGC_POSTMASTER,
+			RESOURCES_ASYNCHRONOUS,
+			gettext_noop("Maximum number of logical replication worker processes."),
+			NULL,
+		},
+		&max_logical_replication_workers,
+		4, 1, MAX_BACKENDS,
+		check_max_logical_replication_workers, NULL, NULL
 	},
 
 	{
@@ -10183,6 +10197,14 @@ static bool
 check_max_worker_processes(int *newval, void **extra, GucSource source)
 {
 	if (MaxConnections + autovacuum_max_workers + 1 + *newval > MAX_BACKENDS)
+		return false;
+	return true;
+}
+
+static bool
+check_max_logical_replication_workers(int *newval, void **extra, GucSource source)
+{
+	if (*newval > max_worker_processes)
 		return false;
 	return true;
 }

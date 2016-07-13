@@ -28,6 +28,7 @@ CREATE SUBSCRIPTION <replaceable class="PARAMETER">subscription_name</replaceabl
     CONNECTION 'conninfo'
     | PUBLICATION publication_name [, ...]
     | INITIALLY { ENABLED | DISABLED }
+    | CREATE_SLOT | NOCREATE_SLOT
 </synopsis>
  </refsynopsisdiv>
 
@@ -100,6 +101,21 @@ CREATE SUBSCRIPTION <replaceable class="PARAMETER">subscription_name</replaceabl
       if it should be just setup but not started yet.  Note that the
       replication slot as described above is created in either case.
       <literal>INITIALLY ENABLED</literal> is the default.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>CREATE_SLOT</term>
+    <term>NOCREATE_SLOT</term>
+    <listitem>
+     <para>
+      Specifies if the command should create the replication slot on the
+      publisher. When the slot is created the command will connect to
+      <replaceable class="parameter">conninfo</replaceable> immediately,
+      otherwise the <replaceable class="parameter">conninfo</replaceable>
+      is not used until the logical worker for the subscription has started.
+      <literal>CREATE_SLOT</literal> is the default.
      </para>
     </listitem>
    </varlistentry>
