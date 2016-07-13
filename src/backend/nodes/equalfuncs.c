@@ -2119,6 +2119,33 @@ _equalAlterTSConfigurationStmt(const AlterTSConfigurationStmt *a,
 }
 
 static bool
+_equalCreatePublicationStmt(const CreatePublicationStmt *a,
+							const CreatePublicationStmt *b)
+{
+	COMPARE_STRING_FIELD(pubname);
+	COMPARE_NODE_FIELD(options);
+	COMPARE_STRING_FIELD(schema);
+	COMPARE_NODE_FIELD(tables);
+	COMPARE_SCALAR_FIELD(for_all_tables);
+
+	return true;
+}
+
+static bool
+_equalAlterPublicationStmt(const AlterPublicationStmt *a,
+						   const AlterPublicationStmt *b)
+{
+	COMPARE_STRING_FIELD(pubname);
+	COMPARE_NODE_FIELD(options);
+	COMPARE_STRING_FIELD(schema);
+	COMPARE_NODE_FIELD(tables);
+	COMPARE_SCALAR_FIELD(for_all_tables);
+	COMPARE_SCALAR_FIELD(tableAction);
+
+	return true;
+}
+
+static bool
 _equalCreatePolicyStmt(const CreatePolicyStmt *a, const CreatePolicyStmt *b)
 {
 	COMPARE_STRING_FIELD(policy_name);
@@ -3266,6 +3293,12 @@ equal(const void *a, const void *b)
 			break;
 		case T_AlterPolicyStmt:
 			retval = _equalAlterPolicyStmt(a, b);
+			break;
+		case T_CreatePublicationStmt:
+			retval = _equalCreatePublicationStmt(a, b);
+			break;
+		case T_AlterPublicationStmt:
+			retval = _equalAlterPublicationStmt(a, b);
 			break;
 		case T_A_Expr:
 			retval = _equalAExpr(a, b);

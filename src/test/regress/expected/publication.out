@@ -1,0 +1,171 @@
+--
+-- PUBLICATION
+--
+CREATE PUBLICATION testpub_default;
+CREATE PUBLICATION testpib_ins_trunct WITH noreplicate_delete noreplicate_update;
+ALTER PUBLICATION testpub_default WITH noreplicate_insert noreplicate_delete;
+\dRp
+               List of publications
+        Name        | Inserts | Updates | Deletes 
+--------------------+---------+---------+---------
+ testpib_ins_trunct | t       | f       | f
+ testpub_default    | f       | t       | f
+(2 rows)
+
+ALTER PUBLICATION testpub_default WITH replicate_insert replicate_delete;
+\dRp
+               List of publications
+        Name        | Inserts | Updates | Deletes 
+--------------------+---------+---------+---------
+ testpib_ins_trunct | t       | f       | f
+ testpub_default    | t       | t       | t
+(2 rows)
+
+--- adding tables
+CREATE SCHEMA pub_test;
+CREATE TABLE testpub_tbl1 (id serial primary key, data text);
+CREATE TABLE pub_test.testpub_nopk (foo int, bar int);
+CREATE VIEW testpub_view AS SELECT 1;
+CREATE PUBLICATION testpub_foralltables FOR ALL TABLES noreplicate_delete noreplicate_update;
+-- fail - there is table with nopk
+ALTER PUBLICATION testpub_foralltables WITH replicate_update;
+ERROR:  publication testpub_foralltables cannot be altered to replicate UPDATEs or DELETEs because it contains tables without REPLICA IDENTITY index
+CREATE TABLE testpub_tbl2 (id serial primary key, data text);
+-- fail - already added
+ALTER PUBLICATION testpub_foralltables ADD TABLE testpub_tbl2;
+ERROR:  relation testpub_tbl2 is already member of publication testpub_foralltables
+-- fail - can't drop from all tables publication
+ALTER PUBLICATION testpub_foralltables DROP TABLE testpub_tbl2;
+ERROR:  tables cannot be dropped from FOR ALL TABLES publications
+DETAIL:  publication testpub_foralltables is defined as FOR ALL TABLES
+\d+ testpub_tbl2
+                                             Table "public.testpub_tbl2"
+ Column |  Type   |                         Modifiers                         | Storage  | Stats target | Description 
+--------+---------+-----------------------------------------------------------+----------+--------------+-------------
+ id     | integer | not null default nextval('testpub_tbl2_id_seq'::regclass) | plain    |              | 
+ data   | text    |                                                           | extended |              | 
+Indexes:
+    "testpub_tbl2_pkey" PRIMARY KEY, btree (id)
+Publications:
+    "testpub_foralltables"
+
+ALTER PUBLICATION testpub_foralltables SET TABLE pub_test.testpub_nopk;
+SELECT pubname, puballtables FROM pg_publication WHERE pubname = 'testpub_foralltables';
+       pubname        | puballtables 
+----------------------+--------------
+ testpub_foralltables | f
+(1 row)
+
+\d+ testpub_tbl2
+                                             Table "public.testpub_tbl2"
+ Column |  Type   |                         Modifiers                         | Storage  | Stats target | Description 
+--------+---------+-----------------------------------------------------------+----------+--------------+-------------
+ id     | integer | not null default nextval('testpub_tbl2_id_seq'::regclass) | plain    |              | 
+ data   | text    |                                                           | extended |              | 
+Indexes:
+    "testpub_tbl2_pkey" PRIMARY KEY, btree (id)
+
+DROP TABLE testpub_tbl2;
+DROP PUBLICATION testpub_foralltables;
+-- fail - view
+CREATE PUBLICATION testpub_fortbl FOR TABLE testpub_view;
+ERROR:  only tables can be added to publication
+DETAIL:  testpub_view is not a table
+-- fail - no pk
+CREATE PUBLICATION testpub_fortbl FOR TABLE testpub_tbl1, pub_test.testpub_nopk;
+ERROR:  table testpub_nopk cannot be added to publication testpub_fortbl
+DETAIL:  table does not have REPLICA IDENTITY index and given publication is configured to replicate UPDATEs and/or DELETEs
+HINT:  A PRIMARY KEY is used as REPLICA IDENTITY by default
+CREATE PUBLICATION testpub_fortbl FOR TABLE testpub_tbl1;
+\dRp+ testpub_fortbl
+ Publication testpub_fortbl
+ Inserts | Updates | Deletes 
+---------+---------+---------
+ t       | t       | t
+Tables:
+    "public.testpub_tbl1"
+
+-- fail - view
+ALTER PUBLICATION testpub_default ADD TABLE testpub_view;
+ERROR:  only tables can be added to publication
+DETAIL:  testpub_view is not a table
+-- fail - no pk
+ALTER PUBLICATION testpub_default ADD TABLE pub_test.testpub_nopk;
+ERROR:  table testpub_nopk cannot be added to publication testpub_default
+DETAIL:  table does not have REPLICA IDENTITY index and given publication is configured to replicate UPDATEs and/or DELETEs
+HINT:  A PRIMARY KEY is used as REPLICA IDENTITY by default
+-- fail - no pk
+ALTER PUBLICATION testpub_default SET TABLE pub_test.testpub_nopk;
+ERROR:  table testpub_nopk cannot be added to publication testpub_default
+DETAIL:  table does not have REPLICA IDENTITY index and given publication is configured to replicate UPDATEs and/or DELETEs
+HINT:  A PRIMARY KEY is used as REPLICA IDENTITY by default
+-- fail - no pk
+ALTER PUBLICATION testpub_default ADD TABLE ALL IN SCHEMA pub_test;
+ERROR:  table testpub_nopk cannot be added to publication testpub_default
+DETAIL:  table does not have REPLICA IDENTITY index and given publication is configured to replicate UPDATEs and/or DELETEs
+HINT:  A PRIMARY KEY is used as REPLICA IDENTITY by default
+-- fail - no pk
+ALTER PUBLICATION testpub_default SET TABLE ALL IN SCHEMA pub_test;
+ERROR:  table testpub_nopk cannot be added to publication testpub_default
+DETAIL:  table does not have REPLICA IDENTITY index and given publication is configured to replicate UPDATEs and/or DELETEs
+HINT:  A PRIMARY KEY is used as REPLICA IDENTITY by default
+ALTER PUBLICATION testpub_default ADD TABLE testpub_tbl1;
+ALTER PUBLICATION testpub_default SET TABLE testpub_tbl1;
+ALTER PUBLICATION testpub_default ADD TABLE pub_test.testpub_nopk;
+ERROR:  table testpub_nopk cannot be added to publication testpub_default
+DETAIL:  table does not have REPLICA IDENTITY index and given publication is configured to replicate UPDATEs and/or DELETEs
+HINT:  A PRIMARY KEY is used as REPLICA IDENTITY by default
+ALTER PUBLICATION testpib_ins_trunct ADD TABLE pub_test.testpub_nopk, testpub_tbl1;
+\d+ pub_test.testpub_nopk
+                    Table "pub_test.testpub_nopk"
+ Column |  Type   | Modifiers | Storage | Stats target | Description 
+--------+---------+-----------+---------+--------------+-------------
+ foo    | integer |           | plain   |              | 
+ bar    | integer |           | plain   |              | 
+Publications:
+    "testpib_ins_trunct"
+
+\d+ testpub_tbl1
+                                             Table "public.testpub_tbl1"
+ Column |  Type   |                         Modifiers                         | Storage  | Stats target | Description 
+--------+---------+-----------------------------------------------------------+----------+--------------+-------------
+ id     | integer | not null default nextval('testpub_tbl1_id_seq'::regclass) | plain    |              | 
+ data   | text    |                                                           | extended |              | 
+Indexes:
+    "testpub_tbl1_pkey" PRIMARY KEY, btree (id)
+Publications:
+    "testpib_ins_trunct"
+    "testpub_default"
+    "testpub_fortbl"
+
+-- fail
+ALTER TABLE testpub_tbl1 DROP CONSTRAINT testpub_tbl1_pkey RESTRICT;
+ERROR:  cannot drop constraint testpub_tbl1_pkey on table testpub_tbl1 because other objects depend on it
+DETAIL:  publication table testpub_tbl1 in publication testpub_fortbl depends on index testpub_tbl1_pkey
+publication table testpub_tbl1 in publication testpub_default depends on index testpub_tbl1_pkey
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+ALTER TABLE testpub_tbl1 DROP CONSTRAINT testpub_tbl1_pkey CASCADE;
+NOTICE:  drop cascades to 2 other objects
+DETAIL:  drop cascades to publication table testpub_tbl1 in publication testpub_fortbl
+drop cascades to publication table testpub_tbl1 in publication testpub_default
+-- fail nonexistent
+ALTER PUBLICATION testpub_default DROP TABLE testpub_tbl1, pub_test.testpub_nopk;
+ERROR:  relation "testpub_tbl1" is not part of the publication
+ALTER PUBLICATION testpub_default DROP TABLE pub_test.testpub_nopk;
+ERROR:  relation "testpub_nopk" is not part of the publication
+\d+ testpub_tbl1
+                                             Table "public.testpub_tbl1"
+ Column |  Type   |                         Modifiers                         | Storage  | Stats target | Description 
+--------+---------+-----------------------------------------------------------+----------+--------------+-------------
+ id     | integer | not null default nextval('testpub_tbl1_id_seq'::regclass) | plain    |              | 
+ data   | text    |                                                           | extended |              | 
+Publications:
+    "testpib_ins_trunct"
+
+DROP VIEW testpub_view;
+-- fail deps
+DROP TABLE testpub_tbl1;
+DROP PUBLICATION testpub_default;
+DROP PUBLICATION testpib_ins_trunct;
+DROP SCHEMA pub_test CASCADE;
+NOTICE:  drop cascades to table pub_test.testpub_nopk

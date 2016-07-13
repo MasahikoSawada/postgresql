@@ -2302,6 +2302,37 @@ describeOneTableDetails(const char *schemaname,
 			}
 			PQclear(result);
 		}
+
+		/* print any publications */
+		if (pset.sversion >= 100000)
+		{
+			printfPQExpBuffer(&buf,
+							  "SELECT pub.pubname\n"
+							  "FROM pg_catalog.pg_publication pub,\n"
+							  "     pg_publication_rel pr\n"
+							  "WHERE pr.relid = '%s' AND pr.pubid = pub.oid\n"
+							  "ORDER BY 1;",
+							  oid);
+
+			result = PSQLexec(buf.data);
+			if (!result)
+				goto error_return;
+			else
+				tuples = PQntuples(result);
+
+			if (tuples > 0)
+				printTableAddFooter(&cont, _("Publications:"));
+
+			/* Might be an empty set - that's ok */
+			for (i = 0; i < tuples; i++)
+			{
+				printfPQExpBuffer(&buf, "    \"%s\"",
+								  PQgetvalue(result, i, 0));
+
+				printTableAddFooter(&cont, buf.data);
+			}
+			PQclear(result);
+		}
 	}
 
 	if (view_def)
@@ -4730,6 +4761,191 @@ listOneExtensionContents(const char *extname, const char *oid)
 	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
 
 	PQclear(res);
+	return true;
+}
+
+/* \dRp
+ * Lists publications.
+ *
+ * Takes an optional regexp to select particular publications
+ */
+bool
+listPublications(const char *pattern)
+{
+	PQExpBufferData buf;
+	PGresult   *res;
+	printQueryOpt myopt = pset.popt;
+	static const bool translate_columns[] = {false, false, false, false};
+
+	if (pset.sversion < 100000)
+	{
+		char		sverbuf[32];
+		psql_error("The server (version %s) does not support publications.\n",
+				   formatPGVersionNumber(pset.sversion, false,
+										 sverbuf, sizeof(sverbuf)));
+		return true;
+	}
+
+	initPQExpBuffer(&buf);
+
+	printfPQExpBuffer(&buf,
+					  "SELECT pubname AS \"%s\",\n"
+					  "  pubreplins AS \"%s\",\n"
+					  "  pubreplupd AS \"%s\",\n"
+					  "  pubrepldel AS \"%s\"\n",
+					  gettext_noop("Name"),
+					  gettext_noop("Inserts"),
+					  gettext_noop("Updates"),
+					  gettext_noop("Deletes"));
+
+	appendPQExpBufferStr(&buf,
+						 "\nFROM pg_catalog.pg_publication\n");
+
+	processSQLNamePattern(pset.db, &buf, pattern, false, false,
+						  NULL, "pubname", NULL,
+						  NULL);
+
+	appendPQExpBufferStr(&buf, "ORDER BY 1;");
+
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+
+	myopt.nullPrint = NULL;
+	myopt.title = _("List of publications");
+	myopt.translate_header = true;
+	myopt.translate_columns = translate_columns;
+	myopt.n_translate_columns = lengthof(translate_columns);
+
+	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+
+	PQclear(res);
+
+	return true;
+}
+
+/* \dRp+
+ * Describes publications including the contents.
+ *
+ * Takes an optional regexp to select particular publications
+ */
+bool
+describePublications(const char *pattern)
+{
+	PQExpBufferData buf;
+	int				i;
+	PGresult	   *res;
+
+	if (pset.sversion < 100000)
+	{
+		char		sverbuf[32];
+		psql_error("The server (version %s) does not support publications.\n",
+				   formatPGVersionNumber(pset.sversion, false,
+										 sverbuf, sizeof(sverbuf)));
+		return true;
+	}
+
+	initPQExpBuffer(&buf);
+
+	printfPQExpBuffer(&buf,
+					  "SELECT oid, pubname, puballtables, pubreplins,\n"
+					  "  pubreplupd, pubrepldel\n"
+					  "FROM pg_catalog.pg_publication\n");
+
+	processSQLNamePattern(pset.db, &buf, pattern, false, false,
+						  NULL, "pubname", NULL,
+						  NULL);
+
+	appendPQExpBufferStr(&buf, "ORDER BY 1;");
+
+	res = PSQLexec(buf.data);
+	if (!res)
+	{
+		termPQExpBuffer(&buf);
+		return false;
+	}
+
+	for (i = 0; i < PQntuples(res); i++)
+	{
+		const char	align = 'l';
+		int			ncols = 3;
+		int			nrows = 1;
+		int			tables = 0;
+		PGresult   *tabres;
+		char	   *pubid = PQgetvalue(res, i, 0);
+		char	   *pubname = PQgetvalue(res, i, 1);
+		bool		puballtables = strcmp(PQgetvalue(res, i, 2), "t") == 0;
+		int			j;
+		PQExpBufferData title;
+		printTableOpt myopt = pset.popt.topt;
+		printTableContent cont;
+
+		initPQExpBuffer(&title);
+		printfPQExpBuffer(&title, _("Publication %s"), pubname);
+		printTableInit(&cont, &myopt, title.data, ncols, nrows);
+
+		printTableAddHeader(&cont, gettext_noop("Inserts"), true, align);
+		printTableAddHeader(&cont, gettext_noop("Updates"), true, align);
+		printTableAddHeader(&cont, gettext_noop("Deletes"), true, align);
+
+		printTableAddCell(&cont, PQgetvalue(res, i, 3), false, false);
+		printTableAddCell(&cont, PQgetvalue(res, i, 4), false, false);
+		printTableAddCell(&cont, PQgetvalue(res, i, 5), false, false);
+
+		if (puballtables)
+			printfPQExpBuffer(&buf,
+							  "SELECT n.nspname, c.relname\n"
+							  "FROM pg_catalog.pg_class c,\n"
+							  "     pg_catalog.pg_namespace n\n"
+							  "WHERE c.relnamespace = n.oid\n"
+							  "  AND c.relkind = 'r'\n"
+							  "  AND n.nspname <> 'pg_catalog'\n"
+							  "  AND n.nspname <> 'information_schema'");
+		else
+			printfPQExpBuffer(&buf,
+							  "SELECT n.nspname, c.relname\n"
+							  "FROM pg_catalog.pg_class c,\n"
+							  "     pg_catalog.pg_namespace n,\n"
+							  "     pg_catalog.pg_publication_rel r\n"
+							  "WHERE c.relnamespace = n.oid\n"
+							  "  AND c.oid = r.relid\n"
+							  "  AND r.pubid = '%s'", pubid);
+
+		tabres = PSQLexec(buf.data);
+		if (!tabres)
+		{
+			printTableCleanup(&cont);
+			PQclear(res);
+			termPQExpBuffer(&buf);
+			termPQExpBuffer(&title);
+			return false;
+		}
+		else
+			tables = PQntuples(tabres);
+
+		if (tables > 0)
+			printTableAddFooter(&cont, _("Tables:"));
+
+		for (j = 0; j < tables; j++)
+		{
+			printfPQExpBuffer(&buf, "    \"%s.%s\"",
+							  PQgetvalue(tabres, j, 0),
+							  PQgetvalue(tabres, j, 1));
+
+			printTableAddFooter(&cont, buf.data);
+		}
+		PQclear(tabres);
+
+		printTable(&cont, pset.queryFout, false, pset.logfile);
+		printTableCleanup(&cont);
+
+		termPQExpBuffer(&title);
+	}
+
+	termPQExpBuffer(&buf);
+	PQclear(res);
+
 	return true;
 }
 

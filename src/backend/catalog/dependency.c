@@ -48,6 +48,8 @@
 #include "catalog/pg_opfamily.h"
 #include "catalog/pg_policy.h"
 #include "catalog/pg_proc.h"
+#include "catalog/pg_publication.h"
+#include "catalog/pg_publication_rel.h"
 #include "catalog/pg_rewrite.h"
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_transform.h"
@@ -64,6 +66,7 @@
 #include "commands/extension.h"
 #include "commands/policy.h"
 #include "commands/proclang.h"
+#include "commands/replicationcmds.h"
 #include "commands/schemacmds.h"
 #include "commands/seclabel.h"
 #include "commands/trigger.h"
@@ -163,6 +166,8 @@ static const Oid object_classes[] = {
 	ExtensionRelationId,		/* OCLASS_EXTENSION */
 	EventTriggerRelationId,		/* OCLASS_EVENT_TRIGGER */
 	PolicyRelationId,			/* OCLASS_POLICY */
+	PublicationRelationId,		/* OCLASS_PUBCLICATION */
+	PublicationRelRelationId,	/* OCLASS_PUBCLICATION_REL */
 	TransformRelationId			/* OCLASS_TRANSFORM */
 };
 
@@ -1277,6 +1282,14 @@ doDeletion(const ObjectAddress *object, int flags)
 
 		case OCLASS_POLICY:
 			RemovePolicyById(object->objectId);
+			break;
+
+		case OCLASS_PUBLICATION:
+			DropPublicationById(object->objectId);
+			break;
+
+		case OCLASS_PUBLICATION_REL:
+			RemovePublicationRelById(object->objectId);
 			break;
 
 		case OCLASS_TRANSFORM:
@@ -2435,6 +2448,12 @@ getObjectClass(const ObjectAddress *object)
 
 		case PolicyRelationId:
 			return OCLASS_POLICY;
+
+		case PublicationRelationId:
+			return OCLASS_PUBLICATION;
+
+		case PublicationRelRelationId:
+			return OCLASS_PUBLICATION_REL;
 
 		case TransformRelationId:
 			return OCLASS_TRANSFORM;

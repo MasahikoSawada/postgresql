@@ -501,6 +501,18 @@ exec_command(const char *cmd,
 				else
 					success = PSQL_CMD_UNKNOWN;
 				break;
+			case 'R':
+				if (cmd[2] == 'p')
+				{
+					if (show_verbose)
+						success = describePublications(pattern);
+					else
+						success = listPublications(pattern);
+					break;
+				}
+				else
+					status = PSQL_CMD_UNKNOWN;
+				break;
 			case 'u':
 				success = describeRoles(pattern, show_verbose, show_system);
 				break;

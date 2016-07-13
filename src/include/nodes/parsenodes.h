@@ -1410,6 +1410,8 @@ typedef enum ObjectType
 	OBJECT_OPERATOR,
 	OBJECT_OPFAMILY,
 	OBJECT_POLICY,
+	OBJECT_PUBLICATION,
+	OBJECT_PUBLICATION_REL,
 	OBJECT_ROLE,
 	OBJECT_RULE,
 	OBJECT_SCHEMA,
@@ -3103,5 +3105,31 @@ typedef struct AlterTSConfigurationStmt
 	bool		replace;		/* if true - replace dictionary by another */
 	bool		missing_ok;		/* for DROP - skip error if missing? */
 } AlterTSConfigurationStmt;
+
+
+typedef struct CreatePublicationStmt
+{
+	NodeTag		type;
+	char	   *pubname;		/* Name of of the publication */
+	List	   *options;		/* List of DefElem nodes */
+	char	   *schema;			/* ALL IN SCHEMA ... */
+	List	   *tables;			/* Optional list of tables to add */
+	bool		for_all_tables;	/* Special publication for all tables in db */
+} CreatePublicationStmt;
+
+typedef struct AlterPublicationStmt
+{
+	NodeTag		type;
+	char	   *pubname;		/* Name of of the publication */
+
+	/* parameters used for ALTER PUBLICATION ... WITH */
+	List	   *options;		/* List of DefElem nodes */
+
+	/* parameters used for ALTER PUBLICATION ... ADD/DROP TABLE */
+	char	   *schema;			/* ALL IN SCHEMA ... */
+	List	   *tables;			/* List of tables to add/drop */
+	bool		for_all_tables;	/* Special publication for all tables in db */
+	DefElemAction	tableAction; /* What action to perform with the tables */
+} AlterPublicationStmt;
 
 #endif   /* PARSENODES_H */

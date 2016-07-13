@@ -319,6 +319,18 @@ DECLARE_UNIQUE_INDEX(pg_replication_origin_roiident_index, 6001, on pg_replicati
 DECLARE_UNIQUE_INDEX(pg_replication_origin_roname_index, 6002, on pg_replication_origin using btree(roname text_pattern_ops));
 #define ReplicationOriginNameIndex 6002
 
+DECLARE_UNIQUE_INDEX(pg_publication_oid_index, 6110, on pg_publication using btree(oid oid_ops));
+#define PublicationObjectIndexId 6110
+
+DECLARE_UNIQUE_INDEX(pg_publication_pubname_index, 6111, on pg_publication using btree(pubname name_ops));
+#define PublicationNameIndexId 6111
+
+DECLARE_UNIQUE_INDEX(pg_publication_rel_object_index, 6112, on pg_publication_rel using btree(oid oid_ops));
+#define PublicationRelObjectIndexId 6112
+
+DECLARE_UNIQUE_INDEX(pg_publication_rel_map_index, 6113, on pg_publication_rel using btree(relid oid_ops, pubid oid_ops));
+#define PublicationRelMapIndexId 6113
+
 /* last step of initialization script: build the indexes declared above */
 BUILD_INDICES
 

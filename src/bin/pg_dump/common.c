@@ -273,6 +273,14 @@ getSchemaData(Archive *fout, int *numTablesPtr)
 		write_msg(NULL, "reading policies\n");
 	getPolicies(fout, tblinfo, numTables);
 
+	if (g_verbose)
+		write_msg(NULL, "reading publications\n");
+	getPublications(fout);
+
+	if (g_verbose)
+		write_msg(NULL, "reading publication membership\n");
+	getPublicationTables(fout, tblinfo, numTables);
+
 	*numTablesPtr = numTables;
 	return tblinfo;
 }

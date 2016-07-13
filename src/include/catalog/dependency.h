@@ -161,6 +161,8 @@ typedef enum ObjectClass
 	OCLASS_EXTENSION,			/* pg_extension */
 	OCLASS_EVENT_TRIGGER,		/* pg_event_trigger */
 	OCLASS_POLICY,				/* pg_policy */
+	OCLASS_PUBLICATION,			/* pg_publication */
+	OCLASS_PUBLICATION_REL,		/* pg_publication_rel */
 	OCLASS_TRANSFORM			/* pg_transform */
 } ObjectClass;
 
@@ -225,6 +227,10 @@ extern long deleteDependencyRecordsFor(Oid classId, Oid objectId,
 
 extern long deleteDependencyRecordsForClass(Oid classId, Oid objectId,
 								Oid refclassId, char deptype);
+
+extern long deleteDependencyOn(const ObjectAddress *depender,
+				   const ObjectAddress *referenced,
+				   DependencyType deptype);
 
 extern long changeDependencyFor(Oid classId, Oid objectId,
 					Oid refClassId, Oid oldRefObjectId,

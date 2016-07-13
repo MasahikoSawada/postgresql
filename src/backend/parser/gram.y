@@ -268,6 +268,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		DropOwnedStmt ReassignOwnedStmt
 		AlterTSConfigurationStmt AlterTSDictionaryStmt
 		CreateMatViewStmt RefreshMatViewStmt CreateAmStmt
+		CreatePublicationStmt AlterPublicationStmt
 
 %type <node>	select_no_parens select_with_parens select_clause
 				simple_select values_clause
@@ -374,13 +375,15 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				create_generic_options alter_generic_options
 				relation_expr_list dostmt_opt_list
 				transform_element_list transform_type_list
+				publication_opt_list publication_opt_items
 
 %type <list>	group_by_list
 %type <node>	group_by_item empty_grouping_set rollup_clause cube_clause
 %type <node>	grouping_sets_clause
+%type <node>    opt_publication_for_tables publication_for_tables
 
 %type <list>	opt_fdw_options fdw_options
-%type <defelt>	fdw_option
+%type <defelt>	fdw_option publication_opt_item
 
 %type <range>	OptTempTableName
 %type <into>	into_clause create_as_target create_mv_target
@@ -619,7 +622,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 	PARALLEL PARSER PARTIAL PARTITION PASSING PASSWORD PLACING PLANS POLICY
 	POSITION PRECEDING PRECISION PRESERVE PREPARE PREPARED PRIMARY
-	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROGRAM
+	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROGRAM PUBLICATION
 
 	QUOTE
 
@@ -780,6 +783,7 @@ stmt :
 			| AlterTableStmt
 			| AlterTblSpcStmt
 			| AlterCompositeTypeStmt
+			| AlterPublicationStmt
 			| AlterRoleSetStmt
 			| AlterRoleStmt
 			| AlterTSConfigurationStmt
@@ -809,6 +813,7 @@ stmt :
 			| CreateMatViewStmt
 			| CreateOpClassStmt
 			| CreateOpFamilyStmt
+			| CreatePublicationStmt
 			| AlterOpFamilyStmt
 			| CreatePolicyStmt
 			| CreatePLangStmt
@@ -5659,6 +5664,7 @@ drop_type:	TABLE									{ $$ = OBJECT_TABLE; }
 			| TEXT_P SEARCH DICTIONARY				{ $$ = OBJECT_TSDICTIONARY; }
 			| TEXT_P SEARCH TEMPLATE				{ $$ = OBJECT_TSTEMPLATE; }
 			| TEXT_P SEARCH CONFIGURATION			{ $$ = OBJECT_TSCONFIGURATION; }
+			| PUBLICATION							{ $$ = OBJECT_PUBLICATION; }
 		;
 
 any_name_list:
@@ -8511,6 +8517,160 @@ AlterOwnerStmt: ALTER AGGREGATE func_name aggr_args OWNER TO RoleSpec
 				}
 		;
 
+
+/*****************************************************************************
+ *
+ * CREATE PUBLICATION name [ WITH options ]
+ *
+ *****************************************************************************/
+
+CreatePublicationStmt:
+			CREATE PUBLICATION name opt_publication_for_tables opt_with publication_opt_list
+				{
+					CreatePublicationStmt *n = makeNode(CreatePublicationStmt);
+					n->pubname = $3;
+					n->options = $6;
+					if ($4 != NULL)
+					{
+						/* FOR TABLE */
+						if (IsA($4, List))
+							n->tables = (List *)$4;
+						/* FOR TABLE ALL IN_P SCHEMA */
+						else if (IsA($4, String))
+							n->schema = strVal($4);
+						/* FOR ALL TABLES */
+						else
+							n->for_all_tables = TRUE;
+					}
+					$$ = (Node *)n;
+				}
+		;
+
+opt_publication_for_tables:
+			publication_for_tables					{ $$ = $1; }
+			| /* EMPTY */							{ $$ = NULL; }
+		;
+
+publication_for_tables:
+			FOR TABLE relation_expr_list
+				{
+					$$ = (Node *) $3;
+				}
+			| FOR TABLE ALL IN_P SCHEMA name
+				{
+					$$ = (Node *) makeString($6);
+				}
+			| FOR ALL TABLES
+				{
+					$$ = (Node *) makeInteger(TRUE);
+				}
+		;
+
+publication_opt_list:
+			publication_opt_items					{ $$ = $1; }
+			| /* EMPTY */							{ $$ = NIL; }
+		;
+
+publication_opt_items:
+			publication_opt_item							{ $$ = list_make1($1); }
+			| publication_opt_items publication_opt_item	{ $$ = lappend($1, $2); }
+		;
+
+publication_opt_item:
+			IDENT
+				{
+					/*
+					 * We handle identifiers that aren't parser keywords with
+					 * the following special-case codes, to avoid bloating the
+					 * size of the main parser.
+					 */
+					if (strcmp($1, "replicate_insert") == 0)
+						$$ = makeDefElem("replicate_insert",
+										 (Node *)makeInteger(TRUE), @1);
+					else if (strcmp($1, "noreplicate_insert") == 0)
+						$$ = makeDefElem("replicate_insert",
+										 (Node *)makeInteger(FALSE), @1);
+					else if (strcmp($1, "replicate_update") == 0)
+						$$ = makeDefElem("replicate_update",
+										 (Node *)makeInteger(TRUE), @1);
+					else if (strcmp($1, "noreplicate_update") == 0)
+						$$ = makeDefElem("replicate_update",
+										 (Node *)makeInteger(FALSE), @1);
+					else if (strcmp($1, "replicate_delete") == 0)
+						$$ = makeDefElem("replicate_delete",
+										 (Node *)makeInteger(TRUE), @1);
+					else if (strcmp($1, "noreplicate_delete") == 0)
+						$$ = makeDefElem("replicate_delete",
+										 (Node *)makeInteger(FALSE), @1);
+					else
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("unrecognized publication option \"%s\"", $1),
+									 parser_errposition(@1)));
+				}
+		;
+
+/*****************************************************************************
+ *
+ * ALTER PUBLICATION name [ WITH ] options
+ *
+ * ALTER PUBLICATION name ADD TABLE table [, table2]
+ *
+ * ALTER PUBLICATION name DROP TABLE table [, table2]
+ *
+ * ALTER PUBLICATION name SET TABLE table [, table2]
+ *
+ *****************************************************************************/
+
+AlterPublicationStmt:
+			ALTER PUBLICATION name opt_with publication_opt_items
+				{
+					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
+					n->pubname = $3;
+					n->options = $5;
+					$$ = (Node *)n;
+				}
+			| ALTER PUBLICATION name ADD_P TABLE relation_expr_list
+				{
+					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
+					n->pubname = $3;
+					n->tables = $6;
+					n->tableAction = DEFELEM_ADD;
+					$$ = (Node *)n;
+				}
+			| ALTER PUBLICATION name ADD_P TABLE ALL IN_P SCHEMA name
+				{
+					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
+					n->pubname = $3;
+					n->schema = $9;
+					n->tableAction = DEFELEM_ADD;
+					$$ = (Node *)n;
+				}
+			| ALTER PUBLICATION name SET TABLE relation_expr_list
+				{
+					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
+					n->pubname = $3;
+					n->tables = $6;
+					n->tableAction = DEFELEM_SET;
+					$$ = (Node *)n;
+				}
+			| ALTER PUBLICATION name SET TABLE ALL IN_P SCHEMA name
+				{
+					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
+					n->pubname = $3;
+					n->schema = $9;
+					n->tableAction = DEFELEM_SET;
+					$$ = (Node *)n;
+				}
+			| ALTER PUBLICATION name DROP TABLE relation_expr_list
+				{
+					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
+					n->pubname = $3;
+					n->tables = $6;
+					n->tableAction = DEFELEM_DROP;
+					$$ = (Node *)n;
+				}
+		;
 
 /*****************************************************************************
  *
@@ -13835,6 +13995,7 @@ unreserved_keyword:
 			| PROCEDURAL
 			| PROCEDURE
 			| PROGRAM
+			| PUBLICATION
 			| QUOTE
 			| RANGE
 			| READ

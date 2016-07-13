@@ -39,6 +39,7 @@
 #include "catalog/pg_inherits_fn.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
+#include "catalog/pg_publication.h"
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
@@ -711,6 +712,25 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 								  true, true, false);
 
 	ObjectAddressSet(address, RelationRelationId, relationId);
+
+	/*
+	 * If the newly created relation is a table and there are publications
+	 * which were created as FOR ALL TABLES, we want to add the relation
+	 * membership to those publications.
+	 */
+
+	if (relkind == RELKIND_RELATION)
+	{
+		List	   *pubids = GetAllTablesPublications();
+		ListCell   *lc;
+
+		foreach(lc, pubids)
+		{
+			Oid	pubid = lfirst_oid(lc);
+
+			publication_add_relation(pubid, rel, false);
+		}
+	}
 
 	/*
 	 * Clean up.  We keep lock on new relation (although it shouldn't be

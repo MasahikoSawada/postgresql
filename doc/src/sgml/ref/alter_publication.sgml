@@ -1,0 +1,163 @@
+<!--
+doc/src/sgml/ref/alter_publication.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="SQL-ALTERPUBLICATION">
+ <indexterm zone="sql-alterpublication">
+  <primary>ALTER PUBLICATION</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>ALTER PUBLICATION</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>ALTER PUBLICATION</refname>
+  <refpurpose>change the definition of a publication</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+ALTER PUBLICATION <replaceable class="PARAMETER">name</replaceable> [ [ WITH ] <replaceable class="PARAMETER">option</replaceable> [ ... ] ]
+
+<phrase>where <replaceable class="PARAMETER">option</replaceable> can be:</phrase>
+
+      REPLICATE_INSERT | NOREPLICATE_INSERT
+    | REPLICATE_UPDATE | NOREPLICATE_UPDATE
+    | REPLICATE_DELETE | NOREPLICATE_DELETE
+
+ALTER PUBLICATION <replaceable class="PARAMETER">name</replaceable> ADD TABLE <replaceable class="PARAMETER">table_name</replaceable> [, ...]
+ALTER PUBLICATION <replaceable class="PARAMETER">name</replaceable> ADD TABLE ALL IN SCHEMA <replaceable class="PARAMETER">schema_name</replaceable>
+ALTER PUBLICATION <replaceable class="PARAMETER">name</replaceable> SET TABLE <replaceable class="PARAMETER">table_name</replaceable> [, ...]
+ALTER PUBLICATION <replaceable class="PARAMETER">name</replaceable> SET TABLE ALL IN SCHEMA <replaceable class="PARAMETER">schema_name</replaceable>
+ALTER PUBLICATION <replaceable class="PARAMETER">name</replaceable> DROP TABLE <replaceable class="PARAMETER">table_name</replaceable> [, ...]
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   The first variant of this command listed in the synopsis can change
+   all of the publication attributes specified in
+   <xref linkend="sql-createpublication">.
+   Attributes not mentioned in the command retain their previous settings.
+   Database superusers can change any of these settings for any role.
+  </para>
+
+  <para>
+   The other variants of this command deal with table membership in the
+   publication. The <literal>FOR TABLE</literal> subcommand will replace
+   or more tables to the publication. If the optional
+   <literal>ALL IN SCHEMA</literal> is specified all tables in that schema
+   will be added. The <literal>ALL IN SCHEMA</literal> variant of this
+   command will not complain about tables that are already present in the
+   publication, it only adds the missing ones.
+   The <literal>SET TABLE</literal> subscommand will replace
+   the current list of tables in the publication with the specified one.
+   The <literal>DROP TABLE</literal> will remove one or more table from
+   publication.
+  </para>
+
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><replaceable class="parameter">name</replaceable></term>
+    <listitem>
+     <para>
+      The name of an existing publication whose attributes are to be
+      altered.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>REPLICATE_INSERT</literal></term>
+    <term><literal>NOREPLICATE_INSERT</literal></term>
+    <term><literal>REPLICATE_UPDATE</literal></term>
+    <term><literal>NOREPLICATE_UPDATE</literal></term>
+    <term><literal>REPLICATE_DELETE</literal></term>
+    <term><literal>NOREPLICATE_DELETE</literal></term>
+    <listitem>
+     <para>
+      These clauses alter attributes originally set by
+      <xref linkend="SQL-CREATEPUBLICATION">. For more information, see the
+      <command>CREATE PUBLICATION</command> reference page.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">table_name</replaceable></term>
+    <listitem>
+     <para>
+      Name of an existing table.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">schema_name</replaceable></term>
+    <listitem>
+     <para>
+      Name of a schema.
+     </para>
+    </listitem>
+   </varlistentry>
+
+  </variablelist>
+ </refsect1>
+
+ <refsect1>
+  <title>Examples</title>
+
+  <para>
+   Change the publication to not replicate inserts:
+<programlisting>
+ALTER PUBLICATION noinsert NOREPLICATE_INSERT;
+</programlisting>
+  </para>
+
+  <para>
+   Add some tables to the publication:
+<programlisting>
+ALTER PUBLICATION mypublication ADD TABLE users, departments;
+</programlisting>
+  </para>
+
+  <para>
+   Add all tables from public schema to the publication:
+<programlisting>
+ALTER PUBLICATION mypublication ADD TABLE ALL IN SCHEMA public;
+</programlisting>
+  </para>
+
+ </refsect1>
+
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   <command>ALTER PUBLICATION</command> is a <productname>PostgreSQL</>
+   extension.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-createpublication"></member>
+   <member><xref linkend="sql-droppublication"></member>
+   <member><xref linkend="sql-createsubscription"></member>
+  </simplelist>
+ </refsect1>
+
+</refentry>

@@ -102,4 +102,10 @@ extern bool listExtensionContents(const char *pattern);
 /* \dy */
 extern bool listEventTriggers(const char *pattern, bool verbose);
 
+/* \dRp */
+bool listPublications(const char *pattern);
+
+/* \dRp+ */
+bool describePublications(const char *pattern);
+
 #endif   /* DESCRIBE_H */

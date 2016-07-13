@@ -245,6 +245,8 @@ static void getBlobs(Archive *fout);
 static void dumpBlob(Archive *fout, BlobInfo *binfo);
 static int	dumpBlobs(Archive *fout, void *arg);
 static void dumpPolicy(Archive *fout, PolicyInfo *polinfo);
+static void dumpPublication(Archive *fout, PublicationInfo *pubinfo);
+static void dumpPublicationTable(Archive *fout, PublicationRelInfo *pubrinfo);
 static void dumpDatabase(Archive *AH);
 static void dumpEncoding(Archive *AH);
 static void dumpStdStrings(Archive *AH);
@@ -3323,6 +3325,272 @@ dumpPolicy(Archive *fout, PolicyInfo *polinfo)
 	free(tag);
 	destroyPQExpBuffer(query);
 	destroyPQExpBuffer(delqry);
+}
+
+/*
+ * getPublications
+ *	  get information about publications
+ */
+void
+getPublications(Archive *fout)
+{
+	PQExpBuffer query;
+	PGresult   *res;
+	PublicationInfo *pubinfo;
+	int			i_tableoid;
+	int			i_oid;
+	int			i_pubname;
+	int			i_puballtables;
+	int			i_pubreplins;
+	int			i_pubreplupd;
+	int			i_pubrepldel;
+	int			i,
+				ntups;
+
+	if (fout->remoteVersion < 100000)
+		return;
+
+	query = createPQExpBuffer();
+
+	if (g_verbose)
+		write_msg(NULL, "reading publications\n");
+
+	resetPQExpBuffer(query);
+
+	/* Get the publications. */
+	appendPQExpBuffer(query,
+					  "SELECT p.tableoid, p.oid, p.pubname, p.puballtables, "
+					  "p.pubreplins, p.pubreplupd, p.pubrepldel "
+					  "FROM pg_catalog.pg_publication p");
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+	ntups = PQntuples(res);
+
+	if (ntups == 0)
+	{
+		/*
+		 * There are no publications defined. Clean up and return.
+		 */
+		PQclear(res);
+		return;
+	}
+
+	i_tableoid = PQfnumber(res, "tableoid");
+	i_oid = PQfnumber(res, "oid");
+	i_pubname = PQfnumber(res, "pubname");
+	i_puballtables = PQfnumber(res, "puballtables");
+	i_pubreplins = PQfnumber(res, "pubreplins");
+	i_pubreplupd = PQfnumber(res, "pubreplupd");
+	i_pubrepldel = PQfnumber(res, "pubrepldel");
+
+	pubinfo = pg_malloc(ntups * sizeof(PublicationInfo));
+
+	for (i = 0; i < ntups; i++)
+	{
+		pubinfo[i].dobj.objType = DO_PUBLICATION;
+		pubinfo[i].dobj.catId.tableoid =
+			atooid(PQgetvalue(res, i, i_tableoid));
+		pubinfo[i].dobj.catId.oid = atooid(PQgetvalue(res, i, i_oid));
+		AssignDumpId(&pubinfo[i].dobj);
+		pubinfo[i].dobj.name = pg_strdup(PQgetvalue(res, i, i_pubname));
+		pubinfo[i].puballtables =
+			(strcmp(PQgetvalue(res, i, i_puballtables), "t") == 0);
+		pubinfo[i].pubreplins =
+			(strcmp(PQgetvalue(res, i, i_pubreplins), "t") == 0);
+		pubinfo[i].pubreplupd =
+			(strcmp(PQgetvalue(res, i, i_pubreplupd), "t") == 0);
+		pubinfo[i].pubrepldel =
+			(strcmp(PQgetvalue(res, i, i_pubrepldel), "t") == 0);
+	}
+	PQclear(res);
+
+	destroyPQExpBuffer(query);
+}
+
+/*
+ * dumpPublication
+ *	  dump the definition of the given publication
+ */
+static void
+dumpPublication(Archive *fout, PublicationInfo *pubinfo)
+{
+	DumpOptions *dopt = fout->dopt;
+	PQExpBuffer delq;
+	PQExpBuffer query;
+
+	if (dopt->dataOnly)
+		return;
+
+	delq = createPQExpBuffer();
+	query = createPQExpBuffer();
+
+	appendPQExpBuffer(delq, "DROP PUBLICATION %s;\n",
+					  fmtId(pubinfo->dobj.name));
+
+	appendPQExpBuffer(query, "CREATE PUBLICATION %s",
+					  fmtId(pubinfo->dobj.name));
+
+	if (pubinfo->puballtables)
+		appendPQExpBufferStr(query, " FOR ALL TABLES");
+
+	if (pubinfo->pubreplins)
+		appendPQExpBufferStr(query, " REPLICATE_INSERT");
+	else
+		appendPQExpBufferStr(query, " NOREPLICATE_INSERT");
+
+	if (pubinfo->pubreplupd)
+		appendPQExpBufferStr(query, " REPLICATE_UPDATE");
+	else
+		appendPQExpBufferStr(query, " NOREPLICATE_UPDATE");
+
+	if (pubinfo->pubrepldel)
+		appendPQExpBufferStr(query, " REPLICATE_DELETE");
+	else
+		appendPQExpBufferStr(query, " NOREPLICATE_DELETE");
+
+	appendPQExpBufferStr(query, ";\n");
+
+	ArchiveEntry(fout, pubinfo->dobj.catId, pubinfo->dobj.dumpId,
+				 pubinfo->dobj.name,
+				 NULL,
+				 NULL,
+				 "", false,
+				 "PUBLICATION", SECTION_POST_DATA,
+				 query->data, delq->data, NULL,
+				 NULL, 0,
+				 NULL, NULL);
+
+	destroyPQExpBuffer(delq);
+	destroyPQExpBuffer(query);
+}
+
+/*
+ * getPublicationTables
+ *	  get information about publication membership for dumpable tables.
+ */
+void
+getPublicationTables(Archive *fout, TableInfo tblinfo[], int numTables)
+{
+	PQExpBuffer query;
+	PGresult   *res;
+	PublicationRelInfo *pubrinfo;
+	int			i_tableoid;
+	int			i_oid;
+	int			i_pubname;
+	int			i,
+				j,
+				ntups;
+
+	if (fout->remoteVersion < 100000)
+		return;
+
+	query = createPQExpBuffer();
+
+	for (i = 0; i < numTables; i++)
+	{
+		TableInfo  *tbinfo = &tblinfo[i];
+
+		/* Only plain tables can be aded to publications. */
+		if (tbinfo->relkind != RELKIND_RELATION)
+			continue;
+
+		/*
+		 * Ignore publication membership of tables whose definitions are
+		 * not to be dumped.
+		 */
+		if (!(tbinfo->dobj.dump & DUMP_COMPONENT_DEFINITION))
+			continue;
+
+		if (g_verbose)
+			write_msg(NULL, "reading publication membership for table \"%s.%s\"\n",
+					  tbinfo->dobj.namespace->dobj.name,
+					  tbinfo->dobj.name);
+
+		resetPQExpBuffer(query);
+
+		/* Get the publication memebership for the table. */
+		appendPQExpBuffer(query,
+						  "SELECT pr.tableoid, pr.oid, p.pubname "
+						  "FROM pg_catalog.pg_publication_rel pr,"
+						  "     pg_catalog.pg_publication p "
+						  "WHERE pr.relid = '%u'"
+						  "  AND p.oid = pr.pubid",
+						  tbinfo->dobj.catId.oid);
+		res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+		ntups = PQntuples(res);
+
+		if (ntups == 0)
+		{
+			/*
+			 * Table is not member of any publications. Clean up and return.
+			 */
+			PQclear(res);
+			continue;
+		}
+
+		i_tableoid = PQfnumber(res, "tableoid");
+		i_oid = PQfnumber(res, "oid");
+		i_pubname = PQfnumber(res, "pubname");
+
+		pubrinfo = pg_malloc(ntups * sizeof(PublicationRelInfo));
+
+		for (j = 0; j < ntups; j++)
+		{
+			pubrinfo[j].dobj.objType = DO_PUBLICATION_REL;
+			pubrinfo[j].dobj.catId.tableoid =
+				atooid(PQgetvalue(res, j, i_tableoid));
+			pubrinfo[j].dobj.catId.oid = atooid(PQgetvalue(res, j, i_oid));
+			AssignDumpId(&pubrinfo[j].dobj);
+			pubrinfo[j].dobj.namespace = tbinfo->dobj.namespace;
+			pubrinfo[j].pubname = pg_strdup(PQgetvalue(res, j, i_pubname));
+			pubrinfo[j].pubtable = tbinfo;
+		}
+		PQclear(res);
+	}
+	destroyPQExpBuffer(query);
+}
+
+/*
+ * dumpPublicationTable
+ *	  dump the definition of the given publication table mapping
+ */
+static void
+dumpPublicationTable(Archive *fout, PublicationRelInfo *pubrinfo)
+{
+	DumpOptions *dopt = fout->dopt;
+	TableInfo  *tbinfo = pubrinfo->pubtable;
+	PQExpBuffer query;
+	char	   *tag;
+
+	if (dopt->dataOnly)
+		return;
+
+	tag = psprintf("%s %s", pubrinfo->pubname, tbinfo->dobj.name);
+
+	query = createPQExpBuffer();
+
+	appendPQExpBuffer(query, "ALTER PUBLICATION %s ADD TABLE",
+					  fmtId(pubrinfo->pubname));
+	appendPQExpBuffer(query, " %s;",
+					  fmtId(tbinfo->dobj.name));
+
+	/*
+	 * There is no point in creating drop query as drop query as the drop
+	 * is done by table drop.
+	 */
+	ArchiveEntry(fout, pubrinfo->dobj.catId, pubrinfo->dobj.dumpId,
+				 tag,
+				 tbinfo->dobj.namespace->dobj.name,
+				 NULL,
+				 "", false,
+				 "PUBLICATION TABLE", SECTION_POST_DATA,
+				 query->data, "", NULL,
+				 NULL, 0,
+				 NULL, NULL);
+
+	free(tag);
+	destroyPQExpBuffer(query);
 }
 
 static void
@@ -9442,6 +9710,12 @@ dumpDumpableObject(Archive *fout, DumpableObject *dobj)
 			break;
 		case DO_POLICY:
 			dumpPolicy(fout, (PolicyInfo *) dobj);
+			break;
+		case DO_PUBLICATION:
+			dumpPublication(fout, (PublicationInfo *) dobj);
+			break;
+		case DO_PUBLICATION_REL:
+			dumpPublicationTable(fout, (PublicationRelInfo *) dobj);
 			break;
 		case DO_PRE_DATA_BOUNDARY:
 		case DO_POST_DATA_BOUNDARY:
@@ -17509,6 +17783,8 @@ addBoundaryDependencies(DumpableObject **dobjs, int numObjs,
 			case DO_EVENT_TRIGGER:
 			case DO_DEFAULT_ACL:
 			case DO_POLICY:
+			case DO_PUBLICATION:
+			case DO_PUBLICATION_REL:
 				/* Post-data objects: must come after the post-data boundary */
 				addObjectDependency(dobj, postDataBound->dumpId);
 				break;

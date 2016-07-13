@@ -106,6 +106,7 @@ static event_trigger_support_data event_trigger_support[] = {
 	{"OPERATOR CLASS", true},
 	{"OPERATOR FAMILY", true},
 	{"POLICY", true},
+	{"PUBLICATION", true},
 	{"ROLE", false},
 	{"RULE", true},
 	{"SCHEMA", true},
@@ -1103,6 +1104,8 @@ EventTriggerSupportsObjectType(ObjectType obtype)
 		case OBJECT_OPERATOR:
 		case OBJECT_OPFAMILY:
 		case OBJECT_POLICY:
+		case OBJECT_PUBLICATION:
+		case OBJECT_PUBLICATION_REL:
 		case OBJECT_RULE:
 		case OBJECT_SCHEMA:
 		case OBJECT_SEQUENCE:
@@ -1168,6 +1171,8 @@ EventTriggerSupportsObjectClass(ObjectClass objclass)
 		case OCLASS_EXTENSION:
 		case OCLASS_POLICY:
 		case OCLASS_AM:
+		case OCLASS_PUBLICATION:
+		case OCLASS_PUBLICATION_REL:
 			return true;
 	}
 

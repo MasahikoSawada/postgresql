@@ -236,6 +236,16 @@
      </row>
 
      <row>
+      <entry><link linkend="catalog-pg-publication"><structname>pg_publication</structname></link></entry>
+      <entry>publications for logical replication</entry>
+     </row>
+
+     <row>
+      <entry><link linkend="catalog-pg-publication-rel"><structname>pg_publication_rel</structname></link></entry>
+      <entry>relation to publication mapping</entry>
+     </row>
+
+     <row>
       <entry><link linkend="catalog-pg-range"><structname>pg_range</structname></link></entry>
       <entry>information about range types</entry>
      </row>
@@ -5129,6 +5139,133 @@
    shared library file containing the function.
   </para>
 
+ </sect1>
+
+ <sect1 id="catalog-pg-publication">
+  <title><structname>pg_publication</structname></title>
+
+  <indexterm zone="catalog-pg-publication">
+   <primary>pg_publication</primary>
+  </indexterm>
+
+  <para>
+   The <structname>pg_publication</structname> catalog contains
+   all publications created in the database.
+  </para>
+
+  <table>
+
+   <title><structname>pg_publication</structname> Columns</title>
+
+   <tgroup cols="4">
+    <thead>
+     <row>
+      <entry>Name</entry>
+      <entry>Type</entry>
+      <entry>References</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry><structfield>oid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry></entry>
+      <entry>Row identifier (hidden attribute; must be explicitly selected)</entry>
+     </row>
+
+     <row>
+      <entry><structfield>pubname</structfield></entry>
+      <entry><type>Name</type></entry>
+      <entry></entry>
+      <entry>A unique, database-wide identifier for the publication.</entry>
+     </row>
+
+     <row>
+      <entry><structfield>puballtables</structfield></entry>
+      <entry><type>bool</type></entry>
+      <entry></entry>
+      <entry>If true, this publication automatically includes all tables
+       in the database, including any that will be created in the future.
+      </entry>
+     </row>
+
+     <row>
+      <entry><structfield>pubreplins</structfield></entry>
+      <entry><type>bool</type></entry>
+      <entry></entry>
+      <entry>If true, INSERT operations are replicated for tables in the
+       publication.</entry>
+     </row>
+
+     <row>
+      <entry><structfield>pubreplupd</structfield></entry>
+      <entry><type>bool</type></entry>
+      <entry></entry>
+      <entry>If true, UPDATE operations are replicated for tables in the
+       publication.</entry>
+     </row>
+
+     <row>
+      <entry><structfield>pubrepldel</structfield></entry>
+      <entry><type>bool</type></entry>
+      <entry></entry>
+      <entry>If true, DELETE operations are replicated for tables in the
+       publication.</entry>
+     </row>
+
+    </tbody>
+   </tgroup>
+  </table>
+ </sect1>
+
+ <sect1 id="catalog-pg-publication-rel">
+  <title><structname>pg_publication_rel</structname></title>
+
+  <indexterm zone="catalog-pg-publication-rel">
+   <primary>pg_publication_rel</primary>
+  </indexterm>
+
+  <para>
+   The <structname>pg_publication_rel</structname> catalog contains
+   mapping between tables and publications in the database. This is many to
+   many mapping.
+  </para>
+
+  <table>
+
+   <title><structname>pg_publication_rel</structname> Columns</title>
+
+   <tgroup cols="4">
+    <thead>
+     <row>
+      <entry>Name</entry>
+      <entry>Type</entry>
+      <entry>References</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+    <tbody>
+
+     <row>
+      <entry><structfield>pubid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry><literal><link linkend="catalog-pg-publication"><structname>pg_publication</structname></link>.oid</literal></entry>
+      <entry>Publication reference.</entry>
+     </row>
+
+     <row>
+      <entry><structfield>relid</structfield></entry>
+      <entry><type>bool</type></entry>
+      <entry><literal><link linkend="catalog-pg-class"><structname>pg_class</structname></link>.oid</literal></entry>
+      <entry>Relation reference.</entry>
+     </row>
+
+    </tbody>
+   </tgroup>
+  </table>
  </sect1>
 
  <sect1 id="catalog-pg-range">

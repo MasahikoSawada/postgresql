@@ -78,7 +78,9 @@ typedef enum
 	DO_POST_DATA_BOUNDARY,
 	DO_EVENT_TRIGGER,
 	DO_REFRESH_MATVIEW,
-	DO_POLICY
+	DO_POLICY,
+	DO_PUBLICATION,
+	DO_PUBLICATION_REL
 } DumpableObjectType;
 
 /* component types of an object which can be selected for dumping */
@@ -554,6 +556,29 @@ typedef struct _policyInfo
 } PolicyInfo;
 
 /*
+ * The PublicationInfo struct is used to represent publications.
+ */
+typedef struct _PublicationInfo
+{
+	DumpableObject dobj;
+	bool		puballtables;
+	bool		pubreplins;
+	bool		pubreplupd;
+	bool		pubrepldel;
+} PublicationInfo;
+
+/*
+ * The PublicationRelInfo struct is used to represent publication table
+ * mapping.
+ */
+typedef struct _PublicationRelInfo
+{
+	DumpableObject dobj;
+	TableInfo  *pubtable;
+	char	   *pubname;
+} PublicationRelInfo;
+
+/*
  * We build an array of these with an entry for each object that is an
  * extension member according to pg_depend.
  */
@@ -649,5 +674,8 @@ extern void processExtensionTables(Archive *fout, ExtensionInfo extinfo[],
 					   int numExtensions);
 extern EventTriggerInfo *getEventTriggers(Archive *fout, int *numEventTriggers);
 extern void getPolicies(Archive *fout, TableInfo tblinfo[], int numTables);
+extern void getPublications(Archive *fout);
+extern void getPublicationTables(Archive *fout, TableInfo tblinfo[],
+								 int numTables);
 
 #endif   /* PG_DUMP_H */

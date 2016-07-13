@@ -915,6 +915,7 @@ static const pgsql_thing_t words_after_create[] = {
 	{"OWNED", NULL, NULL, THING_NO_CREATE},		/* for DROP OWNED BY ... */
 	{"PARSER", Query_for_list_of_ts_parsers, NULL, THING_NO_SHOW},
 	{"POLICY", NULL, NULL},
+	{"PUBLICATION", NULL, NULL},
 	{"ROLE", Query_for_list_of_roles},
 	{"RULE", "SELECT pg_catalog.quote_ident(rulename) FROM pg_catalog.pg_rules WHERE substring(pg_catalog.quote_ident(rulename),1,%d)='%s'"},
 	{"SCHEMA", Query_for_list_of_schemas},
@@ -2133,6 +2134,20 @@ psql_completion(const char *text, int start, int end)
 	/* Complete "CREATE POLICY <name> ON <table> USING (" */
 	else if (Matches6("CREATE", "POLICY", MatchAny, "ON", MatchAny, "USING"))
 		COMPLETE_WITH_CONST("(");
+
+/* CREATE PUBLICATION */
+	else if (Matches3("CREATE", "PUBLICATION", MatchAny))
+		COMPLETE_WITH_LIST3("FOR TABLE", "FOR ALL TABLES", "WITH");
+	else if (Matches4("CREATE", "PUBLICATION", MatchAny, "FOR"))
+		COMPLETE_WITH_LIST2("TABLE", "ALL TABLES");
+	/* Complete "CREATE PUBLICATION <name> FOR TABLE <table>" */
+	else if (Matches4("CREATE", "PUBLICATION", MatchAny, "FOR TABLE"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tables, NULL);
+	/* Complete "CREATE PUBLICATION <name> [...] WITH" */
+	else if (HeadMatches2("CREATE", "PUBLICATION") && TailMatches1("WITH"))
+		COMPLETE_WITH_LIST6("REPLICATE_INSERT", "NOREPLICATE_INSERT",
+							"REPLICATE_UPDATE", "NOREPLICATE_UPDATE",
+							"REPLICATE_DELETE", "NOREPLICATE_DELETE");
 
 /* CREATE RULE */
 	/* Complete "CREATE RULE <sth>" with "AS ON" */
