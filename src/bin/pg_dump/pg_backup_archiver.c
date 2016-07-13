@@ -166,6 +166,7 @@ dumpOptionsFromRestoreOptions(RestoreOptions *ropt)
 	dopt->lockWaitTimeout = ropt->lockWaitTimeout;
 	dopt->include_everything = ropt->include_everything;
 	dopt->enable_row_security = ropt->enable_row_security;
+	dopt->include_subscriptions = ropt->include_subscriptions;
 
 	return dopt;
 }

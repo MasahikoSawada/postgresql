@@ -80,7 +80,8 @@ typedef enum
 	DO_REFRESH_MATVIEW,
 	DO_POLICY,
 	DO_PUBLICATION,
-	DO_PUBLICATION_REL
+	DO_PUBLICATION_REL,
+	DO_SUBSCRIPTION
 } DumpableObjectType;
 
 /* component types of an object which can be selected for dumping */
@@ -579,6 +580,18 @@ typedef struct _PublicationRelInfo
 } PublicationRelInfo;
 
 /*
+ * The SubscriptionInfo struct is used to represent subscription.
+ */
+typedef struct _SubscriptionInfo
+{
+	DumpableObject dobj;
+	bool		subenabled;
+	char	   *subconninfo;
+	char	   *subslotname;
+	char	   *subpublications;
+} SubscriptionInfo;
+
+/*
  * We build an array of these with an entry for each object that is an
  * extension member according to pg_depend.
  */
@@ -677,5 +690,6 @@ extern void getPolicies(Archive *fout, TableInfo tblinfo[], int numTables);
 extern void getPublications(Archive *fout);
 extern void getPublicationTables(Archive *fout, TableInfo tblinfo[],
 								 int numTables);
+extern void getSubscriptions(Archive *fout);
 
 #endif   /* PG_DUMP_H */

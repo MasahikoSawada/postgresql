@@ -4949,6 +4949,75 @@ describePublications(const char *pattern)
 	return true;
 }
 
+/* \dRs
+ * Describes subscriptions.
+ *
+ * Takes an optional regexp to select particular subscriptions
+ */
+bool
+describeSubscriptions(const char *pattern, bool verbose)
+{
+	PQExpBufferData buf;
+	PGresult   *res;
+	printQueryOpt myopt = pset.popt;
+	static const bool translate_columns[] = {false, false, false, false, false};
+
+	if (pset.sversion < 100000)
+	{
+		char		sverbuf[32];
+		psql_error("The server (version %s) does not support subscriptions.\n",
+				   formatPGVersionNumber(pset.sversion, false,
+										 sverbuf, sizeof(sverbuf)));
+		return true;
+	}
+
+	initPQExpBuffer(&buf);
+
+	printfPQExpBuffer(&buf,
+					  "SELECT subname AS \"%s\"\n"
+					  ",  subenabled AS \"%s\"\n"
+					  ",  subpublications AS \"%s\"\n",
+					  gettext_noop("Name"),
+					  gettext_noop("Enabled"),
+					  gettext_noop("Publication"));
+
+	if (verbose)
+	{
+		appendPQExpBuffer(&buf,
+						  ",  subconninfo AS \"%s\"\n",
+						  gettext_noop("Conninfo"));
+	}
+
+	/* Only display subscritpions in current database. */
+	appendPQExpBufferStr(&buf,
+						 "FROM pg_catalog.pg_subscription\n"
+						 "WHERE subdbid = (SELECT oid\n"
+						 "                 FROM pg_catalog.pg_database\n"
+						 "                 WHERE datname = current_database())");
+
+	processSQLNamePattern(pset.db, &buf, pattern, true, false,
+						  NULL, "subname", NULL,
+						  NULL);
+
+	appendPQExpBufferStr(&buf, "ORDER BY 1;");
+
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+
+	myopt.nullPrint = NULL;
+	myopt.title = _("List of subscriptions");
+	myopt.translate_header = true;
+	myopt.translate_columns = translate_columns;
+	myopt.n_translate_columns = lengthof(translate_columns);
+
+	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+
+	PQclear(res);
+	return true;
+}
+
 /*
  * printACLColumn
  *

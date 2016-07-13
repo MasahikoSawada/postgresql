@@ -59,6 +59,7 @@
 #include "catalog/pg_shseclabel.h"
 #include "catalog/pg_replication_origin.h"
 #include "catalog/pg_statistic.h"
+#include "catalog/pg_subscription.h"
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_transform.h"
 #include "catalog/pg_ts_config.h"
@@ -712,6 +713,28 @@ static const struct cachedesc cacheinfo[] = {
 			0
 		},
 		128
+	},
+	{SubscriptionRelationId,		/* SUBSCRIPTIONOID */
+		SubscriptionObjectIndexId,
+		1,
+		{
+			ObjectIdAttributeNumber,
+			0,
+			0,
+			0
+		},
+		4
+	},
+	{SubscriptionRelationId,		/* SUBSCRIPTIONNAME */
+		SubscriptionNameIndexId,
+		2,
+		{
+			Anum_pg_subscription_subdbid,
+			Anum_pg_subscription_subname,
+			0,
+			0
+		},
+		4
 	},
 	{TableSpaceRelationId,		/* TABLESPACEOID */
 		TablespaceOidIndexId,

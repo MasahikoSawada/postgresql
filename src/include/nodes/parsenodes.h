@@ -1416,6 +1416,7 @@ typedef enum ObjectType
 	OBJECT_RULE,
 	OBJECT_SCHEMA,
 	OBJECT_SEQUENCE,
+	OBJECT_SUBSCRIPTION,
 	OBJECT_TABCONSTRAINT,
 	OBJECT_TABLE,
 	OBJECT_TABLESPACE,
@@ -3131,5 +3132,19 @@ typedef struct AlterPublicationStmt
 	bool		for_all_tables;	/* Special publication for all tables in db */
 	DefElemAction	tableAction; /* What action to perform with the tables */
 } AlterPublicationStmt;
+
+typedef struct CreateSubscriptionStmt
+{
+	NodeTag		type;
+	char	   *subname;		/* Name of of the subscription */
+	List	   *options;		/* List of DefElem nodes */
+} CreateSubscriptionStmt;
+
+typedef struct AlterSubscriptionStmt
+{
+	NodeTag		type;
+	char	   *subname;		/* Name of of the subscription */
+	List	   *options;		/* List of DefElem nodes */
+} AlterSubscriptionStmt;
 
 #endif   /* PARSENODES_H */

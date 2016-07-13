@@ -921,6 +921,7 @@ static const pgsql_thing_t words_after_create[] = {
 	{"SCHEMA", Query_for_list_of_schemas},
 	{"SEQUENCE", NULL, &Query_for_list_of_sequences},
 	{"SERVER", Query_for_list_of_servers},
+	{"SUBSCRIPTION", NULL, NULL},
 	{"TABLE", NULL, &Query_for_list_of_tables},
 	{"TABLESPACE", Query_for_list_of_tablespaces},
 	{"TEMP", NULL, NULL, THING_NO_DROP},		/* for CREATE TEMP TABLE ... */
@@ -2199,6 +2200,16 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH_LIST4("CONFIGURATION", "DICTIONARY", "PARSER", "TEMPLATE");
 	else if (Matches5("CREATE", "TEXT", "SEARCH", "CONFIGURATION", MatchAny))
 		COMPLETE_WITH_CONST("(");
+
+/* CREATE SUBSCRIPTION */
+	else if (Matches3("CREATE", "SUBSCRIPTION", MatchAny))
+		COMPLETE_WITH_CONST("WITH");
+	/* Complete "CREATE SUBSCRIPTION <name> WITH <opt>" */
+	else if (Matches4("CREATE", "SUBSCRIPTION", MatchAny, "WITH"))
+		COMPLETE_WITH_LIST4("INITIALLY ENABLED", "INITIALLY DISABLED",
+							"CONNINFO", "PUBLICATION");
+	else if (Matches5("CREATE", "SUBSCRIPTION", MatchAny, "WITH", "INITIALLY"))
+		COMPLETE_WITH_LIST2("ENABLED", "DISABLED");
 
 /* CREATE TRIGGER --- is allowed inside CREATE SCHEMA, so use TailMatches */
 	/* complete CREATE TRIGGER <name> with BEFORE,AFTER,INSTEAD OF */

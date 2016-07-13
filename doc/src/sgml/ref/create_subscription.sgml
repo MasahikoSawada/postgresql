@@ -1,0 +1,159 @@
+<!--
+doc/src/sgml/ref/create_subscription.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="SQL-CREATESUBSCRIPTION">
+ <indexterm zone="sql-altersubscription">
+  <primary>CREATE SUBSCRIPTION</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>CREATE SUBSCRIPTION</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>CREATE SUBSCRIPTION</refname>
+  <refpurpose>define new subscription</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+CREATE SUBSCRIPTION <replaceable class="PARAMETER">subscription_name</replaceable> [ [ WITH ] <replaceable class="PARAMETER">option</replaceable> [ ... ] ]
+
+<phrase>where <replaceable class="PARAMETER">option</replaceable> can be:</phrase>
+
+    CONNECTION 'conninfo'
+    | PUBLICATION publication_name [, ...]
+    | INITIALLY { ENABLED | DISABLED }
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   <command>CREATE SUBSCRIPTION</command> adds a new subscription for
+   a current database. The subscription name must be distinct from
+   the name of any existing subscription in the database cluster.
+  </para>
+
+  <para>
+   The subscription represents a replication connection to the provider.
+   As such this command does not only add definition in the local catalogs
+   but also creates a replication slot on the provider.
+  </para>
+
+  <para>
+   A logical replication worker will be started to replicate data for the
+   new subscription at the commit of the transaction where this command
+   was run.
+  </para>
+
+  <para>
+   Additional info about subscriptions and logical replication as a whole
+   can is available at <xref linkend="logical-replication-subscription"> and
+   <xref linkend="logical-replication">.
+  </para>
+
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><replaceable class="parameter">subscription_name</replaceable></term>
+    <listitem>
+     <para>
+      The name of the new subscription.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>CONNECTION '<replaceable class="parameter">conninfo</replaceable>'</term>
+    <listitem>
+     <para>
+      The connection string to the provider.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>PUBLICATION <replaceable class="parameter">publication_name</replaceable></term>
+    <listitem>
+     <para>
+      Name(s) of the publications on the provider to subscribe to.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>INITIALLY ENABLED</term>
+    <term>INITIALLY DISABLED</term>
+    <listitem>
+     <para>
+      Specifies if the subscription should be actively replicating or
+      if it should be just setup but not started yet.  Note that the
+      replication slot as described above is created in either case.
+      <literal>INITIALLY ENABLED</literal> is the default.
+     </para>
+    </listitem>
+   </varlistentry>
+
+  </variablelist>
+ </refsect1>
+
+ <refsect1>
+  <title>Examples</title>
+
+  <para>
+   Create a subscription to a different server which replicates tables in
+   the publications <literal>mypubclication</literal> and
+   <literal>insert_only</literal> and starts replicating immediately on
+   commit:
+<programlisting>
+CREATE SUBSCRIPTION mysub
+         CONNECTION 'host=192.168.1.50 port=5432 user=foo dbname=foodb password=foopass'
+        PUBLICATION mypublication, insert_only;
+</programlisting>
+  </para>
+
+  <para>
+   Create a subscription to a different server which replicates tables in
+   the <literal>insert_only</literal> publication and does not replicate
+   until enabled at a later time.
+<programlisting>
+CREATE SUBSCRIPTION mysub
+         CONNECTION 'host=192.168.1.50 port=5432 user=foo dbname=foodb password=foopass'
+        PUBLICATION insert_only
+ INITIALLY DISABLED;
+</programlisting>
+  </para>
+
+ </refsect1>
+
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   <command>CREATE SUBSCRIPTION</command> is a <productname>PostgreSQL</>
+   extension.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-altersubscription"></member>
+   <member><xref linkend="sql-dropsubscription"></member>
+   <member><xref linkend="sql-createpublication"></member>
+   <member><xref linkend="sql-alterpublication"></member>
+  </simplelist>
+ </refsect1>
+
+</refentry>

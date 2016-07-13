@@ -1,0 +1,101 @@
+<!--
+doc/src/sgml/ref/drop_subscription.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="SQL-DROPSUBSCRIPTION">
+ <indexterm zone="sql-dropsubscription">
+  <primary>DROP SUBSCRIPTION</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>DROP SUBSCRIPTION</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>DROP SUBSCRIPTION</refname>
+  <refpurpose>remove an existing subscription</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+DROP SUBSCRIPTION <replaceable class="PARAMETER">name</replaceable> [, ...]
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   <command>DROP SUBSCRIPTION</command> removes subscriptions from the
+   cluster.
+  </para>
+
+  <para>
+   This command cannot be performed inside a transaction block.
+  </para>
+
+  <para>
+   A subscription can only be dropped by a superuser.
+  </para>
+
+  <warning>
+   <para>
+    While the <command>DROP SUBSCRIPTION</command> will try to remove the
+    replication slot on the provider, it will not fail when said action
+    is not successfull. This means the replication slot may need to be
+    dropped manually to not hold back removal of WAL on provider.
+   </para>
+  </warning>
+
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><replaceable class="parameter">name</replaceable></term>
+    <listitem>
+     <para>
+      The name of a subscription to be dropped.
+     </para>
+    </listitem>
+   </varlistentry>
+
+  </variablelist>
+ </refsect1>
+
+ <refsect1>
+  <title>Examples</title>
+
+  <para>
+   Drop a subscription:
+<programlisting>
+DROP SUBSCRIPTION mysub;
+</programlisting>
+  </para>
+
+ </refsect1>
+
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   <command>DROP SUBSCRIPTION</command> is a <productname>PostgreSQL</>
+   extension.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-createsubscription"></member>
+   <member><xref linkend="sql-altersubscription"></member>
+  </simplelist>
+ </refsect1>
+
+</refentry>

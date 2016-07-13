@@ -1615,6 +1615,20 @@ testdb=&gt;
       </varlistentry>
 
       <varlistentry>
+        <term><literal>\dRs[+] [ <link linkend="APP-PSQL-patterns"><replaceable class="parameter">pattern</replaceable></link> ]</literal></term>
+        <listitem>
+        <para>
+        List replication subscriptions.
+        If <replaceable class="parameter">pattern</replaceable> is
+        specified, only subscriptions whose names match the pattern are
+        listed.
+        If <literal>+</literal> is appended to the command name, additional
+        parameters of the subscriptions are shown.
+        </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
         <term><literal>\dT[S+] [ <link linkend="APP-PSQL-patterns"><replaceable class="parameter">pattern</replaceable></link> ]</literal></term>
         <listitem>
         <para>

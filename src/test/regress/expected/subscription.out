@@ -1,0 +1,52 @@
+--
+-- SUBSCRIPTION
+--
+-- fail - no publications
+CREATE SUBSCRIPTION testsub CONNECTION 'foo';
+ERROR:  publication not specified
+-- fail - no connection
+CREATE SUBSCRIPTION testsub PUBLICATION foo;
+ERROR:  connection not specified
+CREATE SUBSCRIPTION testsub PUBLICATION testpub CONNECTION 'testconn' INITIALLY DISABLED;
+\dRs+
+           List of subscriptions
+  Name   | Enabled | Publication | Conninfo 
+---------+---------+-------------+----------
+ testsub | f       | {testpub}   | testconn
+(1 row)
+
+ALTER SUBSCRIPTION testsub PUBLICATION testpub2, testpub3;
+\dRs
+          List of subscriptions
+  Name   | Enabled |     Publication     
+---------+---------+---------------------
+ testsub | f       | {testpub2,testpub3}
+(1 row)
+
+ALTER SUBSCRIPTION testsub PUBLICATION testpub, testpub1 CONNECTION 'conn2';
+\dRs+
+               List of subscriptions
+  Name   | Enabled |    Publication     | Conninfo 
+---------+---------+--------------------+----------
+ testsub | f       | {testpub,testpub1} | conn2
+(1 row)
+
+BEGIN;
+ALTER SUBSCRIPTION testsub ENABLE;
+\dRs
+         List of subscriptions
+  Name   | Enabled |    Publication     
+---------+---------+--------------------
+ testsub | t       | {testpub,testpub1}
+(1 row)
+
+ALTER SUBSCRIPTION testsub DISABLE;
+\dRs
+         List of subscriptions
+  Name   | Enabled |    Publication     
+---------+---------+--------------------
+ testsub | f       | {testpub,testpub1}
+(1 row)
+
+COMMIT;
+DROP SUBSCRIPTION testsub;

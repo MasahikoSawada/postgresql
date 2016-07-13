@@ -286,6 +286,11 @@
      </row>
 
      <row>
+      <entry><link linkend="catalog-pg-subscription"><structname>pg_subscription</structname></link></entry>
+      <entry>logical replication subscriptions</entry>
+     </row>
+
+     <row>
       <entry><link linkend="catalog-pg-tablespace"><structname>pg_tablespace</structname></link></entry>
       <entry>tablespaces within this database cluster</entry>
      </row>
@@ -6067,6 +6072,97 @@
 
  </sect1>
 
+ <sect1 id="catalog-pg-subscription">
+  <title><structname>pg_subscription</structname></title>
+
+  <indexterm zone="catalog-pg-subscription">
+   <primary>pg_subscription</primary>
+  </indexterm>
+
+  <para>
+   The <structname>pg_subscription</structname> catalog contains
+   all existing logical replication subscriptions.
+  </para>
+
+  <para>
+   Unlike most system catalogs, <structname>pg_subscription</structname>
+   is shared across all databases of a cluster: there is only one
+   copy of <structname>pg_subscription</structname> per cluster, not
+   one per database.
+  </para>
+
+  <table>
+
+   <title><structname>pg_subscription</structname> Columns</title>
+
+   <tgroup cols="4">
+    <thead>
+     <row>
+      <entry>Name</entry>
+      <entry>Type</entry>
+      <entry>References</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry><structfield>oid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry></entry>
+      <entry>Row identifier (hidden attribute; must be explicitly selected)</entry>
+     </row>
+
+     <row>
+      <entry><structfield>subdbid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry></entry>
+      <entry>Oid of the database which the subscription resides in.</entry>
+     </row>
+
+     <row>
+      <entry><structfield>subname</structfield></entry>
+      <entry><type>Name</type></entry>
+      <entry></entry>
+      <entry>A unique, database-wide identifier for the replication
+      subscription.</entry>
+     </row>
+
+     <row>
+      <entry><structfield>subenabled</structfield></entry>
+      <entry><type>bool</type></entry>
+      <entry></entry>
+      <entry>If true, the subscription is enabled and should be replicating.
+      </entry>
+     </row>
+
+     <row>
+      <entry><structfield>subconninfo</structfield></entry>
+      <entry><type>text</type></entry>
+      <entry></entry>
+      <entry>Connection string to the upstream database.
+      </entry>
+     </row>
+
+     <row>
+      <entry><structfield>subslotname</structfield></entry>
+      <entry><type>text</type></entry>
+      <entry></entry>
+      <entry>Name of the replication slot in the upstream database. Also used
+       for local replication origin name.</entry>
+     </row>
+
+     <row>
+      <entry><structfield>subpublications</structfield></entry>
+      <entry><type>name[]</type></entry>
+      <entry></entry>
+      <entry>Array of subscribed publication names.
+      </entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+ </sect1>
 
  <sect1 id="catalog-pg-tablespace">
   <title><structname>pg_tablespace</structname></title>

@@ -97,8 +97,8 @@ test: rules psql_crosstab amutils
 # run by itself so it can run parallel workers
 test: select_parallel
 
-# run by itself, changes behaviour for all tables in database
-test: publication
+# no relation related tests can be put in thi group
+test: publication subscription
 
 # ----------
 # Another group of parallel tests

@@ -48,6 +48,7 @@
 #include "catalog/pg_publication.h"
 #include "catalog/pg_publication_rel.h"
 #include "catalog/pg_rewrite.h"
+#include "catalog/pg_subscription.h"
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_transform.h"
 #include "catalog/pg_trigger.h"
@@ -464,6 +465,18 @@ static const ObjectPropertyType ObjectProperty[] =
 		InvalidAttrNumber,
 		-1,
 		true
+	},
+	{
+		SubscriptionRelationId,
+		SubscriptionObjectIndexId,
+		SUBSCRIPTIONOID,
+		SUBSCRIPTIONNAME,
+		Anum_pg_subscription_subdbid,
+		Anum_pg_subscription_subname,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		-1,
+		true
 	}
 };
 
@@ -675,6 +688,10 @@ static const struct object_type_map
 	{
 		"publication relation", OBJECT_PUBLICATION_REL
 	},
+	/* OCLASS_SUBSCRIPTION */
+	{
+		"subscription", OBJECT_SUBSCRIPTION
+	},
 	/* OCLASS_TRANSFORM */
 	{
 		"transform", OBJECT_TRANSFORM
@@ -838,6 +855,7 @@ get_object_address(ObjectType objtype, List *objname, List *objargs,
 			case OBJECT_EVENT_TRIGGER:
 			case OBJECT_ACCESS_METHOD:
 			case OBJECT_PUBLICATION:
+			case OBJECT_SUBSCRIPTION:
 				address = get_object_address_unqualified(objtype,
 														 objname, missing_ok);
 				break;
@@ -1124,6 +1142,9 @@ get_object_address_unqualified(ObjectType objtype,
 			case OBJECT_PUBLICATION:
 				msg = gettext_noop("publication name cannot be qualified");
 				break;
+			case OBJECT_SUBSCRIPTION:
+				msg = gettext_noop("subscription name cannot be qualified");
+				break;
 			default:
 				elog(ERROR, "unrecognized objtype: %d", (int) objtype);
 				msg = NULL;		/* placate compiler */
@@ -1192,6 +1213,11 @@ get_object_address_unqualified(ObjectType objtype,
 		case OBJECT_PUBLICATION:
 			address.classId = PublicationRelationId;
 			address.objectId = get_publication_oid(name, missing_ok);
+			address.objectSubId = 0;
+			break;
+		case OBJECT_SUBSCRIPTION:
+			address.classId = SubscriptionRelationId;
+			address.objectId = get_subscription_oid(name, missing_ok);
 			address.objectSubId = 0;
 			break;
 		default:
@@ -2316,6 +2342,7 @@ check_object_ownership(Oid roleid, ObjectType objtype, ObjectAddress address,
 		case OBJECT_TSTEMPLATE:
 		case OBJECT_ACCESS_METHOD:
 		case OBJECT_PUBLICATION:
+		case OBJECT_SUBSCRIPTION:
 			/* We treat these object types as being owned by superusers */
 			if (!superuser_arg(roleid))
 				ereport(ERROR,
@@ -3317,6 +3344,21 @@ getObjectDescription(const ObjectAddress *object)
 				break;
 			}
 
+		case OCLASS_SUBSCRIPTION:
+			{
+				HeapTuple	tup;
+
+				tup = SearchSysCache1(SUBSCRIPTIONOID,
+									  ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(tup))
+					elog(ERROR, "cache lookup failed for subscription %u",
+						 object->objectId);
+				appendStringInfo(&buffer, _("subscription %s"),
+				   NameStr(((Form_pg_subscription) GETSTRUCT(tup))->subname));
+				ReleaseSysCache(tup);
+				break;
+			}
+
 		default:
 			appendStringInfo(&buffer, "unrecognized object %u %u %d",
 							 object->classId,
@@ -3808,6 +3850,10 @@ getObjectTypeDescription(const ObjectAddress *object)
 
 		case OCLASS_PUBLICATION_REL:
 			appendStringInfoString(&buffer, "publication table");
+			break;
+
+		case OCLASS_SUBSCRIPTION:
+			appendStringInfoString(&buffer, "subscription");
 			break;
 
 		default:
@@ -4817,6 +4863,18 @@ getObjectIdentityParts(const ObjectAddress *object,
 				}
 
 				ReleaseSysCache(tup);
+				break;
+			}
+
+		case OCLASS_SUBSCRIPTION:
+			{
+				Subscription *sub;
+
+				sub = GetSubscription(object->objectId, false);
+				appendStringInfoString(&buffer,
+									   quote_identifier(sub->name));
+				if (objname)
+					*objname = list_make1(pstrdup(sub->name));
 				break;
 			}
 

@@ -214,6 +214,8 @@ check_xact_readonly(Node *parsetree)
 		case T_SecLabelStmt:
 		case T_CreatePublicationStmt:
 		case T_AlterPublicationStmt:
+		case T_CreateSubscriptionStmt:
+		case T_AlterSubscriptionStmt:
 			PreventCommandIfReadOnly(CreateCommandTag(parsetree));
 			PreventCommandIfParallelMode(CreateCommandTag(parsetree));
 			break;
@@ -1570,6 +1572,14 @@ ProcessUtilitySlow(ParseState *pstate,
 				commandCollected = true;
 				break;
 
+			case T_CreateSubscriptionStmt:
+				address = CreateSubscription((CreateSubscriptionStmt *) parsetree);
+				break;
+
+			case T_AlterSubscriptionStmt:
+				address = AlterSubscription((AlterSubscriptionStmt *) parsetree);
+				break;
+
 			default:
 				elog(ERROR, "unrecognized node type: %d",
 					 (int) nodeTag(parsetree));
@@ -1931,6 +1941,9 @@ AlterObjectTypeCommandTag(ObjectType objtype)
 		case OBJECT_PUBLICATION:
 			tag = "PUBLICATION";
 			break;
+		case OBJECT_SUBSCRIPTION:
+			tag = "SUBSCRIPTION";
+			break;
 		default:
 			tag = "???";
 			break;
@@ -2218,6 +2231,9 @@ CreateCommandTag(Node *parsetree)
 					break;
 				case OBJECT_PUBLICATION:
 					tag = "DROP PUBLICATION";
+					break;
+				case OBJECT_SUBSCRIPTION:
+					tag = "DROP SUBSCRIPTION";
 					break;
 				default:
 					tag = "???";
@@ -2595,6 +2611,14 @@ CreateCommandTag(Node *parsetree)
 
 		case T_AlterPublicationStmt:
 			tag = "ALTER PUBLICATION";
+			break;
+
+		case T_CreateSubscriptionStmt:
+			tag = "CREATE SUBSCRIPTION";
+			break;
+
+		case T_AlterSubscriptionStmt:
+			tag = "ALTER SUBSCRIPTION";
 			break;
 
 		case T_PrepareStmt:
@@ -3167,6 +3191,14 @@ GetCommandLogLevel(Node *parsetree)
 			break;
 
 		case T_AlterPublicationStmt:
+			lev = LOGSTMT_DDL;
+			break;
+
+		case T_CreateSubscriptionStmt:
+			lev = LOGSTMT_DDL;
+			break;
+
+		case T_AlterSubscriptionStmt:
 			lev = LOGSTMT_DDL;
 			break;
 

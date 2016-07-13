@@ -2146,6 +2146,26 @@ _equalAlterPublicationStmt(const AlterPublicationStmt *a,
 }
 
 static bool
+_equalCreateSubscriptionStmt(const CreateSubscriptionStmt *a,
+							 const CreateSubscriptionStmt *b)
+{
+	COMPARE_STRING_FIELD(subname);
+	COMPARE_NODE_FIELD(options);
+
+	return true;
+}
+
+static bool
+_equalAlterSubscriptionStmt(const AlterSubscriptionStmt *a,
+							const AlterSubscriptionStmt *b)
+{
+	COMPARE_STRING_FIELD(subname);
+	COMPARE_NODE_FIELD(options);
+
+	return true;
+}
+
+static bool
 _equalCreatePolicyStmt(const CreatePolicyStmt *a, const CreatePolicyStmt *b)
 {
 	COMPARE_STRING_FIELD(policy_name);
@@ -3299,6 +3319,12 @@ equal(const void *a, const void *b)
 			break;
 		case T_AlterPublicationStmt:
 			retval = _equalAlterPublicationStmt(a, b);
+			break;
+		case T_CreateSubscriptionStmt:
+			retval = _equalCreateSubscriptionStmt(a, b);
+			break;
+		case T_AlterSubscriptionStmt:
+			retval = _equalAlterSubscriptionStmt(a, b);
 			break;
 		case T_A_Expr:
 			retval = _equalAExpr(a, b);

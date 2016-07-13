@@ -77,7 +77,8 @@ static const int oldObjectTypePriority[] =
 	15,							/* DO_REFRESH_MATVIEW */
 	21,							/* DO_POLICY */
 	22,							/* DO_PUBLICATION */
-	23							/* DO_PUBLICATION_REL */
+	23,							/* DO_PUBLICATION_REL */
+	24							/* DO_SUBSCRIPTION */
 };
 
 /*
@@ -130,7 +131,8 @@ static const int newObjectTypePriority[] =
 	33,							/* DO_REFRESH_MATVIEW */
 	34,							/* DO_POLICY */
 	35,							/* DO_PUBLICATION */
-	36							/* DO_PUBLICATION_REL */
+	36,							/* DO_PUBLICATION_REL */
+	37							/* DO_SUBSCRIPTION */
 };
 
 static DumpId preDataBoundId;
@@ -1500,6 +1502,11 @@ describeDumpableObject(DumpableObject *obj, char *buf, int bufsize)
 		case DO_PUBLICATION_REL:
 			snprintf(buf, bufsize,
 					 "PUBLICATION TABLE (ID %d OID %u)",
+					 obj->dumpId, obj->catId.oid);
+			return;
+		case DO_SUBSCRIPTION:
+			snprintf(buf, bufsize,
+					 "SUBSCRIPTION (ID %d OID %u)",
 					 obj->dumpId, obj->catId.oid);
 			return;
 		case DO_PRE_DATA_BOUNDARY:

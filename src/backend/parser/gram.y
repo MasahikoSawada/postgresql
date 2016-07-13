@@ -269,6 +269,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		AlterTSConfigurationStmt AlterTSDictionaryStmt
 		CreateMatViewStmt RefreshMatViewStmt CreateAmStmt
 		CreatePublicationStmt AlterPublicationStmt
+		CreateSubscriptionStmt AlterSubscriptionStmt
 
 %type <node>	select_no_parens select_with_parens select_clause
 				simple_select values_clause
@@ -376,6 +377,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				relation_expr_list dostmt_opt_list
 				transform_element_list transform_type_list
 				publication_opt_list publication_opt_items
+				subscription_create_opt_items subscription_opt_items
 
 %type <list>	group_by_list
 %type <node>	group_by_item empty_grouping_set rollup_clause cube_clause
@@ -383,7 +385,10 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <node>    opt_publication_for_tables publication_for_tables
 
 %type <list>	opt_fdw_options fdw_options
+				publication_list
 %type <defelt>	fdw_option publication_opt_item
+				subscription_opt_item subscription_create_opt_item
+%type <value>	publication_item
 
 %type <range>	OptTempTableName
 %type <into>	into_clause create_as_target create_mv_target
@@ -634,8 +639,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	SAVEPOINT SCHEMA SCROLL SEARCH SECOND_P SECURITY SELECT SEQUENCE SEQUENCES
 	SERIALIZABLE SERVER SESSION SESSION_USER SET SETS SETOF SHARE SHOW
 	SIMILAR SIMPLE SKIP SMALLINT SNAPSHOT SOME SQL_P STABLE STANDALONE_P START
-	STATEMENT STATISTICS STDIN STDOUT STORAGE STRICT_P STRIP_P SUBSTRING
-	SYMMETRIC SYSID SYSTEM_P
+	STATEMENT STATISTICS STDIN STDOUT STORAGE STRICT_P STRIP_P SUBSCRIPTION
+	SUBSTRING SYMMETRIC SYSID SYSTEM_P
 
 	TABLE TABLES TABLESAMPLE TABLESPACE TEMP TEMPLATE TEMPORARY TEXT_P THEN
 	TIME TIMESTAMP TO TRAILING TRANSACTION TRANSFORM TREAT TRIGGER TRIM TRUE_P
@@ -786,6 +791,7 @@ stmt :
 			| AlterPublicationStmt
 			| AlterRoleSetStmt
 			| AlterRoleStmt
+			| AlterSubscriptionStmt
 			| AlterTSConfigurationStmt
 			| AlterTSDictionaryStmt
 			| AlterUserMappingStmt
@@ -820,6 +826,7 @@ stmt :
 			| CreateSchemaStmt
 			| CreateSeqStmt
 			| CreateStmt
+			| CreateSubscriptionStmt
 			| CreateTableSpaceStmt
 			| CreateTransformStmt
 			| CreateTrigStmt
@@ -5665,6 +5672,7 @@ drop_type:	TABLE									{ $$ = OBJECT_TABLE; }
 			| TEXT_P SEARCH TEMPLATE				{ $$ = OBJECT_TSTEMPLATE; }
 			| TEXT_P SEARCH CONFIGURATION			{ $$ = OBJECT_TSCONFIGURATION; }
 			| PUBLICATION							{ $$ = OBJECT_PUBLICATION; }
+			| SUBSCRIPTION							{ $$ = OBJECT_SUBSCRIPTION; }
 		;
 
 any_name_list:
@@ -8669,6 +8677,122 @@ AlterPublicationStmt:
 					n->tables = $6;
 					n->tableAction = DEFELEM_DROP;
 					$$ = (Node *)n;
+				}
+		;
+
+/*****************************************************************************
+ *
+ * CREATE SUBSCRIPTION name [ WITH ] options
+ *
+ *****************************************************************************/
+
+CreateSubscriptionStmt:
+			CREATE SUBSCRIPTION name opt_with subscription_create_opt_items
+				{
+					CreateSubscriptionStmt *n =
+						makeNode(CreateSubscriptionStmt);
+					n->subname = $3;
+					n->options = $5;
+					$$ = (Node *)n;
+				}
+		;
+
+subscription_create_opt_items:
+			subscription_create_opt_item
+				{
+					$$ = list_make1($1);
+				}
+			| subscription_create_opt_items subscription_create_opt_item
+				{
+					$$ = lappend($1, $2);
+				}
+		;
+
+subscription_create_opt_item:
+			subscription_opt_item
+			| INITIALLY IDENT
+				{
+					if (strcmp($2, "enabled") == 0)
+						$$ = makeDefElem("enabled",
+										 (Node *)makeInteger(TRUE), @1);
+					else if (strcmp($2, "disabled") == 0)
+						$$ = makeDefElem("enabled",
+										 (Node *)makeInteger(FALSE), @1);
+					else
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("unrecognized subscription option \"%s\"", $1),
+									 parser_errposition(@2)));
+				}
+		;
+
+subscription_opt_item:
+			CONNECTION Sconst
+				{
+					$$ = makeDefElem("conninfo", (Node *)makeString($2), @1);
+				}
+			| PUBLICATION publication_list
+				{
+					$$ = makeDefElem("publication", (Node *)$2, @1);
+				}
+		;
+
+publication_list:
+			publication_item
+				{
+					$$ = list_make1($1);
+				}
+			| publication_list ',' publication_item
+				{
+					$$ = lappend($1, $3);
+				}
+		;
+
+publication_item:
+			ColLabel			{ $$ = makeString($1); };
+
+/*****************************************************************************
+ *
+ * ALTER SUBSCRIPTION name [ WITH ] options
+ *
+ *****************************************************************************/
+
+AlterSubscriptionStmt:
+			ALTER SUBSCRIPTION name opt_with subscription_opt_items
+				{
+					AlterSubscriptionStmt *n =
+						makeNode(AlterSubscriptionStmt);
+					n->subname = $3;
+					n->options = $5;
+					$$ = (Node *)n;
+				}
+			| ALTER SUBSCRIPTION name ENABLE_P
+				{
+					AlterSubscriptionStmt *n =
+						makeNode(AlterSubscriptionStmt);
+					n->subname = $3;
+					n->options = list_make1(makeDefElem("enabled",
+											(Node *)makeInteger(TRUE), @1));
+					$$ = (Node *)n;
+				}
+			| ALTER SUBSCRIPTION name DISABLE_P
+				{
+					AlterSubscriptionStmt *n =
+						makeNode(AlterSubscriptionStmt);
+					n->subname = $3;
+					n->options = list_make1(makeDefElem("enabled",
+											(Node *)makeInteger(FALSE), @1));
+					$$ = (Node *)n;
+				}		;
+
+subscription_opt_items:
+			subscription_opt_item
+				{
+					$$ = list_make1($1);
+				}
+			| subscription_opt_items subscription_opt_item
+				{
+					$$ = lappend($1, $2);
 				}
 		;
 
@@ -14050,6 +14174,7 @@ unreserved_keyword:
 			| STORAGE
 			| STRICT_P
 			| STRIP_P
+			| SUBSCRIPTION
 			| SYSID
 			| SYSTEM_P
 			| TABLES

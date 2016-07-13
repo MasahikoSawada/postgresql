@@ -1,0 +1,34 @@
+--
+-- SUBSCRIPTION
+--
+
+-- fail - no publications
+CREATE SUBSCRIPTION testsub CONNECTION 'foo';
+
+-- fail - no connection
+CREATE SUBSCRIPTION testsub PUBLICATION foo;
+
+CREATE SUBSCRIPTION testsub PUBLICATION testpub CONNECTION 'testconn' INITIALLY DISABLED;
+
+\dRs+
+
+ALTER SUBSCRIPTION testsub PUBLICATION testpub2, testpub3;
+
+\dRs
+
+ALTER SUBSCRIPTION testsub PUBLICATION testpub, testpub1 CONNECTION 'conn2';
+
+\dRs+
+
+BEGIN;
+ALTER SUBSCRIPTION testsub ENABLE;
+
+\dRs
+
+ALTER SUBSCRIPTION testsub DISABLE;
+
+\dRs
+
+COMMIT;
+
+DROP SUBSCRIPTION testsub;
