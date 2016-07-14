@@ -592,6 +592,23 @@ loop:
 
 	PageInit(page, BufferGetPageSize(buffer), 0);
 
+	/*
+	 * If the tuple intended for the new page will be frozen upon insertion,
+	 * mark the page is all visible and set both all-visible and all-frozen
+	 * flags to visibility map.
+	 */
+	if (options & HEAP_INSERT_FROZEN)
+	{
+		Buffer	vmbuffer = InvalidBuffer;
+		BlockNumber blkno = BufferGetBlockNumber(buffer);
+
+		PageSetAllVisible(page);
+		visibilitymap_pin(relation, blkno, &vmbuffer);
+		visibilitymap_set(relation, blkno, buffer, InvalidXLogRecPtr,
+						  vmbuffer, InvalidTransactionId,
+						  VISIBILITYMAP_ALL_VISIBLE | VISIBILITYMAP_ALL_FROZEN);
+		ReleaseBuffer(vmbuffer);
+	}
 	if (len > PageGetHeapFreeSpace(page))
 	{
 		/* We should not get here given the test at the top */

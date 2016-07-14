@@ -2417,7 +2417,7 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 	RelationPutHeapTuple(relation, buffer, heaptup,
 						 (options & HEAP_INSERT_SPECULATIVE) != 0);
 
-	if (PageIsAllVisible(BufferGetPage(buffer)))
+	if (PageIsAllVisible(BufferGetPage(buffer)) && !(options & HEAP_INSERT_FROZEN))
 	{
 		all_visible_cleared = true;
 		PageClearAllVisible(BufferGetPage(buffer));
@@ -2731,7 +2731,7 @@ heap_multi_insert(Relation relation, HeapTuple *tuples, int ntuples,
 				log_heap_new_cid(relation, heaptup);
 		}
 
-		if (PageIsAllVisible(page))
+		if (PageIsAllVisible(page) && !(options & HEAP_INSERT_FROZEN))
 		{
 			all_visible_cleared = true;
 			PageClearAllVisible(page);
