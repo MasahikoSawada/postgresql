@@ -15,6 +15,6 @@ include $(top_builddir)/src/Makefile.global
 override CPPFLAGS := -I$(srcdir) $(CPPFLAGS)
 
 OBJS = apply.o decode.o launcher.o logical.o logicalfuncs.o message.o \
-	   origin.o proto.o reorderbuffer.o snapbuild.o
+	   origin.o proto.o reorderbuffer.o snapbuild.o tablesync.o
 
 include $(top_srcdir)/src/backend/common.mk

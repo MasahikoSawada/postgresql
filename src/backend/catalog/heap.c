@@ -49,6 +49,7 @@
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_statistic.h"
+#include "catalog/pg_subscription.h"
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_type_fn.h"
@@ -1815,6 +1816,11 @@ heap_drop_with_catalog(Oid relid)
 	 * something with the doomed relation.
 	 */
 	relation_close(rel, NoLock);
+
+	/*
+	 * Remove any associated relation synchronization states.
+	 */
+	DropSubscriptionRel(InvalidOid, relid);
 
 	/*
 	 * Forget any ON COMMIT action for the rel

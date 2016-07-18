@@ -23,6 +23,9 @@ typedef struct LogicalRepWorker
 	/* Subscription id for the worker. */
 	Oid		subid;
 
+	/* Used for initial table synchronization. */
+	Oid		relid;
+
 	/* Stats. */
 	XLogRecPtr	last_lsn;
 	TimestampTz	last_send_time;
@@ -32,21 +35,22 @@ typedef struct LogicalRepWorker
 } LogicalRepWorker;
 
 extern int max_logical_replication_workers;
-extern LogicalRepWorker *MyLogicalRepWorker;
 
 extern void ApplyLauncherMain(Datum main_arg);
 extern void ApplyWorkerMain(Datum main_arg);
 
 extern Size ApplyLauncherShmemSize(void);
 extern void ApplyLauncherShmemInit(void);
+extern void ApplyLauncherWakeup(void);
+extern void ApplyLauncherWakeupOnCommit(void);
 
 extern void ApplyLauncherWakeupOnCommit(void);
 extern void ApplyLauncherWakeup(void);
 
 extern void logicalrep_worker_attach(int slot);
-extern LogicalRepWorker *logicalrep_worker_find(Oid subid);
+extern LogicalRepWorker *logicalrep_worker_find(Oid subid, Oid relid);
 extern int logicalrep_worker_count(Oid subid);
-extern void logicalrep_worker_launch(Oid dbid, Oid subid);
+extern void logicalrep_worker_launch(Oid dbid, Oid subid, Oid relid);
 extern void logicalrep_worker_stop(LogicalRepWorker *worker);
 
 extern Datum pg_stat_get_subscription(PG_FUNCTION_ARGS);

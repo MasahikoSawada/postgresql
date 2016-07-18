@@ -23,6 +23,7 @@
 #include "pqexpbuffer.h"
 #include "access/xlog.h"
 #include "miscadmin.h"
+#include "replication/logical.h"
 #include "replication/walreceiver.h"
 #include "utils/builtins.h"
 #include "utils/pg_lsn.h"
@@ -74,6 +75,11 @@ static int	libpqrcv_receive(WalReceiverConnHandle *handle, char **buffer,
 							 pgsocket *wait_fd);
 static void libpqrcv_send(WalReceiverConnHandle *handle, const char *buffer,
 						  int nbytes);
+static List *libpqrcv_list_tables(WalReceiverConnHandle *handle,
+								 char *slotname, char *options);
+static bool libpqrcv_copy_table(WalReceiverConnHandle *handle,
+								char *slotname, char *nspname,
+								char *relname, char *options);
 static void libpqrcv_disconnect(WalReceiverConnHandle *handle);
 
 /* Prototypes for private functions */
@@ -105,6 +111,8 @@ _PG_walreceirver_conn_init(WalReceiverConnAPI *wrcapi)
 	wrcapi->receive = libpqrcv_receive;
 	wrcapi->send = libpqrcv_send;
 	wrcapi->disconnect = libpqrcv_disconnect;
+	wrcapi->copy_table = libpqrcv_copy_table;
+	wrcapi->list_tables = libpqrcv_list_tables;
 
 	return handle;
 }
@@ -412,15 +420,15 @@ libpqrcv_endstreaming(WalReceiverConnHandle *handle, TimeLineID *next_tli)
 			(errmsg("could not send end-of-streaming message to primary: %s",
 					PQerrorMessage(handle->streamConn))));
 
+	*next_tli = 0;
+
 	/*
 	 * After COPY is finished, we should receive a result set indicating the
 	 * next timeline's ID, or just CommandComplete if the server was shut
 	 * down.
 	 *
-	 * If we had not yet received CopyDone from the backend, PGRES_COPY_IN
-	 * would also be possible. However, at the moment this function is only
-	 * called after receiving CopyDone from the backend - the walreceiver
-	 * never terminates replication on its own initiative.
+	 * If we had not yet received CopyDone from the backend, PGRES_COPY_OUT
+	 * is also possible in case we aborted the copy in mid-stream.
 	 */
 	res = PQgetResult(handle->streamConn);
 	if (PQresultStatus(res) == PGRES_TUPLES_OK)
@@ -438,8 +446,16 @@ libpqrcv_endstreaming(WalReceiverConnHandle *handle, TimeLineID *next_tli)
 		/* the result set should be followed by CommandComplete */
 		res = PQgetResult(handle->streamConn);
 	}
-	else
-		*next_tli = 0;
+	else if (PQresultStatus(res) == PGRES_COPY_OUT)
+	{
+		PQclear(res);
+
+		/* End the copy */
+		PQendcopy(handle->streamConn);
+
+		/* CommandComplete should follow */
+		res = PQgetResult(handle->streamConn);
+	}
 
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
 		ereport(ERROR,
@@ -639,6 +655,104 @@ libpqrcv_PQexec(WalReceiverConnHandle *handle, const char *query)
 	}
 
 	return lastResult;
+}
+
+/*
+ * Run the LIST_TABLES command which will send list of the tables to copy
+ * in whatever format the plugin choses.
+ */
+static List *
+libpqrcv_list_tables(WalReceiverConnHandle *handle, char *slotname,
+					 char *options)
+{
+	StringInfoData	cmd;
+	PGresult	   *res;
+	int				i;
+	List		   *tablelist = NIL;
+
+	initStringInfo(&cmd);
+	appendStringInfo(&cmd, "LIST_TABLES SLOT \"%s\"",
+					 slotname);
+
+	/* Add options */
+	if (options)
+		appendStringInfo(&cmd, "( %s )", options);
+
+	res = libpqrcv_PQexec(handle, cmd.data);
+	pfree(cmd.data);
+
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+	{
+		PQclear(res);
+		ereport(ERROR,
+				(errmsg("could not receive list of replicated tables from the provider: %s",
+						PQerrorMessage(handle->streamConn))));
+	}
+	if (PQnfields(res) != 3)
+	{
+		int nfields = PQnfields(res);
+		PQclear(res);
+		ereport(ERROR,
+				(errmsg("invalid response from provider"),
+				 errdetail("Expected 3 fields, got %d fields.", nfields)));
+	}
+
+	for (i = 0; i < PQntuples(res); i++)
+	{
+		LogicalRepTableListEntry *entry;
+
+		entry = palloc(sizeof(LogicalRepTableListEntry));
+		entry->nspname = pstrdup(PQgetvalue(res, i, 0));
+		entry->relname = pstrdup(PQgetvalue(res, i, 1));
+		if (!PQgetisnull(res, i, 2))
+			entry->info = pstrdup(PQgetvalue(res, i, 2));
+		else
+			entry->info = NULL;
+
+		tablelist = lappend(tablelist, entry);
+	}
+
+	PQclear(res);
+
+	return tablelist;
+}
+
+/*
+ * Run the COPY_TABLE command which will start streaming the existing data
+ * in the table.
+ */
+static bool
+libpqrcv_copy_table(WalReceiverConnHandle *handle, char *slotname,
+					char *nspname, char *relname, char *options)
+{
+	StringInfoData	cmd;
+	PGresult	   *res;
+
+	initStringInfo(&cmd);
+	appendStringInfo(&cmd, "COPY_TABLE SLOT \"%s\" TABLE \"%s\" \"%s\"",
+					 slotname, nspname, relname);
+
+	/* Add options */
+	if (options)
+		appendStringInfo(&cmd, "( %s )", options);
+
+	res = libpqrcv_PQexec(handle, cmd.data);
+
+	if (PQresultStatus(res) == PGRES_COMMAND_OK)
+	{
+		PQclear(res);
+		return false;
+	}
+	else if (PQresultStatus(res) != PGRES_COPY_BOTH)
+	{
+		PQclear(res);
+		ereport(ERROR,
+				(errmsg("could not start initial table contents streaming: %s",
+						PQerrorMessage(handle->streamConn))));
+	}
+	PQclear(res);
+	pfree(cmd.data);
+	return true;
 }
 
 /*

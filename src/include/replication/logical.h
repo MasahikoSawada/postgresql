@@ -31,9 +31,11 @@ typedef struct LogicalDecodingContext
 	/* memory context this is all allocated in */
 	MemoryContext context;
 
-	/* infrastructure pieces */
-	XLogReaderState *reader;
+	/* The associated replication slot */
 	ReplicationSlot *slot;
+
+	/* infrastructure pieces for decoding */
+	XLogReaderState *reader;
 	struct ReorderBuffer *reorder;
 	struct SnapBuild *snapshot_builder;
 
@@ -75,6 +77,14 @@ typedef struct LogicalDecodingContext
 	TransactionId write_xid;
 } LogicalDecodingContext;
 
+
+/* Entry used for listing tables by logical decoding plugin. */
+typedef struct LogicalRepTableListEntry {
+	char *nspname;
+	char *relname;
+	char *info;
+} LogicalRepTableListEntry;
+
 extern void CheckLogicalDecodingRequirements(void);
 
 extern LogicalDecodingContext *CreateInitDecodingContext(char *plugin,
@@ -91,6 +101,14 @@ extern LogicalDecodingContext *CreateDecodingContext(
 extern void DecodingContextFindStartpoint(LogicalDecodingContext *ctx);
 extern bool DecodingContextReady(LogicalDecodingContext *ctx);
 extern void FreeDecodingContext(LogicalDecodingContext *ctx);
+
+extern LogicalDecodingContext *CreateCopyDecodingContext(
+					  List *output_plugin_options,
+					  LogicalOutputPluginWriterPrepareWrite prepare_write,
+					  LogicalOutputPluginWriterWrite do_write);
+extern void DecodingContextProccessTuple(LogicalDecodingContext *ctx,
+							 Relation rel, HeapTuple tup);
+extern List *DecodingContextGetTableList(LogicalDecodingContext *ctx);
 
 extern void LogicalIncreaseXminForSlot(XLogRecPtr lsn, TransactionId xmin);
 extern void LogicalIncreaseRestartDecodingForSlot(XLogRecPtr current_lsn,

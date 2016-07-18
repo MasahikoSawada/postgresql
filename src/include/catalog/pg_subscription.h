@@ -72,4 +72,10 @@ extern Subscription *GetSubscription(Oid subid, bool missing_ok);
 extern void FreeSubscription(Subscription *sub);
 extern Oid get_subscription_oid(const char *subname, bool missing_ok);
 
+extern Oid SetSubscriptionRelState(Oid subid, Oid relid, char state,
+								   XLogRecPtr sublsn);
+extern char GetSubscriptionRelState(Oid subid, Oid relid,
+									XLogRecPtr *sublsn, bool missing_ok);
+extern void DropSubscriptionRel(Oid subid, Oid relid);
+
 #endif   /* PG_SUBSCRIPTION_H */

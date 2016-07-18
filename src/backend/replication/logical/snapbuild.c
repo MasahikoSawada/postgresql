@@ -589,9 +589,10 @@ SnapBuildExportSnapshot(SnapBuild *builder)
 	snap->xip = newxip;
 
 	/*
-	 * now that we've built a plain snapshot, use the normal mechanisms for
-	 * exporting it
+	 * now that we've built a plain snapshot, make it active and use the
+	 * normal mechanisms for exporting it
 	 */
+	PushActiveSnapshot(snap);
 	snapname = ExportSnapshot(snap);
 
 	ereport(LOG,

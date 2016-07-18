@@ -690,6 +690,7 @@ CREATE VIEW pg_stat_subscription AS
 			su.oid as subid,
 			su.subname,
 			st.pid,
+			st.relid,
 			st.received_lsn,
 			st.last_msg_send_time,
 			st.last_msg_receipt_time,

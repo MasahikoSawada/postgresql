@@ -43,6 +43,7 @@
 #include <signal.h>
 #include <unistd.h>
 
+#include "access/relscan.h"
 #include "access/timeline.h"
 #include "access/transam.h"
 #include "access/xact.h"
@@ -932,7 +933,7 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 	pq_endmessage(&buf);
 
 	/*
-	 * release active status again, START_REPLICATION will reacquire it
+	 * release active status again, subsequent commands will reacquire it
 	 */
 	ReplicationSlotRelease();
 }
@@ -1033,6 +1034,176 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 	/* Get out of COPY mode (CommandComplete). */
 	EndCommand("COPY 0", DestRemote);
 }
+
+/*
+ * Handle LIST_TABLES command.
+ */
+static void
+SendTableList(ListTablesCmd *cmd)
+{
+	List		   *tables;
+	ListCell	   *lc;
+	StringInfoData	buf;
+
+	/* make sure that our requirements are still fulfilled */
+	CheckLogicalDecodingRequirements();
+
+	Assert(!MyReplicationSlot);
+
+	ReplicationSlotAcquire(cmd->slotname);
+
+	/* Initialize the decoding context for table copy. */
+	logical_decoding_ctx = CreateCopyDecodingContext(cmd->options,
+													 WalSndPrepareWrite,
+													 WalSndWriteData);
+
+	/* Send a RowDescription message */
+	pq_beginmessage(&buf, 'T');
+	pq_sendint(&buf, 3, 2);		/* 3 fields */
+
+	/* first field: namespace name */
+	pq_sendstring(&buf, "nspname");	/* col name */
+	pq_sendint(&buf, 0, 4);		/* table oid */
+	pq_sendint(&buf, 0, 2);		/* attnum */
+	pq_sendint(&buf, TEXTOID, 4);		/* type oid */
+	pq_sendint(&buf, -1, 2);	/* typlen */
+	pq_sendint(&buf, 0, 4);		/* typmod */
+	pq_sendint(&buf, 0, 2);		/* format code */
+
+	/* second field: relation name */
+	pq_sendstring(&buf, "relname");	/* col name */
+	pq_sendint(&buf, 0, 4);		/* table oid */
+	pq_sendint(&buf, 0, 2);		/* attnum */
+	pq_sendint(&buf, TEXTOID, 4);		/* type oid */
+	pq_sendint(&buf, -1, 2);	/* typlen */
+	pq_sendint(&buf, 0, 4);		/* typmod */
+	pq_sendint(&buf, 0, 2);		/* format code */
+
+	/* third field: freeform relation info (the only NULLable field) */
+	pq_sendstring(&buf, "info");		/* col name */
+	pq_sendint(&buf, 0, 4);		/* table oid */
+	pq_sendint(&buf, 0, 2);		/* attnum */
+	pq_sendint(&buf, TEXTOID, 4);		/* type oid */
+	pq_sendint(&buf, -1, 2);	/* typlen */
+	pq_sendint(&buf, 0, 4);		/* typmod */
+	pq_sendint(&buf, 0, 2);		/* format code */
+
+	pq_endmessage(&buf);
+
+	/* Let the decoding contex send the list. */
+	tables = DecodingContextGetTableList(logical_decoding_ctx);
+
+	/* Send the table list as tuples. */
+	foreach(lc, tables)
+	{
+		LogicalRepTableListEntry *entry = lfirst(lc);
+		Size		len;
+
+		Assert(entry->nspname != NULL);
+		Assert(entry->relname != NULL);
+
+		/* Send a DataRow message */
+		pq_beginmessage(&buf, 'D');
+		pq_sendint(&buf, 3, 2);		/* # of columns */
+
+		/* namespace name */
+		len = strlen(entry->nspname);
+		pq_sendint(&buf, len, 4);	/* col1 len */
+		pq_sendbytes(&buf, entry->nspname, len);
+
+		/* relation name name */
+		len = strlen(entry->relname);
+		pq_sendint(&buf, len, 4);	/* col1 len */
+		pq_sendbytes(&buf, entry->relname, len);
+
+		/* relation info, or NULL if none */
+		if (entry->info != NULL)
+		{
+			len = strlen(entry->info);
+			pq_sendint(&buf, len, 4);
+			pq_sendbytes(&buf, entry->info, len);
+		}
+		else
+			pq_sendint(&buf, -1, 4);
+
+		pq_endmessage(&buf);
+	}
+
+	/* Clean up the logical decoding context. */
+	FreeDecodingContext(logical_decoding_ctx);
+
+	ReplicationSlotRelease();
+}
+
+/*
+ * LogicalDecodingContext 'write' callback.
+ *
+ * Actually write out data previously prepared by WalSndPrepareWrite out
+ * to the network.
+ */
+static void
+CopyTableWriteData(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid,
+				bool last_write)
+{
+	/* output previously gathered data in a CopyData packet */
+	if (pq_putmessage('d', ctx->out->data, ctx->out->len))
+		ereport(ERROR,
+			(errmsg("copy table could not send data, aborting")));
+}
+
+/*
+ * Handle COPY_TABLE command.
+ */
+static void
+CopyTable(CopyTableCmd *cmd)
+{
+	StringInfoData	buf;
+	Relation		rel;
+	HeapScanDesc	scandesc;
+	HeapTuple	tup;
+
+	/* make sure that our requirements are still fulfilled */
+	CheckLogicalDecodingRequirements();
+
+	Assert(!MyReplicationSlot);
+
+	ReplicationSlotAcquire(cmd->slotname);
+
+	WalSndSetState(WALSNDSTATE_BACKUP);
+
+	/* Send a CopyBothResponse message, and start streaming */
+	pq_beginmessage(&buf, 'W');
+	pq_sendbyte(&buf, 0);
+	pq_sendint(&buf, 0, 2);
+	pq_endmessage(&buf);
+	pq_flush();
+
+	/* Initialize the decoding context for table copy. */
+	logical_decoding_ctx = CreateCopyDecodingContext(cmd->options,
+													 WalSndPrepareWrite,
+													 CopyTableWriteData);
+
+	/* Open the relation and start the scan. */
+	rel = heap_openrv(cmd->relation, AccessShareLock);
+	scandesc = heap_beginscan(rel, GetActiveSnapshot(), 0, NULL);
+
+	/* Scan the whole table and pass the rows to the decoding context. */
+	while (HeapTupleIsValid(tup = heap_getnext(scandesc,
+											   ForwardScanDirection)))
+		DecodingContextProccessTuple(logical_decoding_ctx, rel, tup);
+
+	/* Close the scan and relation. */
+	heap_endscan(scandesc);
+	heap_close(rel, AccessShareLock);
+
+	/* Send CopyDone */
+	pq_putemptymessage('c');
+
+	FreeDecodingContext(logical_decoding_ctx);
+
+	ReplicationSlotRelease();
+}
+
 
 /*
  * LogicalDecodingContext 'prepare_write' callback.
@@ -1299,14 +1470,6 @@ exec_replication_command(const char *cmd_string)
 	ereport(log_replication_commands ? LOG : DEBUG1,
 			(errmsg("received replication command: %s", cmd_string)));
 
-	/*
-	 * CREATE_REPLICATION_SLOT ... LOGICAL exports a snapshot until the next
-	 * command arrives. Clean up the old stuff if there's anything.
-	 */
-	SnapBuildClearExportedSnapshot();
-
-	CHECK_FOR_INTERRUPTS();
-
 	cmd_context = AllocSetContextCreate(CurrentMemoryContext,
 										"Replication command context",
 										ALLOCSET_DEFAULT_SIZES);
@@ -1321,6 +1484,16 @@ exec_replication_command(const char *cmd_string)
 								  parse_rc))));
 
 	cmd_node = replication_parse_result;
+
+	/*
+	 * CREATE_REPLICATION_SLOT ... LOGICAL exports a snapshot until the next
+	 * command arrives. Clean up the old stuff if there's anything unless
+	 * the command currently being executed needs the snapshot.
+	 */
+	if (cmd_node->type != T_ListTablesCmd && cmd_node->type != T_CopyTableCmd)
+		SnapBuildClearExportedSnapshot();
+
+	CHECK_FOR_INTERRUPTS();
 
 	switch (cmd_node->type)
 	{
@@ -1353,6 +1526,14 @@ exec_replication_command(const char *cmd_string)
 
 		case T_TimeLineHistoryCmd:
 			SendTimeLineHistory((TimeLineHistoryCmd *) cmd_node);
+			break;
+
+		case T_ListTablesCmd:
+			SendTableList((ListTablesCmd *) cmd_node);
+			break;
+
+		case T_CopyTableCmd:
+			CopyTable((CopyTableCmd *) cmd_node);
 			break;
 
 		default:

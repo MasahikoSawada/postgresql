@@ -98,6 +98,9 @@ PHYSICAL			{ return K_PHYSICAL; }
 RESERVE_WAL			{ return K_RESERVE_WAL; }
 LOGICAL				{ return K_LOGICAL; }
 SLOT				{ return K_SLOT; }
+LIST_TABLES			{ return K_LIST_TABLES; }
+COPY_TABLE			{ return K_COPY_TABLE; }
+TABLE				{ return K_TABLE; }
 
 ","				{ return ','; }
 ";"				{ return ';'; }

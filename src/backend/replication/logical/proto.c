@@ -365,28 +365,15 @@ logicalrep_read_delete(StringInfo in, LogicalRepTupleData *oldtup)
 }
 
 /*
- * Write relation description to the output stream.
+ * Write qualified relation name to the output stream.
  */
 void
-logicalrep_write_rel(StringInfo out, Relation rel)
+logicalrep_write_rel_name(StringInfo out, char *nspname, char *relname)
 {
-	char	   *nspname;
 	uint8		nspnamelen;
-	const char *relname;
 	uint8		relnamelen;
 
-	pq_sendbyte(out, 'R');		/* sending RELATION */
-
-	/* use Oid as relation identifier */
-	pq_sendint(out, RelationGetRelid(rel), 4);
-
-	nspname = get_namespace_name(RelationGetNamespace(rel));
-	if (nspname == NULL)
-		elog(ERROR, "cache lookup failed for namespace %u",
-			 rel->rd_rel->relnamespace);
 	nspnamelen = strlen(nspname) + 1;
-
-	relname = RelationGetRelationName(rel);
 	relnamelen = strlen(relname) + 1;
 
 	pq_sendbyte(out, nspnamelen);		/* schema name length */
@@ -394,31 +381,63 @@ logicalrep_write_rel(StringInfo out, Relation rel)
 
 	pq_sendbyte(out, relnamelen);		/* table name length */
 	pq_sendbytes(out, relname, relnamelen);
-
-	/* send the attribute info */
-	logicalrep_write_attrs(out, rel);
-
-	pfree(nspname);
 }
 
 /*
- * Read schema.relation from stream and return as LogicalRepRelation opened in
- * lockmode.
+ * Read qualified relation name from the stream.
+ */
+void
+logicalrep_read_rel_name(StringInfo in, char **nspname, char **relname)
+{
+	int			len;
+
+	len = pq_getmsgbyte(in);
+	*nspname = (char *) pq_getmsgbytes(in, len);
+
+	len = pq_getmsgbyte(in);
+	*relname = (char *) pq_getmsgbytes(in, len);
+}
+
+
+/*
+ * Write relation description to the output stream.
+ */
+void
+logicalrep_write_rel(StringInfo out, Relation rel)
+{
+	char	   *nspname;
+	char	   *relname;
+
+	pq_sendbyte(out, 'R');		/* sending RELATION */
+
+	/* use Oid as relation identifier */
+	pq_sendint(out, RelationGetRelid(rel), 4);
+
+	/* send the relation name */
+	nspname = get_namespace_name(RelationGetNamespace(rel));
+	if (nspname == NULL)
+		elog(ERROR, "cache lookup failed for namespace %u",
+			 rel->rd_rel->relnamespace);
+	relname = RelationGetRelationName(rel);
+
+	logicalrep_write_rel_name(out, nspname, relname);
+
+	/* send the attribute info */
+	logicalrep_write_attrs(out, rel);
+}
+
+/*
+ * Read the relation info from stream and return as LogicalRepRelation.
  */
 LogicalRepRelation *
 logicalrep_read_rel(StringInfo in)
 {
 	LogicalRepRelation	*rel = palloc(sizeof(LogicalRepRelation));
-	int			len;
 
 	rel->remoteid = pq_getmsgint(in, 4);
 
-	/* Read relation from stream */
-	len = pq_getmsgbyte(in);
-	rel->nspname = (char *) pq_getmsgbytes(in, len);
-
-	len = pq_getmsgbyte(in);
-	rel->relname = (char *) pq_getmsgbytes(in, len);
+	/* Read relation name from stream */
+	logicalrep_read_rel_name(in, &rel->nspname, &rel->relname);
 
 	/* Get attribute description */
 	logicalrep_read_attrs(in, &rel->attnames, &rel->natts);

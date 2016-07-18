@@ -77,11 +77,14 @@ Node *replication_parse_result;
 %token K_LOGICAL
 %token K_SLOT
 %token K_RESERVE_WAL
+%token K_TABLE
+%token K_LIST_TABLES
+%token K_COPY_TABLE
 
 %type <node>	command
 %type <node>	base_backup start_replication start_logical_replication
 				create_replication_slot drop_replication_slot identify_system
-				timeline_history
+				timeline_history list_tables copy_table
 %type <list>	base_backup_opt_list
 %type <defelt>	base_backup_opt
 %type <uintval>	opt_timeline
@@ -111,6 +114,8 @@ command:
 			| create_replication_slot
 			| drop_replication_slot
 			| timeline_history
+			| list_tables
+			| copy_table
 			;
 
 /*
@@ -323,6 +328,30 @@ plugin_opt_arg:
 			SCONST							{ $$ = (Node *) makeString($1); }
 			| /* EMPTY */					{ $$ = NULL; }
 		;
+
+copy_table:
+			K_COPY_TABLE K_SLOT IDENT K_TABLE IDENT IDENT plugin_options
+				{
+					CopyTableCmd *cmd;
+					cmd = makeNode(CopyTableCmd);
+					cmd->slotname = $3;
+					cmd->relation = makeRangeVar($5, $6, -1);
+					cmd->options = $7;
+					$$ = (Node *) cmd;
+				}
+		;
+
+list_tables:
+			K_LIST_TABLES K_SLOT IDENT plugin_options
+				{
+					ListTablesCmd *cmd;
+					cmd = makeNode(ListTablesCmd);
+					cmd->slotname = $3;
+					cmd->options = $4;
+					$$ = (Node *) cmd;
+				}
+		;
+
 %%
 
 #include "repl_scanner.c"

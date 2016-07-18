@@ -8732,6 +8732,12 @@ subscription_create_opt_item:
 					else if (strcmp($1, "nocreate_slot") == 0)
 						$$ = makeDefElem("create_slot",
 										 (Node *)makeInteger(FALSE), @1);
+					else if (strcmp($1, "copy_data") == 0)
+						$$ = makeDefElem("copy_data",
+										 (Node *)makeInteger(TRUE), @1);
+					else if (strcmp($1, "nocopy_data") == 0)
+						$$ = makeDefElem("copy_data",
+										 (Node *)makeInteger(FALSE), @1);
 				}
 		;
 

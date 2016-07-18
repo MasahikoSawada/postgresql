@@ -30,6 +30,8 @@
 
 #include "miscadmin.h"
 
+#include "access/heapam.h"
+#include "access/htup.h"
 #include "access/xact.h"
 #include "access/xlog_internal.h"
 
@@ -43,6 +45,7 @@
 #include "storage/procarray.h"
 
 #include "utils/memutils.h"
+#include "utils/tuplestore.h"
 
 /* data for errcontext callback */
 typedef struct LogicalErrorCallbackState
@@ -65,6 +68,9 @@ static void change_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 static void message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 				   XLogRecPtr message_lsn, bool transactional,
 				 const char *prefix, Size message_size, const char *message);
+static List *list_tables_cb_wrapper(LogicalDecodingContext *ctx);
+static void tuple_cb_wrapper(LogicalDecodingContext *ctx, Relation relation,
+							 HeapTuple tup);
 
 static void LoadOutputPlugin(OutputPluginCallbacks *callbacks, char *plugin);
 
@@ -399,6 +405,127 @@ CreateDecodingContext(XLogRecPtr start_lsn,
 }
 
 /*
+ * Create a new limited decoding context for base copy.
+ *
+ * nspname:
+ *		name of a schema
+ *
+ * relname
+ *		name of a relation
+ *
+ * output_plugin_options
+ *		contains options passed to the output plugin.
+ *
+ * prepare_write, do_write
+ *		callbacks that have to be filled to perform the use-case dependent,
+ *		actual work.
+ *
+ * Needs to be called while in a memory context that's at least as long lived
+ * as the decoding context because further memory contexts will be created
+ * inside it.
+ *
+ * Needs to be called inside transaction.
+ *
+ * Returns an initialized decoding context after calling the output plugin's
+ * startup function.
+ */
+LogicalDecodingContext *
+CreateCopyDecodingContext(List *output_plugin_options,
+						  LogicalOutputPluginWriterPrepareWrite prepare_write,
+						  LogicalOutputPluginWriterWrite do_write)
+{
+	LogicalDecodingContext *ctx;
+	ReplicationSlot *slot;
+	MemoryContext	context,
+					old_context;
+
+	/* shorter lines... */
+	slot = MyReplicationSlot;
+
+	/* first some sanity checks that are unlikely to be violated */
+	if (slot == NULL)
+		elog(ERROR, "cannot perform logical base copy without an acquired slot");
+
+	/* make sure the passed slot is suitable, these are user facing errors */
+	if (SlotIsPhysical(slot))
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 (errmsg("cannot use physical replication slot for logical base copy"))));
+
+	if (slot->data.database != MyDatabaseId)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+		  (errmsg("replication slot \"%s\" was not created in this database",
+				  NameStr(slot->data.name)))));
+
+	if (!IsTransactionOrTransactionBlock())
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 (errmsg("cannot perform table copy without snapshot"))));
+
+
+	context = AllocSetContextCreate(CurrentMemoryContext,
+									"Table Copy Context",
+									ALLOCSET_DEFAULT_MINSIZE,
+									ALLOCSET_DEFAULT_INITSIZE,
+									ALLOCSET_DEFAULT_MAXSIZE);
+	old_context = MemoryContextSwitchTo(context);
+	ctx = palloc0(sizeof(LogicalDecodingContext));
+
+	ctx->context = context;
+
+	/*
+	 * (re-)load output plugins, so we detect a bad (removed) output plugin
+	 * now.
+	 */
+	LoadOutputPlugin(&ctx->callbacks, NameStr(slot->data.plugin));
+
+	/* CHeck if the output plugin actually supports the copy operations. */
+	if (ctx->callbacks.list_tables_cb == NULL ||
+		ctx->callbacks.tuple_cb == NULL)
+		elog(ERROR, "output plugin \"%s\" does not support LIST_TABLES and COPY_TABLE comamnds",
+			 NameStr(slot->data.plugin));
+
+	/* Initialize non NULL fields. */
+	ctx->slot = slot;
+	ctx->out = makeStringInfo();
+	ctx->prepare_write = prepare_write;
+	ctx->write = do_write;
+
+	/* Make sure plugin sees the options. */
+	ctx->output_plugin_options = output_plugin_options;
+
+	/* call output plugin initialization callback */
+	if (ctx->callbacks.startup_cb != NULL)
+		startup_cb_wrapper(ctx, &ctx->options, false);
+
+	MemoryContextSwitchTo(old_context);
+
+	return ctx;
+}
+
+/*
+ * Process the tuple tup of a relation rel - send it to the tuple
+ * callback of the plugin.
+ */
+void
+DecodingContextProccessTuple(LogicalDecodingContext *ctx, Relation rel,
+							 HeapTuple tup)
+{
+	tuple_cb_wrapper(ctx, rel, tup);
+}
+
+/*
+ * Process the tuple tup of a relation rel - send it to the tuple
+ * callback of the plugin.
+ */
+List *
+DecodingContextGetTableList(LogicalDecodingContext *ctx)
+{
+	return list_tables_cb_wrapper(ctx);
+}
+
+/*
  * Returns true if a consistent initial decoding snapshot has been built.
  */
 bool
@@ -459,9 +586,12 @@ FreeDecodingContext(LogicalDecodingContext *ctx)
 	if (ctx->callbacks.shutdown_cb != NULL)
 		shutdown_cb_wrapper(ctx);
 
-	ReorderBufferFree(ctx->reorder);
-	FreeSnapshotBuilder(ctx->snapshot_builder);
-	XLogReaderFree(ctx->reader);
+	if (ctx->reorder)
+		ReorderBufferFree(ctx->reorder);
+	if (ctx->snapshot_builder)
+		FreeSnapshotBuilder(ctx->snapshot_builder);
+	if (ctx->reader)
+		XLogReaderFree(ctx->reader);
 	MemoryContextDelete(ctx->context);
 }
 
@@ -741,6 +871,60 @@ message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	/* do the actual work: call callback */
 	ctx->callbacks.message_cb(ctx, txn, message_lsn, transactional, prefix,
 							  message_size, message);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+}
+
+static List *
+list_tables_cb_wrapper(LogicalDecodingContext *ctx)
+{
+	LogicalErrorCallbackState state;
+	ErrorContextCallback errcallback;
+	List *res;
+
+	/* Push callback + info on the error context stack */
+	state.ctx = ctx;
+	state.callback_name = "list_tables";
+	state.report_location = InvalidXLogRecPtr;
+	errcallback.callback = output_plugin_error_callback;
+	errcallback.arg = (void *) &state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	/* set output state */
+	ctx->accept_writes = true;
+
+	/* do the actual work: call callback */
+	res = ctx->callbacks.list_tables_cb(ctx);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+
+	return res;
+}
+
+static void
+tuple_cb_wrapper(LogicalDecodingContext *ctx, Relation relation,
+				 HeapTuple tup)
+{
+	LogicalErrorCallbackState state;
+	ErrorContextCallback errcallback;
+
+	/* Push callback + info on the error context stack */
+	state.ctx = ctx;
+	state.callback_name = "tuple";
+	state.report_location = InvalidXLogRecPtr;
+	errcallback.callback = output_plugin_error_callback;
+	errcallback.arg = (void *) &state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	/* set output state */
+	ctx->accept_writes = true;
+
+	/* do the actual work: call callback */
+	ctx->callbacks.tuple_cb(ctx, relation, tup);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;

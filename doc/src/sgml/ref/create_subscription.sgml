@@ -29,6 +29,7 @@ CREATE SUBSCRIPTION <replaceable class="PARAMETER">subscription_name</replaceabl
     | PUBLICATION publication_name [, ...]
     | INITIALLY { ENABLED | DISABLED }
     | CREATE_SLOT | NOCREATE_SLOT
+    | COPY_DATA | NOCOPY_DATA
 </synopsis>
  </refsynopsisdiv>
 
@@ -111,16 +112,33 @@ CREATE SUBSCRIPTION <replaceable class="PARAMETER">subscription_name</replaceabl
     <listitem>
      <para>
       Specifies if the command should create the replication slot on the
-      publisher. When the slot is created the command will connect to
-      <replaceable class="parameter">conninfo</replaceable> immediately,
-      otherwise the <replaceable class="parameter">conninfo</replaceable>
-      is not used until the logical worker for the subscription has started.
-      <literal>CREATE_SLOT</literal> is the default.
+      publisher. <literal>CREATE_SLOT</literal> is the default.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>COPY_DATA</term>
+    <term>NOCOPY_DATA</term>
+    <listitem>
+     <para>
+      Specifies if the existing data in the publication that are being
+      subscribed should be copied once the replication starts.
+      <literal>COPY_DATA</literal> is the default.
      </para>
     </listitem>
    </varlistentry>
 
   </variablelist>
+
+  <para>
+    When either the <literal>CREATE_SLOT</literal> or
+    <literal>COPY_DATA</literal> is specified the command will connect to
+    <replaceable class="parameter">conninfo</replaceable> immediately,
+    otherwise the <replaceable class="parameter">conninfo</replaceable>
+    is not used until the logical worker for the subscription has started.
+  </para>
+
  </refsect1>
 
  <refsect1>

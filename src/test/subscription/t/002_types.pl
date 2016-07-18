@@ -101,12 +101,18 @@ $node_provider->safe_psql('postgres',
 $node_subscriber->safe_psql('postgres',
 	"CREATE SUBSCRIPTION tap_sub WITH CONNECTION '$provider_connstr' PUBLICATION tap_pub");
 
-# Wait for subscriber to finish table sync
+# Wait for subscriber to finish initialization
 my $appname = 'tap_sub';
 my $caughtup_query =
 "SELECT pg_current_xlog_location() <= write_location FROM pg_stat_replication WHERE application_name = '$appname';";
 $node_provider->poll_query_until('postgres', $caughtup_query)
   or die "Timed out while waiting for subscriber to catch up";
+
+# Wait for initial sync to finish as well
+my $synced_query =
+"SELECT count(1) = 0 FROM pg_subscription_rel WHERE substate NOT IN ('s', 'r');";
+$node_subscriber->poll_query_until('postgres', $synced_query)
+  or die "Timed out while waiting for subscriber to synchronize data";
 
 # Insert initial test data
 $node_provider->safe_psql('postgres', qq(

@@ -170,6 +170,13 @@ typedef int (*walrcvconn_receive_fn) (WalReceiverConnHandle *handle,
 									  char **buffer, pgsocket *wait_fd);
 typedef void (*walrcvconn_send_fn) (WalReceiverConnHandle *handle,
 									const char *buffer, int nbytes);
+typedef List *(*walrcvconn_list_tables_fn) (
+									WalReceiverConnHandle *handle,
+									char *slotname, char *options);
+typedef bool (*walrcvconn_copy_table_fn) (
+									WalReceiverConnHandle *handle,
+									char *slotname, char *nspname,
+									char *relname, char *options);
 typedef void (*walrcvconn_disconnect_fn) (WalReceiverConnHandle *handle);
 
 typedef struct WalReceiverConnAPI {
@@ -184,6 +191,8 @@ typedef struct WalReceiverConnAPI {
 	walrcvconn_endstreaming_fn				endstreaming;
 	walrcvconn_receive_fn					receive;
 	walrcvconn_send_fn						send;
+	walrcvconn_list_tables_fn				list_tables;
+	walrcvconn_copy_table_fn				copy_table;
 	walrcvconn_disconnect_fn				disconnect;
 } WalReceiverConnAPI;
 

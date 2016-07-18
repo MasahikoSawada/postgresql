@@ -22,11 +22,13 @@
 #include "access/htup_details.h"
 #include "access/xact.h"
 
+#include "catalog/dependency.h"
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
 #include "catalog/objectaddress.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_subscription.h"
+#include "catalog/pg_subscription_rel.h"
 
 #include "commands/dbcommands.h"
 #include "commands/defrem.h"
@@ -41,7 +43,6 @@
 #include "replication/logicalworker.h"
 #include "replication/origin.h"
 #include "replication/reorderbuffer.h"
-#include "replication/logicalworker.h"
 #include "replication/walreceiver.h"
 
 #include "storage/ipc.h"
@@ -70,15 +71,17 @@ check_subscription_permissions(void)
 static void
 parse_subscription_options(List *options,
 						   bool *enabled_given, bool *enabled,
-						   bool *create_slot, char **conninfo,
-						   List **publications)
+						   bool *create_slot, bool *copy_data,
+						   char **conninfo, List **publications)
 {
 	ListCell   *lc;
 	bool		create_slot_given = false;
+	bool		copy_data_given = false;
 
 	*enabled_given = false;
 	*enabled = true;
 	*create_slot = true;
+	*copy_data = true;
 	*conninfo = NULL;
 	*publications = NIL;
 
@@ -106,6 +109,16 @@ parse_subscription_options(List *options,
 
 			create_slot_given = true;
 			*create_slot = defGetBoolean(defel);
+		}
+		else if (strcmp(defel->defname, "copy_data") == 0)
+		{
+			if (copy_data_given)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+
+			copy_data_given = true;
+			*copy_data = defGetBoolean(defel);
 		}
 		else if (strcmp(defel->defname, "conninfo") == 0)
 		{
@@ -204,6 +217,7 @@ CreateSubscription(CreateSubscriptionStmt *stmt)
 	bool		enabled_given;
 	bool		enabled;
 	bool		create_slot;
+	bool		copy_data;
 	char	   *conninfo;
 	char	   *slotname;
 	List	   *publications;
@@ -225,7 +239,8 @@ CreateSubscription(CreateSubscriptionStmt *stmt)
 
 	/* Parse and check options. */
 	parse_subscription_options(stmt->options, &enabled_given, &enabled,
-							   &create_slot, &conninfo, &publications);
+							   &create_slot, &copy_data,
+							   &conninfo, &publications);
 	slotname = stmt->subname;
 
 	/* TODO: improve error messages here. */
@@ -261,13 +276,12 @@ CreateSubscription(CreateSubscriptionStmt *stmt)
 	CatalogUpdateIndexes(rel, tup);
 	heap_freetuple(tup);
 
-	if (create_slot)
+	if (create_slot || copy_data)
 	{
 		TimeLineID	startpointTLI;
 		char	   *publisher_sysid;
 		char	   *publisher_dbname;
 		char		my_sysid[32];
-		XLogRecPtr	lsn;
 		WalReceiverConnHandle  *wrchandle;
 		WalReceiverConnAPI	   *wrcapi;
 		walrcvconn_init_fn		walrcvconn_init;
@@ -306,22 +320,59 @@ CreateSubscription(CreateSubscriptionStmt *stmt)
 					 (errmsg("the connection info provided points to the current database"))));
 
 		/*
-		 * Create the replication slot on remote side for our newly created
-		 * subscription.
+		 * If requested, create the replication slot on remote side for our
+		 * newly created subscription.
 		 *
 		 * Note, we can't cleanup slot in case of failure as reason for
 		 * failure might be already existing slot of the same name and we
 		 * don't want to drop somebody else's slot by mistake.
 		 */
-		wrcapi->create_slot(wrchandle, slotname, true, &lsn);
-		ereport(NOTICE,
-				(errmsg("created replication slot \"%s\" on provider",
-						slotname)));
+		if (create_slot)
+		{
+			XLogRecPtr	lsn;
+
+			wrcapi->create_slot(wrchandle, slotname, true, &lsn);
+			ereport(NOTICE,
+					(errmsg("created replication slot \"%s\" on provider",
+							slotname)));
+			/*
+			 * Setup replication origin tracking.
+			 */
+			replorigin_create(slotname);
+		}
+
 		/*
-		 * Setup replication origin tracking.
-		 * TODO: do this only when it does not already exist?
+		 * Also if requested set the copy status of all the existing tables
+		 * so that the sync apply workers will be started for them.
 		 */
-		replorigin_create(slotname);
+		if (copy_data)
+		{
+			char	   *options;
+			List	   *tables;
+			ListCell   *lc;
+
+			/* Build option string for the plugin. */
+			options = logicalrep_build_options(publications);
+
+			/*
+			 * Get the table list from provider and build local table status
+			 * info.
+			 */
+			tables = wrcapi->list_tables(wrchandle, slotname, options);
+			foreach (lc, tables)
+			{
+				LogicalRepTableListEntry *entry = lfirst(lc);
+				Oid		nspid = LookupExplicitNamespace(entry->nspname,
+														false);
+				Oid		relid = get_relname_relid(entry->relname, nspid);
+
+				SetSubscriptionRelState(subid, relid, SUBREL_STATE_INIT,
+										InvalidXLogRecPtr);
+			}
+
+			ereport(NOTICE,
+					(errmsg("synchronized table states")));
+		}
 
 		/* And we are done with the remote side. */
 		wrcapi->disconnect(wrchandle);
@@ -355,6 +406,7 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 	bool		enabled_given;
 	bool		enabled;
 	bool		create_slot;
+	bool		copy_data;
 	char	   *conninfo;
 	List	   *publications;
 
@@ -377,6 +429,7 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 	/* Parse options. */
 	parse_subscription_options(stmt->options, &enabled_given, &enabled,
 							   &create_slot  /* not used */,
+							   &copy_data  /* not used */,
 							   &conninfo, &publications);
 
 	/* Form a new tuple. */
@@ -487,12 +540,15 @@ DropSubscriptionById(Oid subid)
 	/* Remove the tuple from catalog. */
 	simple_heap_delete(rel, &tup->t_self);
 
+	/* Remove any associated relation synchronization states. */
+	DropSubscriptionRel(subid, InvalidOid);
+
 	/* Protect against launcher restarting the worker. */
 	LWLockAcquire(LogicalRepLauncherLock, LW_EXCLUSIVE);
 
 	/* Kill the apply worker so that the slot becomes accessible. */
 	LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
-	worker = logicalrep_worker_find(subid);
+	worker = logicalrep_worker_find(subid, InvalidOid);
 	if (worker)
 		logicalrep_worker_stop(worker);
 	LWLockRelease(LogicalRepWorkerLock);

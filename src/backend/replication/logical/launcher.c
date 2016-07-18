@@ -51,7 +51,6 @@
 #include "utils/snapmgr.h"
 
 int	max_logical_replication_workers = 4;
-LogicalRepWorker *MyLogicalRepWorker = NULL;
 
 typedef struct LogicalRepCtxStruct
 {
@@ -188,20 +187,22 @@ WaitForReplicationWorkerAttach(LogicalRepWorker *worker,
 
 /*
  * Walks the workers array and searches for one that matches given
- * subscription id.
+ * subscription id and relid.
  */
 LogicalRepWorker *
-logicalrep_worker_find(Oid subid)
+logicalrep_worker_find(Oid subid, Oid relid)
 {
 	int	i;
 	LogicalRepWorker   *res = NULL;
 
 	Assert(LWLockHeldByMe(LogicalRepWorkerLock));
+
 	/* Search for attached worker for a given subscription id. */
 	for (i = 0; i < max_logical_replication_workers; i++)
 	{
 		LogicalRepWorker   *w = &LogicalRepCtx->workers[i];
-		if (w->subid == subid && w->proc && IsBackendPid(w->proc->pid))
+		if (w->subid == subid && w->relid == relid &&
+			w->proc && IsBackendPid(w->proc->pid))
 		{
 			res = w;
 			break;
@@ -238,16 +239,17 @@ logicalrep_worker_count(Oid subid)
  * Start new apply background worker.
  */
 void
-logicalrep_worker_launch(Oid dbid, Oid subid)
+logicalrep_worker_launch(Oid dbid, Oid subid, Oid relid)
 {
 	BackgroundWorker	bgw;
 	BackgroundWorkerHandle *bgw_handle;
 	int					slot;
 	LogicalRepWorker   *worker = NULL;
 
-	ereport(LOG,
-			(errmsg("starting logical replication worker for subscription %u",
-					subid)));
+	ereport(DEBUG1,
+			(errmsg("starting logical replication worker for "
+					"subscription %u, relation %u",
+					subid, relid)));
 
 	/*
 	 * We need to do the modification of the shared memory under lock so that
@@ -280,6 +282,7 @@ logicalrep_worker_launch(Oid dbid, Oid subid)
 	memset(worker, 0, sizeof(LogicalRepWorker));
 	worker->dbid = dbid;
 	worker->subid = subid;
+	worker->relid = relid;
 
 	LWLockRelease(LogicalRepWorkerLock);
 
@@ -288,6 +291,13 @@ logicalrep_worker_launch(Oid dbid, Oid subid)
 		BGWORKER_BACKEND_DATABASE_CONNECTION;
 	bgw.bgw_start_time = BgWorkerStart_RecoveryFinished;
 	bgw.bgw_main = ApplyWorkerMain;
+
+	if (OidIsValid(relid))
+		snprintf(bgw.bgw_name, BGW_MAXLEN,
+				 "logical replication worker %u sync %u", subid, relid);
+	else
+		snprintf(bgw.bgw_name, BGW_MAXLEN,
+				 "logical replication worker %u", subid);
 
 	bgw.bgw_restart_time = BGW_NEVER_RESTART;
 	bgw.bgw_notify_pid = MyProcPid;
@@ -324,27 +334,6 @@ logicalrep_worker_stop(LogicalRepWorker *worker)
 
 	/* Terminate the worker. */
 	kill(worker->proc->pid, SIGTERM);
-
-	LWLockRelease(LogicalRepLauncherLock);
-
-	/* Wait for it to detach. */
-	for (;;)
-	{
-		int	rc = WaitLatch(&MyProc->procLatch,
-						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-						   1000L);
-
-        /* emergency bailout if postmaster has died */
-        if (rc & WL_POSTMASTER_DEATH)
-			proc_exit(1);
-
-        ResetLatch(&MyProc->procLatch);
-
-		CHECK_FOR_INTERRUPTS();
-
-		if (!worker->proc)
-			return;
-	}
 }
 
 /*
@@ -538,12 +527,12 @@ ApplyLauncherMain(Datum main_arg)
 			LogicalRepWorker   *w;
 
 			LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
-			w = logicalrep_worker_find(sub->oid);
+			w = logicalrep_worker_find(sub->oid, InvalidOid);
 			LWLockRelease(LogicalRepWorkerLock);
 
 			if (sub->enabled && w == NULL)
 			{
-				logicalrep_worker_launch(sub->dbid, sub->oid);
+				logicalrep_worker_launch(sub->dbid, sub->oid, InvalidOid);
 				started = true;
 				/* Limit to one worker per mainloop cycle. */
 				break;
@@ -584,7 +573,7 @@ ApplyLauncherMain(Datum main_arg)
 Datum
 pg_stat_get_subscription(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_SUBSCRIPTION_COLS	7
+#define PG_STAT_GET_SUBSCRIPTION_COLS	8
 	Oid			subid = PG_ARGISNULL(0) ? InvalidOid : PG_GETARG_OID(0);
 	int			wid;
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
@@ -650,27 +639,31 @@ pg_stat_get_subscription(PG_FUNCTION_ARGS)
 
 		/* Values available to all callers */
 		values[0] = ObjectIdGetDatum(worker.subid);
-		values[1] = Int32GetDatum(worker_pid);
-		if (XLogRecPtrIsInvalid(worker.last_lsn))
-			nulls[2] = true;
+		if (!OidIsValid(worker.relid))
+			nulls[1] = true;
 		else
-			values[2] = LSNGetDatum(worker.last_lsn);
-		if (worker.last_send_time == 0)
+			values[1] = ObjectIdGetDatum(worker.relid);
+		values[2] = Int32GetDatum(worker_pid);
+		if (XLogRecPtrIsInvalid(worker.last_lsn))
 			nulls[3] = true;
 		else
-			values[3] = TimestampTzGetDatum(worker.last_send_time);
-		if (worker.last_recv_time == 0)
+			values[3] = LSNGetDatum(worker.last_lsn);
+		if (worker.last_send_time == 0)
 			nulls[4] = true;
 		else
-			values[4] = TimestampTzGetDatum(worker.last_recv_time);
-		if (XLogRecPtrIsInvalid(worker.reply_lsn))
+			values[4] = TimestampTzGetDatum(worker.last_send_time);
+		if (worker.last_recv_time == 0)
 			nulls[5] = true;
 		else
-			values[5] = LSNGetDatum(worker.reply_lsn);
-		if (worker.reply_time == 0)
+			values[5] = TimestampTzGetDatum(worker.last_recv_time);
+		if (XLogRecPtrIsInvalid(worker.reply_lsn))
 			nulls[6] = true;
 		else
-			values[6] = TimestampTzGetDatum(worker.reply_time);
+			values[6] = LSNGetDatum(worker.reply_lsn);
+		if (worker.reply_time == 0)
+			nulls[7] = true;
+		else
+			values[7] = TimestampTzGetDatum(worker.reply_time);
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 

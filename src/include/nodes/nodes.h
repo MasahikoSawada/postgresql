@@ -467,6 +467,8 @@ typedef enum NodeTag
 	T_DropReplicationSlotCmd,
 	T_StartReplicationCmd,
 	T_TimeLineHistoryCmd,
+	T_ListTablesCmd,
+	T_CopyTableCmd,
 
 	/*
 	 * TAGS FOR RANDOM OTHER STUFF
@@ -476,7 +478,7 @@ typedef enum NodeTag
 	 * purposes (usually because they are involved in APIs where we want to
 	 * pass multiple object types through the same pointer).
 	 */
-	T_TriggerData = 950,		/* in commands/trigger.h */
+	T_TriggerData = 970,		/* in commands/trigger.h */
 	T_EventTriggerData,			/* in commands/event_trigger.h */
 	T_ReturnSetInfo,			/* in nodes/execnodes.h */
 	T_WindowObjectData,			/* private in nodeWindowAgg.c */

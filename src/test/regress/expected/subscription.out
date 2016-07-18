@@ -7,7 +7,7 @@ ERROR:  publication not specified
 -- fail - no connection
 CREATE SUBSCRIPTION testsub PUBLICATION foo;
 ERROR:  connection not specified
-CREATE SUBSCRIPTION testsub PUBLICATION testpub CONNECTION 'testconn' INITIALLY DISABLED NOCREATE_SLOT;
+CREATE SUBSCRIPTION testsub PUBLICATION testpub CONNECTION 'testconn' INITIALLY DISABLED NOCREATE_SLOT NOCOPY_DATA;
 \dRs+
            List of subscriptions
   Name   | Enabled | Publication | Conninfo 

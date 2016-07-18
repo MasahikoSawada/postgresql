@@ -35,6 +35,7 @@
 
 #include "catalog/namespace.h"
 #include "catalog/pg_subscription.h"
+#include "catalog/pg_subscription_rel.h"
 
 #include "commands/trigger.h"
 
@@ -73,6 +74,7 @@
 
 #include "utils/builtins.h"
 #include "utils/catcache.h"
+#include "utils/fmgroids.h"
 #include "utils/guc.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
@@ -83,15 +85,26 @@
 
 typedef struct FlushPosition
 {
-	dlist_node node;
-	XLogRecPtr local_end;
-	XLogRecPtr remote_end;
+	dlist_node	node;
+	XLogRecPtr	local_end;
+	XLogRecPtr	remote_end;
 } FlushPosition;
 
 static dlist_head lsn_mapping = DLIST_STATIC_INIT(lsn_mapping);
 
+
+typedef struct TableState
+{
+	dlist_node	node;
+	Oid			relid;
+	XLogRecPtr	lsn;
+	char		state;
+} TableState;
+
+static dlist_head table_states = DLIST_STATIC_INIT(table_states);
+static XLogRecPtr		last_commit_lsn;
+
 static MemoryContext	ApplyContext;
-static bool				in_remote_transaction = false;
 
 typedef struct LogicalRepRelMapEntry {
 	LogicalRepRelation	remoterel;		/* key is remoterel.remoteid */
@@ -103,16 +116,21 @@ typedef struct LogicalRepRelMapEntry {
 										 * local ones */
 	AttInMetadata	   *attin;			/* cached info used in type
 										 * conversion */
+	char				state;
+	XLogRecPtr			statelsn;
 } LogicalRepRelMapEntry;
 
 static HTAB *LogicalRepRelMap = NULL;
 
-/* filled by libpqreceiver when loaded */
-static WalReceiverConnAPI *wrcapi = NULL;
-static WalReceiverConnHandle *wrchandle = NULL;
+WalReceiverConnAPI	   *wrcapi = NULL;
+WalReceiverConnHandle  *wrchandle = NULL;
 
+LogicalRepWorker   *MyLogicalRepWorker = NULL;
 Subscription	   *MySubscription = NULL;
 bool				MySubscriptionValid = false;
+
+static char	   *myslotname = NULL;
+bool			in_remote_transaction = false;
 
 static void send_feedback(XLogRecPtr recvpos, int64 now, bool force);
 void pglogical_apply_main(Datum main_arg);
@@ -121,6 +139,22 @@ static bool tuple_find_by_replidx(Relation rel, LockTupleMode lockmode,
 					  TupleTableSlot *searchslot, TupleTableSlot *slot);
 
 static void reread_subscription(void);
+
+/*
+ * Should this worker apply changes for given relation.
+ *
+ * This is mainly needed for initial relation data sync as that runs in
+ * parallel worker and we need some way to skip changes coming to the main
+ * apply worker during the sync of a table.
+ */
+static bool
+interesting_relation(LogicalRepRelMapEntry *rel)
+{
+	return rel->state == SUBREL_STATE_READY ||
+		(rel->state == SUBREL_STATE_SYNCDONE &&
+		 rel->statelsn < replorigin_session_origin_lsn) ||
+		rel->reloid == MyLogicalRepWorker->relid;
+}
 
 
 /*
@@ -281,6 +315,9 @@ tupdesc_get_att_by_name(LogicalRepRelation *remoterel, TupleDesc desc,
 
 /*
  * Open the local relation associated with the remote one.
+ *
+ * Optionally rebuilds the Relcache mapping if it was invalidated
+ * by local DDL.
  */
 static LogicalRepRelMapEntry *
 logicalreprel_open(uint32 remoteid, LOCKMODE lockmode)
@@ -345,6 +382,12 @@ logicalreprel_open(uint32 remoteid, LOCKMODE lockmode)
 	else
 		entry->rel = heap_open(entry->reloid, lockmode);
 
+	if (entry->state != SUBREL_STATE_READY)
+		entry->state = GetSubscriptionRelState(MySubscription->oid,
+											   entry->reloid,
+											   &entry->statelsn,
+											   true);
+
 	return entry;
 }
 
@@ -357,7 +400,6 @@ logicalreprel_close(LogicalRepRelMapEntry *rel, LOCKMODE lockmode)
 	heap_close(rel->rel, lockmode);
 	rel->rel = NULL;
 }
-
 
 /*
  * Make sure that we started local transaction.
@@ -639,6 +681,9 @@ handle_commit(StringInfo s)
 
 	in_remote_transaction = false;
 
+	last_commit_lsn = end_lsn;
+	process_syncing_tables(myslotname, end_lsn);
+
 	pgstat_report_activity(STATE_IDLE, NULL);
 }
 
@@ -691,6 +736,15 @@ handle_insert(StringInfo s)
 
 	relid = logicalrep_read_insert(s, &newtup);
 	rel = logicalreprel_open(relid, RowExclusiveLock);
+	if (!interesting_relation(rel))
+	{
+		/*
+		 * The relation can't become interestin in the middle of the
+		 * transaction so it's safe to unlock it.
+		 */
+		logicalreprel_close(rel, RowExclusiveLock);
+		return;
+	}
 
 	/* Initialize the executor state. */
 	estate = create_estate_for_relation(rel);
@@ -750,6 +804,15 @@ handle_update(StringInfo s)
 	relid = logicalrep_read_update(s, &hasoldtup, &oldtup,
 								   &newtup);
 	rel = logicalreprel_open(relid, RowExclusiveLock);
+	if (!interesting_relation(rel))
+	{
+		/*
+		 * The relation can't become interestin in the middle of the
+		 * transaction so it's safe to unlock it.
+		 */
+		logicalreprel_close(rel, RowExclusiveLock);
+		return;
+	}
 
 	/* Initialize the executor state. */
 	estate = create_estate_for_relation(rel);
@@ -836,6 +899,15 @@ handle_delete(StringInfo s)
 
 	relid = logicalrep_read_delete(s, &oldtup);
 	rel = logicalreprel_open(relid, RowExclusiveLock);
+	if (!interesting_relation(rel))
+	{
+		/*
+		 * The relation can't become interestin in the middle of the
+		 * transaction so it's safe to unlock it.
+		 */
+		logicalreprel_close(rel, RowExclusiveLock);
+		return;
+	}
 
 	/* Initialize the executor state. */
 	estate = create_estate_for_relation(rel);
@@ -995,11 +1067,9 @@ UpdateWorkerStats(XLogRecPtr last_lsn, TimestampTz send_time, bool reply)
 /*
  * Apply main loop.
  */
-static void
-ApplyLoop(void)
+void
+LogicalRepApplyLoop(XLogRecPtr last_received)
 {
-	XLogRecPtr	last_received = InvalidXLogRecPtr;
-
 	/* Init the ApplyContext which we use for easier cleanup. */
 	ApplyContext = AllocSetContextCreate(TopMemoryContext,
 										 "ApplyContext",
@@ -1109,6 +1179,9 @@ ApplyLoop(void)
 			if (!MySubscriptionValid)
 				reread_subscription();
 			CommitTransactionCommand();
+
+			/* Process any table synchronization changes. */
+			process_syncing_tables(myslotname, last_received);
 		}
 
 		/* confirm all writes at once */
@@ -1120,7 +1193,11 @@ ApplyLoop(void)
 
 		/* Check if we need to exit the streaming loop. */
 		if (endofstream)
+		{
+			TimeLineID	tli;
+			wrcapi->endstreaming(wrchandle, &tli);
 			break;
+		}
 
 		/*
 		 * Wait for more data or latch.
@@ -1321,7 +1398,6 @@ ApplyWorkerMain(Datum main_arg)
 {
 	int				worker_slot = DatumGetObjectId(main_arg);
 	MemoryContext	oldctx;
-	RepOriginId		originid;
 	XLogRecPtr		origin_startpos;
 	char		   *options;
 	walrcvconn_init_fn walrcvconn_init;
@@ -1376,9 +1452,8 @@ ApplyWorkerMain(Datum main_arg)
 	BackgroundWorkerInitializeConnectionByOid(MyLogicalRepWorker->dbid,
 											  InvalidOid);
 
-	StartTransactionCommand();
-
 	/* Load the subscription into persistent memory context. */
+	StartTransactionCommand();
 	oldctx = MemoryContextSwitchTo(CacheMemoryContext);
 	MySubscription = GetSubscription(MyLogicalRepWorker->subid, false);
 	MySubscriptionValid = true;
@@ -1399,34 +1474,60 @@ ApplyWorkerMain(Datum main_arg)
 								  subscription_change_cb,
 								  (Datum) 0);
 
-	elog(LOG, "logical replication apply for subscription %s started",
-		 MySubscription->name);
-
-	/* Setup replication origin tracking. */
-	originid = replorigin_by_name(MySubscription->slotname, true);
-	if (!OidIsValid(originid))
-		originid = replorigin_create(MySubscription->slotname);
-	replorigin_session_setup(originid);
-	replorigin_session_origin = originid;
-	origin_startpos = replorigin_session_get_progress(false);
-
+	if (OidIsValid(MyLogicalRepWorker->relid))
+		elog(LOG, "logical replication sync for subscription %s, table %s started",
+			 MySubscription->name, get_rel_name(MyLogicalRepWorker->relid));
+	else
+		elog(LOG, "logical replication apply for subscription %s started",
+			 MySubscription->name);
 	CommitTransactionCommand();
 
 	/* Connect to the origin and start the replication. */
 	elog(DEBUG1, "connecting to provider using connection string %s",
 		 MySubscription->conninfo);
-	wrcapi->connect(wrchandle, MySubscription->conninfo, true,
-					MySubscription->name);
 
 	/* Build option string for the plugin. */
 	options = logicalrep_build_options(MySubscription->publications);
 
-	/* Start streaming from the slot. */
+	if (OidIsValid(MyLogicalRepWorker->relid))
+	{
+		/* This is table synchroniation worker, call initial sync. */
+		myslotname = LogicalRepSyncTableStart(&origin_startpos);
+	}
+	else
+	{
+		/* This is main apply worker */
+		RepOriginId		originid;
+
+		myslotname = MySubscription->slotname;
+
+		StartTransactionCommand();
+		originid = replorigin_by_name(myslotname, false);
+		replorigin_session_setup(originid);
+		replorigin_session_origin = originid;
+		origin_startpos = replorigin_session_get_progress(false);
+		CommitTransactionCommand();
+
+		wrcapi->connect(wrchandle, MySubscription->conninfo, true,
+						myslotname);
+	}
+
+	/*
+	 * Setup callback for syscache so that we know when something
+	 * changes in the subscription relation state.
+	 */
+	CacheRegisterSyscacheCallback(SUBSCRIPTIONRELOID,
+								  invalidate_syncing_table_states,
+								  (Datum) 0);
+
+	/* Start normal logical streaming replication. */
 	wrcapi->startstreaming_logical(wrchandle, origin_startpos,
-								   MySubscription->slotname, options);
+								   myslotname, options);
+
+	pfree(options);
 
 	/* Run the main loop. */
-	ApplyLoop();
+	LogicalRepApplyLoop(origin_startpos);
 
 	wrcapi->disconnect(wrchandle);
 

@@ -26,8 +26,10 @@
 
 #include "utils/builtins.h"
 #include "utils/inval.h"
+#include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
+#include "utils/tuplestore.h"
 
 PG_MODULE_MAGIC;
 
@@ -43,6 +45,9 @@ static void pgoutput_commit_txn(LogicalDecodingContext *ctx,
 static void pgoutput_change(LogicalDecodingContext *ctx,
 				 ReorderBufferTXN *txn, Relation rel,
 				 ReorderBufferChange *change);
+static void pgoutput_tuple(LogicalDecodingContext *ctx, Relation relation,
+			   HeapTuple tuple);
+static List *pgoutput_list_tables(LogicalDecodingContext *ctx);
 static bool pgoutput_origin_filter(LogicalDecodingContext *ctx,
 						RepOriginId origin_id);
 
@@ -87,6 +92,8 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->commit_cb = pgoutput_commit_txn;
 	cb->filter_by_origin_cb = pgoutput_origin_filter;
 	cb->shutdown_cb = pgoutput_shutdown;
+	cb->tuple_cb = pgoutput_tuple;
+	cb->list_tables_cb = pgoutput_list_tables;
 }
 
 /*
@@ -307,6 +314,103 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	/* Cleanup */
 	MemoryContextSwitchTo(old);
 	MemoryContextReset(data->context);
+}
+
+/*
+ * Sends the tuple from relation over wire.
+ * Currenly this behaves same as the INSERT replication.
+ */
+static void
+pgoutput_tuple(LogicalDecodingContext *ctx, Relation relation,
+			   HeapTuple tuple)
+{
+	PGOutputData	   *data = (PGOutputData *) ctx->output_plugin_private;
+	MemoryContext		old;
+	RelationSyncEntry  *relentry;
+
+	relentry = get_rel_sync_entry(data, RelationGetRelid(relation));
+
+	/*
+	 * First check the table filter
+	 * TODO: do we actually need this?
+	 */
+	if (!relentry->replicate_insert)
+		return;
+
+	/* Avoid leaking memory by using and resetting our own context */
+	old = MemoryContextSwitchTo(data->context);
+
+	/*
+	 * Write the relation schema if the current schema haven't been sent yet.
+	 */
+	if (!relentry->schema_sent)
+	{
+		OutputPluginPrepareWrite(ctx, false);
+		logicalrep_write_rel(ctx->out, relation);
+		OutputPluginWrite(ctx, false);
+		relentry->schema_sent = true;
+	}
+
+	/* Send the data */
+	OutputPluginPrepareWrite(ctx, true);
+	logicalrep_write_insert(ctx->out, relation, tuple);
+	OutputPluginWrite(ctx, true);
+
+	/* Cleanup */
+	MemoryContextSwitchTo(old);
+	MemoryContextReset(data->context);
+}
+
+/*
+ * Get the list of tables replicated by current connection.
+ */
+static List *
+pgoutput_list_tables(LogicalDecodingContext *ctx)
+{
+	PGOutputData   *data = (PGOutputData *) ctx->output_plugin_private;
+	MemoryContext	old;
+	List		   *rellist = NIL,
+				   *res = NIL;
+	ListCell	   *lc;
+
+	/* Avoid leaking memory by using and resetting our own context */
+	old = MemoryContextSwitchTo(data->context);
+
+	/* Build unique list of relations in all subscribed publications. */
+	foreach(lc, data->publication_names)
+	{
+		char	   *pubname = (char *) lfirst(lc);
+		Oid			pubid;
+		List	   *pubrellist;
+
+		pubid = GetSysCacheOid1(PUBLICATIONNAME, CStringGetDatum(pubname));
+		if (!OidIsValid(pubid))
+			elog(ERROR, "cache lookup failed for publication %u", pubid);
+
+		pubrellist = GetPublicationRelations(pubid);
+		rellist = list_concat_unique_oid(rellist, pubrellist);
+	}
+
+	MemoryContextSwitchTo(old);
+
+	/* Put all the relations list of LogicalRepTableListEntry. */
+	foreach (lc, rellist)
+	{
+		Oid			relid = lfirst_oid(lc);
+		LogicalRepTableListEntry *entry;
+
+		entry = palloc(sizeof(LogicalRepTableListEntry));
+		entry->nspname = get_namespace_name(get_rel_namespace(relid));
+		entry->relname = get_rel_name(relid);
+		entry->info = NULL;
+
+		res = lappend(res, entry);
+	}
+
+	/* Cleanup our memory context. */
+	MemoryContextReset(data->context);
+
+	return res;
 }
 
 /*

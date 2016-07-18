@@ -93,6 +93,22 @@ typedef bool (*LogicalDecodeFilterByOriginCB) (
 													  RepOriginId origin_id);
 
 /*
+ * Called from the LIST_TABLES replication command.
+ */
+typedef List *(*BaseCopyListTablesCB) (
+											  struct LogicalDecodingContext *
+);
+
+/*
+ * Called for every individual tuple in a table during COPY_TABLE.
+ */
+typedef void (*BaseCopyTupleCB) (
+											  struct LogicalDecodingContext *,
+											  Relation relation,
+											  HeapTuple tup
+);
+
+/*
  * Called to shutdown an output plugin.
  */
 typedef void (*LogicalDecodeShutdownCB) (
@@ -111,6 +127,8 @@ typedef struct OutputPluginCallbacks
 	LogicalDecodeMessageCB message_cb;
 	LogicalDecodeFilterByOriginCB filter_by_origin_cb;
 	LogicalDecodeShutdownCB shutdown_cb;
+	BaseCopyListTablesCB list_tables_cb;
+	BaseCopyTupleCB tuple_cb;
 } OutputPluginCallbacks;
 
 void		OutputPluginPrepareWrite(struct LogicalDecodingContext *ctx, bool last_write);

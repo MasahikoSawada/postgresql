@@ -95,4 +95,27 @@ typedef struct TimeLineHistoryCmd
 	TimeLineID	timeline;
 } TimeLineHistoryCmd;
 
+/* ----------------------
+ *		LIST_TABLES command
+ * ----------------------
+ */
+typedef struct ListTablesCmd
+{
+	NodeTag		type;
+	char	   *slotname;
+	List	   *options;
+} ListTablesCmd;
+
+/* ----------------------
+ *		COPY_TABLE command
+ * ----------------------
+ */
+typedef struct CopyTableCmd
+{
+	NodeTag		type;
+	char	   *slotname;
+	struct RangeVar   *relation;
+	List	   *options;
+} CopyTableCmd;
+
 #endif   /* REPLNODES_H */

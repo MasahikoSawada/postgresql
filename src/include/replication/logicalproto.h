@@ -69,8 +69,9 @@ extern LogicalRepRelId logicalrep_read_update(StringInfo in, bool *hasoldtup,
 extern void logicalrep_write_delete(StringInfo out, Relation rel,
 							 HeapTuple oldtuple);
 extern LogicalRepRelId logicalrep_read_delete(StringInfo in, LogicalRepTupleData *oldtup);
+extern void logicalrep_write_rel_name(StringInfo out, char *nspname, char *relname);
 extern void logicalrep_write_rel(StringInfo out, Relation rel);
-
+extern void logicalrep_read_rel_name(StringInfo in, char **nspname, char **relname);
 extern LogicalRepRelation *logicalrep_read_rel(StringInfo in);
 
 #endif /* LOGICALREP_PROTO_H */
