@@ -1483,6 +1483,19 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 #endif
 
+	/* temporary GUC, used only for parallel CREATE INDEX development */
+	{
+		{
+			"force_btree_randomaccess", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Force randomAccess argument for B-Tree index builds."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&force_btree_randomaccess,
+		false,
+		NULL, NULL, NULL
+	},
+
 #ifdef WAL_DEBUG
 	{
 		{"wal_debug", PGC_SUSET, DEVELOPER_OPTIONS,

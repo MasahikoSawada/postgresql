@@ -113,6 +113,7 @@ int			work_mem = 1024;
 int			maintenance_work_mem = 16384;
 int			max_parallel_workers_maintenance = 2;
 int			replacement_sort_tuples = 150000;
+bool		force_btree_randomaccess = false;
 
 /*
  * Primary determinants of sizes of shared-memory structures.

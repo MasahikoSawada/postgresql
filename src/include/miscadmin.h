@@ -241,6 +241,7 @@ extern PGDLLIMPORT int work_mem;
 extern PGDLLIMPORT int maintenance_work_mem;
 extern PGDLLIMPORT int max_parallel_workers_maintenance;
 extern PGDLLIMPORT int replacement_sort_tuples;
+extern PGDLLIMPORT bool force_btree_randomaccess;
 
 extern int	VacuumCostPageHit;
 extern int	VacuumCostPageMiss;

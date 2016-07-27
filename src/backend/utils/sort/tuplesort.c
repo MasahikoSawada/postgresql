@@ -1079,12 +1079,17 @@ tuplesort_begin_index_btree(Relation heapRel,
 							SortCoordinate coordinate,
 							bool randomAccess)
 {
-	Tuplesortstate *state = tuplesort_begin_common(workMem, coordinate,
-												   randomAccess);
+	Tuplesortstate *state;
 	ScanKey		indexScanKey;
 	MemoryContext oldcontext;
 	int			i;
 
+	/*
+	 * To test logtape.c infrastructure that would otherwise have no current
+	 * caller when parallel sort is requested, allow GUC to force randomAccess
+	 */
+	state = tuplesort_begin_common(workMem, coordinate,
+								   randomAccess || force_btree_randomaccess);
 	oldcontext = MemoryContextSwitchTo(state->sortcontext);
 
 #ifdef TRACE_SORT
