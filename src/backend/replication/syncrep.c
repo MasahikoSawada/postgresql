@@ -549,7 +549,7 @@ SyncRepGetNNewestSyncRecPtr(XLogRecPtr *writePtr, XLogRecPtr *flushPtr,
 		i++;
 	}
 
-	/* Sort each arrays to get 'pos' newest element */
+	/* Sort each array in descending order to get 'pos' newest element */
 	qsort(write_array, len, sizeof(XLogRecPtr), cmp_lsn);
 	qsort(flush_array, len, sizeof(XLogRecPtr), cmp_lsn);
 	qsort(apply_array, len, sizeof(XLogRecPtr), cmp_lsn);
@@ -643,9 +643,6 @@ SyncRepGetOldestSyncRecPtr(XLogRecPtr *writePtr, XLogRecPtr *flushPtr,
 List *
 SyncRepGetSyncStandbys(bool	*am_sync)
 {
-	Assert(SyncRepConfig->sync_method == SYNC_REP_PRIORITY ||
-		   SyncRepConfig->sync_method == SYNC_REP_QUORUM);
-
 	/* Set default result */
 	if (am_sync != NULL)
 		*am_sync = false;
@@ -656,7 +653,7 @@ SyncRepGetSyncStandbys(bool	*am_sync)
 
 	if (SyncRepConfig->sync_method == SYNC_REP_PRIORITY)
 		return SyncRepGetSyncStandbysPriority(am_sync);
-	else
+	else /* SYNC_REP_QUORUM */
 		return SyncRepGetSyncStandbysQuorum(am_sync);
 }
 
@@ -1058,6 +1055,9 @@ SyncRepQueueIsOrderedByLSN(int mode)
 }
 #endif
 
+/*
+ * Compare lsn in order to sort array in descending order.
+ */
 static int
 cmp_lsn(const void *a, const void *b)
 {
@@ -1065,11 +1065,11 @@ cmp_lsn(const void *a, const void *b)
 	XLogRecPtr lsn2 = *((const XLogRecPtr *) b);
 
 	if (lsn1 > lsn2)
-		return 1;
+		return -1;
 	else if (lsn1 == lsn2)
 		return 0;
 	else
-		return -1;
+		return 1;
 }
 
 /*
