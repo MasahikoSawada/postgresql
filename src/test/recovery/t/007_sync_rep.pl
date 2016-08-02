@@ -3,7 +3,7 @@ use strict;
 use warnings;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 8;
+use Test::More tests => 10;
 
 # Query checking sync_priority and sync_state of each standby
 my $check_sql =
@@ -172,3 +172,25 @@ test_sync_state(
 standby2|1|sync
 standby4|1|potential),
 	'potential standby found earlier in array is promoted to sync');
+
+# Check that the state of standbys listed as a voter are having
+# same priority when synchronous_standby_names uses quorum method.
+test_sync_state(
+	$node_master, qq(standby1|1|quorum
+standby2|1|quorum
+standby4|0|async),
+	'2 quorum and 1 async',
+	'Any 2(standby1, standby2)');
+
+# Start Standby3 which will be considered in 'quorum' state.
+$node_standby_3->start;
+
+# Check that set setting of 'Any 2(*)' chooses all standbys as
+# voter.
+test_sync_state(
+	$node_master, qq(standby1|1|quorum
+standby2|1|quorum
+standby3|1|quorum
+standby4|1|quorum),
+	'all standbys are considered as voter for quorum commit',
+	'Any 2(*)');
