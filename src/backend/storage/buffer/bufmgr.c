@@ -38,6 +38,7 @@
 #include "catalog/storage.h"
 #include "executor/instrument.h"
 #include "lib/binaryheap.h"
+#include "lib/ilist.h"
 #include "miscadmin.h"
 #include "pg_trace.h"
 #include "pgstat.h"
@@ -1730,15 +1731,19 @@ UnpinBuffer(BufferDesc *buf, bool fixOwner)
 			 */
 			buf_state = LockBufHdr(buf);
 
-			if ((buf_state & BM_PIN_COUNT_WAITER) &&
-				BUF_STATE_GET_REFCOUNT(buf_state) == 1)
+			if (buf_state & BM_PIN_COUNT_WAITER)
 			{
-				/* we just released the last pin other than the waiter's */
-				int			wait_backend_pid = buf->wait_backend_pid;
+				dlist_mutable_iter iter;
 
-				buf_state &= ~BM_PIN_COUNT_WAITER;
+				if (pg_atomic_read_u32(&buf->nwaiters) == 1)
+					buf_state &= ~BM_PIN_COUNT_WAITER;
+
+				dlist_foreach_modify(iter, &buf->pin_count_waiters)
+				{
+					PGPROC *waiter = dlist_container(PGPROC, clWaitLink, iter.cur);
+					ProcSendSignal(waiter->pid);
+				}
 				UnlockBufHdr(buf, buf_state);
-				ProcSendSignal(wait_backend_pid);
 			}
 			else
 				UnlockBufHdr(buf, buf_state);
@@ -3513,8 +3518,17 @@ UnlockBuffers(void)
 		 * got a cancel/die interrupt before getting the signal.
 		 */
 		if ((buf_state & BM_PIN_COUNT_WAITER) != 0 &&
-			buf->wait_backend_pid == MyProcPid)
-			buf_state &= ~BM_PIN_COUNT_WAITER;
+			pg_atomic_read_u32(&buf->nwaiters) == 1)
+		{
+			dlist_mutable_iter iter;
+
+			dlist_foreach_modify(iter, &buf->pin_count_waiters)
+			{
+				PGPROC *waiter = dlist_container(PGPROC, clWaitLink, iter.cur);
+				if (waiter->pid == MyProcPid)
+					buf_state &= ~BM_PIN_COUNT_WAITER;
+			}
+		}
 
 		UnlockBufHdr(buf, buf_state);
 
@@ -3616,20 +3630,24 @@ LockBufferForCleanup(Buffer buffer)
 		buf_state = LockBufHdr(bufHdr);
 
 		Assert(BUF_STATE_GET_REFCOUNT(buf_state) > 0);
-		if (BUF_STATE_GET_REFCOUNT(buf_state) == 1)
+		/*
+		 * If refcount == 1 then we can break immediately.
+		 * In case of refcount > 1, if refcount == (nwaiters + 1) then break.
+		 * Because refcount include other processes and itself, but nwaiters
+		 * includes only other processes.
+		 */
+		if (BUF_STATE_GET_REFCOUNT(buf_state) == 1 ||
+			((BUF_STATE_GET_REFCOUNT(buf_state) - 1)==
+			 pg_atomic_read_u32(&bufHdr->nwaiters)))
 		{
 			/* Successfully acquired exclusive lock with pincount 1 */
 			UnlockBufHdr(bufHdr, buf_state);
 			return;
 		}
 		/* Failed, so mark myself as waiting for pincount 1 */
-		if (buf_state & BM_PIN_COUNT_WAITER)
-		{
-			UnlockBufHdr(bufHdr, buf_state);
-			LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
-			elog(ERROR, "multiple backends attempting to wait for pincount 1");
-		}
-		bufHdr->wait_backend_pid = MyProcPid;
+		pg_atomic_fetch_add_u32(&bufHdr->nwaiters, 1);
+		dlist_push_tail(&bufHdr->pin_count_waiters, &MyProc->clWaitLink);
+
 		PinCountWaitBuf = bufHdr;
 		buf_state |= BM_PIN_COUNT_WAITER;
 		UnlockBufHdr(bufHdr, buf_state);
@@ -3662,9 +3680,10 @@ LockBufferForCleanup(Buffer buffer)
 		 * better be safe.
 		 */
 		buf_state = LockBufHdr(bufHdr);
-		if ((buf_state & BM_PIN_COUNT_WAITER) != 0 &&
-			bufHdr->wait_backend_pid == MyProcPid)
-			buf_state &= ~BM_PIN_COUNT_WAITER;
+
+		dlist_delete(&MyProc->clWaitLink);
+		pg_atomic_fetch_sub_u32(&bufHdr->nwaiters, 1);
+
 		UnlockBufHdr(bufHdr, buf_state);
 
 		PinCountWaitBuf = NULL;
