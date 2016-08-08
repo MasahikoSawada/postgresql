@@ -59,6 +59,7 @@
 #include <unistd.h>
 
 #include "access/commit_ts.h"
+#include "access/fdw_xact.h"
 #include "access/htup_details.h"
 #include "access/subtrans.h"
 #include "access/transam.h"
@@ -1451,6 +1452,12 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 		ProcessRecords(bufptr, xid, twophase_postabort_callbacks);
 
 	PredicateLockTwoPhaseFinish(xid, isCommit);
+
+	/*
+	 * Commit/Rollback the foreign transactions prepared as part of this
+	 * prepared transaction.
+	 */
+	FDWXactTwoPhaseFinish(isCommit, xid);
 
 	/* Count the prepared xact as committed or aborted */
 	AtEOXact_PgStat(isCommit);

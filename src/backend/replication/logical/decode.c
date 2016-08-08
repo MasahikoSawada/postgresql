@@ -148,6 +148,7 @@ LogicalDecodingProcessRecord(LogicalDecodingContext *ctx, XLogReaderState *recor
 		case RM_SPGIST_ID:
 		case RM_BRIN_ID:
 		case RM_COMMIT_TS_ID:
+		case RM_FDW_XACT_ID:
 		case RM_REPLORIGIN_ID:
 		case RM_GENERIC_ID:
 			/* just deal with xid, and done */

@@ -119,6 +119,12 @@
 					# (change requires restart)
 # Caution: it is not advisable to set max_prepared_transactions nonzero unless
 # you actively intend to use prepared transactions.
+#max_prepared_foreign_transactions = 0	# zero disables the feature
+					# (change requires restart)
+# Note:  Increasing max_prepared_foreign_transactions costs ~600(?) bytes of shared memory
+# per foreign transaction slot.
+# It is not advisable to set max_prepared_foreign_transactions nonzero unless you
+# actively intend to use atomic foreign transactions feature.
 #work_mem = 4MB				# min 64kB
 #maintenance_work_mem = 64MB		# min 1MB
 #replacement_sort_tuples = 150000	# limits use of replacement selection sort

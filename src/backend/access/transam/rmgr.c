@@ -9,6 +9,7 @@
 
 #include "access/clog.h"
 #include "access/commit_ts.h"
+#include "access/fdw_xact.h"
 #include "access/gin.h"
 #include "access/gist_private.h"
 #include "access/generic_xlog.h"
