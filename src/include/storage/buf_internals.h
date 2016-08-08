@@ -15,6 +15,7 @@
 #ifndef BUFMGR_INTERNALS_H
 #define BUFMGR_INTERNALS_H
 
+#include "lib/ilist.h"
 #include "storage/buf.h"
 #include "storage/bufmgr.h"
 #include "storage/latch.h"
