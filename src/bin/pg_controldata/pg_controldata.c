@@ -296,5 +296,7 @@ main(int argc, char *argv[])
 		   (ControlFile->float8ByVal ? _("by value") : _("by reference")));
 	printf(_("Data page checksum version:           %u\n"),
 		   ControlFile->data_checksum_version);
+	printf(_("Current max_fdw_xacts setting:   %d\n"),
+		   ControlFile->max_fdw_xacts);
 	return 0;
 }

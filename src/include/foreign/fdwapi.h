@@ -12,6 +12,7 @@
 #ifndef FDWAPI_H
 #define FDWAPI_H
 
+#include "access/fdw_xact.h"
 #include "access/parallel.h"
 #include "nodes/execnodes.h"
 #include "nodes/relation.h"
@@ -143,6 +144,23 @@ typedef bool (*AnalyzeForeignTable_function) (Relation relation,
 typedef List *(*ImportForeignSchema_function) (ImportForeignSchemaStmt *stmt,
 														   Oid serverOid);
 
+typedef bool (*EndForeignTransaction_function) (Oid serverid, Oid userid,
+												Oid umid, bool is_commit);
+
+typedef bool (*PrepareForeignTransaction_function) (Oid serverid, Oid userid,
+													int prep_info_len, char *prep_info);
+
+typedef bool (*ResolvePreparedForeignTransaction_function) (Oid serverid,
+															Oid userid,
+															Oid umid,
+															bool is_commit,
+															int prep_info_len,
+															char *prep_info);
+
+typedef char *(*GetPrepareId_function) (Oid serverid, Oid userid,
+														int *prep_info_len);
+
+
 typedef Size (*EstimateDSMForeignScan_function) (ForeignScanState *node,
 													  ParallelContext *pcxt);
 typedef void (*InitializeDSMForeignScan_function) (ForeignScanState *node,
@@ -218,6 +236,12 @@ typedef struct FdwRoutine
 
 	/* Support functions for IMPORT FOREIGN SCHEMA */
 	ImportForeignSchema_function ImportForeignSchema;
+
+	/* Supprot functions for foreign transactions */
+	GetPrepareId_function GetPrepareId;
+	EndForeignTransaction_function EndForeignTransaction;
+	PrepareForeignTransaction_function PrepareForeignTransaction;
+	ResolvePreparedForeignTransaction_function ResolvePreparedForeignTransaction;
 
 	/* Support functions for parallelism under Gather node */
 	IsForeignScanParallelSafe_function IsForeignScanParallelSafe;

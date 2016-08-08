@@ -27,6 +27,7 @@
 #endif
 
 #include "access/commit_ts.h"
+#include "access/fdw_xact.h"
 #include "access/gin.h"
 #include "access/transam.h"
 #include "access/twophase.h"
@@ -2052,6 +2053,19 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_prepared_xacts,
 		0, 0, MAX_BACKENDS,
+		NULL, NULL, NULL
+	},
+
+	/*
+	 * See also CheckRequiredParameterValues() if this parameter changes
+	 */
+	{
+		{"max_prepared_foreign_transactions", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the maximum number of simultaneously prepared transactions on foreign servers."),
+			NULL
+		},
+		&max_fdw_xacts,
+		0, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 

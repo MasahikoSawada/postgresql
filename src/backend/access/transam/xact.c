@@ -21,6 +21,7 @@
 #include <unistd.h>
 
 #include "access/commit_ts.h"
+#include "access/fdw_xact.h"
 #include "access/multixact.h"
 #include "access/parallel.h"
 #include "access/subtrans.h"
@@ -186,6 +187,10 @@ typedef struct TransactionStateData
 	bool		didLogXid;		/* has xid been included in WAL record? */
 	int			parallelModeLevel;		/* Enter/ExitParallelMode counter */
 	struct TransactionStateData *parent;		/* back link to parent */
+	int			num_foreign_servers;	/* number of foreign servers participating in the transaction,
+										   Only valid for top level transaction */
+	int			can_prepare;			/* can all the foreign server involved in
+										   this transaction participate in 2PC */
 } TransactionStateData;
 
 typedef TransactionStateData *TransactionState;
@@ -1921,6 +1926,9 @@ StartTransaction(void)
 	AtStart_Cache();
 	AfterTriggerBeginXact();
 
+	/* Foreign transaction stuff */
+	s->num_foreign_servers = 0;
+
 	/*
 	 * done with start processing, set current transaction state to "in
 	 * progress"
@@ -1980,6 +1988,9 @@ CommitTransaction(void)
 		if (!PreCommit_Portals(false))
 			break;
 	}
+
+	/* Pre-commit step for foreign transcations */
+	PreCommit_FDWXacts();
 
 	CallXactCallbacks(is_parallel_worker ? XACT_EVENT_PARALLEL_PRE_COMMIT
 					  : XACT_EVENT_PRE_COMMIT);
@@ -2138,6 +2149,7 @@ CommitTransaction(void)
 	AtEOXact_HashTables(true);
 	AtEOXact_PgStat(true);
 	AtEOXact_Snapshot(true);
+	AtEOXact_FDWXacts(true);
 	pgstat_report_xact_timestamp(0);
 
 	CurrentResourceOwner = NULL;
@@ -2322,6 +2334,7 @@ PrepareTransaction(void)
 	AtPrepare_PgStat();
 	AtPrepare_MultiXact();
 	AtPrepare_RelationMap();
+	AtPrepare_FDWXacts();
 
 	/*
 	 * Here is where we really truly prepare.
@@ -2608,6 +2621,7 @@ AbortTransaction(void)
 		AtEOXact_ComboCid();
 		AtEOXact_HashTables(false);
 		AtEOXact_PgStat(false);
+		AtEOXact_FDWXacts(false);
 		pgstat_report_xact_timestamp(0);
 	}
 
