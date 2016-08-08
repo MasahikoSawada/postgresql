@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <signal.h>
 
+#include "access/fdw_xact.h"
 #include "access/htup_details.h"
 #include "bootstrap/bootstrap.h"
 #include "catalog/index.h"
