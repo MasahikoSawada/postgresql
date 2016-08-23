@@ -13,6 +13,7 @@
 #ifndef POSTGRES_FDW_H
 #define POSTGRES_FDW_H
 
+#include "access/fdw_xact.h"
 #include "foreign/foreign.h"
 #include "lib/stringinfo.h"
 #include "nodes/relation.h"
@@ -99,7 +100,8 @@ extern int	set_transmission_modes(void);
 extern void reset_transmission_modes(int nestlevel);
 
 /* in connection.c */
-extern PGconn *GetConnection(UserMapping *user, bool will_prep_stmt);
+extern PGconn *GetConnection(UserMapping *user, bool will_prep_stmt,
+							 bool start_transaction, bool connection_error_ok);
 extern void ReleaseConnection(PGconn *conn);
 extern unsigned int GetCursorNumber(PGconn *conn);
 extern unsigned int GetPrepStmtNumber(PGconn *conn);
@@ -160,6 +162,13 @@ extern void deparseSelectStmtForRel(StringInfo buf, PlannerInfo *root,
 						RelOptInfo *foreignrel, List *tlist,
 						List *remote_conds, List *pathkeys,
 						List **retrieved_attrs, List **params_list);
+extern char	*postgresGetPrepareId(Oid serveroid, Oid userid, int *prep_info_len);
+extern bool postgresResolvePreparedForeignTransaction(Oid serverid, Oid userid,
+													  Oid umid, bool is_commit,
+													  int prep_info_len, char *prep_info);
+extern bool postgresEndForeignTransaction(Oid serverid, Oid userid, Oid umid, bool is_commit);
+extern bool postgresPrepareForeignTransaction(Oid serverid, Oid userid, int prep_info_len,
+											  char *prep_info);
 
 /* in shippable.c */
 extern bool is_builtin(Oid objectId);
