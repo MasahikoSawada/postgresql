@@ -174,9 +174,16 @@ typedef struct LVRelStats
 	bool		lock_waiter_detected;
 } LVRelStats;
 
+typedef struct VacuumDeadTuples
+{
+	ItemPointer dead_tuples;
+	slock_t		dt_mutex;
+} VacuumDeadTuples;
+
 typedef struct VacuumTask
 {
-	Oid			relid;	/* Target relation oid */
+	VacuumDeadTuples dead_tuples;
+	slock_t		dt_mutex;
 	bool		aggressive;	/* does each worker need to aggressive vacuum? */
 	int			options; /* Specified vacuum options */
 	TransactionId	oldestxmin;

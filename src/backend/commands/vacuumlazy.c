@@ -61,6 +61,7 @@
 #include "storage/freespace.h"
 #include "storage/lmgr.h"
 #include "storage/procarray.h"
+#include "storage/spin.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/pg_rusage.h"
@@ -150,6 +151,10 @@ static void lazy_scan_heap(Relation onerel, int options,
 								  LVRelStats *vacrelstats, Relation *Irel,
 								  int nindexes, bool aggressive,
 								  BlockNumber begin, BlockNumber nblocks);
+static void lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel,
+								Relation Irel, LVRelStats *vacrelstats,
+								VacuumDeadTuples *dead_tuples, int options,
+								bool aggressive);
 static void gather_vacuum_stats(LVRelStats *valrelstats, LVRelStats *worker_stats,
 								int wnum);
 static void LazyVacuumEstimate(ParallelContext *pcxt, Snapshot snapshot,
@@ -159,8 +164,9 @@ static void LazyVacuumInitializeDSM(ParallelContext *pcxt, ParallelHeapScanDesc 
 									int options, bool aggressive, Snapshot snapshot,
 									int vac_work_mem);
 static void LazyVacuumInitializeWorker(shm_toc *toc, ParallelHeapScanDesc *pscan,
-									   LVRelStats **vacrelstats, ItemPointer *dead_tuples,
-									   int *options, bool *aggressive);
+									   LVRelStats **vacrelstats,
+									   VacuumDeadTuples **dead_tuples, int *options,
+									   bool *aggressive);
 static Relation LazyVacuumAssignIndexWorker(Relation rel, LOCKMODE lockmode);
 
 /*
@@ -516,7 +522,7 @@ lazy_vacuum_worker_test(dsm_segment *seg, shm_toc *toc)
 {
 	ParallelHeapScanDesc pscan;
 	LVRelStats *vacrelstats;
-	ItemPointer dead_tuples;
+	VacuumDeadTuples *dead_tuples;
 	int options;
 	bool aggressive;
 	int elevel;
@@ -540,13 +546,19 @@ lazy_vacuum_worker_test(dsm_segment *seg, shm_toc *toc)
 				   task->aggressive, begin, nblocks);
 */
 
+	heap_beginscan_parallel(rel, pscan);
+
+	lazy_scan_heap_test(pscan, rel, indrel, vacrelstats, dead_tuples,
+						options, aggressive);
+
 	heap_close(rel, NoLock);
 	index_close(indrel, RowExclusiveLock);
 }
 
 static void
 lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
-			   LVRelStats *vacrelstats, int options, bool aggressive)
+					LVRelStats *vacrelstats, VacuumDeadTuples *dead_tuples,
+					int options, bool aggressive)
 {
 	/* Do something */
 }
@@ -2328,11 +2340,13 @@ LazyVacuumEstimate(ParallelContext *pcxt, Snapshot snapshot,
 	keys++;
 
 	/* Estimate size for collecting dead tuples */
+/*
 	size += BUFFERALIGN(vac_work_mem);
 	keys++;
+*/
 
 	/* Estimate size for vacuum task */
-	size += BUFFERALIGN(sizeof(VacuumTask));
+	size += BUFFERALIGN(sizeof(VacuumTask) + vac_work_mem);
 	keys++;
 
 	shm_toc_estimate_chunk(&pcxt->estimator, size);
@@ -2367,12 +2381,16 @@ LazyVacuumInitializeDSM(ParallelContext *pcxt, ParallelHeapScanDesc pscan,
 	}
 
 	/* Prepare for dead tuple array */
+/*
 	dead_tuples = (ItemPointer) shm_toc_allocate(pcxt->toc, vac_work_mem);
 	shm_toc_insert(pcxt->toc, VACUUM_KEY_DEAD_TUPLE, dead_tuples);
+*/
 
 	/* Prepare for vacuum task */
-	vacuum_task = (VacuumTask *) shm_toc_allocate(pcxt->toc, sizeof(VacuumTask));
+	vacuum_task = (VacuumTask *) shm_toc_allocate(pcxt->toc, sizeof(VacuumTask) +
+												  vac_work_mem);
 	shm_toc_insert(pcxt->toc, VACUUM_KEY_VACUUM_TASK, vacuum_task);
+	SpinLockInit(&(vacuum_task->dead_tuples.dt_mutex));
 	vacuum_task->aggressive = aggressive;
 	vacuum_task->options = options;
 	vacuum_task->oldestxmin = OldestXmin;
@@ -2384,7 +2402,7 @@ LazyVacuumInitializeDSM(ParallelContext *pcxt, ParallelHeapScanDesc pscan,
 static void
 LazyVacuumInitializeWorker(shm_toc *toc, ParallelHeapScanDesc *pscan,
 						   LVRelStats **vacrelstats,
-						   ItemPointer *dead_tuples, int *options,
+						   VacuumDeadTuples **dead_tuples, int *options,
 						   bool *aggressive)
 {
 	LVRelStats *lvstats;
@@ -2398,10 +2416,14 @@ LazyVacuumInitializeWorker(shm_toc *toc, ParallelHeapScanDesc *pscan,
 	*vacrelstats = lvstats + sizeof(LVRelStats) * ParallelWorkerNumber;
 
 	/* Look up for dead tuple array */
+/*
 	*dead_tuples = (ItemPointer) shm_toc_lookup(toc, VACUUM_KEY_DEAD_TUPLE);
+	*/
 
 	/* Look up for vacuum task */
 	vacuum_task = (VacuumTask *) shm_toc_lookup(toc, VACUUM_KEY_VACUUM_TASK);
+	*dead_tuples = &vacuum_task->dead_tuples;
+
 	OldestXmin = vacuum_task->oldestxmin;
 	FreezeLimit = vacuum_task->freezelimit;
 	MultiXactCutoff = vacuum_task->multixactcutoff;
