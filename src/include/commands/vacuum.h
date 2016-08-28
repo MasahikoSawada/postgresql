@@ -176,13 +176,18 @@ typedef struct LVRelStats
 
 typedef struct VacuumDeadTuples
 {
-	ItemPointer dead_tuples;
 	slock_t		dt_mutex;
+	int			num_dead_tuples;
+	int			max_dead_tuples;
+	ItemPointer dead_tuples;
+	/* Dead tuple ItemPointer follow */
 } VacuumDeadTuples;
+
+#define SizeOfVacuumDeadTuples \
+	(offsetof(VacuumDeadTuples, dead_tuples) + sizeof(ItemPointer))
 
 typedef struct VacuumTask
 {
-	VacuumDeadTuples dead_tuples;
 	slock_t		dt_mutex;
 	bool		aggressive;	/* does each worker need to aggressive vacuum? */
 	int			options; /* Specified vacuum options */
