@@ -159,12 +159,10 @@ static void lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel,
 								bool aggressive);
 static void gather_vacuum_stats(LVRelStats *valrelstats, LVRelStats *worker_stats,
 								int wnum);
-static void LazyVacuumEstimate(ParallelContext *pcxt, Snapshot snapshot,
-							   int vac_work_mem);
+static void LazyVacuumEstimate(ParallelContext *pcxt, int vac_work_mem);
 static void LazyVacuumInitializeDSM(ParallelContext *pcxt, Relation onrel,
 									LVRelStats *vacrelstats, int options,
-									bool aggressive, Snapshot snapshot,
-									int vac_work_mem);
+									bool aggressive, int vac_work_mem);
 static void LazyVacuumInitializeWorker(shm_toc *toc, ParallelHeapScanDesc *pscan,
 									   LVRelStats **vacrelstats,
 									   VacuumDeadTuples **vac_dead_tuples, int *options,
@@ -473,22 +471,19 @@ parallel_lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		autovacuum_work_mem != -1 ?
 		autovacuum_work_mem : maintenance_work_mem;
 
-	snapshot = GetActiveSnapshot();
-
 	EnterParallelMode();
 
 	/* Create parallel context and initialize it */
 	pcxt = CreateParallelContext(lazy_vacuum_worker_test, wnum);
 
 	/* Estimate size for parallel vacuum */
-	LazyVacuumEstimate(pcxt, snapshot, vac_work_mem);
+	LazyVacuumEstimate(pcxt, vac_work_mem);
 
 	InitializeParallelDSM(pcxt);
 
 	/* Initialize DSM for parallel vacuum */
 	LazyVacuumInitializeDSM(pcxt, onerel, vacrelstats,
-							options, aggressive, snapshot,
-							vac_work_mem);
+							options, aggressive, vac_work_mem);
 
 	/* Launch workers */
 	LaunchParallelWorkers(pcxt);
@@ -3165,14 +3160,15 @@ heap_page_is_all_visible(Relation rel, Buffer buf,
  */
 
 static void
-LazyVacuumEstimate(ParallelContext *pcxt, Snapshot snapshot,
-				   int vac_work_mem)
+LazyVacuumEstimate(ParallelContext *pcxt, int vac_work_mem)
 {
 	int size = 0;
 	int keys = 0;
 
 	/* Estimate size for parallel heap scan */
-	size += heap_parallelscan_estimate(snapshot);
+	//size += add_size(offsetof(ParallelHeapScanDescData, phs_snapshot_data),
+	//sizeof(SerializedSnapshotData));
+	size += heap_parallelscan_estimate(SnapshotAny);
 	keys++;
 
 	/* Estimate size for vacuum statistics */
@@ -3194,8 +3190,7 @@ LazyVacuumEstimate(ParallelContext *pcxt, Snapshot snapshot,
 static void
 LazyVacuumInitializeDSM(ParallelContext *pcxt, Relation onerel,
 						LVRelStats *vacrelstats, int options,
-						bool aggressive, Snapshot snapshot,
-						int vac_work_mem)
+						bool aggressive, int vac_work_mem)
 {
 	ParallelHeapScanDesc pscan;
 	LVRelStats *lvstats;
@@ -3207,9 +3202,13 @@ LazyVacuumInitializeDSM(ParallelContext *pcxt, Relation onerel,
 
 	/* Prepare for parallel scan desciption */
 	pscan = (ParallelHeapScanDesc) shm_toc_allocate(pcxt->toc,
-														  heap_parallelscan_estimate(snapshot));
+													heap_parallelscan_estimate(SnapshotAny));
+	//pscan = (ParallelHeapScanDesc) shm_toc_allocate(pcxt->toc,
+	//												add_size(offsetof(ParallelHeapScanDescData, phs_snapshot_data),
+	//														 sizeof(SerializedSnapshotData)));
+
 	shm_toc_insert(pcxt->toc, VACUUM_KEY_PARALLEL_SCAN, pscan);
-	heap_parallelscan_initialize(pscan, onerel, snapshot);
+	heap_parallelscan_initialize(pscan, onerel, SnapshotAny);
 
 	/* Prepare for vacuum statistics */
 	lvstats = (LVRelStats *)shm_toc_allocate(pcxt->toc,
