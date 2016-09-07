@@ -552,6 +552,7 @@ lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 				nkeep,
 				nunused;
 	IndexBulkDeleteResult *indstats;
+	LVDeadTuples *lv_dead_tuples;
 	int			i;
 	PGRUsage	ru0;
 	Buffer		vmbuffer = InvalidBuffer;
@@ -583,6 +584,7 @@ lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 	vacrelstats->scanned_pages = 0;
 	vacrelstats->nonempty_pages = 0;
 	vacrelstats->latestRemovedXid = InvalidTransactionId;
+	lv_dead_tuples = vacrelstats->lv_dead_tuples;
 
 	lazy_space_alloc(vacrelstats, nblocks);
 	frozen = palloc(sizeof(xl_heap_freeze_tuple) * MaxHeapTuplesPerPage);
@@ -707,8 +709,8 @@ lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 		 * If we are close to overrunning the available space for dead-tuple
 		 * TIDs, pause and do a cycle of vacuuming before we tackle this page.
 		 */
-		if ((vacrelstats->max_dead_tuples - *vacrelstats->num_dead_tuples) < MaxHeapTuplesPerPage &&
-			*vacrelstats->num_dead_tuples > 0)
+		if ((vacrelstats->max_dead_tuples - lv_dead_tuples->num_dead_tuples) < MaxHeapTuplesPerPage &&
+			lv_dead_tuples->num_dead_tuples > 0)
 		{
 			const int	hvp_index[] = {
 				PROGRESS_VACUUM_PHASE,
@@ -946,7 +948,7 @@ lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 		has_dead_tuples = false;
 		nfrozen = 0;
 		hastup = false;
-		prev_dead_count = *vacrelstats->num_dead_tuples;
+		prev_dead_count = lv_dead_tuples->num_dead_tuples;
 		maxoff = PageGetMaxOffsetNumber(page);
 
 		/*
@@ -1158,7 +1160,7 @@ lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 		 * instead of doing a second scan.
 		 */
 		if (Irel == NULL &&
-			*vacrelstats->num_dead_tuples > 0)
+			lv_dead_tuples->num_dead_tuples > 0)
 		{
 			/* Remove tuples from heap */
 			lazy_vacuum_page(onerel, blkno, buf, 0, vacrelstats, &vmbuffer);
@@ -1270,7 +1272,7 @@ lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 		 * page, so remember its free space as-is.  (This path will always be
 		 * taken if there are no indexes.)
 		 */
-		if (*vacrelstats->num_dead_tuples == prev_dead_count)
+		if (lv_dead_tuples->num_dead_tuples == prev_dead_count)
 			RecordPageWithFreeSpace(onerel, blkno, freespace);
 	}
 
@@ -1303,7 +1305,7 @@ lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 
 	/* If any tuples need to be deleted, perform final vacuum cycle */
 	/* XXX put a threshold on min number of tuples here? */
-	if (*vacrelstats->num_dead_tuples > 0)
+	if (lv_dead_tuples->num_dead_tuples > 0)
 	{
 		const int	hvp_index[] = {
 			PROGRESS_VACUUM_PHASE,
@@ -1415,6 +1417,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 				nkeep,
 				nunused;
 	IndexBulkDeleteResult **indstats;
+	LVDeadTuples *lv_dead_tuples;
 	int			i;
 	PGRUsage	ru0;
 	Buffer		vmbuffer = InvalidBuffer;
@@ -1448,6 +1451,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	vacrelstats->scanned_pages = 0;
 	vacrelstats->nonempty_pages = 0;
 	vacrelstats->latestRemovedXid = InvalidTransactionId;
+	lv_dead_tuples = vacrelstats->lv_dead_tuples;
 
 	lazy_space_alloc(vacrelstats, nblocks);
 	frozen = palloc(sizeof(xl_heap_freeze_tuple) * MaxHeapTuplesPerPage);
@@ -1634,8 +1638,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		 * If we are close to overrunning the available space for dead-tuple
 		 * TIDs, pause and do a cycle of vacuuming before we tackle this page.
 		 */
-		if ((vacrelstats->max_dead_tuples - *vacrelstats->num_dead_tuples) < MaxHeapTuplesPerPage &&
-			*vacrelstats->num_dead_tuples > 0)
+		if ((vacrelstats->max_dead_tuples - lv_dead_tuples->num_dead_tuples) < MaxHeapTuplesPerPage &&
+			lv_dead_tuples->num_dead_tuples > 0)
 		{
 			const int	hvp_index[] = {
 				PROGRESS_VACUUM_PHASE,
@@ -1686,7 +1690,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			 * not to reset latestRemovedXid since we want that value to be
 			 * valid.
 			 */
-			*vacrelstats->num_dead_tuples = 0;
+			lv_dead_tuples->num_dead_tuples = 0;
 			vacrelstats->num_index_scans++;
 
 			/* Report that we are once again scanning the heap */
@@ -1868,7 +1872,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		has_dead_tuples = false;
 		nfrozen = 0;
 		hastup = false;
-		prev_dead_count = *vacrelstats->num_dead_tuples;
+		prev_dead_count = lv_dead_tuples->num_dead_tuples;
 		maxoff = PageGetMaxOffsetNumber(page);
 
 		/*
@@ -2080,7 +2084,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		 * instead of doing a second scan.
 		 */
 		if (nindexes == 0 &&
-			vacrelstats->num_dead_tuples > 0)
+			lv_dead_tuples->num_dead_tuples > 0)
 		{
 			/* Remove tuples from heap */
 			lazy_vacuum_page(onerel, blkno, buf, 0, vacrelstats, &vmbuffer);
@@ -2091,7 +2095,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			 * not to reset latestRemovedXid since we want that value to be
 			 * valid.
 			 */
-			*vacrelstats->num_dead_tuples = 0;
+			lv_dead_tuples->num_dead_tuples = 0;
 			vacuumed_pages++;
 		}
 
@@ -2194,7 +2198,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		 * page, so remember its free space as-is.  (This path will always be
 		 * taken if there are no indexes.)
 		 */
-		if (*vacrelstats->num_dead_tuples == prev_dead_count)
+		if (lv_dead_tuples->num_dead_tuples == prev_dead_count)
 			RecordPageWithFreeSpace(onerel, blkno, freespace);
 	}
 
@@ -2225,7 +2229,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 
 	/* If any tuples need to be deleted, perform final vacuum cycle */
 	/* XXX put a threshold on min number of tuples here? */
-	if (vacrelstats->num_dead_tuples > 0)
+	if (lv_dead_tuples->num_dead_tuples > 0)
 	{
 		const int	hvp_index[] = {
 			PROGRESS_VACUUM_PHASE,
@@ -2359,7 +2363,7 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
 	npages = 0;
 
 	tupindex = 0;
-	while (tupindex < *vacrelstats->num_dead_tuples)
+	while (tupindex < vacrelstats->lv_dead_tuples->num_dead_tuples)
 	{
 		BlockNumber tblk;
 		Buffer		buf;
@@ -2368,7 +2372,7 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
 
 		vacuum_delay_point();
 
-		tblk = ItemPointerGetBlockNumber(&vacrelstats->dead_tuples[tupindex]);
+		tblk = ItemPointerGetBlockNumber(&vacrelstats->lv_dead_tuples->dead_tuples[tupindex]);
 		buf = ReadBufferExtended(onerel, MAIN_FORKNUM, tblk, RBM_NORMAL,
 								 vac_strategy);
 		if (!ConditionalLockBufferForCleanup(buf))
@@ -2420,6 +2424,7 @@ lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 {
 	Page		page = BufferGetPage(buffer);
 	OffsetNumber unused[MaxOffsetNumber];
+	LVDeadTuples *lv_dead_tuples = vacrelstats->lv_dead_tuples;
 	int			uncnt = 0;
 	TransactionId visibility_cutoff_xid;
 	bool		all_frozen;
@@ -2428,16 +2433,16 @@ lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 
 	START_CRIT_SECTION();
 
-	for (; tupindex < *vacrelstats->num_dead_tuples; tupindex++)
+	for (; tupindex < lv_dead_tuples->num_dead_tuples; tupindex++)
 	{
 		BlockNumber tblk;
 		OffsetNumber toff;
 		ItemId		itemid;
 
-		tblk = ItemPointerGetBlockNumber(&vacrelstats->dead_tuples[tupindex]);
+		tblk = ItemPointerGetBlockNumber(&lv_dead_tuples->dead_tuples[tupindex]);
 		if (tblk != blkno)
 			break;				/* past end of tuples for this block */
-		toff = ItemPointerGetOffsetNumber(&vacrelstats->dead_tuples[tupindex]);
+		toff = ItemPointerGetOffsetNumber(&lv_dead_tuples->dead_tuples[tupindex]);
 		itemid = PageGetItemId(page, toff);
 		ItemIdSetUnused(itemid);
 		unused[uncnt++] = toff;
@@ -2587,7 +2592,7 @@ lazy_vacuum_index(Relation indrel,
 	ereport(elevel,
 			(errmsg("scanned index \"%s\" to remove %d row versions",
 					RelationGetRelationName(indrel),
-					*vacrelstats->num_dead_tuples),
+					vacrelstats->lv_dead_tuples->num_dead_tuples),
 			 errdetail("%s.", pg_rusage_show(&ru0))));
 }
 
@@ -2956,16 +2961,13 @@ lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks)
 
 	if (!vacrelstats->do_parallel)
 	{
-		LVDeadTuples *lv_dead_tuples;
+		int size = maxtuples * sizeof(ItemPointerData);
 
-		lv_dead_tuples = (LVDeadTuples *) palloc0(sizeof(LVDeadTuples));
-		vacrelstats->dead_tuples = (ItemPointer)
-			palloc(maxtuples * sizeof(ItemPointerData));
-		vacrelstats->num_dead_tuples = (int *) &(lv_dead_tuples->num_dead_tuples);
-
+		vacrelstats->lv_dead_tuples = (LVDeadTuples *)
+			palloc0(sizeof(LVDeadTuples) + size);
 	}
 
-	*vacrelstats->num_dead_tuples = 0;
+	vacrelstats->lv_dead_tuples->num_dead_tuples = 0;
 	vacrelstats->max_dead_tuples = (int) maxtuples;
 }
 
@@ -2973,18 +2975,19 @@ static void
 lazy_record_dead_tuple_test(LVRelStats *vacrelstats, ItemPointer itemptr)
 {
 	bool do_parallel = vacrelstats->do_parallel;
+	LVDeadTuples *lv_dead_tuples = vacrelstats->lv_dead_tuples;
 	
-	if (*vacrelstats->num_dead_tuples < vacrelstats->max_dead_tuples)
+	if (lv_dead_tuples->num_dead_tuples < vacrelstats->max_dead_tuples)
 	{
 		if (do_parallel)
-			SpinLockAcquire(&vacrelstats->dt_mutex);
+			SpinLockAcquire(&lv_dead_tuples->dt_mutex);
 
-		vacrelstats->dead_tuples[*vacrelstats->num_dead_tuples] = *itemptr;
-		(*vacrelstats->num_dead_tuples)++;
+		lv_dead_tuples->dead_tuples[lv_dead_tuples->num_dead_tuples] = *itemptr;
+		(lv_dead_tuples->num_dead_tuples)++;
 		/* Update progress info */
 
 		if (do_parallel)
-			SpinLockRelease(&vacrelstats->dt_mutex);
+			SpinLockRelease(&lv_dead_tuples->dt_mutex);
 	}
 }
 
@@ -2992,14 +2995,15 @@ static void
 lazy_clear_dead_tuple(LVRelStats *vacrelstats)
 {
 	bool do_parallel = vacrelstats->do_parallel;
+	LVDeadTuples *lv_dead_tuples = vacrelstats->lv_dead_tuples;
 
 	if (do_parallel)
-		SpinLockAcquire(&vacrelstats->dt_mutex);
+		SpinLockAcquire(&lv_dead_tuples->dt_mutex);
 
-	*vacrelstats->num_dead_tuples = 0;
+	lv_dead_tuples->num_dead_tuples = 0;
 
 	if (do_parallel)
-		SpinLockRelease(&vacrelstats->dt_mutex);
+		SpinLockRelease(&lv_dead_tuples->dt_mutex);
 }
 
 /*
@@ -3009,17 +3013,19 @@ static void
 lazy_record_dead_tuple(LVRelStats *vacrelstats,
 					   ItemPointer itemptr)
 {
+	LVDeadTuples *lv_dead_tuples = vacrelstats->lv_dead_tuples;
+
 	/*
 	 * The array shouldn't overflow under normal behavior, but perhaps it
 	 * could if we are given a really small maintenance_work_mem. In that
 	 * case, just forget the last few tuples (we'll get 'em next time).
 	 */
-	if (*vacrelstats->num_dead_tuples < vacrelstats->max_dead_tuples)
+	if (lv_dead_tuples->num_dead_tuples < vacrelstats->max_dead_tuples)
 	{
-		vacrelstats->dead_tuples[*vacrelstats->num_dead_tuples] = *itemptr;
-		(*vacrelstats->num_dead_tuples)++;
+		lv_dead_tuples->dead_tuples[lv_dead_tuples->num_dead_tuples] = *itemptr;
+		(lv_dead_tuples->num_dead_tuples)++;
 		pgstat_progress_update_param(PROGRESS_VACUUM_NUM_DEAD_TUPLES,
-									 *vacrelstats->num_dead_tuples);
+									 lv_dead_tuples->num_dead_tuples);
 	}
 }
 
@@ -3037,8 +3043,8 @@ lazy_tid_reaped(ItemPointer itemptr, void *state)
 	ItemPointer res;
 
 	res = (ItemPointer) bsearch((void *) itemptr,
-								(void *) vacrelstats->dead_tuples,
-								*vacrelstats->num_dead_tuples,
+								(void *) vacrelstats->lv_dead_tuples->dead_tuples,
+								vacrelstats->lv_dead_tuples->num_dead_tuples,
 								sizeof(ItemPointerData),
 								vac_cmp_itemptr);
 
@@ -3255,12 +3261,10 @@ LazyVacuumInitializeDSM(ParallelContext *pcxt, Relation onerel,
 	/* Prepare for dead tuple array */
 	lv_dead_tuples_size += sizeof(ItemPointer) * vacrelstats->max_dead_tuples;
 	lv_dead_tuples_size += sizeof(LVDeadTuples);
-
 	lv_dead_tuples = (LVDeadTuples *) shm_toc_allocate(pcxt->toc, lv_dead_tuples_size);
 	shm_toc_insert(pcxt->toc, VACUUM_KEY_DEAD_TUPLE, lv_dead_tuples);
 	SpinLockInit(&(lv_dead_tuples->dt_mutex));
 	lv_dead_tuples->num_dead_tuples = 0;
-	//lv_dead_tuples->max_dead_tuples = maxtuples;
 
 	/* Prepare for vacuum task */
 	vacuum_task = (VacuumTask *) shm_toc_allocate(pcxt->toc, sizeof(VacuumTask));
@@ -3291,8 +3295,7 @@ LazyVacuumInitializeWorker(shm_toc *toc, ParallelHeapScanDesc *pscan,
 
 	/* Look up for dead tuple area */
 	lv_dead_tuples = (LVDeadTuples *) shm_toc_lookup(toc, VACUUM_KEY_DEAD_TUPLE);
-	(*vacrelstats)->dt_mutex = lv_dead_tuples->dt_mutex;
-	(*vacrelstats)->num_dead_tuples = (int *) &(lv_dead_tuples->num_dead_tuples);
+	(*vacrelstats)->lv_dead_tuples = lv_dead_tuples;
 
 	/* Look up for vacuum task */
 	vacuum_task = (VacuumTask *) shm_toc_lookup(toc, VACUUM_KEY_VACUUM_TASK);

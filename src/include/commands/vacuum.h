@@ -147,6 +147,18 @@ typedef struct VacuumParams
 										 * activated, -1 to use default */
 } VacuumParams;
 
+typedef struct LVDeadTuples
+{
+	slock_t		dt_mutex;
+	int			num_dead_tuples; /* current # of entries */
+	//int			max_dead_tuples;
+	ItemPointer dead_tuples; /* array of ItemPointerData */
+	/* Dead tuple ItemPointer follow */
+} LVDeadTuples;
+
+#define SizeOfVacuumDeadTuples \
+	(offsetof(VacuumDeadTuples, dead_tuples) + sizeof(ItemPointer))
+
 typedef struct LVRelStats
 {
 	/* hasindex = true means two-pass strategy; false means one-pass */
@@ -167,26 +179,12 @@ typedef struct LVRelStats
 	BlockNumber nonempty_pages; /* actually, last nonempty page + 1 */
 	/* List of TIDs of tuples we intend to delete */
 	/* NB: this list is ordered by TID address */
-	slock_t		dt_mutex;
-	int			*num_dead_tuples;	/* current # of entries */
+	LVDeadTuples *lv_dead_tuples;
 	int			max_dead_tuples;	/* # slots allocated in array */
-	ItemPointer dead_tuples;	/* array of ItemPointerData */
 	int			num_index_scans;
 	TransactionId latestRemovedXid;
 	bool		lock_waiter_detected;
 } LVRelStats;
-
-typedef struct LVDeadTuples
-{
-	slock_t		dt_mutex;
-	int			num_dead_tuples;
-	//int			max_dead_tuples;
-	ItemPointer dead_tuples;
-	/* Dead tuple ItemPointer follow */
-} LVDeadTuples;
-
-#define SizeOfVacuumDeadTuples \
-	(offsetof(VacuumDeadTuples, dead_tuples) + sizeof(ItemPointer))
 
 typedef struct VacuumTask
 {
