@@ -486,7 +486,11 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	indstats = (IndexBulkDeleteResult **)
 		palloc0(nindexes * sizeof(IndexBulkDeleteResult *));
 
-	nblocks = RelationGetNumberOfBlocks(onerel);
+	if (strcmp("vm", RelationGetRelationName(onerel)) == 0 &&
+		((options & VACOPT_FREEZE) == 0))
+		nblocks = MaxBlockNumber;
+	else
+		nblocks = RelationGetNumberOfBlocks(onerel);
 	vacrelstats->rel_pages = nblocks;
 	vacrelstats->scanned_pages = 0;
 	vacrelstats->nonempty_pages = 0;
@@ -562,10 +566,17 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			else
 			{
 				if ((vmstatus & VISIBILITYMAP_ALL_VISIBLE) == 0)
-					break;
+				{
+					if (strcmp("vm", RelationGetRelationName(onerel)) != 0)
+						break;
+				}
 			}
 			vacuum_delay_point();
 			next_unskippable_block++;
+
+			if (next_unskippable_block % 100000000 == 0)
+				elog(NOTICE, "next_unskippable_block = %u",
+					 next_unskippable_block);
 		}
 	}
 
@@ -574,6 +585,9 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	else
 		skipping_blocks = false;
 
+	blkno = 0;
+	elog(NOTICE, "start blkno = %u, nblocks = %u, next_unskip = %u", blkno, nblocks,
+		next_unskippable_block);
 	for (blkno = 0; blkno < nblocks; blkno++)
 	{
 		Buffer		buf;
@@ -652,7 +666,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			 * Otherwise, the page must be at least all-visible if not
 			 * all-frozen, so we can set all_visible_according_to_vm = true.
 			 */
-			if (skipping_blocks && !FORCE_CHECK_PAGE())
+			if (skipping_blocks)
+			//if (skipping_blocks && !FORCE_CHECK_PAGE())
 			{
 				/*
 				 * Tricky, tricky.  If this is in aggressive vacuum, the page
@@ -666,6 +681,10 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 				 */
 				if (aggressive || VM_ALL_FROZEN(onerel, blkno, &vmbuffer))
 					vacrelstats->frozenskipped_pages++;
+
+				if (blkno % 100000000 == 0)
+					elog(NOTICE, "blkno = %u", blkno);
+
 				continue;
 			}
 			all_visible_according_to_vm = true;
@@ -1241,6 +1260,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			RecordPageWithFreeSpace(onerel, blkno, freespace);
 	}
 
+	elog(NOTICE, "end blkno = %d", blkno);
 	/* report that everything is scanned and vacuumed */
 	pgstat_progress_update_param(PROGRESS_VACUUM_HEAP_BLKS_SCANNED, blkno);
 
