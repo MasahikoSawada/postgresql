@@ -517,7 +517,7 @@ lazy_vacuum_worker_test(dsm_segment *seg, shm_toc *toc)
 	Relation indrel;
 
 	fprintf(stderr, "Worker %d\n", MyProcPid);
-	pg_usleep(30 * 1000L * 1000L);
+	//pg_usleep(30 * 1000L * 1000L);
 
 	/* Look up and initialize information and task */
 	LazyVacuumInitializeWorker(toc, &pscan, &vacrelstats, &options,
@@ -584,9 +584,9 @@ lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 	vacrelstats->scanned_pages = 0;
 	vacrelstats->nonempty_pages = 0;
 	vacrelstats->latestRemovedXid = InvalidTransactionId;
-	lv_dead_tuples = vacrelstats->lv_dead_tuples;
 
 	lazy_space_alloc(vacrelstats, nblocks);
+	lv_dead_tuples = vacrelstats->lv_dead_tuples;
 	frozen = palloc(sizeof(xl_heap_freeze_tuple) * MaxHeapTuplesPerPage);
 
 	scan = heap_beginscan_parallel(onerel, pscan);
@@ -658,10 +658,6 @@ lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 		bool		all_frozen = true;	/* provided all_visible is also true */
 		bool		has_dead_tuples;
 		TransactionId visibility_cutoff_xid = InvalidTransactionId;
-		StringInfoData strbuf;
-
-		initStringInfo(&strbuf);
-		appendStringInfo(&strbuf, "Block %d ", blkno);
 
 		/* see note above about forcing scanning of last page */
 #define FORCE_CHECK_PAGE() \
@@ -680,8 +676,6 @@ lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 				if ((vmstatus & VISIBILITYMAP_ALL_FROZEN) != 0)
 				{
 					vacrelstats->frozenskipped_pages++;
-					appendStringInfo(&strbuf, "-> all-frozen SKIP");
-					elog(NOTICE, "[%d] %s", MyProcPid, strbuf.data);
 					continue;
 				}
 			}
@@ -689,17 +683,12 @@ lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 			{
 				if ((vmstatus & VISIBILITYMAP_ALL_VISIBLE) != 0)
 				{
-					appendStringInfo(&strbuf, "-> all-visible SKIP");
-					elog(NOTICE, "[%d] %s", MyProcPid, strbuf.data);
 					if ((vmstatus & VISIBILITYMAP_ALL_FROZEN) == 0)
 						vacrelstats->frozenskipped_pages++;
 					continue;
 				}
 			}
 		}
-
-		appendStringInfo(&strbuf, "-> SCAAAAAAAAAAAAAN");
-		elog(NOTICE, "[%d] %s", MyProcPid, strbuf.data);
 
 		pgstat_progress_update_param(PROGRESS_VACUUM_HEAP_BLKS_SCANNED, blkno);
 
@@ -1451,9 +1440,9 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	vacrelstats->scanned_pages = 0;
 	vacrelstats->nonempty_pages = 0;
 	vacrelstats->latestRemovedXid = InvalidTransactionId;
-	lv_dead_tuples = vacrelstats->lv_dead_tuples;
 
 	lazy_space_alloc(vacrelstats, nblocks);
+	lv_dead_tuples = vacrelstats->lv_dead_tuples;
 	frozen = palloc(sizeof(xl_heap_freeze_tuple) * MaxHeapTuplesPerPage);
 
 	/* Report that we're scanning the heap, advertising total # of blocks */
@@ -2962,9 +2951,12 @@ lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks)
 	if (!vacrelstats->do_parallel)
 	{
 		int size = maxtuples * sizeof(ItemPointerData);
+		LVDeadTuples *lv_dead_tuples;
 
-		vacrelstats->lv_dead_tuples = (LVDeadTuples *)
-			palloc0(sizeof(LVDeadTuples) + size);
+		lv_dead_tuples = (LVDeadTuples *) palloc0(sizeof(LVDeadTuples) + size);
+		lv_dead_tuples->dead_tuples = (ItemPointer) (lv_dead_tuples + SizeOfLVDeadTuples);
+
+		vacrelstats->lv_dead_tuples = lv_dead_tuples;
 	}
 
 	vacrelstats->lv_dead_tuples->num_dead_tuples = 0;
@@ -3296,6 +3288,7 @@ LazyVacuumInitializeWorker(shm_toc *toc, ParallelHeapScanDesc *pscan,
 	/* Look up for dead tuple area */
 	lv_dead_tuples = (LVDeadTuples *) shm_toc_lookup(toc, VACUUM_KEY_DEAD_TUPLE);
 	(*vacrelstats)->lv_dead_tuples = lv_dead_tuples;
+	(*vacrelstats)->lv_dead_tuples->dead_tuples = (ItemPointer) (lv_dead_tuples + SizeOfLVDeadTuples);
 
 	/* Look up for vacuum task */
 	vacuum_task = (VacuumTask *) shm_toc_lookup(toc, VACUUM_KEY_VACUUM_TASK);

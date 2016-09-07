@@ -156,8 +156,8 @@ typedef struct LVDeadTuples
 	/* Dead tuple ItemPointer follow */
 } LVDeadTuples;
 
-#define SizeOfVacuumDeadTuples \
-	(offsetof(VacuumDeadTuples, dead_tuples) + sizeof(ItemPointer))
+#define SizeOfLVDeadTuples \
+	(offsetof(LVDeadTuples, dead_tuples) + sizeof(ItemPointer))
 
 typedef struct LVRelStats
 {
