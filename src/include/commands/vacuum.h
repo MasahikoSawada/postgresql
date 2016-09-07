@@ -151,6 +151,7 @@ typedef struct LVRelStats
 {
 	/* hasindex = true means two-pass strategy; false means one-pass */
 	bool		hasindex;
+	bool		do_parallel;
 	/* Overall statistics about rel */
 	BlockNumber old_rel_pages;	/* previous value of pg_class.relpages */
 	BlockNumber rel_pages;		/* total number of pages */
@@ -166,8 +167,8 @@ typedef struct LVRelStats
 	BlockNumber nonempty_pages; /* actually, last nonempty page + 1 */
 	/* List of TIDs of tuples we intend to delete */
 	/* NB: this list is ordered by TID address */
-	LVDeadTuples *lv_dead_tuples;
-	int			num_dead_tuples;	/* current # of entries */
+	slock_t		dt_mutex;
+	int			*num_dead_tuples;	/* current # of entries */
 	int			max_dead_tuples;	/* # slots allocated in array */
 	ItemPointer dead_tuples;	/* array of ItemPointerData */
 	int			num_index_scans;
@@ -175,14 +176,14 @@ typedef struct LVRelStats
 	bool		lock_waiter_detected;
 } LVRelStats;
 
-typedef struct VacuumDeadTuples
+typedef struct LVDeadTuples
 {
 	slock_t		dt_mutex;
 	int			num_dead_tuples;
-	int			max_dead_tuples;
+	//int			max_dead_tuples;
 	ItemPointer dead_tuples;
 	/* Dead tuple ItemPointer follow */
-} VacuumDeadTuples;
+} LVDeadTuples;
 
 #define SizeOfVacuumDeadTuples \
 	(offsetof(VacuumDeadTuples, dead_tuples) + sizeof(ItemPointer))
