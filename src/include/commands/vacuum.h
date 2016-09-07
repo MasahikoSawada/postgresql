@@ -186,6 +186,15 @@ typedef struct LVRelStats
 	bool		lock_waiter_detected;
 } LVRelStats;
 
+typedef struct LVScanDescData
+{
+	BlockNumber lv_cblock;
+	BlockNumber lv_next_unskippable_block;
+	BlockNumber lv_nblocks;
+	bool		lv_skipping_blocks;
+} LVScanDescData;
+typedef struct LVScanDescData *LVScanDesc;
+
 typedef struct VacuumTask
 {
 	slock_t		dt_mutex;
