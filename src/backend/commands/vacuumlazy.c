@@ -471,6 +471,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		PROGRESS_VACUUM_MAX_DEAD_TUPLES
 	};
 	int64		initprog_val[3];
+	BlockNumber	n_skipped;
+	BlockNumber n_all_frozen;
 
 	pg_rusage_init(&ru0);
 
@@ -504,6 +506,9 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	initprog_val[1] = nblocks;
 	initprog_val[2] = vacrelstats->max_dead_tuples;
 	pgstat_progress_update_multi_param(3, initprog_index, initprog_val);
+
+	n_skipped = 0;
+	n_all_frozen = 0;
 
 	/*
 	 * Except when aggressive is set, we want to skip pages that are
@@ -562,6 +567,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			{
 				if ((vmstatus & VISIBILITYMAP_ALL_FROZEN) == 0)
 					break;
+				n_all_frozen++;
 			}
 			else
 			{
@@ -569,10 +575,15 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 				{
 					if (strcmp("vm", RelationGetRelationName(onerel)) != 0)
 						break;
+
+					/* Count the number of all-frozen pages */
+					if (vmstatus & VISIBILITYMAP_ALL_FROZEN)
+						n_all_frozen++;
 				}
 			}
 			vacuum_delay_point();
 			next_unskippable_block++;
+			n_skipped++;
 
 			if (next_unskippable_block % 100000000 == 0)
 				elog(NOTICE, "next_unskippable_block = %u",
@@ -588,7 +599,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	blkno = 0;
 	elog(NOTICE, "start blkno = %u, nblocks = %u, next_unskip = %u", blkno, nblocks,
 		next_unskippable_block);
-	for (blkno = 0; blkno < nblocks; blkno++)
+	
+	while (blkno < nblocks)
 	{
 		Buffer		buf;
 		Page		page;
@@ -606,18 +618,22 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		TransactionId visibility_cutoff_xid = InvalidTransactionId;
 
 		/* see note above about forcing scanning of last page */
-#define FORCE_CHECK_PAGE() \
-		(blkno == nblocks - 1 && should_attempt_truncation(vacrelstats))
+#define FORCE_CHECK_PAGE(blk) \
+		((blk) == nblocks - 1 && should_attempt_truncation(vacrelstats))
 
 		pgstat_progress_update_param(PROGRESS_VACUUM_HEAP_BLKS_SCANNED, blkno);
 
 		if (blkno == next_unskippable_block)
 		{
+			n_skipped = 0;
+			n_all_frozen = 0;
+
 			/* Time to advance next_unskippable_block */
 			next_unskippable_block++;
 			if ((options & VACOPT_DISABLE_PAGE_SKIPPING) == 0)
 			{
-				while (next_unskippable_block < nblocks)
+				while (next_unskippable_block < nblocks &&
+					   !FORCE_CHECK_PAGE(next_unskippable_block))
 				{
 					uint8		vmskipflags;
 
@@ -628,14 +644,22 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 					{
 						if ((vmskipflags & VISIBILITYMAP_ALL_FROZEN) == 0)
 							break;
+
+						/* Count the number of all-frozen pages */
+						n_all_frozen++;
 					}
 					else
 					{
 						if ((vmskipflags & VISIBILITYMAP_ALL_VISIBLE) == 0)
 							break;
+
+						/* Count the number of all-frozen pages */
+						if (vmskipflags & VISIBILITYMAP_ALL_FROZEN)
+							n_all_frozen++;
 					}
 					vacuum_delay_point();
 					next_unskippable_block++;
+					n_skipped++;
 				}
 			}
 
@@ -660,31 +684,35 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		else
 		{
 			/*
-			 * The current block is potentially skippable; if we've seen a
-			 * long enough run of skippable blocks to justify skipping it, and
-			 * we're not forced to check it, then go ahead and skip.
-			 * Otherwise, the page must be at least all-visible if not
-			 * all-frozen, so we can set all_visible_according_to_vm = true.
+			 * The current block is the first block of continuous skippable blocks,
+			 * and we know that how many blocks we can skip to scan. If we've
+			 * seen a long enough run of skippable blocks to justify skipping it,
+			 * then go ahead and skip. Otherwise, the page must be at least all-visible
+			 * if not all-frozen, so we can set all_visible_according_to_vm = true.
 			 */
 			if (skipping_blocks)
-			//if (skipping_blocks && !FORCE_CHECK_PAGE())
 			{
 				/*
+				 * We know that there are n_skipped pages by the visibilitymap
+				 * scan we did just before.
+				 *
 				 * Tricky, tricky.  If this is in aggressive vacuum, the page
 				 * must have been all-frozen at the time we checked whether it
 				 * was skippable, but it might not be any more.  We must be
 				 * careful to count it as a skipped all-frozen page in that
 				 * case, or else we'll think we can't update relfrozenxid and
-				 * relminmxid.  If it's not an aggressive vacuum, we don't
-				 * know whether it was all-frozen, so we have to recheck; but
-				 * in this case an approximate answer is OK.
+				 * relminmxid.  Even if it's not an aggressive vacuum, we know
+				 * the number of all-frozen pages in this all-visible blocks,
+				 * so we don't need to recheck it.
 				 */
-				if (aggressive || VM_ALL_FROZEN(onerel, blkno, &vmbuffer))
-					vacrelstats->frozenskipped_pages++;
+				vacrelstats->frozenskipped_pages += n_all_frozen;
+
+
+				/* Jump to the next unskippable block directly */
+				blkno += n_skipped;
 
 				if (blkno % 100000000 == 0)
 					elog(NOTICE, "blkno = %u", blkno);
-
 				continue;
 			}
 			all_visible_according_to_vm = true;
@@ -779,10 +807,11 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			 * it's OK to skip vacuuming pages we get a lock conflict on. They
 			 * will be dealt with in some future vacuum.
 			 */
-			if (!aggressive && !FORCE_CHECK_PAGE())
+			if (!aggressive && !FORCE_CHECK_PAGE(blkno))
 			{
 				ReleaseBuffer(buf);
 				vacrelstats->pinskipped_pages++;
+				blkno++;
 				continue;
 			}
 
@@ -810,6 +839,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 				vacrelstats->pinskipped_pages++;
 				if (hastup)
 					vacrelstats->nonempty_pages = blkno + 1;
+				blkno++;
 				continue;
 			}
 			if (!aggressive)
@@ -822,6 +852,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 				vacrelstats->pinskipped_pages++;
 				if (hastup)
 					vacrelstats->nonempty_pages = blkno + 1;
+				blkno++;
 				continue;
 			}
 			LockBuffer(buf, BUFFER_LOCK_UNLOCK);
@@ -872,6 +903,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			UnlockReleaseBuffer(buf);
 
 			RecordPageWithFreeSpace(onerel, blkno, freespace);
+			blkno++;
 			continue;
 		}
 
@@ -911,6 +943,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 
 			UnlockReleaseBuffer(buf);
 			RecordPageWithFreeSpace(onerel, blkno, freespace);
+			blkno++;
 			continue;
 		}
 
@@ -1258,6 +1291,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		 */
 		if (vacrelstats->num_dead_tuples == prev_dead_count)
 			RecordPageWithFreeSpace(onerel, blkno, freespace);
+
+		blkno++;
 	}
 
 	elog(NOTICE, "end blkno = %d", blkno);
