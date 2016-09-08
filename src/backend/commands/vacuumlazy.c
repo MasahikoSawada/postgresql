@@ -98,6 +98,28 @@
  */
 #define SKIP_PAGES_THRESHOLD	((BlockNumber) 32)
 
+#define BITS_PER_BITMAP_CHUNK 32
+#define BITMAP_CHUNKS_PER_PAGE	\
+	((int) ((LAZY_ALLOC_TUPLES / BITS_PER_BITMAP_CHUNK) + 1))
+#define BitoffsetToOffsetNumber(chunk, offset) \
+	(((chunk) * BITS_PER_BITMAP_CHUNK) + (offset) + 1)
+#define OffsetNumberToChunk(offset) \
+	((offset) / BITS_PER_BITMAP_CHUNK)
+#define OffsetNumberToBitoffset(offset) \
+	((offset) % BITS_PER_BITMAP_CHUNK)
+
+typedef struct PageEntry
+{
+	BlockNumber	blockno;
+	uint32	bm[BITMAP_CHUNKS_PER_PAGE]; /* tuple bitmap of blockno */
+} PageEntry;
+
+typedef struct DeadTupleMap
+{
+	HTAB	*pagetable;
+	int		npages; /* # of blocks hashmap has */
+} DeadTupleMap;
+
 typedef struct LVRelStats
 {
 	/* hasindex = true means two-pass strategy; false means one-pass */
@@ -120,6 +142,9 @@ typedef struct LVRelStats
 	int			num_dead_tuples;	/* current # of entries */
 	int			max_dead_tuples;	/* # slots allocated in array */
 	ItemPointer dead_tuples;	/* array of ItemPointerData */
+
+	DeadTupleMap *dead_tuple_map; /* hash map if dead ItemPointerData */
+
 	int			num_index_scans;
 	TransactionId latestRemovedXid;
 	bool		lock_waiter_detected;
@@ -148,20 +173,19 @@ static void lazy_vacuum_index(Relation indrel,
 static void lazy_cleanup_index(Relation indrel,
 				   IndexBulkDeleteResult *stats,
 				   LVRelStats *vacrelstats);
-static int lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
-				 int tupindex, LVRelStats *vacrelstats, Buffer *vmbuffer);
+static void lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
+				 PageEntry *entry, LVRelStats *vacrelstats, Buffer *vmbuffer);
 static bool should_attempt_truncation(LVRelStats *vacrelstats);
 static void lazy_truncate_heap(Relation onerel, LVRelStats *vacrelstats);
 static BlockNumber count_nondeletable_pages(Relation onerel,
 						 LVRelStats *vacrelstats);
 static void lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks);
-static void lazy_record_dead_tuple(LVRelStats *vacrelstats,
-					   ItemPointer itemptr);
+static void lazy_record_dead_tuple(LVRelStats *vacrelstats, ItemPointer itemptr);
 static bool lazy_tid_reaped(ItemPointer itemptr, void *state);
-static int	vac_cmp_itemptr(const void *left, const void *right);
 static bool heap_page_is_all_visible(Relation rel, Buffer buf,
 					 TransactionId *visibility_cutoff_xid, bool *all_frozen);
 
+static void init_dead_tuple_map(DeadTupleMap *dead_tuple_map);
 
 /*
  *	lazy_vacuum_rel() -- perform LAZY VACUUM for one heap relation
@@ -237,6 +261,7 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 		aggressive = true;
 
 	vacrelstats = (LVRelStats *) palloc0(sizeof(LVRelStats));
+	vacrelstats->dead_tuple_map = (DeadTupleMap *) palloc0(sizeof(DeadTupleMap));
 
 	vacrelstats->old_rel_pages = onerel->rd_rel->relpages;
 	vacrelstats->old_rel_tuples = onerel->rd_rel->reltuples;
@@ -427,6 +452,26 @@ vacuum_log_cleanup_info(Relation rel, LVRelStats *vacrelstats)
 		(void) log_heap_cleanup_info(rel->rd_node, vacrelstats->latestRemovedXid);
 }
 
+static void
+init_dead_tuple_map(DeadTupleMap *dtmap)
+{
+	HASHCTL	hash_ctl;
+
+	/* If already exists, destroy it in advance */
+	if (dtmap->pagetable)
+		hash_destroy(dtmap->pagetable);
+
+	MemSet(&hash_ctl, 0, sizeof(hash_ctl));
+	hash_ctl.keysize = sizeof(BlockNumber);
+	hash_ctl.entrysize = sizeof(PageEntry);
+	hash_ctl.hcxt = CurrentMemoryContext;
+	dtmap->pagetable = hash_create("DeadTupleBitmap",
+											128,
+											&hash_ctl,
+											HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+	dtmap->npages = 0;
+}
+
 /*
  *	lazy_scan_heap() -- scan an open heap relation
  *
@@ -493,6 +538,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	vacrelstats->latestRemovedXid = InvalidTransactionId;
 
 	lazy_space_alloc(vacrelstats, nblocks);
+	init_dead_tuple_map(vacrelstats->dead_tuple_map);
+
 	frozen = palloc(sizeof(xl_heap_freeze_tuple) * MaxHeapTuplesPerPage);
 
 	/* Report that we're scanning the heap, advertising total # of blocks */
@@ -731,6 +778,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			 */
 			vacrelstats->num_dead_tuples = 0;
 			vacrelstats->num_index_scans++;
+			init_dead_tuple_map(vacrelstats->dead_tuple_map);
 
 			/* Report that we are once again scanning the heap */
 			pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
@@ -1125,8 +1173,18 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		if (nindexes == 0 &&
 			vacrelstats->num_dead_tuples > 0)
 		{
+			PageEntry *entry = NULL;
+			bool found;
+
+			/* Search current block from hash table, must be found */
+			entry = (PageEntry *) hash_search(vacrelstats->dead_tuple_map->pagetable,
+											 (void *) &blkno,
+											 HASH_FIND, &found);
+
+			Assert(found);
+
 			/* Remove tuples from heap */
-			lazy_vacuum_page(onerel, blkno, buf, 0, vacrelstats, &vmbuffer);
+			lazy_vacuum_page(onerel, blkno, buf, entry, vacrelstats, &vmbuffer);
 			has_dead_tuples = false;
 
 			/*
@@ -1134,6 +1192,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			 * not to reset latestRemovedXid since we want that value to be
 			 * valid.
 			 */
+			init_dead_tuple_map(vacrelstats->dead_tuple_map);
 			vacrelstats->num_dead_tuples = 0;
 			vacuumed_pages++;
 		}
@@ -1367,11 +1426,15 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
 	PGRUsage	ru0;
 	Buffer		vmbuffer = InvalidBuffer;
 
+	DeadTupleMap	*dtmap = vacrelstats->dead_tuple_map;
+	HASH_SEQ_STATUS	status;
+	PageEntry	*entry;
+
 	pg_rusage_init(&ru0);
 	npages = 0;
 
-	tupindex = 0;
-	while (tupindex < vacrelstats->num_dead_tuples)
+	hash_seq_init(&status, dtmap->pagetable);
+	while ((entry = (PageEntry *) hash_seq_search(&status)) != NULL)
 	{
 		BlockNumber tblk;
 		Buffer		buf;
@@ -1380,7 +1443,7 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
 
 		vacuum_delay_point();
 
-		tblk = ItemPointerGetBlockNumber(&vacrelstats->dead_tuples[tupindex]);
+		tblk = entry->blockno;
 		buf = ReadBufferExtended(onerel, MAIN_FORKNUM, tblk, RBM_NORMAL,
 								 vac_strategy);
 		if (!ConditionalLockBufferForCleanup(buf))
@@ -1389,8 +1452,8 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
 			++tupindex;
 			continue;
 		}
-		tupindex = lazy_vacuum_page(onerel, tblk, buf, tupindex, vacrelstats,
-									&vmbuffer);
+		lazy_vacuum_page(onerel, tblk, buf, entry, vacrelstats,
+						 &vmbuffer);
 
 		/* Now that we've compacted the page, record its available space */
 		page = BufferGetPage(buf);
@@ -1425,33 +1488,43 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
  * tuple for this page.  We assume the rest follow sequentially.
  * The return value is the first tupindex after the tuples of this page.
  */
-static int
+static void
 lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
-				 int tupindex, LVRelStats *vacrelstats, Buffer *vmbuffer)
+				 PageEntry *entry, LVRelStats *vacrelstats, Buffer *vmbuffer)
 {
 	Page		page = BufferGetPage(buffer);
 	OffsetNumber unused[MaxOffsetNumber];
 	int			uncnt = 0;
 	TransactionId visibility_cutoff_xid;
 	bool		all_frozen;
+	int			chunk, off;
 
 	pgstat_progress_update_param(PROGRESS_VACUUM_HEAP_BLKS_VACUUMED, blkno);
 
 	START_CRIT_SECTION();
 
-	for (; tupindex < vacrelstats->num_dead_tuples; tupindex++)
+	for (chunk = 0; chunk < BITMAP_CHUNKS_PER_PAGE; chunk++)
 	{
-		BlockNumber tblk;
 		OffsetNumber toff;
 		ItemId		itemid;
 
-		tblk = ItemPointerGetBlockNumber(&vacrelstats->dead_tuples[tupindex]);
-		if (tblk != blkno)
-			break;				/* past end of tuples for this block */
-		toff = ItemPointerGetOffsetNumber(&vacrelstats->dead_tuples[tupindex]);
-		itemid = PageGetItemId(page, toff);
-		ItemIdSetUnused(itemid);
-		unused[uncnt++] = toff;
+		if (!(entry->bm[chunk]))
+			continue;
+
+		for (off = 0; off < BITS_PER_BITMAP_CHUNK; off++)
+		{
+			if (entry->bm[chunk] < ((uint32) 1 << off))
+				break;
+
+			/* Found the offset number that bit is set */
+			if (entry->bm[chunk] & ((uint32) 1 << off))
+			{
+				toff = BitoffsetToOffsetNumber(chunk, off);
+				itemid = PageGetItemId(page, toff);
+				ItemIdSetUnused(itemid);
+				unused[uncnt++] = toff;
+			}
+		}
 	}
 
 	PageRepairFragmentation(page);
@@ -1512,8 +1585,6 @@ lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 			visibilitymap_set(onerel, blkno, buffer, InvalidXLogRecPtr,
 							  *vmbuffer, visibility_cutoff_xid, flags);
 	}
-
-	return tupindex;
 }
 
 /*
@@ -1947,12 +2018,24 @@ lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks)
 	int			vac_work_mem = IsAutoVacuumWorkerProcess() &&
 	autovacuum_work_mem != -1 ?
 	autovacuum_work_mem : maintenance_work_mem;
+	HASHCTL	hash_ctl;
+
+	MemSet(&hash_ctl, 0, sizeof(hash_ctl));
+	hash_ctl.keysize = sizeof(BlockNumber);
+	hash_ctl.entrysize = sizeof(PageEntry);
+	hash_ctl.hcxt = CurrentMemoryContext;
+	vacrelstats->dead_tuple_map->pagetable = hash_create("DeadTupleBitmap",
+														 128,
+														 &hash_ctl,
+														 HASH_ELEM | HASH_BLOBS |
+														 HASH_CONTEXT);
+	vacrelstats->dead_tuple_map->npages = 0;
 
 	if (vacrelstats->hasindex)
 	{
-		maxtuples = (vac_work_mem * 1024L) / sizeof(ItemPointerData);
+		maxtuples = ((vac_work_mem * 1024L) / sizeof(PageEntry)) * LAZY_ALLOC_TUPLES;
 		maxtuples = Min(maxtuples, INT_MAX);
-		maxtuples = Min(maxtuples, MaxAllocSize / sizeof(ItemPointerData));
+		maxtuples = Min(maxtuples, (MaxAllocSize / sizeof(PageEntry)) * LAZY_ALLOC_TUPLES);
 
 		/* curious coding here to ensure the multiplication can't overflow */
 		if ((BlockNumber) (maxtuples / LAZY_ALLOC_TUPLES) > relblocks)
@@ -1968,29 +2051,41 @@ lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks)
 
 	vacrelstats->num_dead_tuples = 0;
 	vacrelstats->max_dead_tuples = (int) maxtuples;
-	vacrelstats->dead_tuples = (ItemPointer)
-		palloc(maxtuples * sizeof(ItemPointerData));
 }
 
 /*
  * lazy_record_dead_tuple - remember one deletable tuple
  */
 static void
-lazy_record_dead_tuple(LVRelStats *vacrelstats,
-					   ItemPointer itemptr)
+lazy_record_dead_tuple(LVRelStats *vacrelstats, ItemPointer itemptr)
 {
-	/*
-	 * The array shouldn't overflow under normal behavior, but perhaps it
-	 * could if we are given a really small maintenance_work_mem. In that
-	 * case, just forget the last few tuples (we'll get 'em next time).
-	 */
-	if (vacrelstats->num_dead_tuples < vacrelstats->max_dead_tuples)
+	DeadTupleMap *dtmap = vacrelstats->dead_tuple_map;
+	PageEntry *page = NULL;
+	BlockNumber		blkno = ItemPointerGetBlockNumber(itemptr);
+	OffsetNumber	offset = ItemPointerGetOffsetNumber(itemptr);
+	bool	found;
+	int		chunk, bitoffset;
+
+	page = (PageEntry *) hash_search(dtmap->pagetable,
+									 (void *) &blkno,
+									 HASH_ENTER, &found);
+
+	/* Initialize it if not present before */
+	if (!found)
 	{
-		vacrelstats->dead_tuples[vacrelstats->num_dead_tuples] = *itemptr;
-		vacrelstats->num_dead_tuples++;
-		pgstat_progress_update_param(PROGRESS_VACUUM_NUM_DEAD_TUPLES,
-									 vacrelstats->num_dead_tuples);
+		MemSet(page, 0, sizeof(PageEntry));
+		page->blockno = blkno;
+		dtmap->npages++;
 	}
+
+	chunk = OffsetNumberToChunk(offset - 1);
+	bitoffset = OffsetNumberToBitoffset(offset - 1);
+
+	page->bm[chunk] |= ((uint32) 1 << bitoffset);
+
+	vacrelstats->num_dead_tuples++;
+	pgstat_progress_update_param(PROGRESS_VACUUM_NUM_DEAD_TUPLES,
+								 vacrelstats->num_dead_tuples);
 }
 
 /*
@@ -2004,45 +2099,24 @@ static bool
 lazy_tid_reaped(ItemPointer itemptr, void *state)
 {
 	LVRelStats *vacrelstats = (LVRelStats *) state;
-	ItemPointer res;
+	PageEntry	*entry;
+	BlockNumber	blkno = ItemPointerGetBlockNumber(itemptr);
+	OffsetNumber offset = ItemPointerGetOffsetNumber(itemptr);
+	bool	found;
+	bool	ret;
+	int	chunk, bitoffset;
 
-	res = (ItemPointer) bsearch((void *) itemptr,
-								(void *) vacrelstats->dead_tuples,
-								vacrelstats->num_dead_tuples,
-								sizeof(ItemPointerData),
-								vac_cmp_itemptr);
+	entry = (PageEntry *) hash_search(vacrelstats->dead_tuple_map->pagetable,
+									 (void *) &blkno,
+									 HASH_FIND, &found);
+	if (!found)
+		return false;	/* quick exit */
 
-	return (res != NULL);
-}
+	chunk = OffsetNumberToChunk(offset - 1);
+	bitoffset = OffsetNumberToBitoffset(offset - 1);
 
-/*
- * Comparator routines for use with qsort() and bsearch().
- */
-static int
-vac_cmp_itemptr(const void *left, const void *right)
-{
-	BlockNumber lblk,
-				rblk;
-	OffsetNumber loff,
-				roff;
-
-	lblk = ItemPointerGetBlockNumber((ItemPointer) left);
-	rblk = ItemPointerGetBlockNumber((ItemPointer) right);
-
-	if (lblk < rblk)
-		return -1;
-	if (lblk > rblk)
-		return 1;
-
-	loff = ItemPointerGetOffsetNumber((ItemPointer) left);
-	roff = ItemPointerGetOffsetNumber((ItemPointer) right);
-
-	if (loff < roff)
-		return -1;
-	if (loff > roff)
-		return 1;
-
-	return 0;
+	ret = entry->bm[chunk] & ((uint32) 1 << bitoffset);
+	return ret;
 }
 
 /*
