@@ -3367,12 +3367,10 @@ lv_beginscan(LVRelStats *vacrelstats, ParallelHeapScanDesc pscan,
 	lvscan->lv_next_unskippable_block = 0;
 	lvscan->lv_nblocks = vacrelstats->rel_pages;
 
-	/*
 	if (pscan != NULL)
 		lvscan->heapscan = heap_beginscan_parallel(onerel, pscan);
 	else
 		lvscan->heapscan = NULL;
-	*/
 
 	return lvscan;
 }
