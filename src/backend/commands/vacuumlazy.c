@@ -165,6 +165,12 @@ static void LazyVacuumInitializeWorker(shm_toc *toc, ParallelHeapScanDesc *pscan
 									   bool *aggressive);
 static Relation LazyVacuumAssignIndexWorker(Relation rel, LOCKMODE lockmode);
 static void lazy_clear_dead_tuple(LVRelStats *vacrelstats);
+static LVScanDesc lv_beginscan(LVRelStats *vacrelstats, ParallelHeapScanDesc pscan,
+							   Relation onerel);
+static void lv_endscan(LVScanDesc lvscan);
+static BlockNumber lazy_scan_heap_get_nextpage(Relation onerel, LVRelStats* vacrelstats,
+											   LVScanDesc lvscan, bool *all_visible,
+											   Buffer *vmbuffer, int options, bool aggressive);
 
 /*
  *	lazy_vacuum_rel() -- perform LAZY VACUUM for one heap relation
@@ -267,8 +273,10 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 
 
 		vacrelstats->do_parallel = false;
-		lazy_scan_heap(onerel, options, vacrelstats, Irel, nindexes,
-					   aggressive, 0, nblocks);
+		lazy_scan_heap_test(NULL, onerel, NULL, vacrelstats, options,
+							aggressive);
+		//lazy_scan_heap(onerel, options, vacrelstats, Irel, nindexes,
+		//			   aggressive, 0, nblocks);
 		/* Done with indexes */
 		vac_close_indexes(nindexes, Irel, NoLock);
 	}
@@ -517,7 +525,7 @@ lazy_vacuum_worker_test(dsm_segment *seg, shm_toc *toc)
 	Relation indrel;
 
 	fprintf(stderr, "Worker %d\n", MyProcPid);
-	//pg_usleep(30 * 1000L * 1000L);
+	pg_usleep(30 * 1000L * 1000L);
 
 	/* Look up and initialize information and task */
 	LazyVacuumInitializeWorker(toc, &pscan, &vacrelstats, &options,
@@ -543,7 +551,7 @@ lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 	BlockNumber blkno;
 	BlockNumber nblocks;
 	HeapTupleData tuple;
-	HeapScanDesc scan;
+	LVScanDesc lvscan;
 	char	   *relname;
 	BlockNumber empty_pages,
 				vacuumed_pages;
@@ -558,6 +566,8 @@ lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 	Buffer		vmbuffer = InvalidBuffer;
 	xl_heap_freeze_tuple *frozen;
 	StringInfoData buf;
+	bool		all_visible_according_to_vm;
+
 	const int	initprog_index[] = {
 		PROGRESS_VACUUM_PHASE,
 		PROGRESS_VACUUM_TOTAL_HEAP_BLKS,
@@ -575,7 +585,7 @@ lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 
 	empty_pages = vacuumed_pages = 0;
 	num_tuples = tups_vacuumed = nkeep = nunused = 0;
-	nblocks = pscan->phs_nblocks;
+	nblocks = RelationGetNumberOfBlocks(onerel);
 
 	indstats = (IndexBulkDeleteResult *)
 		palloc0(sizeof(IndexBulkDeleteResult *));
@@ -589,60 +599,23 @@ lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 	lv_dead_tuples = vacrelstats->lv_dead_tuples;
 	frozen = palloc(sizeof(xl_heap_freeze_tuple) * MaxHeapTuplesPerPage);
 
-	scan = heap_beginscan_parallel(onerel, pscan);
-
+	/* Begin heap scan for vacuum */
+	lvscan = lv_beginscan(vacrelstats, pscan, onerel);
+	
 	/* Report that we're scanning the heap, advertising total # of blocks */
 	initprog_val[0] = PROGRESS_VACUUM_PHASE_SCAN_HEAP;
 	initprog_val[1] = nblocks;
 	initprog_val[2] = vacrelstats->max_dead_tuples;
 	pgstat_progress_update_multi_param(3, initprog_index, initprog_val);
 
-	/*
-	 * Except when aggressive is set, we want to skip pages that are
-	 * all-visible according to the visibility map, but only when we can skip
-	 * at least SKIP_PAGES_THRESHOLD consecutive pages.  Since we're reading
-	 * sequentially, the OS should be doing readahead for us, so there's no
-	 * gain in skipping a page now and then; that's likely to disable
-	 * readahead and so be counterproductive. Also, skipping even a single
-	 * page means that we can't update relfrozenxid, so we only want to do it
-	 * if we can skip a goodly number of pages.
-	 *
-	 * When aggressive is set, we can't skip pages just because they are
-	 * all-visible, but we can still skip pages that are all-frozen, since
-	 * such pages do not need freezing and do not affect the value that we can
-	 * safely set for relfrozenxid or relminmxid.
-	 *
-	 * Before entering the main loop, establish the invariant that
-	 * next_unskippable_block is the next block number >= blkno that's not we
-	 * can't skip based on the visibility map, either all-visible for a
-	 * regular scan or all-frozen for an aggressive scan.  We set it to
-	 * nblocks if there's no such block.  We also set up the skipping_blocks
-	 * flag correctly at this stage.
-	 *
-	 * Note: The value returned by visibilitymap_get_status could be slightly
-	 * out-of-date, since we make this test before reading the corresponding
-	 * heap page or locking the buffer.  This is OK.  If we mistakenly think
-	 * that the page is all-visible or all-frozen when in fact the flag's just
-	 * been cleared, we might fail to vacuum the page.  It's easy to see that
-	 * skipping a page when aggressive is not set is not a very big deal; we
-	 * might leave some dead tuples lying around, but the next vacuum will
-	 * find them.  But even when aggressive *is* set, it's still OK if we miss
-	 * a page whose all-frozen marking has just been cleared.  Any new XIDs
-	 * just added to that page are necessarily newer than the GlobalXmin we
-	 * computed, so they'll have no effect on the value to which we can safely
-	 * set relfrozenxid.  A similar argument applies for MXIDs and relminmxid.
-	 *
-	 * We will scan the table's last page, at least to the extent of
-	 * determining whether it has tuples or not, even if it should be skipped
-	 * according to the above rules; except when we've already determined that
-	 * it's not worth trying to truncate the table.  This avoids having
-	 * lazy_truncate_heap() take access-exclusive lock on the table to attempt
-	 * a truncation that just fails immediately because there are tuples in
-	 * the last page.  This is worth avoiding mainly because such a lock must
-	 * be replayed on any hot standby, where it can be disruptive.
-	 */
+#define FORCE_CHECK_PAGE() \
+	(blkno == blkno - 1 && should_attempt_truncation(vacrelstats))
 
-	while((blkno = heap_parallelscan_nextpage(scan)) != InvalidBlockNumber)
+	while((blkno = lazy_scan_heap_get_nextpage(onerel, vacrelstats, lvscan,
+											   &all_visible_according_to_vm,
+											   &vmbuffer, options, aggressive)) !=
+		  InvalidBlockNumber)
+		//while((blkno = heap_parallelscan_nextpage(scan)) != InvalidBlockNumber)
 	{
 		Buffer		buf;
 		Page		page;
@@ -653,43 +626,13 @@ lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 		int			prev_dead_count;
 		int			nfrozen;
 		Size		freespace;
-		//bool		all_visible_according_to_vm = false;
 		bool		all_visible;
 		bool		all_frozen = true;	/* provided all_visible is also true */
 		bool		has_dead_tuples;
 		TransactionId visibility_cutoff_xid = InvalidTransactionId;
 
-		/* see note above about forcing scanning of last page */
-#define FORCE_CHECK_PAGE() \
-		(blkno == nblocks - 1 && should_attempt_truncation(vacrelstats))
+		elog(NOTICE, "[%d] blkno %u SCAAAAAAAAAN", MyProcPid, blkno);
 
-		/* Consider to skip scan page according visibility map */
-		if ((options & VACOPT_DISABLE_PAGE_SKIPPING) == 0 &&
-			!FORCE_CHECK_PAGE())
-		{
-			uint8		vmstatus;
-
-			vmstatus = visibilitymap_get_status(onerel, blkno, &vmbuffer);
-
-			if (aggressive)
-			{
-				if ((vmstatus & VISIBILITYMAP_ALL_FROZEN) != 0)
-				{
-					vacrelstats->frozenskipped_pages++;
-					continue;
-				}
-			}
-			else
-			{
-				if ((vmstatus & VISIBILITYMAP_ALL_VISIBLE) != 0)
-				{
-					if ((vmstatus & VISIBILITYMAP_ALL_FROZEN) == 0)
-						vacrelstats->frozenskipped_pages++;
-					continue;
-				}
-			}
-		}
-c
 		pgstat_progress_update_param(PROGRESS_VACUUM_HEAP_BLKS_SCANNED, blkno);
 
 		vacuum_delay_point();
@@ -1343,7 +1286,7 @@ c
 	if (Irel)
 		lazy_cleanup_index(Irel, indstats, vacrelstats);
 
-	heap_endscan(scan);
+	lv_endscan(lvscan);
 	
 	/*
 	 * This is pretty messy, but we split it up so that we can skip emitting
@@ -3188,61 +3131,60 @@ heap_page_is_all_visible(Relation rel, Buffer buf,
 /*
  * Return the block number we need to scan next, or InvalidBlockNumber if
  * scan is done.
+ *
+ * Except when aggressive is set, we want to skip pages that are
+ * all-visible according to the visibility map, but only when we can skip
+ * at least SKIP_PAGES_THRESHOLD consecutive pages.  Since we're reading
+ * sequentially, the OS should be doing readahead for us, so there's no
+ * gain in skipping a page now and then; that's likely to disable
+ * readahead and so be counterproductive. Also, skipping even a single
+ * page means that we can't update relfrozenxid, so we only want to do it
+ * if we can skip a goodly number of pages.
+ *
+ * When aggressive is set, we can't skip pages just because they are
+ * all-visible, but we can still skip pages that are all-frozen, since
+ * such pages do not need freezing and do not affect the value that we can
+ * safely set for relfrozenxid or relminmxid.
+ *
+ * Before entering the main loop, establish the invariant that
+ * next_unskippable_block is the next block number >= blkno that's not we
+ * can't skip based on the visibility map, either all-visible for a
+ * regular scan or all-frozen for an aggressive scan.  We set it to
+ * nblocks if there's no such block.  We also set up the skipping_blocks
+ * flag correctly at this stage.
+ *
+ * Note: The value returned by visibilitymap_get_status could be slightly
+ * out-of-date, since we make this test before reading the corresponding
+ * heap page or locking the buffer.  This is OK.  If we mistakenly think
+ * that the page is all-visible or all-frozen when in fact the flag's just
+ * been cleared, we might fail to vacuum the page.  It's easy to see that
+ * skipping a page when aggressive is not set is not a very big deal; we
+ * might leave some dead tuples lying around, but the next vacuum will
+ * find them.  But even when aggressive *is* set, it's still OK if we miss
+ * a page whose all-frozen marking has just been cleared.  Any new XIDs
+ * just added to that page are necessarily newer than the GlobalXmin we
+ * computed, so they'll have no effect on the value to which we can safely
+ * set relfrozenxid.  A similar argument applies for MXIDs and relminmxid.
+ *
+ * We will scan the table's last page, at least to the extent of
+ * determining whether it has tuples or not, even if it should be skipped
+ * according to the above rules; except when we've already determined that
+ * it's not worth trying to truncate the table.  This avoids having
+ * lazy_truncate_heap() take access-exclusive lock on the table to attempt
+ * a truncation that just fails immediately because there are tuples in
+ * the last page.  This is worth avoiding mainly because such a lock must
+ * be replayed on any hot standby, where it can be disruptive.
  */
-	/*
-	 * Except when aggressive is set, we want to skip pages that are
-	 * all-visible according to the visibility map, but only when we can skip
-	 * at least SKIP_PAGES_THRESHOLD consecutive pages.  Since we're reading
-	 * sequentially, the OS should be doing readahead for us, so there's no
-	 * gain in skipping a page now and then; that's likely to disable
-	 * readahead and so be counterproductive. Also, skipping even a single
-	 * page means that we can't update relfrozenxid, so we only want to do it
-	 * if we can skip a goodly number of pages.
-	 *
-	 * When aggressive is set, we can't skip pages just because they are
-	 * all-visible, but we can still skip pages that are all-frozen, since
-	 * such pages do not need freezing and do not affect the value that we can
-	 * safely set for relfrozenxid or relminmxid.
-	 *
-	 * Before entering the main loop, establish the invariant that
-	 * next_unskippable_block is the next block number >= blkno that's not we
-	 * can't skip based on the visibility map, either all-visible for a
-	 * regular scan or all-frozen for an aggressive scan.  We set it to
-	 * nblocks if there's no such block.  We also set up the skipping_blocks
-	 * flag correctly at this stage.
-	 *
-	 * Note: The value returned by visibilitymap_get_status could be slightly
-	 * out-of-date, since we make this test before reading the corresponding
-	 * heap page or locking the buffer.  This is OK.  If we mistakenly think
-	 * that the page is all-visible or all-frozen when in fact the flag's just
-	 * been cleared, we might fail to vacuum the page.  It's easy to see that
-	 * skipping a page when aggressive is not set is not a very big deal; we
-	 * might leave some dead tuples lying around, but the next vacuum will
-	 * find them.  But even when aggressive *is* set, it's still OK if we miss
-	 * a page whose all-frozen marking has just been cleared.  Any new XIDs
-	 * just added to that page are necessarily newer than the GlobalXmin we
-	 * computed, so they'll have no effect on the value to which we can safely
-	 * set relfrozenxid.  A similar argument applies for MXIDs and relminmxid.
-	 *
-	 * We will scan the table's last page, at least to the extent of
-	 * determining whether it has tuples or not, even if it should be skipped
-	 * according to the above rules; except when we've already determined that
-	 * it's not worth trying to truncate the table.  This avoids having
-	 * lazy_truncate_heap() take access-exclusive lock on the table to attempt
-	 * a truncation that just fails immediately because there are tuples in
-	 * the last page.  This is worth avoiding mainly because such a lock must
-	 * be replayed on any hot standby, where it can be disruptive.
-	 */
 static BlockNumber
-lazy_scan_heap_get_nextpage(LVRelStats *vacrelstats, HeapScanDesc scan,
-							LVScanDesc lvscandesc, bool *all_visible,
-							bool aggressive)
+lazy_scan_heap_get_nextpage(Relation onerel, LVRelStats *vacrelstats,
+							LVScanDesc lvscan, bool *all_visible,
+							Buffer *vmbuffer, int options, bool aggressive)
 {
 	BlockNumber blkno;
 	
 	/* see note above about forcing scanning of last page */
 #define FORCE_CHECK_PAGE() \
-	(blkno == nblocks - 1 && should_attempt_truncation(vacrelstats))
+	(blkno == (lvscan->lv_nblocks - 1) && should_attempt_truncation(vacrelstats))
 
 	/*
 	 * In parallel vacuum, we can not check if how many consective all-visible
@@ -3250,7 +3192,7 @@ lazy_scan_heap_get_nextpage(LVRelStats *vacrelstats, HeapScanDesc scan,
 	 */
 	if (vacrelstats->do_parallel)
 	{
-		while ((blkno = heap_parallelscan_nextpage(scan)) != InvalidBlockNumber)
+		while ((blkno = heap_parallelscan_nextpage(lvscan->heapscan)) != InvalidBlockNumber)
 		{
 			*all_visible = false;
 
@@ -3260,22 +3202,24 @@ lazy_scan_heap_get_nextpage(LVRelStats *vacrelstats, HeapScanDesc scan,
 			{
 				uint8		vmstatus;
 
-				vmstatus = visibilitymap_get_status(onerel, blkno, &vmbuffer);
+				vmstatus = visibilitymap_get_status(onerel, blkno, vmbuffer);
 
 				if (aggressive)
 				{
 					if ((vmstatus & VISIBILITYMAP_ALL_FROZEN) != 0)
 					{
+						elog(NOTICE, "[%d] blkno %u skipped", MyProcPid, blkno);
 						vacrelstats->frozenskipped_pages++;
 						continue;
 					}
-					else if ((vmstatus & VISIBITLIYMAP_ALL_VISIBLE) != 0)
+					else if ((vmstatus & VISIBILITYMAP_ALL_VISIBLE) != 0)
 						*all_visible = true;
 				}
 				else
 				{
 					if ((vmstatus & VISIBILITYMAP_ALL_VISIBLE) != 0)
 					{
+						elog(NOTICE, "[%d] blkno %u skipped", MyProcPid, blkno);
 						if ((vmstatus & VISIBILITYMAP_ALL_FROZEN) == 0)
 							vacrelstats->frozenskipped_pages++;
 						continue;
@@ -3283,26 +3227,56 @@ lazy_scan_heap_get_nextpage(LVRelStats *vacrelstats, HeapScanDesc scan,
 				}
 			}
 
+			/* We need to sacn current blkno, break */
 			break;
 		}
 
-		lvscan->lv_cblock = blkno;
 		return blkno;
 	}
 	else
 	{
+		bool skipping_blocks = false;
+
+		/* Initialize lv_nextunskippable_page if needed */
+		if (lvscan->lv_cblock == 0 && (options & VACOPT_DISABLE_PAGE_SKIPPING) == 0)
+		{
+			while (lvscan->lv_next_unskippable_block < lvscan->lv_nblocks)
+			{
+				uint8		vmstatus;
+
+				vmstatus = visibilitymap_get_status(onerel, lvscan->lv_next_unskippable_block,
+													vmbuffer);
+				if (aggressive)
+				{
+					if ((vmstatus & VISIBILITYMAP_ALL_FROZEN) == 0)
+						break;
+				}
+				else
+				{
+					if ((vmstatus & VISIBILITYMAP_ALL_VISIBLE) == 0)
+						break;
+				}
+				vacuum_delay_point();
+				lvscan->lv_next_unskippable_block++;
+			}
+		}
+
+		/* Decide the block number we need to scan */
 		for (blkno = lvscan->lv_cblock; blkno < lvscan->lv_nblocks; blkno++)
 		{
-			if (blkno = lvscan->lv_nextunskippable_block)
+			if (blkno == lvscan->lv_next_unskippable_block)
 			{
+				/* Time to advance next_unskippable_block */
+				lvscan->lv_next_unskippable_block++;
 				if ((options & VACOPT_DISABLE_PAGE_SKIPPING) == 0)
 				{
-					while (lvscan->next_unskippable_block < lvscan->lv_nblocks)
+					while (lvscan->lv_next_unskippable_block < lvscan->lv_nblocks)
 					{
 						uint8		vmstatus;
 
-						vmstatus = visibilitymap_get_status(onerel, next_unskippable_block,
-															&vmbuffer);
+						vmstatus = visibilitymap_get_status(onerel,
+															lvscan->lv_next_unskippable_block,
+															vmbuffer);
 						if (aggressive)
 						{
 							if ((vmstatus & VISIBILITYMAP_ALL_FROZEN) == 0)
@@ -3314,36 +3288,102 @@ lazy_scan_heap_get_nextpage(LVRelStats *vacrelstats, HeapScanDesc scan,
 								break;
 						}
 						vacuum_delay_point();
-						lvscan->next_unskippable_block++;
+						lvscan->lv_next_unskippable_block++;
 					}
-
-					/*
-					 * We know we can't skip the current block.  But set up
-					 * skipping_all_visible_blocks to do the right thing at the
-					 * following blocks.
-					 */
-					if (lvscan->next_unskippable_block - blkno > SKIP_PAGES_THRESHOLD)
-						skipping_blocks = true;
-					else
-						skipping_blocks = false;
-
-					/*
-					 * Normally, the fact that we can't skip this block must mean that
-					 * it's not all-visible.  But in an aggressive vacuum we know only
-					 * that it's not all-frozen, so it might still be all-visible.
-					 */
-					if (aggressive && VM_ALL_VISIBLE(onerel, blkno, &vmbuffer))
-						*all_visible = true;
 				}
+
+				/*
+				 * We know we can't skip the current block.  But set up
+				 * skipping_all_visible_blocks to do the right thing at the
+				 * following blocks.
+				 */
+				if (lvscan->lv_next_unskippable_block - blkno > SKIP_PAGES_THRESHOLD)
+					skipping_blocks = true;
 				else
+					skipping_blocks = false;
+
+				/*
+				 * Normally, the fact that we can't skip this block must mean that
+				 * it's not all-visible.  But in an aggressive vacuum we know only
+				 * that it's not all-frozen, so it might still be all-visible.
+				 */
+				if (aggressive && VM_ALL_VISIBLE(onerel, blkno, vmbuffer))
+					*all_visible = true;
+			}
+			else
+			{
+				/*
+				 * The current block is potentially skippable; if we've seen a
+				 * long enough run of skippable blocks to justify skipping it, and
+				 * we're not forced to check it, then go ahead and skip.
+				 * Otherwise, the page must be at least all-visible if not
+				 * all-frozen, so we can set all_visible_according_to_vm = true.
+				 */
+				if (skipping_blocks && !FORCE_CHECK_PAGE())
 				{
-aaaa
+					/*
+					 * Tricky, tricky.  If this is in aggressive vacuum, the page
+					 * must have been all-frozen at the time we checked whether it
+					 * was skippable, but it might not be any more.  We must be
+					 * careful to count it as a skipped all-frozen page in that
+					 * case, or else we'll think we can't update relfrozenxid and
+					 * relminmxid.  If it's not an aggressive vacuum, we don't
+					 * know whether it was all-frozen, so we have to recheck; but
+					 * in this case an approximate answer is OK.
+					 */
+					if (aggressive || VM_ALL_FROZEN(onerel, blkno, vmbuffer))
+						vacrelstats->frozenskipped_pages++;
+					elog(NOTICE, "[%d] blkno %u skipped", MyProcPid, blkno);
+					continue;
 				}
-		}
+
+				*all_visible = true;
+
+				/* We need to scan current blkno, break */
+				break;
+			}
+		} /* for */
+
+		/* Advance the current block number and save */
+		lvscan->lv_cblock = blkno + 1;
+
+		/* Return InvalidBlockNumber if scan is done */
+		if (blkno >= lvscan->lv_nblocks)
+			blkno = InvalidBlockNumber;
+
+		return blkno;
 	}
-	
 }
 
+static LVScanDesc
+lv_beginscan(LVRelStats *vacrelstats, ParallelHeapScanDesc pscan,
+			 Relation onerel)
+{
+	LVScanDesc lvscan;
+
+	lvscan = palloc(sizeof(LVScanDesc));
+
+	lvscan->lv_cblock = 0;
+	lvscan->lv_next_unskippable_block = 0;
+	lvscan->lv_nblocks = vacrelstats->rel_pages;
+
+	/*
+	if (pscan != NULL)
+		lvscan->heapscan = heap_beginscan_parallel(onerel, pscan);
+	else
+		lvscan->heapscan = NULL;
+	*/
+
+	return lvscan;
+}
+
+static void
+lv_endscan(LVScanDesc lvscan)
+{
+	if (lvscan->heapscan != NULL)
+		heap_endscan(lvscan->heapscan);
+	pfree(lvscan);
+}
 
 /* ----------------------------------------------------------------
  *						Parallel Vacuum Support

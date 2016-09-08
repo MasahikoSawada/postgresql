@@ -1903,7 +1903,6 @@ BTCycleId
 _bt_start_vacuum(Relation rel)
 {
 	BTCycleId	result;
-	int			i;
 	BTOneVacInfo *vac;
 
 	LWLockAcquire(BtreeVacuumLock, LW_EXCLUSIVE);

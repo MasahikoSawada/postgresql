@@ -2827,7 +2827,7 @@ typedef enum VacuumOption
 	VACOPT_FULL = 1 << 4,		/* FULL (non-concurrent) vacuum */
 	VACOPT_NOWAIT = 1 << 5,		/* don't wait to get lock (autovacuum only) */
 	VACOPT_SKIPTOAST = 1 << 6,	/* don't process the TOAST table, if any */
-	VACOPT_DISABLE_PAGE_SKIPPING = 1 << 7		/* don't skip any pages */
+	VACOPT_DISABLE_PAGE_SKIPPING = 1 << 7,		/* don't skip any pages */
 	VACOPT_PARALLEL = 1 << 8	/* do VACUUM parallelly */
 } VacuumOption;
 

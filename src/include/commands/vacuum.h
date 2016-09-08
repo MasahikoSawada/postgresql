@@ -15,6 +15,7 @@
 #define VACUUM_H
 
 #include "access/htup.h"
+#include "access/heapam.h"
 #include "catalog/pg_statistic.h"
 #include "catalog/pg_type.h"
 #include "nodes/parsenodes.h"
@@ -191,7 +192,7 @@ typedef struct LVScanDescData
 	BlockNumber lv_cblock;
 	BlockNumber lv_next_unskippable_block;
 	BlockNumber lv_nblocks;
-	bool		lv_skipping_blocks;
+	HeapScanDesc heapscan;
 } LVScanDescData;
 typedef struct LVScanDescData *LVScanDesc;
 

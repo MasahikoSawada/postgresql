@@ -410,7 +410,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <node>	overlay_placing substr_from substr_for
 
 %type <boolean> opt_instead
-%type <boolean> opt_unique opt_concurrently opt_verbose opt_full opt_parallel
+%type <boolean> opt_unique opt_concurrently opt_verbose opt_full
 %type <boolean> opt_freeze opt_default opt_recheck
 %type <defelt>	opt_binary opt_oids copy_delimiter
 
