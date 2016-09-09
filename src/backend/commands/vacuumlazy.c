@@ -600,6 +600,7 @@ lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 	frozen = palloc(sizeof(xl_heap_freeze_tuple) * MaxHeapTuplesPerPage);
 
 	/* Begin heap scan for vacuum */
+	//lvscan = (LVScanDesc *) palloc(sizeof(LVScanDescData));
 	lvscan = lv_beginscan(vacrelstats, pscan, onerel);
 	
 	/* Report that we're scanning the heap, advertising total # of blocks */
@@ -3361,7 +3362,7 @@ lv_beginscan(LVRelStats *vacrelstats, ParallelHeapScanDesc pscan,
 {
 	LVScanDesc lvscan;
 
-	lvscan = palloc(sizeof(LVScanDesc));
+	lvscan = (LVScanDesc *) palloc(sizeof(LVScanDescData));
 
 	lvscan->lv_cblock = 0;
 	lvscan->lv_next_unskippable_block = 0;
