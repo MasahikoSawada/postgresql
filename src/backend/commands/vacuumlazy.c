@@ -3362,7 +3362,7 @@ lv_beginscan(LVRelStats *vacrelstats, ParallelHeapScanDesc pscan,
 {
 	LVScanDesc lvscan;
 
-	lvscan = (LVScanDesc *) palloc(sizeof(LVScanDescData));
+	lvscan = (LVScanDesc) palloc(sizeof(LVScanDescData));
 
 	lvscan->lv_cblock = 0;
 	lvscan->lv_next_unskippable_block = 0;
