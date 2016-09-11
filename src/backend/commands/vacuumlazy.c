@@ -2260,7 +2260,6 @@ gather_vacuum_stats(ParallelContext *pcxt, LVRelStats *vacrelstats)
 	{
 		LVRelStats *wstats = lvstats_list + sizeof(LVRelStats) * i;
 
-		vacrelstats->rel_pages += wstats->rel_pages;
 		vacrelstats->scanned_pages += wstats->scanned_pages;
 		vacrelstats->pinskipped_pages += wstats->pinskipped_pages;
 		vacrelstats->frozenskipped_pages += wstats->frozenskipped_pages;
@@ -3260,6 +3259,11 @@ lazy_scan_heap_get_nextpage(Relation onerel, LVRelStats *vacrelstats,
 				vacuum_delay_point();
 				lvscan->lv_next_unskippable_block++;
 			}
+
+			if (lvscan->lv_next_unskippable_block >= SKIP_PAGES_THRESHOLD)
+				skipping_blocks = true;
+			else
+				skipping_blocks = false;
 		}
 
 		/* Decide the block number we need to scan */
@@ -3310,6 +3314,9 @@ lazy_scan_heap_get_nextpage(Relation onerel, LVRelStats *vacrelstats,
 				 */
 				if (aggressive && VM_ALL_VISIBLE(onerel, blkno, vmbuffer))
 					*all_visible = true;
+
+				/* Found out that next unskippable block number */
+				break;
 			}
 			else
 			{
