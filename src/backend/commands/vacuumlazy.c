@@ -632,8 +632,6 @@ lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 		bool		has_dead_tuples;
 		TransactionId visibility_cutoff_xid = InvalidTransactionId;
 
-		elog(NOTICE, "[%d] blkno %u SCAAAAAAAAAN", MyProcPid, blkno);
-
 		pgstat_progress_update_param(PROGRESS_VACUUM_HEAP_BLKS_SCANNED, blkno);
 
 		vacuum_delay_point();
@@ -3208,7 +3206,6 @@ lazy_scan_heap_get_nextpage(Relation onerel, LVRelStats *vacrelstats,
 				{
 					if ((vmstatus & VISIBILITYMAP_ALL_FROZEN) != 0)
 					{
-						elog(NOTICE, "[%d] blkno %u skipped", MyProcPid, blkno);
 						vacrelstats->frozenskipped_pages++;
 						continue;
 					}
@@ -3219,7 +3216,6 @@ lazy_scan_heap_get_nextpage(Relation onerel, LVRelStats *vacrelstats,
 				{
 					if ((vmstatus & VISIBILITYMAP_ALL_VISIBLE) != 0)
 					{
-						elog(NOTICE, "[%d] blkno %u skipped", MyProcPid, blkno);
 						if ((vmstatus & VISIBILITYMAP_ALL_FROZEN) == 0)
 							vacrelstats->frozenskipped_pages++;
 						continue;
@@ -3341,7 +3337,6 @@ lazy_scan_heap_get_nextpage(Relation onerel, LVRelStats *vacrelstats,
 					 */
 					if (aggressive || VM_ALL_FROZEN(onerel, blkno, vmbuffer))
 						vacrelstats->frozenskipped_pages++;
-					elog(NOTICE, "[%d] blkno %u skipped", MyProcPid, blkno);
 					continue;
 				}
 
