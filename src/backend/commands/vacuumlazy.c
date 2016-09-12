@@ -503,7 +503,7 @@ parallel_lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 														 vacrelstats->rel_pages,
 														 vacrelstats->scanned_pages,
 														 vacrelstats->scanned_tuples);
-	
+
 	DestroyParallelContext(pcxt);
 
 	ExitParallelMode();
@@ -602,7 +602,7 @@ lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 	/* Begin heap scan for vacuum */
 	//lvscan = (LVScanDesc *) palloc(sizeof(LVScanDescData));
 	lvscan = lv_beginscan(vacrelstats, pscan, onerel);
-	
+
 	/* Report that we're scanning the heap, advertising total # of blocks */
 	initprog_val[0] = PROGRESS_VACUUM_PHASE_SCAN_HEAP;
 	initprog_val[1] = nblocks;
@@ -1107,7 +1107,7 @@ lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 		}
 
 		freespace = PageGetHeapFreeSpace(page);
-		
+
 		/* mark page all-visible, if appropriate */
 		if (all_visible)
 		{
@@ -1286,7 +1286,7 @@ lazy_scan_heap_test(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 		lazy_cleanup_index(Irel, indstats, vacrelstats);
 
 	lv_endscan(lvscan);
-	
+
 	/*
 	 * This is pretty messy, but we split it up so that we can skip emitting
 	 * individual parts of the message when not applicable.
@@ -2252,7 +2252,7 @@ gather_vacuum_stats(ParallelContext *pcxt, LVRelStats *vacrelstats)
 	LVRelStats *lvstats_list;
 
 	lvstats_list = (LVRelStats *) shm_toc_lookup(pcxt->toc, VACUUM_KEY_VACUUM_STATS);
-	
+
 	/* Gather each worker stats */
 	for (i = 0; i < pcxt->nworkers; i++)
 	{
@@ -2909,7 +2909,7 @@ lazy_record_dead_tuple_test(LVRelStats *vacrelstats, ItemPointer itemptr)
 {
 	bool do_parallel = vacrelstats->do_parallel;
 	LVDeadTuples *lv_dead_tuples = vacrelstats->lv_dead_tuples;
-	
+
 	if (lv_dead_tuples->num_dead_tuples < vacrelstats->max_dead_tuples)
 	{
 		if (do_parallel)
@@ -3179,7 +3179,7 @@ lazy_scan_heap_get_nextpage(Relation onerel, LVRelStats *vacrelstats,
 							Buffer *vmbuffer, int options, bool aggressive)
 {
 	BlockNumber blkno;
-	
+
 	/* see note above about forcing scanning of last page */
 #define FORCE_CHECK_PAGE() \
 	(blkno == (lvscan->lv_nblocks - 1) && should_attempt_truncation(vacrelstats))
