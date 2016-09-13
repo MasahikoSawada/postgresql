@@ -148,66 +148,6 @@ typedef struct VacuumParams
 										 * activated, -1 to use default */
 } VacuumParams;
 
-typedef struct LVDeadTuples
-{
-	slock_t		dt_mutex;
-	int			num_dead_tuples; /* current # of entries */
-	//int			max_dead_tuples;
-	ItemPointer dead_tuples; /* array of ItemPointerData */
-	/* Dead tuple ItemPointer follow */
-} LVDeadTuples;
-
-#define SizeOfLVDeadTuples \
-	(offsetof(LVDeadTuples, dead_tuples) + sizeof(ItemPointer))
-
-typedef struct LVRelStats
-{
-	/* hasindex = true means two-pass strategy; false means one-pass */
-	bool		hasindex;
-	bool		do_parallel;
-	/* Overall statistics about rel */
-	BlockNumber old_rel_pages;	/* previous value of pg_class.relpages */
-	BlockNumber rel_pages;		/* total number of pages */
-	BlockNumber scanned_pages;	/* number of pages we examined */
-	BlockNumber pinskipped_pages;		/* # of pages we skipped due to a pin */
-	BlockNumber frozenskipped_pages;	/* # of frozen pages we skipped */
-	double		scanned_tuples; /* counts only tuples on scanned pages */
-	double		old_rel_tuples; /* previous value of pg_class.reltuples */
-	double		new_rel_tuples; /* new estimated total # of tuples */
-	double		new_dead_tuples;	/* new estimated total # of dead tuples */
-	BlockNumber pages_removed;
-	double		tuples_deleted;
-	BlockNumber nonempty_pages; /* actually, last nonempty page + 1 */
-	/* List of TIDs of tuples we intend to delete */
-	/* NB: this list is ordered by TID address */
-	LVDeadTuples *lv_dead_tuples;
-	int			max_dead_tuples;	/* # slots allocated in array */
-	int			num_index_scans;
-	TransactionId latestRemovedXid;
-	bool		lock_waiter_detected;
-} LVRelStats;
-
-typedef struct LVScanDescData
-{
-	BlockNumber lv_cblock;
-	BlockNumber lv_next_unskippable_block;
-	BlockNumber lv_nblocks;
-	HeapScanDesc heapscan;
-} LVScanDescData;
-typedef struct LVScanDescData *LVScanDesc;
-
-typedef struct VacuumTask
-{
-	slock_t		dt_mutex;
-	bool		aggressive;	/* does each worker need to aggressive vacuum? */
-	int			options; /* Specified vacuum options */
-	TransactionId	oldestxmin;
-	TransactionId	freezelimit;
-	MultiXactId		multixactcutoff;
-	int			wnum;
-	int			elevel;
-} VacuumTask;
-
 /* GUC parameters */
 extern PGDLLIMPORT int default_statistics_target;		/* PGDLLIMPORT for
 														 * PostGIS */

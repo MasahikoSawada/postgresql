@@ -1903,6 +1903,7 @@ BTCycleId
 _bt_start_vacuum(Relation rel)
 {
 	BTCycleId	result;
+	int			i;
 	BTOneVacInfo *vac;
 
 	LWLockAcquire(BtreeVacuumLock, LW_EXCLUSIVE);
@@ -1914,6 +1915,25 @@ _bt_start_vacuum(Relation rel)
 	result = ++(btvacinfo->cycle_ctr);
 	if (result == 0 || result > MAX_BT_CYCLE_ID)
 		result = btvacinfo->cycle_ctr = 1;
+
+	/* Let's just make sure there's no entry already for this index */
+	for (i = 0; i < btvacinfo->num_vacuums; i++)
+	{
+		vac = &btvacinfo->vacuums[i];
+		if (vac->relid.relId == rel->rd_lockInfo.lockRelId.relId &&
+			vac->relid.dbId == rel->rd_lockInfo.lockRelId.dbId)
+		{
+			/*
+			 * Unlike most places in the backend, we have to explicitly
+			 * release our LWLock before throwing an error.  This is because
+			 * we expect _bt_end_vacuum() to be called before transaction
+			 * abort cleanup can run to release LWLocks.
+			 */
+			LWLockRelease(BtreeVacuumLock);
+			elog(ERROR, "multiple active vacuums for index \"%s\"",
+				 RelationGetRelationName(rel));
+		}
+	}
 
 	/* OK, add an entry */
 	if (btvacinfo->num_vacuums >= btvacinfo->max_vacuums)
