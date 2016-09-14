@@ -60,8 +60,6 @@
 #include "storage/bufmgr.h"
 #include "storage/freespace.h"
 #include "storage/lmgr.h"
-#include "storage/procarray.h"
-#include "storage/spin.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/pg_rusage.h"
@@ -120,9 +118,8 @@ typedef struct LVDeadTuples
 {
 	slock_t		dt_mutex;
 	int			num_dead_tuples; /* current # of entries */
-	//int			max_dead_tuples;
 	ItemPointer dead_tuples; /* array of ItemPointerData */
-	/* Dead tuple ItemPointer follow */
+	/* Dead tuple ItemPointer follows */
 } LVDeadTuples;
 
 #define SizeOfLVDeadTuples \
@@ -155,7 +152,7 @@ typedef struct LVRelStats
 	bool		lock_waiter_detected;
 } LVRelStats;
 
-/* Scan desctiption for lazy vacuum */
+/* Scan description for lazy vacuum */
 typedef struct LVScanDescData
 {
 	BlockNumber lv_cblock;	/* current scanning block number */
@@ -511,13 +508,13 @@ vacuum_log_cleanup_info(Relation rel, LVRelStats *vacrelstats)
  * Launch parallel some vacuum workers specified by wnum and then gather the
  * vacuum statistics of each worker. All of vacuum workers scan a relation using
  * parallel heap scan description is stored into DSM tagged by VACUUM_KEY_PARALLEL_SCAN,
- * and are assigned some indexes.  The vacuum options and some threshoulds, for
- * example, OldestXmin, FreezeLimit and MultiXactCutoff, are stored into DSM tagged by
- * VACUUM_KEY_TASK.  All workers exclusively store the dead tuple locations into
- * DSM tagged by VACUUM_KEY_DEAD_TUPLES. The above three memory spaces are shared by
- * all workers. The vacuum statistics of each workers are stored into DSM tagged
- * by VACUUM_KEY_WORKER_STATS, that will be gathered by the launcher process after
- * all worker finished its task.
+ * and are assigned different indexes.  The vacuum relevant options and some
+ * threshoulds, for example, OldestXmin, FreezeLimit and MultiXactCutoff, are
+ * stored into DSM tagged by VACUUM_KEY_TASK.  All workers exclusively store
+ * the dead tuple locations into DSM tagged by VACUUM_KEY_DEAD_TUPLES. The
+ * above three memory spaces are shared by all workers. The vacuum statistics
+ * of each workers are stored into DSM tagged by VACUUM_KEY_WORKER_STATS,
+ * that will be gathered by the launcher process after all worker finished its task.
  */
 static void
 parallel_lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
@@ -574,9 +571,6 @@ lazy_vacuum_worker(dsm_segment *seg, shm_toc *toc)
 	Relation rel;
 	Relation indrel;
 
-	fprintf(stderr, "Worker %d\n", MyProcPid);
-	//pg_usleep(30 * 1000L * 1000L);
-
 	/* Look up and initialize information and task */
 	lazy_initialize_worker(toc, &pscan, &vacrelstats, &options,
 							   &aggressive);
@@ -585,7 +579,7 @@ lazy_vacuum_worker(dsm_segment *seg, shm_toc *toc)
 	rel = relation_open(pscan->phs_relid, NoLock);
 	indrel = lazy_assign_index_worker(rel, RowExclusiveLock);
 
-	/* Do vacuuming particular area */
+	/* Do lazy vacuum */
 	lazy_scan_heap(pscan, rel, indrel, vacrelstats, options, aggressive);
 
 	heap_close(rel, NoLock);
@@ -603,7 +597,7 @@ lazy_vacuum_worker(dsm_segment *seg, shm_toc *toc)
  *		lists of dead tuples and pages with free space, calculates statistics
  *		on the number of live tuples in the heap, and marks pages as
  *		all-visible if appropriate.  When done, or when we run low on space for
- *		dead-tuple TIDs, invoke vacuuming of assined indexes and call lazy_vacuum_heap
+ *		dead-tuple TIDs, invoke vacuuming of assigned indexes and call lazy_vacuum_heap
  *		to reclaim dead line pointers.
  *
  *		This routine scans each page using parallel heap scan infrastructure
@@ -764,8 +758,8 @@ lazy_scan_heap(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 										 PROGRESS_VACUUM_PHASE_SCAN_HEAP);
 
 			/*
-			 * If I'm not resposible for any index, we might need to wait here
-			 * for other workers that is vacuuming index.
+			 * XXX : If I'm not responsible for any index, we might need to wait
+			 * here for other workers that is vacuuming index.
 			 */
 		}
 
@@ -1624,6 +1618,7 @@ lazy_check_needs_freeze(Buffer buf, bool *hastup)
 	return false;
 }
 
+
 /*
  *	lazy_vacuum_index() -- vacuum one index relation.
  *
@@ -1994,8 +1989,8 @@ count_nondeletable_pages(Relation onerel, LVRelStats *vacrelstats)
  * lazy_space_alloc - space allocation decisions for lazy vacuum
  *
  * If we are in parallel lazy vacuum then space for dead tuple locatons
- * located at DSM is already allocated, so we allocate space for dead
- * tuple locations if not in parallel lazy vacuum.
+ * are already allocated in DSM, so we allocate space for dead tuple
+ * locations only if not in parallel lazy vacuum.
  *
  * See the comments at the head of this file for rationale.
  */
@@ -2278,9 +2273,9 @@ heap_page_is_all_visible(Relation rel, Buffer buf,
  * flag correctly at this stage.
  *
  * In parallel mode, we scan heap pages using parallel heap scan infrastructure.
- * Each worker call heap_parallelscan_nextpage() in order to get exclusively
+ * Each worker calls heap_parallelscan_nextpage() in order to get exclusively
  * block number we need to scan at next. If given block is all-visible
- * according to visibility map, we skip to scan this block immidiately unlike
+ * according to visibility map, we skip to scan this block immediately unlike
  * not parallelly lazy scan.
  *
  * Note: The value returned by visibilitymap_get_status could be slightly
@@ -2313,7 +2308,7 @@ lazy_scan_heap_get_nextpage(Relation onerel, LVRelStats *vacrelstats,
 	BlockNumber blkno;
 
 	/*
-	 * In parallel vacuum, we can not check if how many consective all-visible
+	 * In parallel vacuum, we can not check if how many consecutive all-visible
 	 * pages exits.
 	 */
 	if (vacrelstats->do_parallel)
@@ -2351,7 +2346,7 @@ lazy_scan_heap_get_nextpage(Relation onerel, LVRelStats *vacrelstats,
 				}
 			}
 
-			/* We need to sacn current blkno, break */
+			/* We need to scan current blkno, break */
 			break;
 		}
 	}
@@ -2516,7 +2511,7 @@ lv_endscan(LVScanDesc lvscan)
 }
 
 /* ----------------------------------------------------------------
- *						Parallel Vacuum Support
+ *						Parallel Lazy Vacuum Support
  * ----------------------------------------------------------------
  */
 
@@ -2537,7 +2532,7 @@ lazy_estimate_dsm(ParallelContext *pcxt, int vac_work_mem)
 	size += BUFFERALIGN(sizeof(LVRelStats) * pcxt->nworkers);
 	keys++;
 
-	/* Estimate size for collecting dead tuples */
+	/* Estimate size for dead tuple locations */
 	size += BUFFERALIGN(sizeof(LVDeadTuples) + vac_work_mem);
 	keys++;
 
@@ -2551,8 +2546,9 @@ lazy_estimate_dsm(ParallelContext *pcxt, int vac_work_mem)
 
 /*
  * Initialize dynamic shared memory for parallel lazy vacuum. We store
- * information of parallel heap scanning, dead tuple array, vacuum
- * statistics for each worker and some parameters for lazy vacuum.
+ * relevant informations of parallel heap scanning, dead tuple array
+ * and vacuum statistics for each worker and some parameters for
+ * lazy vacuum.
  */
 static void
 lazy_initialize_dsm(ParallelContext *pcxt, Relation onerel,
@@ -2566,7 +2562,7 @@ lazy_initialize_dsm(ParallelContext *pcxt, Relation onerel,
 	int i;
 	int lv_dead_tuples_size = 0;
 
-	/* Prepare for parallel scan desciption */
+	/* Prepare for parallel scan description */
 	pscan = (ParallelHeapScanDesc) shm_toc_allocate(pcxt->toc,
 													heap_parallelscan_estimate(SnapshotAny));
 
