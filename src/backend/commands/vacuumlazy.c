@@ -1779,7 +1779,6 @@ lazy_cleanup_index(Relation indrel,
 	{
 		if (IsParallelWorker())
 		{
-			elog(NOTICE, "%d index cleanup %d", MyProcPid, indrel->rd_id);
 			/* Save to shared memory */
 			vacindstats->do_update = true;
 			vacindstats->rel_pages = stats->num_pages;
