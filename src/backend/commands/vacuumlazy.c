@@ -2413,12 +2413,12 @@ lazy_scan_heap_get_nextpage(Relation onerel, LVRelStats *vacrelstats,
 {
 	BlockNumber blkno;
 
-	/*
-	 * In parallel vacuum, we can not check if how many consecutive all-visible
-	 * pages exits.
-	 */
 	if (vacrelstats->do_parallel)
 	{
+		/*
+		 * In parallel vacuum, since it's hard to know how many consecutive all-visible
+		 * pages exits on this relation, we skip to scan the heap page immidiately.
+		 */
 		while ((blkno = heap_parallelscan_nextpage(lvscan->heapscan)) != InvalidBlockNumber)
 		{
 			*all_visible_according_to_vm = false;
