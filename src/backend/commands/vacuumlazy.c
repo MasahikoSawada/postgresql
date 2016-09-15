@@ -106,6 +106,7 @@
 #define VACUUM_KEY_VACUUM_STATS		51
 #define VACUUM_KEY_DEAD_TUPLES		52
 #define VACUUM_KEY_VACUUM_TASK		53
+#define VACUUM_KEY_INDEX_STATS		54
 
 /*
  * see note of lazy_scan_heap_get_nextpage about forcing scanning of
@@ -113,6 +114,10 @@
  */
 #define FORCE_CHECK_PAGE(blk) \
 	(blkno == (blk - 1) && should_attempt_truncation(vacrelstats))
+
+#define IsAssignedIndex(i, num) \
+	(!IsParallelWorker() ||\
+	 (IsParallelWorker() && ((i) % (num) == ParallelWorkerNumber)))
 
 typedef struct LVDeadTuples
 {
@@ -124,6 +129,14 @@ typedef struct LVDeadTuples
 
 #define SizeOfLVDeadTuples \
 	(offsetof(LVDeadTuples, dead_tuples) + sizeof(ItemPointer))
+
+/* Data structure for updating index relation statistics */
+typedef struct LVIndStats
+{
+	bool		do_update;
+	BlockNumber	rel_pages;
+	BlockNumber rel_tuples;
+} LVIndStats;
 
 typedef struct LVRelStats
 {
@@ -150,6 +163,10 @@ typedef struct LVRelStats
 	int			num_index_scans;
 	TransactionId latestRemovedXid;
 	bool		lock_waiter_detected;
+	/* Fields for parallel lazy vacuum */
+	int			wnum;
+	int			nindexes;
+	LVIndStats	*vacindstats;
 } LVRelStats;
 
 /* Scan description for lazy vacuum */
@@ -191,7 +208,8 @@ static void lazy_vacuum_index(Relation indrel,
 				  LVRelStats *vacrelstats);
 static void lazy_cleanup_index(Relation indrel,
 				   IndexBulkDeleteResult *stats,
-				   LVRelStats *vacrelstats);
+				   LVRelStats *vacrelstats,
+				   LVIndStats *vacindstats);
 static int lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 							int tupindex, LVRelStats *vacrelstats, Buffer *vmbuffer);
 static bool should_attempt_truncation(LVRelStats *vacrelstats);
@@ -204,23 +222,25 @@ static bool lazy_tid_reaped(ItemPointer itemptr, void *state);
 static int	vac_cmp_itemptr(const void *left, const void *right);
 static bool heap_page_is_all_visible(Relation rel, Buffer buf,
 					 TransactionId *visibility_cutoff_xid, bool *all_frozen);
-static void lazy_scan_heap(ParallelHeapScanDesc pscan, Relation onerel,
-								Relation Irel, LVRelStats *vacrelstats,
-								int options, bool aggressive);
+static void lazy_scan_heap(LVRelStats *vacrelstats, Relation onerel,
+						   Relation *Irels, int nindexes,ParallelHeapScanDesc pscan,
+						   int options, bool aggressive);
 
 /* function prototypes for parallel vacuum */
 static void parallel_lazy_scan_heap(Relation rel, LVRelStats *vacrelstats,
 									int options, bool aggressive, int wnum);
 static void lazy_vacuum_worker(dsm_segment *seg, shm_toc *toc);
-static void lazy_gather_vacuum_stats(ParallelContext *pxct, LVRelStats *valrelstats);
-static void lazy_estimate_dsm(ParallelContext *pcxt, int vac_work_mem);
+static void lazy_gather_vacuum_stats(ParallelContext *pxct,
+									 LVRelStats *valrelstats,
+									 LVIndStats *vacindstats);
+static void lazy_update_index_stats(Relation onerel, LVIndStats *vacindstats);
+static void lazy_estimate_dsm(ParallelContext *pcxt, int vac_work_mem, int nindexes);
 static void lazy_initialize_dsm(ParallelContext *pcxt, Relation onrel,
 								LVRelStats *vacrelstats, int options,
 								bool aggressive);
 static void lazy_initialize_worker(shm_toc *toc, ParallelHeapScanDesc *pscan,
 								   LVRelStats **vacrelstats, int *options,
 								   bool *aggressive);
-static Relation lazy_assign_index_worker(Relation rel, LOCKMODE lockmode);
 static void lazy_clear_dead_tuple(LVRelStats *vacrelstats);
 static LVScanDesc lv_beginscan(LVRelStats *vacrelstats, ParallelHeapScanDesc pscan,
 							   Relation onerel);
@@ -313,6 +333,8 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	if (parallel_vacuum_workers > 0)
 	{
 		vacrelstats->do_parallel = true;
+		vacrelstats->wnum = parallel_vacuum_workers;
+		vacrelstats->nindexes = list_length(RelationGetIndexList(onerel));
 
 		/* Do the parallel vacuum */
 		parallel_lazy_scan_heap(onerel, vacrelstats, options, aggressive,
@@ -324,11 +346,11 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 		vacrelstats->hasindex = (nindexes > 0);
 
 		vacrelstats->do_parallel = false;
-		lazy_scan_heap(NULL, onerel, NULL, vacrelstats, options,
-							aggressive);
+		lazy_scan_heap(vacrelstats, onerel, Irel, nindexes, NULL,
+					   options, aggressive);
 
 		/* Done with indexes */
-		vac_close_indexes(nindexes, Irel, NoLock);
+		vac_close_indexes(nindexes, Irel, RowExclusiveLock);
 	}
 
 	/*
@@ -505,16 +527,20 @@ vacuum_log_cleanup_info(Relation rel, LVRelStats *vacrelstats)
 }
 
 /*
- * Launch parallel some vacuum workers specified by wnum and then gather the
- * vacuum statistics of each worker. All of vacuum workers scan a relation using
- * parallel heap scan description is stored into DSM tagged by VACUUM_KEY_PARALLEL_SCAN,
- * and are assigned different indexes.  The vacuum relevant options and some
- * threshoulds, for example, OldestXmin, FreezeLimit and MultiXactCutoff, are
- * stored into DSM tagged by VACUUM_KEY_TASK.  All workers exclusively store
- * the dead tuple locations into DSM tagged by VACUUM_KEY_DEAD_TUPLES. The
- * above three memory spaces are shared by all workers. The vacuum statistics
- * of each workers are stored into DSM tagged by VACUUM_KEY_WORKER_STATS,
- * that will be gathered by the launcher process after all worker finished its task.
+ * Launch parallel vacuum workers specified by wnum and then gather the
+ * vacuum result of relation statistics of each worker. All of vacuum workers
+ * scan a relation using parallel heap scan description that is stored at
+ * DSM tagged by VACUUM_KEY_PARALLEL_SCAN, and each vacuum worker is assigned
+ * different indexes.  The vacuum relevant options and some threshoulds,
+ * for example, OldestXmin, FreezeLimit and MultiXactCutoff, are stored in DSM
+ * tagged by VACUUM_KEY_TASK.  All of vacuum workers exclusively store the dead
+ * tuple locations into DSM tagged by VACUUM_KEY_DEAD_TUPLES. Updating index
+ * statistics according result of index vaucum can not be done by vacuum worker,
+ * so we store such statistics into DSM tagged by VACUUM_KEY_INDEX_STATS once,
+ * and the launcher process will update it later. The above four memory spaces
+ * are shared by all of vacuum workers. The vacuum statistics of each workers are
+ * stored in DSM tagged by VACUUM_KEY_WORKER_STATS, that will be gathered by
+ * the launcher process after all worker finished its task.
  */
 static void
 parallel_lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
@@ -524,6 +550,9 @@ parallel_lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 	int	vac_work_mem = IsAutoVacuumWorkerProcess() &&
 		autovacuum_work_mem != -1 ?
 		autovacuum_work_mem : maintenance_work_mem;
+	LVIndStats *vacindstats;
+
+	vacindstats = (LVIndStats *) palloc(sizeof(LVIndStats) * vacrelstats->nindexes);
 
 	EnterParallelMode();
 
@@ -531,7 +560,7 @@ parallel_lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 	pcxt = CreateParallelContext(lazy_vacuum_worker, wnum);
 
 	/* Estimate DSM size for parallel vacuum */
-	lazy_estimate_dsm(pcxt, vac_work_mem);
+	lazy_estimate_dsm(pcxt, vac_work_mem, vacrelstats->nindexes);
 
 	/* Initialize DSM for parallel vacuum */
 	InitializeParallelDSM(pcxt);
@@ -544,7 +573,7 @@ parallel_lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 	WaitForParallelWorkersToFinish(pcxt);
 
 	/* Gather vacuum statistics from workers */
-	lazy_gather_vacuum_stats(pcxt, vacrelstats);
+	lazy_gather_vacuum_stats(pcxt, vacrelstats, vacindstats);
 
 	/* Now we can compute the new value for pg_class.reltuples */
 	vacrelstats->new_rel_tuples = vac_estimate_reltuples(onerel, false,
@@ -553,8 +582,10 @@ parallel_lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 														 vacrelstats->scanned_tuples);
 
 	DestroyParallelContext(pcxt);
-
 	ExitParallelMode();
+
+	/* After parallel mode, we can update index statistics */
+	lazy_update_index_stats(onerel, vacindstats);
 }
 
 /*
@@ -569,7 +600,8 @@ lazy_vacuum_worker(dsm_segment *seg, shm_toc *toc)
 	int options;
 	bool aggressive;
 	Relation rel;
-	Relation indrel;
+	Relation *indrel;
+	int nindexes_worker;
 
 	/* Look up and initialize information and task */
 	lazy_initialize_worker(toc, &pscan, &vacrelstats, &options,
@@ -577,15 +609,18 @@ lazy_vacuum_worker(dsm_segment *seg, shm_toc *toc)
 
 	/* Assign vacuum index target */
 	rel = relation_open(pscan->phs_relid, NoLock);
-	indrel = lazy_assign_index_worker(rel, RowExclusiveLock);
+
+	/* Open all indexes */
+	vac_open_indexes(rel, RowExclusiveLock, &nindexes_worker,
+					 &indrel);
 
 	/* Do lazy vacuum */
-	lazy_scan_heap(pscan, rel, indrel, vacrelstats, options, aggressive);
+	lazy_scan_heap(vacrelstats, rel, indrel, vacrelstats->nindexes,
+				   pscan, options, aggressive);
 
 	heap_close(rel, NoLock);
 
-	if (indrel)
-		index_close(indrel, RowExclusiveLock);
+	vac_close_indexes(vacrelstats->nindexes, indrel, RowExclusiveLock);
 }
 
 /*
@@ -608,13 +643,15 @@ lazy_vacuum_worker(dsm_segment *seg, shm_toc *toc)
  *		reference them have been killed.
  */
 static void
-lazy_scan_heap(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
-			   LVRelStats *vacrelstats, int options, bool aggressive)
+lazy_scan_heap(LVRelStats *vacrelstats, Relation onerel, Relation *Irel,
+			   int nindexes, ParallelHeapScanDesc pscan, int options,
+			   bool aggressive)
 {
 	BlockNumber blkno;
 	BlockNumber nblocks;
 	HeapTupleData tuple;
 	LVScanDesc lvscan;
+	LVIndStats *vacindstats;
 	char	   *relname;
 	BlockNumber empty_pages,
 				vacuumed_pages;
@@ -622,7 +659,7 @@ lazy_scan_heap(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 				tups_vacuumed,
 				nkeep,
 				nunused;
-	IndexBulkDeleteResult *indstats;
+	IndexBulkDeleteResult **indstats;
 	LVDeadTuples *lv_dead_tuples;
 	int			i;
 	PGRUsage	ru0;
@@ -650,8 +687,8 @@ lazy_scan_heap(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 	num_tuples = tups_vacuumed = nkeep = nunused = 0;
 	nblocks = RelationGetNumberOfBlocks(onerel);
 
-	indstats = (IndexBulkDeleteResult *)
-		palloc0(sizeof(IndexBulkDeleteResult *));
+	indstats = (IndexBulkDeleteResult **)
+		palloc0(sizeof(IndexBulkDeleteResult *) * nindexes);
 
 	vacrelstats->rel_pages = nblocks;
 	vacrelstats->scanned_pages = 0;
@@ -661,6 +698,8 @@ lazy_scan_heap(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 	lazy_space_alloc(vacrelstats, nblocks);
 	lv_dead_tuples = vacrelstats->lv_dead_tuples;
 	frozen = palloc(sizeof(xl_heap_freeze_tuple) * MaxHeapTuplesPerPage);
+
+	vacindstats = vacrelstats->vacindstats;
 
 	/* Begin heap scan for vacuum */
 	lvscan = lv_beginscan(vacrelstats, pscan, onerel);
@@ -727,10 +766,11 @@ lazy_scan_heap(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 										 PROGRESS_VACUUM_PHASE_VACUUM_INDEX);
 
 			/* Remove index entries if an index is assigned */
-			if (Irel)
-				lazy_vacuum_index(Irel,
-								  &indstats,
-								  vacrelstats);
+			for (i = 0; i < nindexes; i++)
+			{
+				if (IsAssignedIndex(i, vacrelstats->wnum))
+					lazy_vacuum_index(Irel[i], &indstats[i], vacrelstats);
+			}
 
 			/*
 			 * Report that we are now vacuuming the heap.  We also increase
@@ -1304,10 +1344,11 @@ lazy_scan_heap(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 									 PROGRESS_VACUUM_PHASE_VACUUM_INDEX);
 
 		/* Remove index entries */
-		if (Irel)
-		lazy_vacuum_index(Irel,
-						  &indstats,
-						  vacrelstats);
+		for (i = 0; i < nindexes; i++)
+		{
+			if (IsAssignedIndex(i, vacrelstats->wnum))
+				lazy_vacuum_index(Irel[i], &indstats[i], vacrelstats);
+		}
 
 		/* Report that we are now vacuuming the heap */
 		hvp_val[0] = PROGRESS_VACUUM_PHASE_VACUUM_HEAP;
@@ -1326,16 +1367,19 @@ lazy_scan_heap(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
 	pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
 								 PROGRESS_VACUUM_PHASE_INDEX_CLEANUP);
 
+	/* Do post-vacuum cleanup and statistics update for each index */
+	for (i = 0; i < nindexes; i++)
+	{
+		if (IsAssignedIndex(i, vacrelstats->wnum))
+			lazy_cleanup_index(Irel[i], indstats[i], vacrelstats, &vacindstats[i]);
+	}
+
 	/* If no indexes, make log report that lazy_vacuum_heap would've made */
 	if (vacuumed_pages)
 		ereport(elevel,
 				(errmsg("\"%s\": removed %.0f row versions in %u pages",
 						RelationGetRelationName(onerel),
 						tups_vacuumed, vacuumed_pages)));
-
-	/* Do post-vacuum cleanup and statistics update for each index */
-	if (Irel)
-		lazy_cleanup_index(Irel, indstats, vacrelstats);
 
 	lv_endscan(lvscan);
 
@@ -1373,12 +1417,15 @@ lazy_scan_heap(ParallelHeapScanDesc pscan, Relation onerel, Relation Irel,
  * gather_vacuum_stats() -- Gather vacuum statistics from workers
  */
 static void
-lazy_gather_vacuum_stats(ParallelContext *pcxt, LVRelStats *vacrelstats)
+lazy_gather_vacuum_stats(ParallelContext *pcxt, LVRelStats *vacrelstats,
+									LVIndStats *vacindstats)
 {
 	int	i;
 	LVRelStats *lvstats_list;
+	LVIndStats *lvindstats_list;
 
 	lvstats_list = (LVRelStats *) shm_toc_lookup(pcxt->toc, VACUUM_KEY_VACUUM_STATS);
+	lvindstats_list = (LVIndStats *) shm_toc_lookup(pcxt->toc, VACUUM_KEY_INDEX_STATS);
 
 	/* Gather each worker stats */
 	for (i = 0; i < pcxt->nworkers; i++)
@@ -1394,6 +1441,49 @@ lazy_gather_vacuum_stats(ParallelContext *pcxt, LVRelStats *vacrelstats)
 		vacrelstats->tuples_deleted += wstats->tuples_deleted;
 		vacrelstats->nonempty_pages += wstats->nonempty_pages;
 	}
+
+	/* Copy index vacuum statistics on DSM to local memory */
+	memcpy(vacindstats, lvindstats_list, sizeof(LVIndStats) * vacrelstats->nindexes);
+}
+
+/*
+ * lazy_update_index_stats() -- Update index vacuum statistics
+ *
+ * This routine can not be called in parallel context.
+ */
+static void
+lazy_update_index_stats(Relation onerel, LVIndStats *vacindstats)
+{
+	List *indexoidlist;
+	ListCell *indexoidscan;
+	int i;
+
+	indexoidlist = RelationGetIndexList(onerel);
+	i = 0;
+
+	foreach(indexoidscan, indexoidlist)
+	{
+		Oid indexoid = lfirst_oid(indexoidscan);
+		Relation indrel;
+
+		/* Update index relation statistics if needed */
+		if (vacindstats[i].do_update)
+		{
+			indrel = index_open(indexoid, RowExclusiveLock);
+			vac_update_relstats(indrel,
+								vacindstats[i].rel_pages,
+								vacindstats[i].rel_tuples,
+								0,
+								false,
+								InvalidTransactionId,
+								InvalidMultiXactId,
+								false);
+			index_close(indrel, RowExclusiveLock);
+		}
+		i++;
+	}
+
+	list_free(indexoidlist);
 }
 
 /*
@@ -1659,7 +1749,8 @@ lazy_vacuum_index(Relation indrel,
 static void
 lazy_cleanup_index(Relation indrel,
 				   IndexBulkDeleteResult *stats,
-				   LVRelStats *vacrelstats)
+				   LVRelStats *vacrelstats,
+				   LVIndStats *vacindstats)
 {
 	IndexVacuumInfo ivinfo;
 	PGRUsage	ru0;
@@ -1681,16 +1772,31 @@ lazy_cleanup_index(Relation indrel,
 	/*
 	 * Now update statistics in pg_class, but only if the index says the count
 	 * is accurate.
+	 * In parallel lazy vacuum, the worker can not update these information by
+	 * itself, so save to DSM and then the launcher process will update it later.
 	 */
 	if (!stats->estimated_count)
-		vac_update_relstats(indrel,
-							stats->num_pages,
-							stats->num_index_tuples,
-							0,
-							false,
-							InvalidTransactionId,
-							InvalidMultiXactId,
-							false);
+	{
+		if (IsParallelWorker())
+		{
+			elog(NOTICE, "%d index cleanup %d", MyProcPid, indrel->rd_id);
+			/* Save to shared memory */
+			vacindstats->do_update = true;
+			vacindstats->rel_pages = stats->num_pages;
+			vacindstats->rel_tuples = stats->num_index_tuples;
+		}
+		else
+		{
+			vac_update_relstats(indrel,
+								stats->num_pages,
+								stats->num_index_tuples,
+								0,
+								false,
+								InvalidTransactionId,
+								InvalidMultiXactId,
+								false);
+		}
+	}
 
 	ereport(elevel,
 			(errmsg("index \"%s\" now contains %.0f row versions in %u pages",
@@ -2519,7 +2625,8 @@ lv_endscan(LVScanDesc lvscan)
  * Estimate storage for parallel lazy vacuum.
  */
 static void
-lazy_estimate_dsm(ParallelContext *pcxt, int vac_work_mem)
+lazy_estimate_dsm(ParallelContext *pcxt, int vac_work_mem,
+				  int nindexes)
 {
 	int size = 0;
 	int keys = 0;
@@ -2530,6 +2637,10 @@ lazy_estimate_dsm(ParallelContext *pcxt, int vac_work_mem)
 
 	/* Estimate size for vacuum statistics */
 	size += BUFFERALIGN(sizeof(LVRelStats) * pcxt->nworkers);
+	keys++;
+
+	/* Estimate size fo index vacuum statistics */
+	size += BUFFERALIGN(sizeof(LVIndStats) * nindexes);
 	keys++;
 
 	/* Estimate size for dead tuple locations */
@@ -2556,31 +2667,37 @@ lazy_initialize_dsm(ParallelContext *pcxt, Relation onerel,
 					bool aggressive)
 {
 	ParallelHeapScanDesc pscan;
-	LVRelStats *lvstats;
+	LVRelStats *lvrelstats;
+	LVIndStats *lvindstats;
 	LVDeadTuples *lv_dead_tuples;
 	VacuumTask	*vacuum_task;
 	int i;
 	int lv_dead_tuples_size = 0;
 
-	/* Prepare for parallel scan description */
+	/* Prepare DSM for parallel scan description */
 	pscan = (ParallelHeapScanDesc) shm_toc_allocate(pcxt->toc,
 													heap_parallelscan_estimate(SnapshotAny));
 
 	shm_toc_insert(pcxt->toc, VACUUM_KEY_PARALLEL_SCAN, pscan);
 	heap_parallelscan_initialize(pscan, onerel, SnapshotAny);
 
-	/* Prepare for vacuum statistics for each worker */
-	lvstats = (LVRelStats *)shm_toc_allocate(pcxt->toc,
+	/* Prepare DSM for vacuum statistics for each worker */
+	lvrelstats = (LVRelStats *)shm_toc_allocate(pcxt->toc,
 											 sizeof(LVRelStats) * pcxt->nworkers);
-	shm_toc_insert(pcxt->toc, VACUUM_KEY_VACUUM_STATS, lvstats);
+	shm_toc_insert(pcxt->toc, VACUUM_KEY_VACUUM_STATS, lvrelstats);
 
 	for (i = 0; i < pcxt->nworkers; i++)
 	{
-		LVRelStats *ls = lvstats + sizeof(LVRelStats) * i;
-		memcpy(ls, vacrelstats, sizeof(LVRelStats));
+		LVRelStats *stats = lvrelstats + sizeof(LVRelStats) * i;
+		memcpy(stats, vacrelstats, sizeof(LVRelStats));
 	}
 
-	/* Prepare for dead tuple array */
+	/* Prepare DSM for index vacuum statistics */
+	lvindstats = (LVIndStats *) shm_toc_allocate(pcxt->toc,
+												 sizeof(LVIndStats) * vacrelstats->nindexes);
+	shm_toc_insert(pcxt->toc, VACUUM_KEY_INDEX_STATS, lvindstats);
+
+	/* Prepare DSM for dead tuple array */
 	lv_dead_tuples_size += sizeof(ItemPointer) * vacrelstats->max_dead_tuples;
 	lv_dead_tuples_size += sizeof(LVDeadTuples);
 	lv_dead_tuples = (LVDeadTuples *) shm_toc_allocate(pcxt->toc, lv_dead_tuples_size);
@@ -2588,7 +2705,7 @@ lazy_initialize_dsm(ParallelContext *pcxt, Relation onerel,
 	SpinLockInit(&(lv_dead_tuples->dt_mutex));
 	lv_dead_tuples->num_dead_tuples = 0;
 
-	/* Prepare for vacuum task */
+	/* Prepare DSM for vacuum task */
 	vacuum_task = (VacuumTask *) shm_toc_allocate(pcxt->toc, sizeof(VacuumTask));
 	shm_toc_insert(pcxt->toc, VACUUM_KEY_VACUUM_TASK, vacuum_task);
 	vacuum_task->aggressive = aggressive;
@@ -2608,6 +2725,7 @@ lazy_initialize_worker(shm_toc *toc, ParallelHeapScanDesc *pscan,
 						   bool *aggressive)
 {
 	LVRelStats *lvstats;
+	LVIndStats *vacindstats;
 	VacuumTask	*vacuum_task;
 	LVDeadTuples *lv_dead_tuples;
 
@@ -2617,6 +2735,10 @@ lazy_initialize_worker(shm_toc *toc, ParallelHeapScanDesc *pscan,
 	/* Set up vacuum statistics */
 	lvstats = (LVRelStats *) shm_toc_lookup(toc, VACUUM_KEY_VACUUM_STATS);
 	*vacrelstats = lvstats + sizeof(LVRelStats) * ParallelWorkerNumber;
+
+	/* Set up vacuum index statistics */
+	vacindstats = (LVIndStats *) shm_toc_lookup(toc, VACUUM_KEY_INDEX_STATS);
+	(*vacrelstats)->vacindstats = (LVIndStats *)vacindstats;
 
 	/* Set up dead tuple list */
 	lv_dead_tuples = (LVDeadTuples *) shm_toc_lookup(toc, VACUUM_KEY_DEAD_TUPLES);
@@ -2633,33 +2755,4 @@ lazy_initialize_worker(shm_toc *toc, ParallelHeapScanDesc *pscan,
 	elevel = vacuum_task->elevel;
 	*options = vacuum_task->options;
 	*aggressive = vacuum_task->aggressive;
-}
-
-static Relation
-lazy_assign_index_worker(Relation rel, LOCKMODE lockmode)
-{
-	Relation indrel;
-	List *indexoidlist;
-	ListCell *listcell;
-	int num = 0;
-
-	Assert(lockmode != NoLock);
-
-	indexoidlist = RelationGetIndexList(rel);
-
-	if (list_length(indexoidlist) == 0)
-		return NULL;
-
-	foreach(listcell, indexoidlist)
-	{
-		Oid	indexoid = lfirst_oid(listcell);
-
-		if (num == ParallelWorkerNumber)
-		{
-			indrel = index_open(indexoid, lockmode);
-			return indrel;
-		}
-	}
-
-	return NULL;
 }

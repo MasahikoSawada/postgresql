@@ -1440,8 +1440,7 @@ vacuum_rel(Oid relid, RangeVar *relation, int options, VacuumParams *params)
  * hit dangling index pointers.
  */
 void
-vac_open_indexes(Relation relation, LOCKMODE lockmode,
-				 int *nindexes, Relation **Irel)
+vac_open_indexes(Relation relation, LOCKMODE lockmode, int *nindexes, Relation **Irel)
 {
 	List	   *indexoidlist;
 	ListCell   *indexoidscan;
