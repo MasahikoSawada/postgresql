@@ -64,6 +64,11 @@ xdinside		[^"]+
 %%
 {space}+	{ /* ignore */ }
 
+first		{
+				yylval.str = pstrdup(yytext);
+				return FIRST;
+		}
+
 {xdstart}	{
 				initStringInfo(&xdbuf);
 				BEGIN(xd);

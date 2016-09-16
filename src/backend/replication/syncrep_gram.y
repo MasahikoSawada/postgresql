@@ -46,7 +46,7 @@ static SyncRepConfigData *create_syncrep_config(const char *num_sync,
 	SyncRepConfigData *config;
 }
 
-%token <str> NAME NUM JUNK
+%token <str> NAME NUM JUNK FIRST
 
 %type <config> result standby_config
 %type <list> standby_list
@@ -61,7 +61,7 @@ result:
 
 standby_config:
 		standby_list				{ $$ = create_syncrep_config("1", $1); }
-		| NUM '(' standby_list ')'	{ $$ = create_syncrep_config($1, $3); }
+		| FIRST NUM '(' standby_list ')'	{ $$ = create_syncrep_config($1, $4); }
 	;
 
 standby_list:
@@ -70,7 +70,7 @@ standby_list:
 	;
 
 standby_name:
-		NAME						{ $$ = $1; }
+		NAME						{ $$ = $1;}
 		| NUM						{ $$ = $1; }
 	;
 %%
