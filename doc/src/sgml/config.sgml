@@ -3036,41 +3036,46 @@ include_dir 'conf.d'
         the number of synchronous standbys that transactions need to
         wait for replies from,
         and <replaceable class="parameter">standby_name</replaceable>
-is the name of a standby server.
-
-<literal>FIRST</> and <literal>ANY</> specify the method of
-that how master server controls the standby servers.
-<literal>FIRST</> means to control the standby servers with
-different priorities. The synchronous standbys will be those whose
-name appear earlier in this list, and that are both currently
-connected and streaming data in real-time(as shown by a state of
-<literal>streaming</> in the <link linkend="monitoring-stats-views-table">
-<literal>pg_stat_replication</></link> view). Other standby
-servers appearing later in this list represent potential
-synchronous standbys. If any of the current synchronous standbys
-disconnects for whatever reason, it will be replaced immediately
-with the next-highest-priority standby.
-
-For example, a setting of
-        <literal>3 (s1, s2, s3, s4)</> makes transaction commits wait
-        until their WAL records are received by three higher-priority standbys
-        chosen from standby servers <literal>s1</>, <literal>s2</>,
-        <literal>s3</> and <literal>s4</>. On the other hand,
-        <literal> ANY 3 (s1, s2, s3, s4)</> makes transaction commits wait
-        until their WAL records are received by at least three standbys from
-        four listed servers.
-
-<literal>ANY</> means to control all of standby servers with
-same priority. 
- 
-many standbys
-
-
-
- <literal>FIRST</> and <literal>ANY</> are
-        case-insensitive but the standby name having these words are
-        must be double-quoted.
+        is the name of a standby server.
+        <literal>FIRST</> and <literal>ANY</> specify the method of
+        that how master server controls the standby servers.
         </para>
+
+        <para>
+        <literal>FIRST</> means to control the standby servers with
+        different priorities. The synchronous standbys will be those
+        whose name appear earlier in this list, and that are both
+        currently connected and streaming data in real-time(as shown
+        by a state of <literal>streaming</> in the
+        <link linkend="monitoring-stats-views-table">
+        <literal>pg_stat_replication</></link> view). Other standby
+        servers appearing later in this list represent potential
+        synchronous standbys. If any of the current synchronous
+        standbys disconnects for whatever reason, it will be replaced
+        immediately with the next-highest-priority standby.
+        For example, a setting of <literal>FIRST 3 (s1, s2, s3, s4)</>
+        makes transaction commits wait until their WAL records are received
+        by three higher-priority standbys chosen from standby servers
+        <literal>s1</>, <literal>s2</>, <literal>s3</> and <literal>s4</>.
+        </para>
+
+       <para>
+       <literal>ANY</> means to control all of standby servers with
+       same priority. The master sever will wait for receipt from
+       at least <replaceable class="parameter">num_sync</replaceable>
+       standbys, which is quorum commit in the literature. The all of
+       listed standbys are considered as candidate of quorum commit.
+       For example, a setting of <literal> ANY 3 (s1, s2, s3, s4)</> makes
+       transaction commits wait until receiving receipts from at least
+       any three standbys of four listed servers <literal>s1</>,
+       <literal>s2</>, <literal>s3</>, <literal>s4</>.
+       </para>
+
+        <para>
+        <literal>FIRST</> and <literal>ANY</> are case-insensitive word
+        and the standby name having these words are must be double-quoted.
+        </para>
+
         <para>
         The second syntax was used before <productname>PostgreSQL</>
         version 9.6 and is still supported. It's the same as the first syntax

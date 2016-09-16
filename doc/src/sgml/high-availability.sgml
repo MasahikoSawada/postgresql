@@ -1165,13 +1165,13 @@ synchronous_standby_names = 'FIRST 2 (s1, s2, s3)'
     Another example of <varname>synchronous_standby_names</> for multiple
     synchronous standby is:
 <programlisting>
- synchronous_standby_names = 'any 2 (s1, s2, s2)'
+ synchronous_standby_names = 'ANY 2 (s1, s2, s3)'
 </programlisting>
     In this example, if four standby servers <literal>s1</>, <literal>s2</>,
-    <literal>s3</> and <literal>s4</> are running, the three standbys <literal>s1</>,
-    <literal>s2</> and <literal>s3</> wil be considered as synchronous standby
-    condidates. The master server will wait for at least 2 replies from them.
-    <literal>s4</> is an asynchronous standby since its name is not in the list.
+    <literal>s3</> and <literal>s4</> are running, the all of listed standbys
+    will be considered as candidate of quorum commit. The master server will
+    wait for at least 2 replies from any of three standbys. <literal>s4</> is
+    an asynchronous standby since its name is not in the list.
    </para>
    </sect3>
 
