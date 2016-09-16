@@ -69,6 +69,10 @@ first		{
 				return FIRST;
 		}
 
+any		{
+				yylval.str = pstrdup(yytext);
+				return ANY;
+		}
 {xdstart}	{
 				initStringInfo(&xdbuf);
 				BEGIN(xd);
