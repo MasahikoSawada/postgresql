@@ -1134,7 +1134,7 @@ primary_slot_name = 'node_a_slot'
 
    <para>
     Synchronous replication supports one or more synchronous standby servers;
-    transactions will wait until all the standby servers which are considered
+    transactions will wait until the multiple standby servers which are considered
     as synchronous confirm receipt of their data. The number of synchronous
     standbys that transactions must wait for replies from is specified in
     <varname>synchronous_standby_names</>. This parameter also specifies
@@ -1150,7 +1150,7 @@ primary_slot_name = 'node_a_slot'
     An example of <varname>synchronous_standby_names</> for multiple
     synchronous standbys is:
 <programlisting>
-synchronous_standby_names = '2 (s1, s2, s3)'
+synchronous_standby_names = 'First 2 (s1, s2, s3)'
 </programlisting>
     In this example, if four standby servers <literal>s1</>, <literal>s2</>,
     <literal>s3</> and <literal>s4</> are running, the two standbys
@@ -1160,6 +1160,18 @@ synchronous_standby_names = '2 (s1, s2, s3)'
     the role of synchronous standby when either of <literal>s1</> or
     <literal>s2</> fails. <literal>s4</> is an asynchronous standby since
     its name is not in the list.
+   </para>
+   <para>
+    Another example of <varname>synchronous_standby_names</> for multiple
+    synchronous standby is:
+<programlisting>
+ synchronous_standby_names = 'Any 2 (s1, s2, s3)'
+</programlisting>
+    In this example, if four standby servers <literal>s1</>, <literal>s2</>,
+    <literal>s3</> and <literal>s4</> are running, the three standbys <literal>s1</>,
+    <literal>s2</> and <literal>s3</> wil be considered as synchronous standby
+    condidates. The master server will wait for at least 2 replies from them.
+    <literal>s4</> is an asynchronous standby since its name is not in the list.
    </para>
    </sect3>
 

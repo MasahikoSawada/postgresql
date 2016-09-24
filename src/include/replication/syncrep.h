@@ -32,6 +32,10 @@
 #define SYNC_REP_WAITING			1
 #define SYNC_REP_WAIT_COMPLETE		2
 
+/* sync_method of SyncRepConfigData */
+#define SYNC_REP_PRIORITY	0
+#define SYNC_REP_QUORUM		1
+
 /*
  * Struct for the configuration of synchronous replication.
  *
@@ -45,9 +49,12 @@ typedef struct SyncRepConfigData
 	int			num_sync;		/* number of sync standbys that we need to
 								 * wait for */
 	int			nmembers;		/* number of members in the following list */
+	int			sync_method;	/* synchronous method */
 	/* member_names contains nmembers consecutive nul-terminated C strings */
 	char		member_names[FLEXIBLE_ARRAY_MEMBER];
 } SyncRepConfigData;
+
+extern SyncRepConfigData *SyncRepConfig;
 
 /* communication variables for parsing synchronous_standby_names GUC */
 extern SyncRepConfigData *syncrep_parse_result;
@@ -68,6 +75,8 @@ extern void SyncRepReleaseWaiters(void);
 
 /* called by wal sender and user backend */
 extern List *SyncRepGetSyncStandbys(bool *am_sync);
+extern List *SyncRepGetSyncStandbysPriority(bool *am_sync);
+extern List *SyncRepGetSyncStandbysQuorum(bool *am_sync);
 
 /* called by checkpointer */
 extern void SyncRepUpdateSyncStandbysDefined(void);
