@@ -3028,41 +3028,61 @@ include_dir 'conf.d'
         transactions waiting for commit will be allowed to proceed after
         these standby servers confirm receipt of their data.
         The synchronous standbys will be those whose names appear
-        earlier in this list, and
-        that are both currently connected and streaming data in real-time
-        (as shown by a state of <literal>streaming</literal> in the
+        in this list, and
+        that are both currently connected and streaming data in
+        real-time(as shown by a state of <literal>streaming</> in the
         <link linkend="monitoring-stats-views-table">
-        <literal>pg_stat_replication</></link> view).
-        Other standby servers appearing later in this list represent potential
+        <literal>pg_stat_replication</></link> view). Other standby
+        servers appearing later in this list represent potential
         synchronous standbys. If any of the current synchronous
-        standbys disconnects for whatever reason,
-        it will be replaced immediately with the next-highest-priority standby.
-        Specifying more than one standby name can allow very high availability.
+        standbys disconnects for whatever reason, it will be replaced
+        immediately with the next-highest-priority standby.
        </para>
        <para>
         This parameter specifies a list of standby servers using
         either of the following syntaxes:
 <synopsis>
-<replaceable class="parameter">num_sync</replaceable> ( <replaceable class="parameter">standby_name</replaceable> [, ...] )
+[ANY] <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="parameter">standby_name</replaceable> [, ...] )
+FIRST <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="parameter">standby_name</replaceable> [, ...] )
 <replaceable class="parameter">standby_name</replaceable> [, ...]
 </synopsis>
         where <replaceable class="parameter">num_sync</replaceable> is
         the number of synchronous standbys that transactions need to
         wait for replies from,
         and <replaceable class="parameter">standby_name</replaceable>
-        is the name of a standby server. For example, a setting of
-        <literal>3 (s1, s2, s3, s4)</> makes transaction commits wait
-        until their WAL records are received by three higher-priority standbys
-        chosen from standby servers <literal>s1</>, <literal>s2</>,
-        <literal>s3</> and <literal>s4</>.
+        is the name of a standby server.
+        <literal>FIRST</> and <literal>ANY</> specify the method of
+        that how master server controls the standby servers.
         </para>
         <para>
-        The second syntax was used before <productname>PostgreSQL</>
+        The keyword <literal>FIRST</>, coupled with an interger
+        number N higher-priority standbys and makes transaction commit
+        when their WAL records are received.
+        For example, a setting of <literal>FIRST 3 (s1, s2, s3, s4)</>
+        makes transaction commits wait until their WAL records are received
+        by three higher-priority standbys chosen from standby servers
+        <literal>s1</>, <literal>s2</>, <literal>s3</> and <literal>s4</>.
+        </para>
+        <para>
+        The keyword <literal>ANY</>, coupeld with an interger number N,
+        chooses N standbys in a set of standbys with the same, lowest,
+        priority and makes transaction commit when WAL records are received
+        those N standbys. For example, a setting of <literal> ANY 3 (s1, s2, s3, s4)</>
+        makes transaction commits wait until receiving receipts from at least
+        any three standbys of four listed servers <literal>s1</>,
+        <literal>s2</>, <literal>s3</>, <literal>s4</>.
+        </para>
+        <para>
+        <literal>FIRST</> and <literal>ANY</> are case-insensitive word
+        and the standby name having these words are must be double-quoted.
+        </para>
+        <para>
+        The third syntax was used before <productname>PostgreSQL</>
         version 9.6 and is still supported. It's the same as the first syntax
-        with <replaceable class="parameter">num_sync</replaceable> equal to 1.
-        For example, <literal>1 (s1, s2)</> and
-        <literal>s1, s2</> have the same meaning: either <literal>s1</>
-        or <literal>s2</> is chosen as a synchronous standby.
+        with <literal>FIRST</> and <replaceable class="parameter">num_sync</replaceable>
+        equal to 1. For example, <literal>1 (s1, s2)</> and <literal>s1, s2</>
+        have the same meaning: either <literal>s1</> or <literal>s2</> is
+        chosen as a synchronous standby.
        </para>
        <para>
         The name of a standby server for this purpose is the

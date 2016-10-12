@@ -1389,7 +1389,8 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
     <row>
      <entry><structfield>sync_state</></entry>
      <entry><type>text</></entry>
-     <entry>Synchronous state of this standby server</entry>
+     <entry>Synchronous state of this standby server. <literal>quorum</>
+      when standby is considered as a condidate of quorum commit.</entry>
     </row>
    </tbody>
    </tgroup>
