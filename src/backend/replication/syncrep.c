@@ -551,10 +551,6 @@ SyncRepGetSyncRecPtr(XLogRecPtr *writePtr, XLogRecPtr *flushPtr,
 		flush_array = (XLogRecPtr *) palloc(sizeof(XLogRecPtr) * len);
 		apply_array = (XLogRecPtr *) palloc(sizeof(XLogRecPtr) * len);
 
-		/*
-		 * Scan through all sync standbys and calculate 'pos' Newest
-		 * Write, Flush and Apply positions.
-		 */
 		foreach (cell, sync_standbys)
 		{
 			WalSnd *walsnd = &WalSndCtl->walsnds[lfirst_int(cell)];
@@ -568,12 +564,14 @@ SyncRepGetSyncRecPtr(XLogRecPtr *writePtr, XLogRecPtr *flushPtr,
 			i++;
 		}
 
-		/* Sort each array in descending order to get 'pos' newest element */
 		qsort(write_array, len, sizeof(XLogRecPtr), cmp_lsn);
 		qsort(flush_array, len, sizeof(XLogRecPtr), cmp_lsn);
 		qsort(apply_array, len, sizeof(XLogRecPtr), cmp_lsn);
 
-		/* Get 'pos' newest Write, Flush, Apply positions */
+		/*
+		 * Get N-th newest Write, Flush, Apply positions
+		 * specified by SyncRepConfig->num_sync.
+		 */
 		*writePtr = write_array[SyncRepConfig->num_sync - 1];
 		*flushPtr = flush_array[SyncRepConfig->num_sync - 1];
 		*applyPtr = apply_array[SyncRepConfig->num_sync - 1];
