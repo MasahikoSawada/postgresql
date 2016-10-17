@@ -3032,11 +3032,12 @@ include_dir 'conf.d'
         that are both currently connected and streaming data in
         real-time(as shown by a state of <literal>streaming</> in the
         <link linkend="monitoring-stats-views-table">
-        <literal>pg_stat_replication</></link> view). Other standby
-        servers appearing later in this list represent potential
-        synchronous standbys. If any of the current synchronous
-        standbys disconnects for whatever reason, it will be replaced
-        immediately with the next-highest-priority standby.
+        <literal>pg_stat_replication</></link> view). If the keyword
+        <literal>FIRST</> is specified, other standby servers appearing
+        later in this list represent potential synchronous standbys.
+        If any of the current synchronous standbys disconnects for
+        whatever reason, it will be replaced immediately with the
+        next-highest-priority standby.
        </para>
        <para>
         This parameter specifies a list of standby servers using
@@ -3083,7 +3084,19 @@ FIRST <replaceable class="parameter">num_sync</replaceable> ( <replaceable class
         equal to 1. For example, <literal>1 (s1, s2)</> and <literal>s1, s2</>
         have the same meaning: either <literal>s1</> or <literal>s2</> is
         chosen as a synchronous standby.
-       </para>
+        </para>
+        <note>
+         <para>
+         The keyword <literal>ANY</> is omissible, but note that there is
+         not compatibility between <productname>PostgreSQL</> version 10 and
+         9.6 or before. For example, <literal>1 (s1, s2)</> is the same as the
+         configuration with <literal>FIRST</> and <replaceable class="parameter">
+         num_sync</replaceable> equal to 1 in <productname>PostgreSQL</> 9.6
+         or before.  On the other hand, It's the same as the configuration with
+         <literal>ANY</> and <replaceable class="parameter">num_sync</> equal to
+         1 in <productname>PostgreSQL</> 10 or later.
+        </para>
+       </note>
        <para>
         The name of a standby server for this purpose is the
         <varname>application_name</> setting of the standby, as set in the
