@@ -126,11 +126,6 @@ GetCCHashEqFuncs(Oid keytype, PGFunction *hashfunc, RegProcedure *eqfunc)
 
 			*eqfunc = F_INT2EQ;
 			break;
-		case INT2VECTOROID:
-			*hashfunc = hashint2vector;
-
-			*eqfunc = F_INT2VECTOREQ;
-			break;
 		case INT4OID:
 			*hashfunc = hashint4;
 
@@ -536,9 +531,7 @@ CreateCacheMemoryContext(void)
 	if (!CacheMemoryContext)
 		CacheMemoryContext = AllocSetContextCreate(TopMemoryContext,
 												   "CacheMemoryContext",
-												   ALLOCSET_DEFAULT_MINSIZE,
-												   ALLOCSET_DEFAULT_INITSIZE,
-												   ALLOCSET_DEFAULT_MAXSIZE);
+												   ALLOCSET_DEFAULT_SIZES);
 }
 
 

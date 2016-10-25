@@ -824,6 +824,7 @@ pqInternalNotice(const PGNoticeHooks *hooks, const char *fmt,...)
 	 */
 	pqSaveMessageField(res, PG_DIAG_MESSAGE_PRIMARY, msgBuf);
 	pqSaveMessageField(res, PG_DIAG_SEVERITY, libpq_gettext("NOTICE"));
+	pqSaveMessageField(res, PG_DIAG_SEVERITY_NONLOCALIZED, "NOTICE");
 	/* XXX should provide a SQLSTATE too? */
 
 	/*
@@ -1385,8 +1386,7 @@ PQsendQueryStart(PGconn *conn)
 	}
 
 	/* initialize async result-accumulation state */
-	conn->result = NULL;
-	conn->next_result = NULL;
+	pqClearAsyncResult(conn);
 
 	/* reset single-row processing mode */
 	conn->singleRowMode = false;

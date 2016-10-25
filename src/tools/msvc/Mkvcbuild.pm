@@ -50,7 +50,7 @@ my @contrib_excludes = (
 
 # Set of variables for frontend modules
 my $frontend_defines = { 'initdb' => 'FRONTEND' };
-my @frontend_uselibpq = ('pg_ctl', 'pg_upgrade', 'pgbench', 'psql');
+my @frontend_uselibpq = ('pg_ctl', 'pg_upgrade', 'pgbench', 'psql', 'initdb');
 my @frontend_uselibpgport = (
 	'pg_archivecleanup', 'pg_test_fsync',
 	'pg_test_timing',    'pg_upgrade',
@@ -110,12 +110,12 @@ sub mkvcbuild
 	}
 
 	our @pgcommonallfiles = qw(
-	  config_info.c controldata_utils.c exec.c keywords.c
-	  pg_lzcompress.c pgfnames.c psprintf.c relpath.c rmtree.c
+	  config_info.c controldata_utils.c exec.c ip.c keywords.c
+	  md5.c pg_lzcompress.c pgfnames.c psprintf.c relpath.c rmtree.c
 	  string.c username.c wait_error.c);
 
 	our @pgcommonfrontendfiles = (
-		@pgcommonallfiles, qw(fe_memutils.c
+		@pgcommonallfiles, qw(fe_memutils.c file_utils.c
 		  restricted_token.c));
 
 	our @pgcommonbkndfiles = @pgcommonallfiles;
@@ -381,18 +381,7 @@ sub mkvcbuild
 	$zic->AddDirResourceFile('src/timezone');
 	$zic->AddReference($libpgcommon, $libpgport);
 
-	if ($solution->{options}->{xml})
-	{
-		$contrib_extraincludes->{'pgxml'} = [
-			$solution->{options}->{xml} . '/include',
-			$solution->{options}->{xslt} . '/include',
-			$solution->{options}->{iconv} . '/include' ];
-
-		$contrib_extralibs->{'pgxml'} = [
-			$solution->{options}->{xml} . '/lib/libxml2.lib',
-			$solution->{options}->{xslt} . '/lib/libxslt.lib' ];
-	}
-	else
+	if (!$solution->{options}->{xml})
 	{
 		push @contrib_excludes, 'xml2';
 	}
@@ -402,14 +391,7 @@ sub mkvcbuild
 		push @contrib_excludes, 'sslinfo';
 	}
 
-	if ($solution->{options}->{uuid})
-	{
-		$contrib_extraincludes->{'uuid-ossp'} =
-		  [ $solution->{options}->{uuid} . '/include' ];
-		$contrib_extralibs->{'uuid-ossp'} =
-		  [ $solution->{options}->{uuid} . '/lib/uuid.lib' ];
-	}
-	else
+	if (!$solution->{options}->{uuid})
 	{
 		push @contrib_excludes, 'uuid-ossp';
 	}
@@ -493,14 +475,16 @@ sub mkvcbuild
 		$plpython->AddReference($postgres);
 
 		# Add transform modules dependent on plpython
-		AddTransformModule(
+		my $hstore_plpython = AddTransformModule(
 			'hstore_plpython' . $pymajorver, 'contrib/hstore_plpython',
 			'plpython' . $pymajorver,        'src/pl/plpython',
 			'hstore',                        'contrib/hstore');
-		AddTransformModule(
+		$hstore_plpython->AddDefine('PLPYTHON_LIBNAME="plpython' . $pymajorver . '"');
+		my $ltree_plpython = AddTransformModule(
 			'ltree_plpython' . $pymajorver, 'contrib/ltree_plpython',
 			'plpython' . $pymajorver,       'src/pl/plpython',
 			'ltree',                        'contrib/ltree');
+		$ltree_plpython->AddDefine('PLPYTHON_LIBNAME="plpython' . $pymajorver . '"');
 	}
 
 	if ($solution->{options}->{perl})
@@ -575,16 +559,17 @@ sub mkvcbuild
 			}
 		}
 		$plperl->AddReference($postgres);
+		my $perl_path = $solution->{options}->{perl} . '\lib\CORE\perl*.lib';
 		my @perl_libs =
 		  grep { /perl\d+.lib$/ }
-		  glob($solution->{options}->{perl} . '\lib\CORE\perl*.lib');
+		  glob($perl_path);
 		if (@perl_libs == 1)
 		{
 			$plperl->AddLibrary($perl_libs[0]);
 		}
 		else
 		{
-			die "could not identify perl library version";
+			die "could not identify perl library version matching pattern $perl_path\n";
 		}
 
 		# Add transform module dependent on plperl

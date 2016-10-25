@@ -232,9 +232,7 @@ ReorderBufferAllocate(void)
 	/* allocate memory in own context, to have better accountability */
 	new_ctx = AllocSetContextCreate(CurrentMemoryContext,
 									"ReorderBuffer",
-									ALLOCSET_DEFAULT_MINSIZE,
-									ALLOCSET_DEFAULT_INITSIZE,
-									ALLOCSET_DEFAULT_MAXSIZE);
+									ALLOCSET_DEFAULT_SIZES);
 
 	buffer =
 		(ReorderBuffer *) MemoryContextAlloc(new_ctx, sizeof(ReorderBuffer));
@@ -937,8 +935,12 @@ ReorderBufferIterTXNInit(ReorderBuffer *rb, ReorderBufferTXN *txn)
 		ReorderBufferChange *cur_change;
 
 		if (txn->nentries != txn->nentries_mem)
+		{
+			/* serialize remaining changes */
+			ReorderBufferSerializeTXN(rb, txn);
 			ReorderBufferRestoreChanges(rb, txn, &state->entries[off].fd,
 										&state->entries[off].segno);
+		}
 
 		cur_change = dlist_head_element(ReorderBufferChange, node,
 										&txn->changes);
@@ -962,10 +964,13 @@ ReorderBufferIterTXNInit(ReorderBuffer *rb, ReorderBufferTXN *txn)
 			ReorderBufferChange *cur_change;
 
 			if (cur_txn->nentries != cur_txn->nentries_mem)
+			{
+				/* serialize remaining changes */
+				ReorderBufferSerializeTXN(rb, cur_txn);
 				ReorderBufferRestoreChanges(rb, cur_txn,
 											&state->entries[off].fd,
 											&state->entries[off].segno);
-
+			}
 			cur_change = dlist_head_element(ReorderBufferChange, node,
 											&cur_txn->changes);
 
@@ -1160,17 +1165,15 @@ ReorderBufferCleanupTXN(ReorderBuffer *rb, ReorderBufferTXN *txn)
 		txn->base_snapshot_lsn = InvalidXLogRecPtr;
 	}
 
-	/* delete from list of known subxacts */
-	if (txn->is_known_as_subxact)
-	{
-		/* NB: nsubxacts count of parent will be too high now */
-		dlist_delete(&txn->node);
-	}
-	/* delete from LSN ordered list of toplevel TXNs */
-	else
-	{
-		dlist_delete(&txn->node);
-	}
+	/*
+	 * Remove TXN from its containing list.
+	 *
+	 * Note: if txn->is_known_as_subxact, we are deleting the TXN from its
+	 * parent's list of known subxacts; this leaves the parent's nsubxacts
+	 * count too high, but we don't care.  Otherwise, we are deleting the TXN
+	 * from the LSN-ordered list of toplevel TXNs.
+	 */
+	dlist_delete(&txn->node);
 
 	/* now remove reference from buffer */
 	hash_search(rb->by_txn,
@@ -1370,10 +1373,6 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 	txn->commit_time = commit_time;
 	txn->origin_id = origin_id;
 	txn->origin_lsn = origin_lsn;
-
-	/* serialize the last bunch of changes if we need start earlier anyway */
-	if (txn->nentries_mem != txn->nentries)
-		ReorderBufferSerializeTXN(rb, txn);
 
 	/*
 	 * If this transaction didn't have any real changes in our database, it's
@@ -2254,6 +2253,9 @@ ReorderBufferSerializeChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 
 				data = ((char *) rb->outbuf) + sizeof(ReorderBufferDiskChange);
 
+				/* might have been reallocated above */
+				ondisk = (ReorderBufferDiskChange *) rb->outbuf;
+
 				/* write the prefix including the size */
 				memcpy(data, &prefix_size, sizeof(Size));
 				data += sizeof(Size);
@@ -2317,7 +2319,10 @@ ReorderBufferSerializeChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 
 	if (write(fd, rb->outbuf, ondisk->size) != ondisk->size)
 	{
+		int			save_errno = errno;
+
 		CloseTransientFile(fd);
+		errno = save_errno;
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not write to data file for XID %u: %m",
@@ -3070,7 +3075,8 @@ ApplyLogicalMappingFile(HTAB *tuplecid_data, Oid relid, const char *fname)
 	fd = OpenTransientFile(path, O_RDONLY | PG_BINARY, 0);
 	if (fd < 0)
 		ereport(ERROR,
-				(errmsg("could not open file \"%s\": %m", path)));
+				(errcode_for_file_access(),
+				 errmsg("could not open file \"%s\": %m", path)));
 
 	while (true)
 	{

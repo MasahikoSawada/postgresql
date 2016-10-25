@@ -111,7 +111,6 @@ typedef z_stream *z_streamp;
 
 typedef struct _archiveHandle ArchiveHandle;
 typedef struct _tocEntry TocEntry;
-struct ParallelArgs;
 struct ParallelState;
 
 #define READ_ERROR_EXIT(fd) \
@@ -162,12 +161,8 @@ typedef void (*PrintTocDataPtr) (ArchiveHandle *AH, TocEntry *te);
 typedef void (*ClonePtr) (ArchiveHandle *AH);
 typedef void (*DeClonePtr) (ArchiveHandle *AH);
 
-typedef char *(*WorkerJobRestorePtr) (ArchiveHandle *AH, TocEntry *te);
-typedef char *(*WorkerJobDumpPtr) (ArchiveHandle *AH, TocEntry *te);
-typedef char *(*MasterStartParallelItemPtr) (ArchiveHandle *AH, TocEntry *te,
-														 T_Action act);
-typedef int (*MasterEndParallelItemPtr) (ArchiveHandle *AH, TocEntry *te,
-											  const char *str, T_Action act);
+typedef int (*WorkerJobDumpPtr) (ArchiveHandle *AH, TocEntry *te);
+typedef int (*WorkerJobRestorePtr) (ArchiveHandle *AH, TocEntry *te);
 
 typedef size_t (*CustomOutPtr) (ArchiveHandle *AH, const void *buf, size_t len);
 
@@ -266,9 +261,6 @@ struct _archiveHandle
 	EndBlobsPtr EndBlobsPtr;
 	StartBlobPtr StartBlobPtr;
 	EndBlobPtr EndBlobPtr;
-
-	MasterStartParallelItemPtr MasterStartParallelItemPtr;
-	MasterEndParallelItemPtr MasterEndParallelItemPtr;
 
 	SetupWorkerPtr SetupWorkerPtr;
 	WorkerJobDumpPtr WorkerJobDumpPtr;
@@ -375,7 +367,7 @@ struct _tocEntry
 	int			nLockDeps;		/* number of such dependencies */
 };
 
-extern int	parallel_restore(struct ParallelArgs *args);
+extern int	parallel_restore(ArchiveHandle *AH, TocEntry *te);
 extern void on_exit_close_archive(Archive *AHX);
 
 extern void warn_or_exit_horribly(ArchiveHandle *AH, const char *modulename, const char *fmt,...) pg_attribute_printf(3, 4);

@@ -1089,11 +1089,11 @@ exec_command(const char *cmd,
 	/* \password -- set user password */
 	else if (strcmp(cmd, "password") == 0)
 	{
-		char	   *pw1;
-		char	   *pw2;
+		char		pw1[100];
+		char		pw2[100];
 
-		pw1 = simple_prompt("Enter new password: ", 100, false);
-		pw2 = simple_prompt("Enter it again: ", 100, false);
+		simple_prompt("Enter new password: ", pw1, sizeof(pw1), false);
+		simple_prompt("Enter it again: ", pw2, sizeof(pw2), false);
 
 		if (strcmp(pw1, pw2) != 0)
 		{
@@ -1139,9 +1139,6 @@ exec_command(const char *cmd,
 			if (opt0)
 				free(opt0);
 		}
-
-		free(pw1);
-		free(pw2);
 	}
 
 	/* \prompt -- prompt and set variable */
@@ -1173,7 +1170,10 @@ exec_command(const char *cmd,
 				opt = arg1;
 
 			if (!pset.inputfile)
-				result = simple_prompt(prompt_text, 4096, true);
+			{
+				result = (char *) pg_malloc(4096);
+				simple_prompt(prompt_text, result, 4096, true);
+			}
 			else
 			{
 				if (prompt_text)
@@ -1182,15 +1182,23 @@ exec_command(const char *cmd,
 					fflush(stdout);
 				}
 				result = gets_fromFile(stdin);
+				if (!result)
+				{
+					psql_error("\\%s: could not read value for variable\n",
+							   cmd);
+					success = false;
+				}
 			}
 
-			if (!SetVariable(pset.vars, opt, result))
+			if (result &&
+				!SetVariable(pset.vars, opt, result))
 			{
 				psql_error("\\%s: error while setting variable\n", cmd);
 				success = false;
 			}
 
-			free(result);
+			if (result)
+				free(result);
 			if (prompt_text)
 				free(prompt_text);
 			free(opt);
@@ -1747,20 +1755,19 @@ exec_command(const char *cmd,
 static char *
 prompt_for_password(const char *username)
 {
-	char	   *result;
+	char		buf[100];
 
 	if (username == NULL)
-		result = simple_prompt("Password: ", 100, false);
+		simple_prompt("Password: ", buf, sizeof(buf), false);
 	else
 	{
 		char	   *prompt_text;
 
 		prompt_text = psprintf(_("Password for user %s: "), username);
-		result = simple_prompt(prompt_text, 100, false);
+		simple_prompt(prompt_text, buf, sizeof(buf), false);
 		free(prompt_text);
 	}
-
-	return result;
+	return pg_strdup(buf);
 }
 
 static bool

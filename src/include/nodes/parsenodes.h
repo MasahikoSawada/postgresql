@@ -116,6 +116,7 @@ typedef struct Query
 
 	bool		hasAggs;		/* has aggregates in tlist or havingQual */
 	bool		hasWindowFuncs; /* has window functions in tlist */
+	bool		hasTargetSRFs;	/* has set-returning functions in tlist */
 	bool		hasSubLinks;	/* has subquery SubLink */
 	bool		hasDistinctOn;	/* distinctClause is from DISTINCT ON */
 	bool		hasRecursive;	/* WITH RECURSIVE was specified */
@@ -666,6 +667,7 @@ typedef struct DefElem
 	char	   *defname;
 	Node	   *arg;			/* a (Value *) or a (TypeName *) */
 	DefElemAction defaction;	/* unspecified action, or SET/ADD/DROP */
+	int			location;		/* token location, or -1 if unknown */
 } DefElem;
 
 /*
@@ -2707,10 +2709,11 @@ typedef struct AlterEnumStmt
 {
 	NodeTag		type;
 	List	   *typeName;		/* qualified name (list of Value strings) */
+	char	   *oldVal;			/* old enum value's name, if renaming */
 	char	   *newVal;			/* new enum value's name */
 	char	   *newValNeighbor; /* neighboring enum value, if specified */
 	bool		newValIsAfter;	/* place new enum value after neighbor? */
-	bool		skipIfExists;	/* no error if label already exists */
+	bool		skipIfNewValExists;		/* no error if new already exists? */
 } AlterEnumStmt;
 
 /* ----------------------

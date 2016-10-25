@@ -29,7 +29,7 @@
 #include "commands/dbcommands.h"
 #include "commands/seclabel.h"
 #include "commands/user.h"
-#include "libpq/md5.h"
+#include "common/md5.h"
 #include "miscadmin.h"
 #include "storage/lmgr.h"
 #include "utils/acl.h"
@@ -44,7 +44,7 @@ Oid			binary_upgrade_next_pg_authid_oid = InvalidOid;
 
 
 /* GUC parameter */
-extern bool Password_encryption;
+int			Password_encryption = PASSWORD_TYPE_MD5;
 
 /* Hook to check passwords in CreateRole() and AlterRole() */
 check_password_hook_type check_password_hook = NULL;
@@ -69,7 +69,7 @@ have_createrole_privilege(void)
  * CREATE ROLE
  */
 Oid
-CreateRole(CreateRoleStmt *stmt)
+CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 {
 	Relation	pg_authid_rel;
 	TupleDesc	pg_authid_dsc;
@@ -80,7 +80,7 @@ CreateRole(CreateRoleStmt *stmt)
 	ListCell   *item;
 	ListCell   *option;
 	char	   *password = NULL;	/* user password */
-	bool		encrypt_password = Password_encryption; /* encrypt password? */
+	int			password_type = Password_encryption;
 	char		encrypted_password[MD5_PASSWD_LEN + 1];
 	bool		issuper = false;	/* Make the user a superuser? */
 	bool		inherit = true; /* Auto inherit privileges? */
@@ -136,12 +136,13 @@ CreateRole(CreateRoleStmt *stmt)
 			if (dpassword)
 				ereport(ERROR,
 						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, defel->location)));
 			dpassword = defel;
 			if (strcmp(defel->defname, "encryptedPassword") == 0)
-				encrypt_password = true;
+				password_type = PASSWORD_TYPE_MD5;
 			else if (strcmp(defel->defname, "unencryptedPassword") == 0)
-				encrypt_password = false;
+				password_type = PASSWORD_TYPE_PLAINTEXT;
 		}
 		else if (strcmp(defel->defname, "sysid") == 0)
 		{
@@ -153,7 +154,8 @@ CreateRole(CreateRoleStmt *stmt)
 			if (dissuper)
 				ereport(ERROR,
 						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, defel->location)));
 			dissuper = defel;
 		}
 		else if (strcmp(defel->defname, "inherit") == 0)
@@ -161,7 +163,8 @@ CreateRole(CreateRoleStmt *stmt)
 			if (dinherit)
 				ereport(ERROR,
 						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, defel->location)));
 			dinherit = defel;
 		}
 		else if (strcmp(defel->defname, "createrole") == 0)
@@ -169,7 +172,8 @@ CreateRole(CreateRoleStmt *stmt)
 			if (dcreaterole)
 				ereport(ERROR,
 						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, defel->location)));
 			dcreaterole = defel;
 		}
 		else if (strcmp(defel->defname, "createdb") == 0)
@@ -177,7 +181,8 @@ CreateRole(CreateRoleStmt *stmt)
 			if (dcreatedb)
 				ereport(ERROR,
 						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, defel->location)));
 			dcreatedb = defel;
 		}
 		else if (strcmp(defel->defname, "canlogin") == 0)
@@ -185,7 +190,8 @@ CreateRole(CreateRoleStmt *stmt)
 			if (dcanlogin)
 				ereport(ERROR,
 						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, defel->location)));
 			dcanlogin = defel;
 		}
 		else if (strcmp(defel->defname, "isreplication") == 0)
@@ -193,7 +199,8 @@ CreateRole(CreateRoleStmt *stmt)
 			if (disreplication)
 				ereport(ERROR,
 						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, defel->location)));
 			disreplication = defel;
 		}
 		else if (strcmp(defel->defname, "connectionlimit") == 0)
@@ -201,7 +208,8 @@ CreateRole(CreateRoleStmt *stmt)
 			if (dconnlimit)
 				ereport(ERROR,
 						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, defel->location)));
 			dconnlimit = defel;
 		}
 		else if (strcmp(defel->defname, "addroleto") == 0)
@@ -209,7 +217,8 @@ CreateRole(CreateRoleStmt *stmt)
 			if (daddroleto)
 				ereport(ERROR,
 						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, defel->location)));
 			daddroleto = defel;
 		}
 		else if (strcmp(defel->defname, "rolemembers") == 0)
@@ -217,7 +226,8 @@ CreateRole(CreateRoleStmt *stmt)
 			if (drolemembers)
 				ereport(ERROR,
 						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, defel->location)));
 			drolemembers = defel;
 		}
 		else if (strcmp(defel->defname, "adminmembers") == 0)
@@ -225,7 +235,8 @@ CreateRole(CreateRoleStmt *stmt)
 			if (dadminmembers)
 				ereport(ERROR,
 						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, defel->location)));
 			dadminmembers = defel;
 		}
 		else if (strcmp(defel->defname, "validUntil") == 0)
@@ -233,7 +244,8 @@ CreateRole(CreateRoleStmt *stmt)
 			if (dvalidUntil)
 				ereport(ERROR,
 						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, defel->location)));
 			dvalidUntil = defel;
 		}
 		else if (strcmp(defel->defname, "bypassrls") == 0)
@@ -241,7 +253,8 @@ CreateRole(CreateRoleStmt *stmt)
 			if (dbypassRLS)
 				ereport(ERROR,
 						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, defel->location)));
 			dbypassRLS = defel;
 		}
 		else
@@ -380,7 +393,7 @@ CreateRole(CreateRoleStmt *stmt)
 
 	if (password)
 	{
-		if (!encrypt_password || isMD5(password))
+		if (password_type == PASSWORD_TYPE_PLAINTEXT || isMD5(password))
 			new_record[Anum_pg_authid_rolpassword - 1] =
 				CStringGetTextDatum(password);
 		else
@@ -492,7 +505,7 @@ AlterRole(AlterRoleStmt *stmt)
 	ListCell   *option;
 	char	   *rolename = NULL;
 	char	   *password = NULL;	/* user password */
-	bool		encrypt_password = Password_encryption; /* encrypt password? */
+	int			password_type = Password_encryption;
 	char		encrypted_password[MD5_PASSWD_LEN + 1];
 	int			issuper = -1;	/* Make the user a superuser? */
 	int			inherit = -1;	/* Auto inherit privileges? */
@@ -537,9 +550,9 @@ AlterRole(AlterRoleStmt *stmt)
 						 errmsg("conflicting or redundant options")));
 			dpassword = defel;
 			if (strcmp(defel->defname, "encryptedPassword") == 0)
-				encrypt_password = true;
+				password_type = PASSWORD_TYPE_MD5;
 			else if (strcmp(defel->defname, "unencryptedPassword") == 0)
-				encrypt_password = false;
+				password_type = PASSWORD_TYPE_PLAINTEXT;
 		}
 		else if (strcmp(defel->defname, "superuser") == 0)
 		{
@@ -791,7 +804,7 @@ AlterRole(AlterRoleStmt *stmt)
 	/* password */
 	if (password)
 	{
-		if (!encrypt_password || isMD5(password))
+		if (password_type == PASSWORD_TYPE_PLAINTEXT || isMD5(password))
 			new_record[Anum_pg_authid_rolpassword - 1] =
 				CStringGetTextDatum(password);
 		else

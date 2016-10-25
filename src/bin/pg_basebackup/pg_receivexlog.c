@@ -336,11 +336,20 @@ StreamLog(void)
 	stream.stream_stop = stop_streaming;
 	stream.standby_message_timeout = standby_message_timeout;
 	stream.synchronous = synchronous;
+	stream.do_sync = true;
 	stream.mark_done = false;
-	stream.basedir = basedir;
+	stream.walmethod = CreateWalDirectoryMethod(basedir, stream.do_sync);
 	stream.partial_suffix = ".partial";
 
 	ReceiveXlogStream(conn, &stream);
+
+	if (!stream.walmethod->finish())
+	{
+		fprintf(stderr,
+				_("%s: could not finish writing WAL files: %s\n"),
+				progname, strerror(errno));
+		return;
+	}
 
 	PQfinish(conn);
 	conn = NULL;

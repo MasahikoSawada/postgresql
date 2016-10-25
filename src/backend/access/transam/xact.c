@@ -1023,9 +1023,7 @@ AtStart_Memory(void)
 	TopTransactionContext =
 		AllocSetContextCreate(TopMemoryContext,
 							  "TopTransactionContext",
-							  ALLOCSET_DEFAULT_MINSIZE,
-							  ALLOCSET_DEFAULT_INITSIZE,
-							  ALLOCSET_DEFAULT_MAXSIZE);
+							  ALLOCSET_DEFAULT_SIZES);
 
 	/*
 	 * In a top-level transaction, CurTransactionContext is the same as
@@ -1083,9 +1081,7 @@ AtSubStart_Memory(void)
 	 */
 	CurTransactionContext = AllocSetContextCreate(CurTransactionContext,
 												  "CurTransactionContext",
-												  ALLOCSET_DEFAULT_MINSIZE,
-												  ALLOCSET_DEFAULT_INITSIZE,
-												  ALLOCSET_DEFAULT_MAXSIZE);
+												  ALLOCSET_DEFAULT_SIZES);
 	s->curTransactionContext = CurTransactionContext;
 
 	/* Make the CurTransactionContext active. */

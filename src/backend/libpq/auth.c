@@ -20,13 +20,16 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#ifdef HAVE_SYS_SELECT_H
+#include <sys/select.h>
+#endif
 
+#include "common/ip.h"
+#include "common/md5.h"
 #include "libpq/auth.h"
 #include "libpq/crypt.h"
-#include "libpq/ip.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
-#include "libpq/md5.h"
 #include "miscadmin.h"
 #include "replication/walsender.h"
 #include "storage/ipc.h"

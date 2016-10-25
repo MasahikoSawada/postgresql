@@ -508,7 +508,7 @@ buildSubPlanHash(SubPlanState *node, ExprContext *econtext)
 										  node->tab_eq_funcs,
 										  node->tab_hash_funcs,
 										  nbuckets,
-										  sizeof(TupleHashEntryData),
+										  0,
 										  node->hashtablecxt,
 										  node->hashtempcxt);
 
@@ -527,7 +527,7 @@ buildSubPlanHash(SubPlanState *node, ExprContext *econtext)
 											  node->tab_eq_funcs,
 											  node->tab_hash_funcs,
 											  nbuckets,
-											  sizeof(TupleHashEntryData),
+											  0,
 											  node->hashtablecxt,
 											  node->hashtempcxt);
 	}
@@ -626,7 +626,7 @@ findPartialMatch(TupleHashTable hashtable, TupleTableSlot *slot,
 	TupleHashEntry entry;
 
 	InitTupleHashIterator(hashtable, &hashiter);
-	while ((entry = ScanTupleHashTable(&hashiter)) != NULL)
+	while ((entry = ScanTupleHashTable(hashtable, &hashiter)) != NULL)
 	{
 		ExecStoreMinimalTuple(entry->firstTuple, hashtable->tableslot, false);
 		if (!execTuplesUnequal(slot, hashtable->tableslot,
@@ -776,16 +776,12 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 		sstate->hashtablecxt =
 			AllocSetContextCreate(CurrentMemoryContext,
 								  "Subplan HashTable Context",
-								  ALLOCSET_DEFAULT_MINSIZE,
-								  ALLOCSET_DEFAULT_INITSIZE,
-								  ALLOCSET_DEFAULT_MAXSIZE);
+								  ALLOCSET_DEFAULT_SIZES);
 		/* and a small one for the hash tables to use as temp storage */
 		sstate->hashtempcxt =
 			AllocSetContextCreate(CurrentMemoryContext,
 								  "Subplan HashTable Temp Context",
-								  ALLOCSET_SMALL_MINSIZE,
-								  ALLOCSET_SMALL_INITSIZE,
-								  ALLOCSET_SMALL_MAXSIZE);
+								  ALLOCSET_SMALL_SIZES);
 		/* and a short-lived exprcontext for function evaluation */
 		sstate->innerecontext = CreateExprContext(estate);
 		/* Silly little array of column numbers 1..n */

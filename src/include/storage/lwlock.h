@@ -175,6 +175,7 @@ extern void LWLockRelease(LWLock *lock);
 extern void LWLockReleaseClearVar(LWLock *lock, uint64 *valptr, uint64 val);
 extern void LWLockReleaseAll(void);
 extern bool LWLockHeldByMe(LWLock *lock);
+extern bool LWLockHeldByMeInMode(LWLock *lock, LWLockMode mode);
 
 extern bool LWLockWaitForVar(LWLock *lock, uint64 *valptr, uint64 oldval, uint64 *newval);
 extern void LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 value);
@@ -183,7 +184,7 @@ extern Size LWLockShmemSize(void);
 extern void CreateLWLocks(void);
 extern void InitLWLockAccess(void);
 
-extern const char *GetLWLockIdentifier(uint8 classId, uint16 eventId);
+extern const char *GetLWLockIdentifier(uint32 classId, uint16 eventId);
 
 /*
  * Extensions (or core code) can obtain an LWLocks by calling

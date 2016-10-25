@@ -77,7 +77,7 @@ typedef struct
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
-#if (SSLEAY_VERSION_NUMBER >= 0x00907000L) && !defined(OPENSSL_NO_ENGINE)
+#ifndef OPENSSL_NO_ENGINE
 #define USE_SSL_ENGINE
 #endif
 #endif   /* USE_OPENSSL */
@@ -364,7 +364,6 @@ struct pg_conn
 	PGnotify   *notifyTail;		/* newest unreported Notify msg */
 
 	/* Connection data */
-	/* See PQconnectPoll() for how we use 'int' and not 'pgsocket'. */
 	pgsocket	sock;			/* FD for socket, PGINVALID_SOCKET if
 								 * unconnected */
 	SockAddr	laddr;			/* Local address */
@@ -452,7 +451,7 @@ struct pg_conn
 #ifndef ENABLE_GSS
 	gss_buffer_desc ginbuf;		/* GSS input token */
 #else
-	char	   *gsslib;			/* What GSS librart to use ("gssapi" or
+	char	   *gsslib;			/* What GSS library to use ("gssapi" or
 								 * "sspi") */
 #endif
 	CredHandle *sspicred;		/* SSPI credentials handle */

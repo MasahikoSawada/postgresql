@@ -921,6 +921,7 @@ _equalQuery(const Query *a, const Query *b)
 	COMPARE_SCALAR_FIELD(resultRelation);
 	COMPARE_SCALAR_FIELD(hasAggs);
 	COMPARE_SCALAR_FIELD(hasWindowFuncs);
+	COMPARE_SCALAR_FIELD(hasTargetSRFs);
 	COMPARE_SCALAR_FIELD(hasSubLinks);
 	COMPARE_SCALAR_FIELD(hasDistinctOn);
 	COMPARE_SCALAR_FIELD(hasRecursive);
@@ -1465,10 +1466,11 @@ static bool
 _equalAlterEnumStmt(const AlterEnumStmt *a, const AlterEnumStmt *b)
 {
 	COMPARE_NODE_FIELD(typeName);
+	COMPARE_STRING_FIELD(oldVal);
 	COMPARE_STRING_FIELD(newVal);
 	COMPARE_STRING_FIELD(newValNeighbor);
 	COMPARE_SCALAR_FIELD(newValIsAfter);
-	COMPARE_SCALAR_FIELD(skipIfExists);
+	COMPARE_SCALAR_FIELD(skipIfNewValExists);
 
 	return true;
 }
@@ -2424,6 +2426,7 @@ _equalDefElem(const DefElem *a, const DefElem *b)
 	COMPARE_STRING_FIELD(defname);
 	COMPARE_NODE_FIELD(arg);
 	COMPARE_SCALAR_FIELD(defaction);
+	COMPARE_LOCATION_FIELD(location);
 
 	return true;
 }
@@ -2434,6 +2437,7 @@ _equalLockingClause(const LockingClause *a, const LockingClause *b)
 	COMPARE_NODE_FIELD(lockedRels);
 	COMPARE_SCALAR_FIELD(strength);
 	COMPARE_SCALAR_FIELD(waitPolicy);
+	COMPARE_LOCATION_FIELD(location);
 
 	return true;
 }

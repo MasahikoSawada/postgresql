@@ -1092,9 +1092,7 @@ get_stmt_mcontext(PLpgSQL_execstate *estate)
 		estate->stmt_mcontext =
 			AllocSetContextCreate(estate->stmt_mcontext_parent,
 								  "PLpgSQL per-statement data",
-								  ALLOCSET_DEFAULT_MINSIZE,
-								  ALLOCSET_DEFAULT_INITSIZE,
-								  ALLOCSET_DEFAULT_MAXSIZE);
+								  ALLOCSET_DEFAULT_SIZES);
 	}
 	return estate->stmt_mcontext;
 }
@@ -1559,7 +1557,7 @@ exec_stmt(PLpgSQL_execstate *estate, PLpgSQL_stmt *stmt)
 
 	CHECK_FOR_INTERRUPTS();
 
-	switch ((enum PLpgSQL_stmt_types) stmt->cmd_type)
+	switch (stmt->cmd_type)
 	{
 		case PLPGSQL_STMT_BLOCK:
 			rc = exec_stmt_block(estate, (PLpgSQL_stmt_block *) stmt);
@@ -3479,9 +3477,7 @@ plpgsql_estate_setup(PLpgSQL_execstate *estate,
 		{
 			shared_cast_context = AllocSetContextCreate(TopMemoryContext,
 														"PLpgSQL cast info",
-													ALLOCSET_DEFAULT_MINSIZE,
-												   ALLOCSET_DEFAULT_INITSIZE,
-												   ALLOCSET_DEFAULT_MAXSIZE);
+													 ALLOCSET_DEFAULT_SIZES);
 			memset(&ctl, 0, sizeof(ctl));
 			ctl.keysize = sizeof(plpgsql_CastHashKey);
 			ctl.entrysize = sizeof(plpgsql_CastHashEntry);
@@ -6803,6 +6799,7 @@ exec_simple_check_plan(PLpgSQL_execstate *estate, PLpgSQL_expr *expr)
 	 */
 	if (query->hasAggs ||
 		query->hasWindowFuncs ||
+		query->hasTargetSRFs ||
 		query->hasSubLinks ||
 		query->hasForUpdate ||
 		query->cteList ||

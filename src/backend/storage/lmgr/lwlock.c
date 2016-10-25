@@ -285,9 +285,7 @@ init_lwlock_stats(void)
 	 */
 	lwlock_stats_cxt = AllocSetContextCreate(TopMemoryContext,
 											 "LWLock stats",
-											 ALLOCSET_DEFAULT_MINSIZE,
-											 ALLOCSET_DEFAULT_INITSIZE,
-											 ALLOCSET_DEFAULT_MAXSIZE);
+											 ALLOCSET_DEFAULT_SIZES);
 	MemoryContextAllowInCriticalSection(lwlock_stats_cxt, true);
 
 	MemSet(&ctl, 0, sizeof(ctl));
@@ -734,9 +732,9 @@ LWLockReportWaitStart(LWLock *lock)
 	int			lockId = T_ID(lock);
 
 	if (lock->tranche == 0)
-		pgstat_report_wait_start(WAIT_LWLOCK_NAMED, (uint16) lockId);
+		pgstat_report_wait_start(PG_WAIT_LWLOCK_NAMED | (uint16) lockId);
 	else
-		pgstat_report_wait_start(WAIT_LWLOCK_TRANCHE, lock->tranche);
+		pgstat_report_wait_start(PG_WAIT_LWLOCK_TRANCHE | lock->tranche);
 }
 
 /*
@@ -752,12 +750,12 @@ LWLockReportWaitEnd(void)
  * Return an identifier for an LWLock based on the wait class and event.
  */
 const char *
-GetLWLockIdentifier(uint8 classId, uint16 eventId)
+GetLWLockIdentifier(uint32 classId, uint16 eventId)
 {
-	if (classId == WAIT_LWLOCK_NAMED)
+	if (classId == PG_WAIT_LWLOCK_NAMED)
 		return MainLWLockNames[eventId];
 
-	Assert(classId == WAIT_LWLOCK_TRANCHE);
+	Assert(classId == PG_WAIT_LWLOCK_TRANCHE);
 
 	/*
 	 * It is quite possible that user has registered tranche in one of the
@@ -1882,10 +1880,9 @@ LWLockReleaseAll(void)
 
 
 /*
- * LWLockHeldByMe - test whether my process currently holds a lock
+ * LWLockHeldByMe - test whether my process holds a lock in any mode
  *
- * This is meant as debug support only.  We currently do not distinguish
- * whether the lock is held shared or exclusive.
+ * This is meant as debug support only.
  */
 bool
 LWLockHeldByMe(LWLock *l)
@@ -1895,6 +1892,24 @@ LWLockHeldByMe(LWLock *l)
 	for (i = 0; i < num_held_lwlocks; i++)
 	{
 		if (held_lwlocks[i].lock == l)
+			return true;
+	}
+	return false;
+}
+
+/*
+ * LWLockHeldByMeInMode - test whether my process holds a lock in given mode
+ *
+ * This is meant as debug support only.
+ */
+bool
+LWLockHeldByMeInMode(LWLock *l, LWLockMode mode)
+{
+	int			i;
+
+	for (i = 0; i < num_held_lwlocks; i++)
+	{
+		if (held_lwlocks[i].lock == l && held_lwlocks[i].mode == mode)
 			return true;
 	}
 	return false;

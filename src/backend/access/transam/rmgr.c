@@ -13,7 +13,7 @@
 #include "access/gin.h"
 #include "access/gist_private.h"
 #include "access/generic_xlog.h"
-#include "access/hash.h"
+#include "access/hash_xlog.h"
 #include "access/heapam_xlog.h"
 #include "access/brin_xlog.h"
 #include "access/multixact.h"

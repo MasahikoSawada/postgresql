@@ -19,6 +19,7 @@
 #include "commands/defrem.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
+#include "pgstat.h"
 #include "storage/latch.h"
 #include "utils/hsearch.h"
 #include "utils/memutils.h"
@@ -533,7 +534,7 @@ pgfdw_get_result(PGconn *conn, const char *query)
 			wc = WaitLatchOrSocket(MyLatch,
 								   WL_LATCH_SET | WL_SOCKET_READABLE,
 								   PQsocket(conn),
-								   -1L);
+								   -1L, PG_WAIT_EXTENSION);
 			ResetLatch(MyLatch);
 
 			CHECK_FOR_INTERRUPTS();

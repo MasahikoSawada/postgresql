@@ -830,7 +830,7 @@ testdb=&gt;
         <para>
         Establishes a new connection to a <productname>PostgreSQL</>
         server.  The connection parameters to use can be specified either
-        using a positional syntax, or using <literal>conninfo</> connection
+        using a positional syntax, or using <replaceable>conninfo</> connection
         strings as detailed in <xref linkend="libpq-connstring">.
         </para>
 
@@ -838,7 +838,7 @@ testdb=&gt;
         Where the command omits database name, user, host, or port, the new
         connection can reuse values from the previous connection.  By default,
         values from the previous connection are reused except when processing
-        a <literal>conninfo</> string.  Passing a first argument
+        a <replaceable>conninfo</> string.  Passing a first argument
         of <literal>-reuse-previous=on</>
         or <literal>-reuse-previous=off</literal> overrides that default.
         When the command neither specifies nor reuses a particular parameter,
@@ -2789,8 +2789,11 @@ testdb=&gt; <userinput>\setenv LESS -imx4F</userinput>
        <term><literal>\timing [ <replaceable class="parameter">on</replaceable> | <replaceable class="parameter">off</replaceable> ]</literal></term>
         <listitem>
         <para>
-         Without parameter, toggles a display of how long each SQL statement
-         takes, in milliseconds.  With parameter, sets same.
+         With a parameter, turns displaying of how long each SQL statement
+         takes on or off.  Without a parameter, toggles the display between
+         on and off.  The display is in milliseconds; intervals longer than
+         1 second are also shown in minutes:seconds format, with hours and
+         days fields added if needed.
         </para>
        </listitem>
       </varlistentry>
