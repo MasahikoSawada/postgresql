@@ -503,10 +503,6 @@ register_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
 	FDWXact				fdw_xact;
 	FDWXactOnDiskData	*fdw_xact_file_data;
 	int					data_len;
-	char				path[MAXPGPATH];
-	int					fd;
-	pg_crc32c			fdw_xact_crc;
-	pg_crc32c			bogus_crc;
 
 	/* Enter the foreign transaction in the shared memory structure */
 	fdw_xact = insert_fdw_xact(dbid, xid, serverid, userid,
@@ -557,11 +553,6 @@ register_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
 	XLogRegisterData((char *)fdw_xact_file_data, data_len);
 	fdw_xact->fdw_xact_lsn = XLogInsert(RM_FDW_XACT_ID, XLOG_FDW_XACT_INSERT);
 	XLogFlush(fdw_xact->fdw_xact_lsn);
-
-	/* If we crash now WAL replay will fix things */
-
-	/* Store record's start location to read that later on Commit */
-	fdw_xact->fdw_xact_start_lsn = ProcLastRecPtr;
 
 	/* File is written completely, checkpoint can proceed with syncing */
 	fdw_xact->fdw_xact_valid = true;
@@ -642,7 +633,7 @@ insert_fdw_xact(Oid dboid, TransactionId xid, Oid serverid, Oid userid,
 	fdw_xact->userid = userid;
 	fdw_xact->umid = user_mapping->umid;
 	fdw_xact->fdw_xact_status = fdw_xact_status;
-	fdw_xact->fdw_xact_lsn = InvalidXLoGRecPtr;
+	fdw_xact->fdw_xact_lsn = InvalidXLogRecPtr;
 	fdw_xact->fdw_xact_valid = false;
 	fdw_xact->ondisk = false;
 	fdw_xact->fdw_xact_id_len = fdw_xact_id_len;
