@@ -1700,5 +1700,87 @@ GetForeignServerByName(const char *name, bool missing_ok);
     </para>
 
   </sect1>
+   <sect1 id="fdw-transactions">
+    <title>Transaction manager for Foreign Data Wrappers</title>
+
+    <para>
+    <productname>PostgreSQL</> transaction manager allows FDWs to read and write
+    data on foreign server within a transaction while maintaining atomicity
+    (and hence consistency) of the foreign data. Every Foreign Data Wrapper is
+    required to register the foreign server along with the <productname>PostgreSQL</>
+    user whose user mapping is used to connect to the foreign server while starting a
+    transaction on the foreign server as part of the transaction on
+    <productname>PostgreSQL</> using <function>RegisterXactForeignServer</>.
+<programlisting>
+void
+RegisterXactForeignServer(Oid serverid,
+                            Oid userid,
+                            bool two_phase_compliant)
+</programlisting>
+    <varname>two_phase_compliant</> should be true if the foreign server supports
+    two-phase commit protocol, false otherwise.
+    </para>
+
+    <para>
+    An example of such transaction is as follows
+<programlisting>
+BEGIN;
+UPDATE ft1 SET col = 'a';
+UPDATE ft2 SET col = 'b';
+COMMIT;
+</programlisting>
+    ft1 and ft2 are foreign tables on different foreign servers may be using different
+    Foreign Data Wrappers.
+    </para>
+
+    <para>
+    When <varname>atomic_foreign_transaction</> is enabled
+    <productname>PostgreSQL</> employs Two-phase commit protocol to achieve
+    atomic distributed transaction. All the foreign servers registered should
+    support two-phase commit protocol. In Two-phase commit protocol the commit
+    is processed in two phases: prepare phase and commit phase. In prepare phase,
+    <productname>PostgreSQL</> prepares the transactions on all the foreign
+    servers registered using <function>RegisterXactForeignServer</>.
+    If any of the foreign server fails to prepare transaction, prepare phase fails.
+    In commit phase, all the prepared transactions are committed if prepare
+    phase has succeeded or rolled back if prepare phase fails to prepare
+    transactions on all the foreign servers.
+    </para>
+
+    <para>
+    During prepare phase the distributed transaction manager calls
+    <function>GetPrepareInfo</> to get the prepared transaction identifier for
+    each foreign server involved. It stores this identifier along with the
+    serverid and userid for later use. It then calls
+    <function>HandleForeignTransaction</> with the same identifier with action
+    FDW_XACT_PREPARE.
+    </para>
+    
+    <para>
+    During commit phase the distributed transaction manager calls
+    <function>HandleForeignTransaction</> with the same identifier with action
+    FDW_XACT_COMMIT_PREPARED to commit the prepared transaction or
+    FDW_XACT_ABORT_PREPARED to rollback the prepared transaction. In case the
+    distributed transaction manager fails to commit or rollback a prepared
+    transaction because of connection failure, the operation can be tried again
+    through built-in <function>pg_fdw_xact</>. One may set up a background worker
+    process to retry the operation by installing extension pg_fdw_xact_resolver
+    and including $libdir/pg_fdw_xact_resolver.so in
+    <varname>shared_preload_libraries</>.
+    </para>
+
+    <para>
+    When <varname>atomic_foreign_transaction</> is disabled, atomicity can not be
+    guaranteed across foreign servers. If transaction on <productname>PostgreSQL</>
+    is committed, Distributed transaction manager calls
+    <function>HandleForeignTransaction</> to commit the transaction on all the
+    foreign servers registered using <function>RegisterXactForeignServer</>,
+    independent of the outcome of the same operation on other foreign servers.
+    Thus transactions on some foreign servers may be committed, while the same
+    on other foreign servers would be rolled back. If the transaction on
+    <productname>PostgreSQL</> aborts transactions on all the foreign servers
+    are aborted too.
+    </para>
+    </sect1>
 
  </chapter>
