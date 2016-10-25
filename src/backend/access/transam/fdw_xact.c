@@ -89,7 +89,7 @@ typedef struct
 													 * necessary.
 													 */
 	GetPrepareId_function		prepare_id_provider;
-	EndForeignTransaction_function	end_foreing_xact;
+	EndForeignTransaction_function	end_foreign_xact;
 	PrepareForeignTransaction_function	prepare_foreign_xact;
 	ResolvePreparedForeignTransaction_function	resolve_prepared_foreign_xact;
 } FDWConnection;
@@ -171,7 +171,7 @@ RegisterXactForeignServer(Oid serverid, Oid userid, bool two_phase_commit)
 	fdw_conn->prepare_id_provider = fdw_routine->GetPrepareId;
 	fdw_conn->prepare_foreign_xact = fdw_routine->PrepareForeignTransaction;
 	fdw_conn->resolve_prepared_foreign_xact = fdw_routine->ResolvePreparedForeignTransaction;
-	fdw_conn->end_foreing_xact = fdw_routine->EndForeignTransaction;
+	fdw_conn->end_foreign_xact = fdw_routine->EndForeignTransaction;
 	fdw_conn->fdw_xact = NULL;
 	fdw_conn->two_phase_commit = two_phase_commit;
 	MyFDWConnections = lappend(MyFDWConnections, fdw_conn);
@@ -207,9 +207,11 @@ typedef struct FDWXactData
 	FDWXactStatus	fdw_xact_status;	/* The state of the foreign transaction.
 										   This doubles as the action to be
 										   taken on this entry.*/
-	XLogRecPtr		fdw_xact_lsn;		/* LSN of the log record for inserting this entry */
+	XLogRecPtr		fdw_xact_lsn;   /* XLOG offset of inserting this entry*/
+
 	bool			fdw_xact_valid;		/* Has the entry been complete and written to file? */
 	BackendId		locking_backend;	/* Backend working on this entry */
+	bool            ondisk;             /* TRUE if prepare state file is on disk */
 	int				fdw_xact_id_len;	/* Length of prepared transaction identifier */
 	char			fdw_xact_id[MAX_FDW_XACT_ID_LEN];	/* prepared transaction identifier */
 } FDWXactData;
@@ -374,7 +376,7 @@ PreCommit_FDWXacts(void)
 			 * foreign server is out of transaction. Even if the handler
 			 * function returns failure statue, there's hardly anything to do.
 			 */
-			if (!fdw_conn->end_foreing_xact(fdw_conn->serverid, fdw_conn->userid,
+			if (!fdw_conn->end_foreign_xact(fdw_conn->serverid, fdw_conn->userid,
 											fdw_conn->umid, true))
 				elog(WARNING, "could not commit transaction on server %s",
 								fdw_conn->servername);
@@ -527,53 +529,6 @@ register_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
 	memcpy(fdw_xact_file_data->fdw_xact_id, fdw_xact->fdw_xact_id,
 					fdw_xact->fdw_xact_id_len);
 
-	FDWXactFilePath(path, fdw_xact->local_xid, fdw_xact->serverid,
-						fdw_xact->userid);
-
-	/* Create the file, but error out if it already exists. */
-	fd = OpenTransientFile(path, O_EXCL | O_CREAT | PG_BINARY | O_WRONLY,
-							S_IRUSR | S_IWUSR);
-	if (fd < 0)
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not create foreign transaction state file \"%s\": %m",
-						path)));
-
-	/* Write data to file, and calculate CRC as we pass over it */
-	INIT_CRC32C(fdw_xact_crc);
-	COMP_CRC32C(fdw_xact_crc, fdw_xact_file_data, data_len);
-	if (write(fd, fdw_xact_file_data, data_len) != data_len)
-	{
-		CloseTransientFile(fd);
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not write FDW transaction state file: %s", path)));
-	}
-
-	FIN_CRC32C(fdw_xact_crc);
-	/*
-	 * Write a deliberately bogus CRC to the state file; this is just paranoia
-	 * to catch the case where four more bytes will run us out of disk space.
-	 */
-	bogus_crc = ~fdw_xact_crc;
-
-	if ((write(fd, &bogus_crc, sizeof(pg_crc32c))) != sizeof(pg_crc32c))
-	{
-		CloseTransientFile(fd);
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not write two-phase state file: %m")));
-	}
-
-	/* Back up to prepare for rewriting the CRC */
-	if (lseek(fd, -((off_t) sizeof(pg_crc32c)), SEEK_CUR) < 0)
-	{
-		CloseTransientFile(fd);
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not seek in two-phase state file: %m")));
-	}
-
 	/*
 	 * The state file isn't valid yet, because we haven't written the correct
 	 * CRC yet.	 Before we do that, insert entry in WAL and flush it to disk.
@@ -604,19 +559,9 @@ register_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
 	XLogFlush(fdw_xact->fdw_xact_lsn);
 
 	/* If we crash now WAL replay will fix things */
-	/* write correct CRC and close file */
-	if ((write(fd, &fdw_xact_crc, sizeof(pg_crc32c))) != sizeof(pg_crc32c))
-	{
-		CloseTransientFile(fd);
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not write foreign transaction file: %m")));
-	}
 
-	if (CloseTransientFile(fd) != 0)
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not close foreign transaction file: %m")));
+	/* Store record's start location to read that later on Commit */
+	fdw_xact->fdw_xact_start_lsn = ProcLastRecPtr;
 
 	/* File is written completely, checkpoint can proceed with syncing */
 	fdw_xact->fdw_xact_valid = true;
@@ -697,8 +642,9 @@ insert_fdw_xact(Oid dboid, TransactionId xid, Oid serverid, Oid userid,
 	fdw_xact->userid = userid;
 	fdw_xact->umid = user_mapping->umid;
 	fdw_xact->fdw_xact_status = fdw_xact_status;
-	fdw_xact->fdw_xact_lsn = 0;
+	fdw_xact->fdw_xact_lsn = InvalidXLoGRecPtr;
 	fdw_xact->fdw_xact_valid = false;
+	fdw_xact->ondisk = false;
 	fdw_xact->fdw_xact_id_len = fdw_xact_id_len;
 	memcpy(fdw_xact->fdw_xact_id, fdw_xact_id, fdw_xact_id_len);
 
@@ -756,8 +702,9 @@ remove_fdw_xact(FDWXact fdw_xact)
 			XLogInsert(RM_FDW_XACT_ID, XLOG_FDW_XACT_REMOVE);
 
 			/* Remove the file from the disk as well. */
-			RemoveFDWXactFile(fdw_remove_xlog.xid, fdw_remove_xlog.serverid,
-								fdw_remove_xlog.userid, true);
+			if (fdw_xact->ondisk)
+				RemoveFDWXactFile(fdw_remove_xlog.xid, fdw_remove_xlog.serverid,
+								  fdw_remove_xlog.userid, true);
 			return;
 		}
 	}
@@ -864,11 +811,12 @@ AtEOXact_FDWXacts(bool is_commit)
 			 * foreign server is out of transaction. Even if the handler
 			 * function returns failure statue, there's hardly anything to do.
 			 */
-			if (!fdw_conn->end_foreing_xact(fdw_conn->serverid, fdw_conn->userid,
+			if (!fdw_conn->end_foreign_xact(fdw_conn->serverid, fdw_conn->userid,
 											fdw_conn->umid, is_commit))
 				elog(WARNING, "could not %s transaction on server %s",
 								is_commit ? "commit" : "abort",
 								fdw_conn->servername);
+
 		}
 	}
 
@@ -1247,9 +1195,8 @@ fdw_xact_redo(XLogReaderState *record)
 	{
 		FdwRemoveXlogRec	*fdw_remove_xlog = (FdwRemoveXlogRec *)rec;
 
-		/* Remove the file from the disk. */
 		RemoveFDWXactFile(fdw_remove_xlog->xid, fdw_remove_xlog->serverid, fdw_remove_xlog->userid,
-								true);
+						  true);
 	}
 	else
 		elog(ERROR, "invalid log type %d in foreign transction log record", info);
@@ -1281,6 +1228,7 @@ CheckPointFDWXact(XLogRecPtr redo_horizon)
 	Oid				*dbids;
 	int				nxacts;
 	int				cnt;
+
 	/* Quick get-away, before taking lock */
 	if (max_fdw_xacts <= 0)
 		return;
@@ -1323,6 +1271,7 @@ CheckPointFDWXact(XLogRecPtr redo_horizon)
 
 	for (cnt = 0; cnt < nxacts; cnt++)
 	{
+		FDWXact	fdw_xact = FDWXactGlobal->fdw_xacts[cnt];
 		char	path[MAXPGPATH];
 		int		fd;
 
@@ -1362,6 +1311,8 @@ CheckPointFDWXact(XLogRecPtr redo_horizon)
 					(errcode_for_file_access(),
 					 errmsg("could not close foreign transaction state file \"%s\": %m",
 							path)));
+
+		fdw_xact->ondisk = true;
 	}
 
 	pfree(xids);
@@ -2000,10 +1951,13 @@ ReadFDWXacts(void)
 									   fdw_xact_file_data->fdw_xact_id_len,
 									   fdw_xact_file_data->fdw_xact_id,
 									   FDW_XACT_PREPARING);
-			/* Add some valid LSN */
+
+			/* Add some valid LSNs */
 			fdw_xact->fdw_xact_lsn = 0;
 			/* Mark the entry as ready */
 			fdw_xact->fdw_xact_valid = true;
+			/* Alreadby synced to disk */
+			fdw_xact->ondisk = true;
 			/* Unlock the entry as we don't need it any further */
 			unlock_fdw_xact(fdw_xact);
 			pfree(fdw_xact_file_data);
