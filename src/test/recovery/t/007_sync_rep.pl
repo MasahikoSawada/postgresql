@@ -192,5 +192,5 @@ $node_master, qq(standby1|1|quorum
 standby2|1|quorum
 standby3|1|quorum
 standby4|1|quorum),
-'all standbys are considered as condidates for quorum commit',
+'all standbys are considered as candidates for quorum commit',
 'Any 2(*)');

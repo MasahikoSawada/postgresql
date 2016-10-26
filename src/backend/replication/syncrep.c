@@ -665,7 +665,7 @@ SyncRepGetSyncStandbysQuorum(bool *am_sync)
  * Return the list of sync standbys using priority method, or
  * NIL if no sync standby is connected. In priority method,
  * if there are multiple standbys with the same priority,
- * the first one found is selected perferentially.
+ * the first one found is selected preferentially.
  *
  * On return, *am_sync is set to true if this walsender is connecting to
  * sync standby. Otherwise it's set to false.
@@ -867,7 +867,7 @@ SyncRepGetStandbyPriority(void)
 		standby_name += strlen(standby_name) + 1;
 	}
 
-	/* In quroum method, all sync standby priorities are always 1 */
+	/* In quorum method, all sync standby priorities are always 1 */
 	if (found && SyncRepConfig->sync_method == SYNC_REP_QUORUM)
 		priority = 1;
 
