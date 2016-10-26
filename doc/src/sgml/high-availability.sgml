@@ -1169,7 +1169,7 @@ synchronous_standby_names = 'FIRST 2 (s1, s2, s3)'
 </programlisting>
     In this example, if four standby servers <literal>s1</>, <literal>s2</>,
     <literal>s3</> and <literal>s4</> are running, the three standbys <literal>s1</>,
-    <literal>s2</> and <literal>s3</> wil be considered as synchronous standby
+    <literal>s2</> and <literal>s3</> will be considered as synchronous standby
     candidates. The master server will wait for at least 2 replies from them.
     <literal>s4</> is an asynchronous standby since its name is not in the list.
    </para>

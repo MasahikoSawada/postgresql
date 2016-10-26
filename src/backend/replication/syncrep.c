@@ -91,6 +91,8 @@ static bool SyncRepGetSyncRecPtr(XLogRecPtr *writePtr,
 								 XLogRecPtr *applyPtr,
 								 bool *am_sync);
 static int	SyncRepGetStandbyPriority(void);
+static List *SyncRepGetSyncStandbysPriority(bool *am_sync);
+static List *SyncRepGetSyncStandbysQuorum(bool *am_sync);
 static int	cmp_lsn(const void *a, const void *b);
 
 #ifdef USE_ASSERT_CHECKING
@@ -471,6 +473,30 @@ SyncRepReleaseWaiters(void)
 }
 
 /*
+ * Return the list of sync standbys using according to synchronous method,
+ * or NIL if no sync standby is connected. The caller must hold SyncRepLock.
+ *
+ * On return, *am_sync is set to true if this walsender is connecting to
+ * sync standby. Otherwise it's set to false.
+ */
+List *
+SyncRepGetSyncStandbys(bool	*am_sync)
+{
+	/* Set default result */
+	if (am_sync != NULL)
+		*am_sync = false;
+
+	/* Quick exit if sync replication is not requested */
+	if (SyncRepConfig == NULL)
+		return NIL;
+
+	if (SyncRepConfig->sync_method == SYNC_REP_PRIORITY)
+		return SyncRepGetSyncStandbysPriority(am_sync);
+	else /* SYNC_REP_QUORUM */
+		return SyncRepGetSyncStandbysQuorum(am_sync);
+}
+
+/*
  * Calculate the Write, Flush and Apply positions among sync standbys.
  *
  * Return false if the number of sync standbys is less than
@@ -586,30 +612,6 @@ SyncRepGetSyncRecPtr(XLogRecPtr *writePtr, XLogRecPtr *flushPtr,
 }
 
 /*
- * Return the list of sync standbys using according to synchronous method,
- * or NIL if no sync standby is connected. The caller must hold SyncRepLock.
- *
- * On return, *am_sync is set to true if this walsender is connecting to
- * sync standby. Otherwise it's set to false.
- */
-List *
-SyncRepGetSyncStandbys(bool	*am_sync)
-{
-	/* Set default result */
-	if (am_sync != NULL)
-		*am_sync = false;
-
-	/* Quick exit if sync replication is not requested */
-	if (SyncRepConfig == NULL)
-		return NIL;
-
-	if (SyncRepConfig->sync_method == SYNC_REP_PRIORITY)
-		return SyncRepGetSyncStandbysPriority(am_sync);
-	else /* SYNC_REP_QUORUM */
-		return SyncRepGetSyncStandbysQuorum(am_sync);
-}
-
-/*
  * Return the list of sync standbys using quorum method, or
  * NIL if no sync standby is connected. In quorum method, all standby
  * priorities are same, that is 1. So this function returns the list of
@@ -619,7 +621,7 @@ SyncRepGetSyncStandbys(bool	*am_sync)
  * On return, *am_sync is set to true if this walsender is connecting to
  * sync standby. Otherwise it's set to false.
  */
-List *
+static List *
 SyncRepGetSyncStandbysQuorum(bool *am_sync)
 {
 	List	*result = NIL;
@@ -668,7 +670,7 @@ SyncRepGetSyncStandbysQuorum(bool *am_sync)
  * On return, *am_sync is set to true if this walsender is connecting to
  * sync standby. Otherwise it's set to false.
  */
-List *
+static List *
 SyncRepGetSyncStandbysPriority(bool *am_sync)
 {
 	List	   *result = NIL;

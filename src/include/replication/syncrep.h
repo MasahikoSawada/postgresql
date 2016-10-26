@@ -75,8 +75,6 @@ extern void SyncRepReleaseWaiters(void);
 
 /* called by wal sender and user backend */
 extern List *SyncRepGetSyncStandbys(bool *am_sync);
-extern List *SyncRepGetSyncStandbysPriority(bool *am_sync);
-extern List *SyncRepGetSyncStandbysQuorum(bool *am_sync);
 
 /* called by checkpointer */
 extern void SyncRepUpdateSyncStandbysDefined(void);
