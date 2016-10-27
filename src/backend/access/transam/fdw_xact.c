@@ -256,6 +256,8 @@ static int GetFDWXactList(FDWXact *fdw_xacts);
 static ResolvePreparedForeignTransaction_function get_prepared_foreign_xact_resolver(FDWXact fdw_xact);
 static FDWXactOnDiskData *ReadFDWXactFile(TransactionId xid, Oid serverid,
 											Oid userid);
+static void RecovrFDWXactFromXLOG(XLogReaderState *record);
+static FDWXact RecoverFDWXactFromBuffer(char *buf);
 static void RemoveFDWXactFile(TransactionId xid, Oid serverid, Oid userid,
 								bool giveWarning);
 static void prepare_foreign_transactions(void);
@@ -1124,75 +1126,69 @@ fdw_xact_redo(XLogReaderState *record)
 
 	if (info == XLOG_FDW_XACT_INSERT)
 	{
-		FDWXactOnDiskData	*fdw_xact_data_file = (FDWXactOnDiskData *)rec;
-		char				path[MAXPGPATH];
-		int					fd;
-		pg_crc32c	fdw_xact_crc;
-
-		/* Recompute CRC */
-		INIT_CRC32C(fdw_xact_crc);
-		COMP_CRC32C(fdw_xact_crc, rec, rec_len);
-		FIN_CRC32C(fdw_xact_crc);
-
-		FDWXactFilePath(path, xid, fdw_xact_data_file->serverid,
-							fdw_xact_data_file->userid);
-		/*
-		 * The file may exist, if it was flushed to disk after creating it. The
-		 * file might have been flushed while it was being crafted, so the
-		 * contents can not be guaranteed to be accurate. Hence truncate and
-		 * rewrite the file.
-		 */
-		fd = OpenTransientFile(path, O_CREAT | O_WRONLY | O_TRUNC | PG_BINARY,
-								S_IRUSR | S_IWUSR);
-		if (fd < 0)
-			ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not create/open foreign transaction state file \"%s\": %m",
-						path)));
-
-		/* The log record is exactly the contents of the file. */
-		if (write(fd, rec, rec_len) != rec_len)
-		{
-			CloseTransientFile(fd);
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not write FDW transaction state file: %s", path)));
-		}
-
-		if (write(fd, &fdw_xact_crc, sizeof(pg_crc32c)) != sizeof(pg_crc32c))
-		{
-			CloseTransientFile(fd);
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not write two-phase state file: %m")));
-		}
-
-		/*
-		 * We must fsync the file because the end-of-replay checkpoint will not do
-		 * so, there being no foreign transaction entry in shared memory yet to
-		 * tell it to.
-		 */
-		if (pg_fsync(fd) != 0)
-		{
-			CloseTransientFile(fd);
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not fsync foreign transaction state file: %m")));
-		}
-
-		CloseTransientFile(fd);
+		RecoverFDWXactFromXLOG(record);
 	}
 	else if (info == XLOG_FDW_XACT_REMOVE)
 	{
 		FdwRemoveXlogRec	*fdw_remove_xlog = (FdwRemoveXlogRec *)rec;
 
-		RemoveFDWXactFile(fdw_remove_xlog->xid, fdw_remove_xlog->serverid, fdw_remove_xlog->userid,
-						  true);
+		RemoveFDWXactFile(fdw_remove_xlog->xid, fdw_remove_xlog->serverid,
+						  fdw_remove_xlog->userid, true);
 	}
 	else
 		elog(ERROR, "invalid log type %d in foreign transction log record", info);
 
 	return;
+}
+
+/*
+ * RecoverFDWXactFromXLOG
+ *
+ * To avoid the creation of fdwxact state files during replay we register
+ * WAL records for fdw transaction in shared memory in the same way
+ * during normal operations. If replay faces a WAL record for a COMMIT
+ * PREPARED transaction before a checkpoint or restartpoint happens then
+ * no files are used, limitign the I/O impact of such operations during
+ * recovery.
+ */
+static void
+RecoverFDWXactFromXLOG(XLogReaderState *record)
+{
+	char				*buf;
+	FDWXact				fdw_xact;
+
+	buf = XLogRecGetData(record);
+
+	fdw_xact = RecoverFDWXactFromBuffer(buf);
+
+	/* Add some valid LSNs */
+	fdw_xact->fdw_xact_lsn = 0;
+	/* Mark the entry as ready */
+	fdw_xact->fdw_xact_valid = true;
+	/* Unlock the entry as we don't need it any further */
+	unlock_fdw_xact(fdw_xact);
+}
+
+/*
+ * RecoverFDWXactFromBuffer
+ *
+ * Parse data in given buffer and insert fdw transaction state
+ * into shared-memory.
+ */
+static FDWXact
+RecoverFDWXactFromBuffer(char *buf)
+{
+	FDWXactOnDiskData	*fdw_xact_file_data;
+	FDWXact				fdw_xact;
+
+	fdw_xact_file_data = (FDWXactOnDiskData *)buf;
+
+	fdw_xact = insert_fdw_xact(fdw_xact_file_data->dboid,
+							   fdw_xact_file_data->local_xid,
+							   fdw_xact_file_data->fdw_xact_id_len,
+							   fdw_xact_file_data->fdw_xact_id,
+							   FDW_XACT_PREPARING);
+	return fdw_xact;
 }
 
 /*
@@ -1890,12 +1886,12 @@ PrescanFDWXacts(TransactionId oldestActiveXid)
 	return oldestActiveXid;
 }
 /*
- * ReadFDWXact
+ * REcoverFDWXactFromFiles
  * Read the foreign prepared transaction information and set it up for further
  * usage.
  */
 void
-ReadFDWXacts(void)
+RecoverFDWXactFromFiles(void)
 {
 	DIR				*cldir;
 	struct dirent	*clde;
@@ -1937,11 +1933,14 @@ ReadFDWXacts(void)
 			 * status of local transaction which prepared this foreign
 			 * transaction.
 			 */
+			fdw_xact = RecoverFDWXactFromBuffer((char *)fdw_axct_file_data);
+			/*
 			fdw_xact = insert_fdw_xact(fdw_xact_file_data->dboid, local_xid,
 									   serverid, userid,
 									   fdw_xact_file_data->fdw_xact_id_len,
 									   fdw_xact_file_data->fdw_xact_id,
 									   FDW_XACT_PREPARING);
+			*/
 
 			/* Add some valid LSNs */
 			fdw_xact->fdw_xact_lsn = 0;
