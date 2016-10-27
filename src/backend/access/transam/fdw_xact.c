@@ -256,7 +256,7 @@ static int GetFDWXactList(FDWXact *fdw_xacts);
 static ResolvePreparedForeignTransaction_function get_prepared_foreign_xact_resolver(FDWXact fdw_xact);
 static FDWXactOnDiskData *ReadFDWXactFile(TransactionId xid, Oid serverid,
 											Oid userid);
-static void RecovrFDWXactFromXLOG(XLogReaderState *record);
+static void RecoverFDWXactFromXLOG(XLogReaderState *record);
 static FDWXact RecoverFDWXactFromBuffer(char *buf);
 static void RemoveFDWXactFile(TransactionId xid, Oid serverid, Oid userid,
 								bool giveWarning);
@@ -1121,8 +1121,6 @@ fdw_xact_redo(XLogReaderState *record)
 {
 	char			*rec = XLogRecGetData(record);
 	uint8			info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
-	int				rec_len = XLogRecGetDataLen(record);
-	TransactionId	xid = XLogRecGetXid(record);
 
 	if (info == XLOG_FDW_XACT_INSERT)
 	{
@@ -1185,6 +1183,8 @@ RecoverFDWXactFromBuffer(char *buf)
 
 	fdw_xact = insert_fdw_xact(fdw_xact_file_data->dboid,
 							   fdw_xact_file_data->local_xid,
+							   fdw_xact_file_data->serverid,
+							   fdw_xact_file_data->userid,
 							   fdw_xact_file_data->fdw_xact_id_len,
 							   fdw_xact_file_data->fdw_xact_id,
 							   FDW_XACT_PREPARING);
@@ -1933,7 +1933,7 @@ RecoverFDWXactFromFiles(void)
 			 * status of local transaction which prepared this foreign
 			 * transaction.
 			 */
-			fdw_xact = RecoverFDWXactFromBuffer((char *)fdw_axct_file_data);
+			fdw_xact = RecoverFDWXactFromBuffer((char *)fdw_xact_file_data);
 			/*
 			fdw_xact = insert_fdw_xact(fdw_xact_file_data->dboid, local_xid,
 									   serverid, userid,

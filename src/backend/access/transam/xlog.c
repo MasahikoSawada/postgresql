@@ -7472,11 +7472,8 @@ StartupXLOG(void)
 	/* Reload shared-memory state for prepared transactions */
 	RecoverPreparedTransactions();
 
-	/*
-	 * WAL reply must have created the files for prepared foreign transactions.
-	 * Reload the shared-memory foreign transaction state.
-	 */
-	ReadFDWXacts();
+	/* Recover foreign transaction state and insert into shared-memory. */
+	RecoverFDWXactFromFiles();
 
 	/*
 	 * Shutdown the recovery environment. This must occur after
