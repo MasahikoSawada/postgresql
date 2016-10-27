@@ -25,10 +25,12 @@
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
+#include "access/xlogutils.h"
 #include "catalog/pg_type.h"
 #include "foreign/foreign.h"
 #include "foreign/fdwapi.h"
 #include "libpq/pqsignal.h"
+#include "pg_trace.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
@@ -207,7 +209,15 @@ typedef struct FDWXactData
 	FDWXactStatus	fdw_xact_status;	/* The state of the foreign transaction.
 										   This doubles as the action to be
 										   taken on this entry.*/
-	XLogRecPtr		fdw_xact_lsn;   /* XLOG offset of inserting this entry*/
+	/*
+	 * Note that we need to keep track of two LSNs for each FDWXact. We keep
+	 * track of the start LSN because this is the address we must use to read
+	 * state data back from WAL when committing a FDWXact. We keep track of
+	 * the end LSN because that is the LSN we need to wait for prior
+	 * to commit.
+	 */
+	XLogRecPtr		fdw_xact_start_lsn;   /* XLOG offset of inserting this entry start */
+	XLogRecPtr		fdw_xact_end_lsn;   /* XLOG offset of inserting this entry end*/
 
 	bool			fdw_xact_valid;		/* Has the entry been complete and written to file? */
 	BackendId		locking_backend;	/* Backend working on this entry */
@@ -245,8 +255,8 @@ static void AtProcExit_FDWXact(int code, Datum arg);
 static bool resolve_fdw_xact(FDWXact fdw_xact,
 							ResolvePreparedForeignTransaction_function prepared_foreign_xact_resolver);
 static FDWXact insert_fdw_xact(Oid dboid, TransactionId xid, Oid serverid, Oid userid,
-										int fdw_xact_id_len, char *fdw_xact_id,
-										FDWXactStatus fdw_xact_status);
+							   Oid umid, int fdw_xact_id_len, char *fdw_xact_id,
+							   FDWXactStatus fdw_xact_status);
 static void unlock_fdw_xact(FDWXact fdw_xact);
 static void unlock_fdw_xact_entries();
 static void remove_fdw_xact(FDWXact fdw_xact);
@@ -260,6 +270,9 @@ static void RecoverFDWXactFromXLOG(XLogReaderState *record);
 static FDWXact RecoverFDWXactFromBuffer(char *buf);
 static void RemoveFDWXactFile(TransactionId xid, Oid serverid, Oid userid,
 								bool giveWarning);
+static void RecreateFDWXactFile(TransactionId xid, Oid serverid, Oid userid,
+								void  *content, int len);
+static void XlogReadFDWXactData(XLogRecPtr lsn, char **buf, int *len);
 static void prepare_foreign_transactions(void);
 bool search_fdw_xact(TransactionId xid, Oid dbid, Oid serverid, Oid userid,
 						List **qualifying_xacts);
@@ -507,9 +520,9 @@ register_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
 	int					data_len;
 
 	/* Enter the foreign transaction in the shared memory structure */
-	fdw_xact = insert_fdw_xact(dbid, xid, serverid, userid,
-									fdw_xact_id_len, fdw_xact_id,
-									FDW_XACT_PREPARING);
+	fdw_xact = insert_fdw_xact(dbid, xid, serverid, userid, umid,
+							   fdw_xact_id_len, fdw_xact_id,
+							   FDW_XACT_PREPARING);
 	/*
 	 * Prepare to write the entry to a file. Also add xlog entry. The contents
 	 * of the xlog record are same as what is written to the file.
@@ -553,8 +566,13 @@ register_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
 	/* Add the entry in the xlog and save LSN for checkpointer */
 	XLogBeginInsert();
 	XLogRegisterData((char *)fdw_xact_file_data, data_len);
-	fdw_xact->fdw_xact_lsn = XLogInsert(RM_FDW_XACT_ID, XLOG_FDW_XACT_INSERT);
-	XLogFlush(fdw_xact->fdw_xact_lsn);
+	fdw_xact->fdw_xact_end_lsn = XLogInsert(RM_FDW_XACT_ID, XLOG_FDW_XACT_INSERT);
+	XLogFlush(fdw_xact->fdw_xact_end_lsn);
+
+	/* If we crash now, we have prepared: WAL replay will fix things */
+
+	/* Store record's start location to read that later on CheckPoint */
+	fdw_xact->fdw_xact_start_lsn = ProcLastRecPtr;
 
 	/* File is written completely, checkpoint can proceed with syncing */
 	fdw_xact->fdw_xact_valid = true;
@@ -575,12 +593,11 @@ register_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
  * If the entry already exists, the function raises an error.
  */
 static FDWXact
-insert_fdw_xact(Oid dboid, TransactionId xid, Oid serverid, Oid userid,
+insert_fdw_xact(Oid dboid, TransactionId xid, Oid serverid, Oid userid, Oid umid,
 				int fdw_xact_id_len, char *fdw_xact_id, FDWXactStatus fdw_xact_status)
 {
 	FDWXact			fdw_xact;
 	int				cnt;
-	UserMapping		*user_mapping;
 
 	if (!fdwXactExitRegistered)
 	{
@@ -591,8 +608,6 @@ insert_fdw_xact(Oid dboid, TransactionId xid, Oid serverid, Oid userid,
 	if (fdw_xact_id_len > MAX_FDW_XACT_ID_LEN)
 		elog(ERROR, "foreign transaction identifier longer (%d) than allowed (%d)",
 				fdw_xact_id_len, MAX_FDW_XACT_ID_LEN);
-
-	user_mapping = GetUserMapping(userid, serverid);
 
 	LWLockAcquire(FDWXactLock, LW_EXCLUSIVE);
 	fdw_xact = NULL;
@@ -633,9 +648,10 @@ insert_fdw_xact(Oid dboid, TransactionId xid, Oid serverid, Oid userid,
 	fdw_xact->local_xid = xid;
 	fdw_xact->serverid = serverid;
 	fdw_xact->userid = userid;
-	fdw_xact->umid = user_mapping->umid;
+	fdw_xact->umid = umid;
 	fdw_xact->fdw_xact_status = fdw_xact_status;
-	fdw_xact->fdw_xact_lsn = InvalidXLogRecPtr;
+	fdw_xact->fdw_xact_start_lsn = InvalidXLogRecPtr;
+	fdw_xact->fdw_xact_end_lsn = InvalidXLogRecPtr;
 	fdw_xact->fdw_xact_valid = false;
 	fdw_xact->ondisk = false;
 	fdw_xact->fdw_xact_id_len = fdw_xact_id_len;
@@ -1160,7 +1176,8 @@ RecoverFDWXactFromXLOG(XLogReaderState *record)
 	fdw_xact = RecoverFDWXactFromBuffer(buf);
 
 	/* Add some valid LSNs */
-	fdw_xact->fdw_xact_lsn = 0;
+	fdw_xact->fdw_xact_start_lsn = 0;
+	fdw_xact->fdw_xact_end_lsn = 0;
 	/* Mark the entry as ready */
 	fdw_xact->fdw_xact_valid = true;
 	/* Unlock the entry as we don't need it any further */
@@ -1185,6 +1202,7 @@ RecoverFDWXactFromBuffer(char *buf)
 							   fdw_xact_file_data->local_xid,
 							   fdw_xact_file_data->serverid,
 							   fdw_xact_file_data->userid,
+							   fdw_xact_file_data->umid,
 							   fdw_xact_file_data->fdw_xact_id_len,
 							   fdw_xact_file_data->fdw_xact_id,
 							   FDW_XACT_PREPARING);
@@ -1209,16 +1227,14 @@ RecoverFDWXactFromBuffer(char *buf)
 void
 CheckPointFDWXact(XLogRecPtr redo_horizon)
 {
-	Oid				*serverids;
-	TransactionId	*xids;
-	Oid				*userids;
-	Oid				*dbids;
-	int				nxacts;
-	int				cnt;
+	int cnt;
+	int serialized_fdw_xacts = 0;
 
 	/* Quick get-away, before taking lock */
 	if (max_fdw_xacts <= 0)
 		return;
+
+	TRACE_POSTGRESQL_FDWXACT_CHECKPOINT_START();
 
 	LWLockAcquire(FDWXactLock, LW_SHARED);
 
@@ -1230,82 +1246,178 @@ CheckPointFDWXact(XLogRecPtr redo_horizon)
 	}
 
 	/*
-	 * Collect the file paths which need to be synced. We might sync a file
-	 * again if it lives beyond the checkpoint boundaries. But this case is rare
-	 * and may not involve much I/O.
+	 * We are expecting there to be zero FDWXact that neet to be copied to
+	 * disk, so we preform all I/O while holding FDWXactLock for simplicity.
+	 * This precents any new foreign xacts from preparing while this occurs,
+	 * which shouldn't be a problem since the presence fo long-lived prepared
+	 * foreign xacts indicated the transaction manager isn't active.
+	 *
+	 * it's also possible to move I/O out of the lock, but on every error we
+	 * should check whether somebody committed our transaction in different
+	 * backend. Let's leave this optimisation for future, if somebody will
+	 * spot that this place cause bottleneck.
+	 *
+	 * Note that it isn't possible for there to be a FDWXact with a
+	 * fdw_xact_end_lsn set prior to the last checkpoit yet is marked invalid,
+	 * bacause of the efforts with delayChkpt.
 	 */
-	xids = (TransactionId *) palloc(FDWXactGlobal->num_fdw_xacts * sizeof(TransactionId));
-	serverids = (Oid *) palloc(FDWXactGlobal->num_fdw_xacts * sizeof(Oid));
-	userids = (Oid *) palloc(FDWXactGlobal->num_fdw_xacts * sizeof(Oid));
-	dbids = (Oid *) palloc(FDWXactGlobal->num_fdw_xacts * sizeof(Oid));
-	nxacts = 0;
-
 	for (cnt = 0; cnt < FDWXactGlobal->num_fdw_xacts; cnt++)
 	{
 		FDWXact	fdw_xact = FDWXactGlobal->fdw_xacts[cnt];
+
 		if (fdw_xact->fdw_xact_valid &&
-			fdw_xact->fdw_xact_lsn <= redo_horizon)
+			!fdw_xact->ondisk &&
+			fdw_xact->fdw_xact_end_lsn <= redo_horizon)
 		{
-			xids[nxacts] = fdw_xact->local_xid;
-			serverids[nxacts] = fdw_xact->serverid;
-			userids[nxacts] = fdw_xact->userid;
-			dbids[nxacts] = fdw_xact->dboid;
-			nxacts++;
+			char *buf;
+			int len;
+
+			XlogReadFDWXactData(fdw_xact->fdw_xact_start_lsn, &buf, &len);
+			RecreateFDWXactFile(fdw_xact->local_xid, fdw_xact->serverid,
+								fdw_xact->userid, buf, len);
+			fdw_xact->ondisk = true;
+			serialized_fdw_xacts++;
+			pfree(buf);
 		}
 	}
 
 	LWLockRelease(FDWXactLock);
 
-	for (cnt = 0; cnt < nxacts; cnt++)
+	TRACE_POSTGRESQL_FDWXACT_CHECKPOINT_DONE();
+
+	if (log_checkpoints && serialized_fdw_xacts > 0)
+		ereport(LOG,
+				(errmsg_plural("%u foreign transaction state file was written "
+							   "for long-running prepared transactions",
+							   "%u foreign transaction state files were written "
+							   "for long-running prepared transactions",
+							   serialized_fdw_xacts,
+							   serialized_fdw_xacts)));
+}
+
+
+/*
+ * Reads foreign trasasction data from xlog. During checkpoint this data will
+ * be moved to fdwxact files and ReadFDWXactFile should be used instead.
+ *
+ * Note clearly that this function accesses WAL during normal operation, similarly
+ * to the way WALSender or Logical Decoding would do. It does not run during
+ * crash recovery or standby processing.
+ */
+static void
+XlogReadFDWXactData(XLogRecPtr lsn, char **buf, int *len)
+{
+	XLogRecord			*record;
+	XLogReaderState		*xlogreader;
+	char				*errormsg;
+
+	Assert(!RecoveryInProgress());
+
+	xlogreader = XLogReaderAllocate(&read_local_xlog_page, NULL);
+	if (!xlogreader)
+		ereport(ERROR,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("out of memory"),
+				 errdetail("Failed while allocating an XLog reading processor.")));
+
+	record = XLogReadRecord(xlogreader, lsn, &errormsg);
+
+	if (record == NULL)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not read foreign transaction state from xlog at %X/%X",
+						(uint32) (lsn >> 32),
+						(uint32) lsn)));
+
+	if (XLogRecGetRmid(xlogreader) != RM_FDW_XACT_ID ||
+		(XLogRecGetInfo(xlogreader) & ~XLR_INFO_MASK) != XLOG_FDW_XACT_INSERT)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("expected foreign transaction state data is not present in xlog at %X/%X",
+						(uint32) (lsn >> 32),
+						(uint32) lsn)));
+
+	if (len != NULL)
+		*len = XLogRecGetDataLen(xlogreader);
+
+	*buf = palloc(sizeof(char) * XLogRecGetDataLen(xlogreader));
+	memcpy(*buf, XLogRecGetData(xlogreader), sizeof(char) * XLogRecGetDataLen(xlogreader));
+
+	XLogReaderFree(xlogreader);
+}
+
+/*
+ * Recreates a foreign transaction state file. This is used in WAL replay and
+ * during checkpoint creation.
+ *
+ * Note: content and len don't include CRC.
+ */
+void
+RecreateFDWXactFile(TransactionId xid, Oid serverid, Oid userid,
+					void *content, int len)
+{
+	char		path[MAXPGPATH];
+	pg_crc32c	fdw_xact_crc;
+	pg_crc32c	bogus_crc;
+	int			fd;
+
+	/* Recompute CRC */
+	INIT_CRC32C(fdw_xact_crc);
+	COMP_CRC32C(fdw_xact_crc, content, len);
+
+	FDWXactFilePath(path, xid, serverid, userid);
+
+	fd = OpenTransientFile(path, O_CREAT | O_TRUNC | O_WRONLY | PG_BINARY,
+						   S_IRUSR | S_IWUSR);
+
+	if (fd < 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not recreate foreign transaction state file \"%s\": %m",
+						path)));
+
+	if (write(fd, content, len) != len)
 	{
-		FDWXact	fdw_xact = FDWXactGlobal->fdw_xacts[cnt];
-		char	path[MAXPGPATH];
-		int		fd;
+		CloseTransientFile(fd);
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not write foreign transcation state file: %m")));
+	}
+	FIN_CRC32C(fdw_xact_crc);
 
-		FDWXactFilePath(path, xids[cnt], serverids[cnt], userids[cnt]);
-
-		fd = OpenTransientFile(path, O_RDWR | PG_BINARY, 0);
-
-		if (fd < 0)
-		{
-			if (errno == ENOENT)
-			{
-				/* OK if we do not have the entry anymore */
-				if (!fdw_xact_exists(xids[cnt], dbids[cnt], serverids[cnt],
-										userids[cnt]))
-					continue;
-
-				/* Restore errno in case it was changed */
-				errno = ENOENT;
-			}
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not open foreign transaction state file \"%s\": %m",
-							path)));
-		}
-
-		if (pg_fsync(fd) != 0)
-		{
-			CloseTransientFile(fd);
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not fsync foreign transaction state file \"%s\": %m",
-							path)));
-		}
-
-		if (CloseTransientFile(fd) != 0)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not close foreign transaction state file \"%s\": %m",
-							path)));
-
-		fdw_xact->ondisk = true;
+	/*
+	 * Write a deliberately bogus CRC to the state file; this is just paranoia
+	 * to catch the case where four more bytes will run us out of disk space.
+	 */
+	bogus_crc = ~fdw_xact_crc;
+	if ((write(fd, &bogus_crc, sizeof(pg_crc32c))) != sizeof(pg_crc32c))
+	{
+		CloseTransientFile(fd);
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not write foreing transaction state file: %m")));
+	}
+	/* Back up to prepare for rewriting the CRC */
+	if (lseek(fd, -((off_t) sizeof(pg_crc32c)), SEEK_CUR) < 0)
+	{
+		CloseTransientFile(fd);
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not seek in foreign transaction state file: %m")));
 	}
 
-	pfree(xids);
-	pfree(serverids);
-	pfree(userids);
-	pfree(dbids);
+	/* write correct CRC and close file */
+	if ((write(fd, &fdw_xact_crc, sizeof(pg_crc32c))) != sizeof(pg_crc32c))
+	{
+		CloseTransientFile(fd);
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not write foreign transaction file: %m")));
+	}
+	if (CloseTransientFile(fd) != 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not close foreign transaction file: %m")));
 }
 
 /* Built in functions */
@@ -1368,7 +1480,7 @@ GetFDWXactList(FDWXact *fdw_xacts)
 }
 
 Datum
-pg_fdw_xact(PG_FUNCTION_ARGS)
+pg_fdw_xacts(PG_FUNCTION_ARGS)
 {
 	FuncCallContext *funcctx;
 	WorkingStatus	*status;
@@ -1943,7 +2055,8 @@ RecoverFDWXactFromFiles(void)
 			*/
 
 			/* Add some valid LSNs */
-			fdw_xact->fdw_xact_lsn = 0;
+			fdw_xact->fdw_xact_start_lsn = 0;
+			fdw_xact->fdw_xact_end_lsn = 0;
 			/* Mark the entry as ready */
 			fdw_xact->fdw_xact_valid = true;
 			/* Alreadby synced to disk */
