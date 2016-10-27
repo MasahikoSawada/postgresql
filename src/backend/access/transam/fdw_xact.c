@@ -1963,7 +1963,7 @@ RecoverFDWXactFromFiles(void)
  * If giveWarning is false, do not complain about file-not-present;
  * this is an expected case during WAL replay.
  */
-void
+static void
 RemoveFDWXactFile(TransactionId xid, Oid serverid, Oid userid, bool giveWarning)
 {
 	char		path[MAXPGPATH];
