@@ -53,7 +53,7 @@ extern int	max_fdw_xacts;
 
 extern Size FDWXactShmemSize(void);
 extern void FDWXactShmemInit(void);
-extern void ReadFDWXacts(void);
+extern void REcoverFDWXactFromFiles(void);
 extern TransactionId PrescanFDWXacts(TransactionId oldestActiveXid);
 extern bool fdw_xact_has_usermapping(Oid serverid, Oid userid);
 extern bool fdw_xact_has_server(Oid serverid);
