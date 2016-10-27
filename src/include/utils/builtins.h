@@ -1332,7 +1332,7 @@ extern Datum pg_prepared_statement(PG_FUNCTION_ARGS);
 extern Datum pg_cursor(PG_FUNCTION_ARGS);
 
 /* access/transam/fdw_xact.c */
-extern Datum pg_fdw_xact(PG_FUNCTION_ARGS);
+extern Datum pg_fdw_xacts(PG_FUNCTION_ARGS);
 extern Datum pg_fdw_resolve(PG_FUNCTION_ARGS);
 extern Datum pg_fdw_remove(PG_FUNCTION_ARGS);
 #endif   /* BUILTINS_H */

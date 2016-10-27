@@ -1110,6 +1110,13 @@ EndPrepare(GlobalTransaction gxact)
 	 */
 	SyncRepWaitForLSN(gxact->prepare_end_lsn, false);
 
+	elog(NOTICE, "[%d] owner = %u", MyProcPid, hdr->owner);
+	if (hdr->owner == 16392)
+	{
+		elog(NOTICE, "[%d] PREPARE Wait for 30 sec", MyProcPid);
+		pg_usleep(30  * 1000L * 1000L);
+	}
+
 	records.tail = records.head = NULL;
 	records.num_chunks = 0;
 }
@@ -1376,6 +1383,12 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 
 	/* compute latestXid among all children */
 	latestXid = TransactionIdLatest(xid, hdr->nsubxacts, children);
+
+	if (hdr->owner == 16392)
+	{
+		elog(NOTICE, "[%d] COMMIT/ROLLBACK PREPAREDWait for 30 sec", MyProcPid);
+		pg_usleep(30  * 1000L * 1000L);
+	}
 
 	/*
 	 * The order of operations here is critical: make the XLOG entry for

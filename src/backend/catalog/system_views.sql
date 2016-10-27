@@ -254,6 +254,9 @@ CREATE VIEW pg_prepared_xacts AS
 CREATE VIEW pg_prepared_statements AS
     SELECT * FROM pg_prepared_statement() AS P;
 
+CREATE VIEW pg_fdw_xacts AS
+       SELECT * FROM pg_fdw_xacts() AS F;
+
 CREATE VIEW pg_seclabels AS
 SELECT
 	l.objoid, l.classoid, l.objsubid,
