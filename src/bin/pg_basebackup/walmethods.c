@@ -299,6 +299,13 @@ CreateWalDirectoryMethod(const char *basedir, bool sync)
 	return method;
 }
 
+void
+FreeWalDirectoryMethod(void)
+{
+	pg_free(dir_data->basedir);
+	pg_free(dir_data);
+}
+
 
 /*-------------------------------------------------------------------------
  * WalTarMethod - write wal to a tar file containing pg_xlog contents
@@ -611,6 +618,9 @@ tar_sync(Walfile f)
 	Assert(f != NULL);
 	tar_clear_error();
 
+	if (!tar_data->sync)
+		return 0;
+
 	/*
 	 * Always sync the whole tarfile, because that's all we can do. This makes
 	 * no sense on compressed files, so just ignore those.
@@ -842,7 +852,8 @@ tar_finish(void)
 #endif
 
 	/* sync the empty blocks as well, since they're after the last file */
-	fsync(tar_data->fd);
+	if (tar_data->sync)
+		fsync(tar_data->fd);
 
 	if (close(tar_data->fd) != 0)
 		return false;
@@ -889,4 +900,15 @@ CreateWalTarMethod(const char *tarbase, int compression, bool sync)
 #endif
 
 	return method;
+}
+
+void
+FreeWalTarMethod(void)
+{
+	pg_free(tar_data->tarfilename);
+#ifdef HAVE_LIBZ
+	if (tar_data->compression)
+		 pg_free(tar_data->zlibOut);
+#endif
+	pg_free(tar_data);
 }
