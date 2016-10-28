@@ -216,7 +216,7 @@ FDWXactResolverMain(Datum main_arg)
 				worker.bgw_main_arg = ObjectIdGetDatum(dbid);
 				/* set bgw_notify_pid so that we can wait for it to finish */
 				worker.bgw_notify_pid = MyProcPid;
-			
+
 				RegisterDynamicBackgroundWorker(&worker, &handle);
 			}
 		}
@@ -313,7 +313,7 @@ FDWXactResolver_worker_main(Datum dbid_datum)
 	pqsignal(SIGTTOU, SIG_DFL);
 	pqsignal(SIGCONT, SIG_DFL);
 	pqsignal(SIGWINCH, SIG_DFL);
-	
+
 	/* Unblock signals */
 	BackgroundWorkerUnblockSignals();
 
