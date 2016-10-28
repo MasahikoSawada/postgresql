@@ -370,6 +370,7 @@ PreCommit_FDWXacts(void)
 	ListCell	*cur;
 	ListCell	*prev;
 	ListCell	*next;
+	int			n_fdw_using_2pc = 0;
 
 	/* If there are no foreign servers involved, we have no business here */
 	if (list_length(MyFDWConnections) < 1)
@@ -404,10 +405,32 @@ PreCommit_FDWXacts(void)
 	}
 
 	/*
-	 * Prepare the transactions on the foreign servers, which can execute
-	 * two-phase-commit protocol.
+	 * Here, foreign servers that can not execute two-phase-commit protocol
+	 * already commit the transaction and MyFDWConnections has only forign
+	 * servers that can execute two-phase-commit protocol. We dont' need to use
+	 * two-phase-commit protocol when there is only one foreign server that
+	 * that can execute two-phase-commit.
 	 */
-	prepare_foreign_transactions();
+	if (list_length(MyFDWConnections) == 1)
+	{
+		FDWConnection *fdw_conn = lfirst(list_head(MyFDWConnections));
+
+		if (!fdw_conn->end_foreign_xact(fdw_conn->serverid, fdw_conn->userid,
+										fdw_conn->umid, true))
+			elog(WARNING, "could not commit transaction on server %s",
+				 fdw_conn->servername);
+
+		/* MyFDWConnections should be cleared here */
+		MyFDWConnections = list_delete_cell(MyFDWConnections, cur, prev);
+	}
+	else
+	{
+		/*
+		 * Prepare the transactions on the foreign servers, which can execute
+		 * two-phase-commit protocol.
+		 */
+		prepare_foreign_transactions();
+	}
 }
 
 /*
