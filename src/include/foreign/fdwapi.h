@@ -148,7 +148,8 @@ typedef bool (*EndForeignTransaction_function) (Oid serverid, Oid userid,
 												Oid umid, bool is_commit);
 
 typedef bool (*PrepareForeignTransaction_function) (Oid serverid, Oid userid,
-													int prep_info_len, char *prep_info);
+													Oid umid, int prep_info_len,
+													char *prep_info);
 
 typedef bool (*ResolvePreparedForeignTransaction_function) (Oid serverid,
 															Oid userid,
