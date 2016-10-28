@@ -653,7 +653,7 @@ postgresGetPrepareId(Oid serverid, Oid userid, int *prep_info_len)
 }
 
 bool
-postgresPrepareForeignTransaction(Oid serverid, Oid userid,
+postgresPrepareForeignTransaction(Oid serverid, Oid userid, Oid umid,
 								  int prep_info_len, char *prep_info)
 {
 	StringInfo		command;
@@ -661,10 +661,9 @@ postgresPrepareForeignTransaction(Oid serverid, Oid userid,
 	ConnCacheEntry	*entry = NULL;
 	ConnCacheKey	 key;
 	bool			found;
-	UserMapping 	*user_mapping = GetUserMapping(userid, serverid);
 
 	/* Create hash key for the entry.  Assume no pad bytes in key struct */
-	key = user_mapping->umid;
+	key = umid;
 
 	Assert(ConnectionHash);
 	entry = hash_search(ConnectionHash, &key, HASH_FIND, &found);
