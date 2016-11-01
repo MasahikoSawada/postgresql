@@ -403,8 +403,8 @@ PreCommit_FDWXacts(void)
 
 	/*
 	 * Here, foreign servers that can not execute two-phase-commit protocol
-	 * already commit the transaction and MyFDWConnections has only forign
-	 * servers that can execute two-phase-commit protocol. We dont' need to use
+	 * already commit the transaction and MyFDWConnections has only foreign
+	 * servers that can execute two-phase-commit protocol. We don't need to use
 	 * two-phase-commit protocol when there is only one foreign server that
 	 * that can execute two-phase-commit.
 	 */
@@ -496,7 +496,7 @@ prepare_foreign_transactions(void)
 											fdw_xact_info))
 		{
 			/*
-			 * An error occured, and we didn't prepare the transaction. Delete the
+			 * An error occurred, and we didn't prepare the transaction. Delete the
 			 * entry from foreign transaction table. Raise an error, so that the
 			 * local server knows that one of the foreign server has failed to
 			 * prepare the transaction.
@@ -817,7 +817,7 @@ AtEOXact_FDWXacts(bool is_commit)
 			fdw_xact->fdw_xact_status = (is_commit ?
 											FDW_XACT_COMMITTING_PREPARED :
 											FDW_XACT_ABORTING_PREPARED);
-			/* Try aborting or commiting the transaction on the foreign server */
+			/* Try aborting or committing the transaction on the foreign server */
 			if (!resolve_fdw_xact(fdw_xact, fdw_conn->resolve_prepared_foreign_xact))
 			{
 				/*
@@ -1022,7 +1022,7 @@ fdw_xact_exists(TransactionId xid, Oid dbid, Oid serverid, Oid userid)
  * invalid | valid	 | invalid	| invalid | given dbid
  * invalid | valid	 | invalid	| valid	  | given dbid and userid
  * invalid | valid	 | valid	| invalid | given dbid and serverid
- * invalid | valid	 | valid	| valid	  | given dbid, servroid and userid
+ * invalid | valid	 | valid	| valid	  | given dbid, serveroid and userid
  * valid   | invalid | invalid	| invalid | given xid
  * valid   | invalid | invalid	| valid	  | given xid and userid
  * valid   | invalid | valid	| invalid | given xid, serverid
@@ -1272,9 +1272,9 @@ CheckPointFDWXact(XLogRecPtr redo_horizon)
 	}
 
 	/*
-	 * We are expecting there to be zero FDWXact that neet to be copied to
-	 * disk, so we preform all I/O while holding FDWXactLock for simplicity.
-	 * This precents any new foreign xacts from preparing while this occurs,
+	 * We are expecting there to be zero FDWXact that need to be copied to
+	 * disk, so we perform all I/O while holding FDWXactLock for simplicity.
+	 * This presents any new foreign xacts from preparing while this occurs,
 	 * which shouldn't be a problem since the presence fo long-lived prepared
 	 * foreign xacts indicated the transaction manager isn't active.
 	 *
@@ -1284,8 +1284,8 @@ CheckPointFDWXact(XLogRecPtr redo_horizon)
 	 * spot that this place cause bottleneck.
 	 *
 	 * Note that it isn't possible for there to be a FDWXact with a
-	 * fdw_xact_end_lsn set prior to the last checkpoit yet is marked invalid,
-	 * bacause of the efforts with delayChkpt.
+	 * fdw_xact_end_lsn set prior to the last checkpoint yet is marked invalid,
+	 * because of the efforts with delayChkpt.
 	 */
 	for (cnt = 0; cnt < FDWXactGlobal->num_fdw_xacts; cnt++)
 	{
@@ -1801,7 +1801,7 @@ pg_fdw_resolve(PG_FUNCTION_ARGS)
  * transaction in case
  * 1. The foreign server where it is prepared is no longer available
  * 2. The user which prepared this transaction needs to be dropped
- * 3. PITR is recoverying before a transaction id, which created the prepared
+ * 3. PITR is recovering before a transaction id, which created the prepared
  *	  foreign transaction
  * 4. The database containing the entries needs to be dropped
  *
@@ -2003,7 +2003,7 @@ PrescanFDWXacts(TransactionId oldestActiveXid)
 					&userid);
 
 			/*
-			 * Remove a foreign prepared transaction file correspnding
+			 * Remove a foreign prepared transaction file corresponding
 			 * to an XID, which is too new.
 			 */
 			if (TransactionIdFollowsOrEquals(local_xid, nextXid))
@@ -2083,7 +2083,7 @@ RecoverFDWXactFromFiles(void)
 			fdw_xact->fdw_xact_end_lsn = 0;
 			/* Mark the entry as ready */
 			fdw_xact->fdw_xact_valid = true;
-			/* Alreadby synced to disk */
+			/* Already synced to disk */
 			fdw_xact->ondisk = true;
 			/* Unlock the entry as we don't need it any further */
 			unlock_fdw_xact(fdw_xact);

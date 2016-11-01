@@ -238,7 +238,7 @@ typedef struct FdwRoutine
 	/* Support functions for IMPORT FOREIGN SCHEMA */
 	ImportForeignSchema_function ImportForeignSchema;
 
-	/* Supprot functions for foreign transactions */
+	/* Support functions for foreign transactions */
 	GetPrepareId_function GetPrepareId;
 	EndForeignTransaction_function EndForeignTransaction;
 	PrepareForeignTransaction_function PrepareForeignTransaction;
