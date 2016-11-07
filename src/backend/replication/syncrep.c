@@ -76,13 +76,13 @@
 
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
+SyncRepConfigData *SyncRepConfig = NULL;
 
 #define SyncStandbysDefined() \
 	(SyncRepStandbyNames != NULL && SyncRepStandbyNames[0] != '\0')
 
-SyncRepConfigData *SyncRepConfig = NULL;
-
 static bool announce_next_takeover = true;
+
 static int	SyncRepWaitMode = SYNC_REP_NO_WAIT;
 
 static void SyncRepQueueInsert(int mode);
