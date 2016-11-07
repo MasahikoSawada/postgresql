@@ -31,16 +31,19 @@
  *
  * In 9.5 or before only a single standby could be considered as
  * synchronous. In 9.6 we support multiple synchronous standbys.
- * The number of synchronous standbys that transactions must wait for
- * replies from is specified in synchronous_standby_names.
- * This parameter also specifies a list of standby names,
- * which determines the priority of each standby for being chosen as
- * a synchronous standby. The standbys whose names appear earlier
- * in the list are given higher priority and will be considered as
- * synchronous. Other standby servers appearing later in this list
- * represent potential synchronous standbys. If any of the current
- * synchronous standbys disconnects for whatever reason, it will be
- * replaced immediately with the next-highest-priority standby.
+ * In 10.0 we support two synchronization methods, priority and
+ * quorum. The number of synchronous standbys that transactions
+ * must wait for replies from and synchronization method are specified
+ * in synchronous_standby_names. This parameter also specifies a list
+ * of standby names, which determines the priority of each standby for
+ * being chosen as a synchronous standby. In priority method, the standbys
+ * whose names appear earlier in the list are given higher priority
+ * and will be considered as synchronous. Other standby servers appearing
+ * later in this list represent potential synchronous standbys. If any of
+ * the current synchronous standbys disconnects for whatever reason,
+ * it will be replaced immediately with the next-highest-priority standby.
+ * In quorum method, the all standbys appearing in the list are
+ * considered as a candidate for quorum commit.
  *
  * Before the standbys chosen from synchronous_standby_names can
  * become the synchronous standbys they must have caught up with
