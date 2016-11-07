@@ -2860,7 +2860,7 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 
 			/*
 			 * More easily understood version of standby state. This is purely
-			 * informational. If in quorum method, we add the number to indicate
+			 * informational. In quorum method, we add the number to indicate
 			 * how many in the set need to give a commit confirmation.
 			 */
 			if (priority == 0)
