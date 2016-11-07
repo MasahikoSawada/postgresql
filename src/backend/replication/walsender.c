@@ -2865,8 +2865,18 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 			if (priority == 0)
 				values[7] = CStringGetTextDatum("async");
 			else if (list_member_int(sync_standbys, i))
-				values[7] = SyncRepConfig->sync_method == SYNC_REP_PRIORITY ?
-					CStringGetTextDatum("sync") : CStringGetTextDatum("quorum");
+			{
+				if (SyncRepConfig->sync_method == SYNC_REP_PRIORITY)
+					values[7] = CStringGetTextDatum("sync");
+				else
+				{
+					StringInfoData buf;
+
+					initStringInfo(&buf);
+					appendStringInfo(&buf, "quorum-%d", SyncRepConfig->num_sync);
+					values[7] = CStringGetTextDatum(buf.data);
+				}
+			}
 			else
 				values[7] = CStringGetTextDatum("potential");
 		}
