@@ -497,6 +497,11 @@ SyncRepGetSyncStandbys(bool	*am_sync)
 		return SyncRepGetSyncStandbysPriority(am_sync);
 	else /* SYNC_REP_QUORUM */
 		return SyncRepGetSyncStandbysQuorum(am_sync);
+	else
+		ereport(ERROR,
+				errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				("invalid synchronization method is specified \"%d\"",
+				 SyncRepConfig->sync_method));
 }
 
 /*
@@ -586,8 +591,8 @@ SyncRepGetSyncRecPtr(XLogRecPtr *writePtr, XLogRecPtr *flushPtr,
 
 			SpinLockAcquire(&walsnd->mutex);
 			write_array[i] = walsnd->write;
-			flush_array[i]= walsnd->flush;
-			apply_array[i] = walsnd->flush;
+			flush_array[i] = walsnd->flush;
+			apply_array[i] = walsnd->apply;
 			SpinLockRelease(&walsnd->mutex);
 
 			i++;

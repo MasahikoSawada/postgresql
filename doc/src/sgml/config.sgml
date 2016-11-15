@@ -3053,30 +3053,30 @@ FIRST <replaceable class="parameter">num_sync</replaceable> ( <replaceable class
         wait for replies from,
         and <replaceable class="parameter">standby_name</replaceable>
         is the name of a standby server.
-        <literal>FIRST</> and <literal>ANY</> specify the method of
-        that how master server controls the standby servers.
+        <literal>FIRST</> and <literal>ANY</> specify the method used by
+        the master to control the standby servres.
         </para>
         <para>
-        The keyword <literal>FIRST</>, coupled with an integer
-        number N higher-priority standbys and makes transaction commit
-        when their WAL records are received.
+The keyword <literal>FIRST</>, coupled with <literal>num_sync</>, makes
+transaction commit wait until WAL records are received from the N
+standbys with higher priority number.
         For example, a setting of <literal>FIRST 3 (s1, s2, s3, s4)</>
         makes transaction commits wait until their WAL records are received
         by three higher-priority standbys chosen from standby servers
         <literal>s1</>, <literal>s2</>, <literal>s3</> and <literal>s4</>.
         </para>
         <para>
-        The keyword <literal>ANY</>, coupled with an integer number N,
+        The keyword <literal>ANY</>, coupled with <literal>num_sync</>,
         makes transaction commits wait until WAL records are received
         from N connected standbys among those defined in the list of
         <varname>synchronous_standby_names</>. For example, a setting
         of <literal>ANY 3 (s1, s2, s3, s4)</> makes transaction commits
-        wait until receiving receipts from at least any three standbys
+        wait until receiving WAL records from at least any three standbys
         of four listed servers <literal>s1</>, <literal>s2</>, <literal>s3</>,
         <literal>s4</>.
         </para>
         <para>
-        <literal>FIRST</> and <literal>ANY</> are case-insensitive word
+        <literal>FIRST</> and <literal>ANY</> are case-insensitive words
         and the standby name having these words are must be double-quoted.
         </para>
         <para>
@@ -3090,12 +3090,11 @@ FIRST <replaceable class="parameter">num_sync</replaceable> ( <replaceable class
         <note>
          <para>
          If <literal>FIRST</> or <literal>ANY</> are not specified, this parameter
-         behaves as <literal>ANY</>. Note that this grammar is incompatible with
-         <productname>PostgresSQL</> 9.6, where no keyword specified is equivalent
-         as if <literal>FIRST</> was specified. In short, there is no real need to
-         specify <replaceable class="parameter">num_sync</replaceable> as this
-         behavior does not have changed, as well as it is not necessary to mention
-         pre-9.6 versions are the multi-sync grammar has been added in 9.6.
+         behaves as if <literal>ANY</> is used. Note that this grammar is incompatible
+         with <productname>PostgresSQL</> 9.6 which is first version supporting multiple
+         standbys with synchronous replication, where no such keyword <literal>FIRST</>
+         or <literal>ANY</> can be used. Note that the grammer behaves as if <literal>FIRST</>
+         is used, which is incompatible with the post-9.6 version behavior.
         </para>
        </note>
        <para>

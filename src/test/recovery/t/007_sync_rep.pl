@@ -3,7 +3,7 @@ use strict;
 use warnings;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 10;
+use Test::More tests => 11;
 
 # Query checking sync_priority and sync_state of each standby
 my $check_sql =
@@ -107,7 +107,7 @@ test_sync_state(
 	$node_master, qq(standby2|2|sync
 standby3|3|sync),
 	'2 synchronous standbys',
-	'First 2(standby1,standby2,standby3)');
+	'FIRST 2(standby1,standby2,standby3)');
 
 # Start standby1
 $node_standby_1->start;
@@ -138,7 +138,7 @@ standby2|4|sync
 standby3|3|sync
 standby4|1|sync),
 	'num_sync exceeds the num of potential sync standbys',
-	'First 6(standby4,standby0,standby3,standby2)');
+	'FIRST 6(standby4,standby0,standby3,standby2)');
 
 # The setting that * comes before another standby name is acceptable
 # but does not make sense in most cases. Check that sync_state is
@@ -150,7 +150,7 @@ standby2|2|sync
 standby3|2|potential
 standby4|2|potential),
 	'asterisk comes before another standby name',
-	'First 2(standby1,*,standby2)');
+	'FIRST 2(standby1,*,standby2)');
 
 # Check that the setting of '2(*)' chooses standby2 and standby3 that are stored
 # earlier in WalSnd array as sync standbys.
@@ -160,7 +160,7 @@ standby2|1|sync
 standby3|1|sync
 standby4|1|potential),
 	'multiple standbys having the same priority are chosen as sync',
-	'First 2(*)');
+	'FIRST 2(*)');
 
 # Stop Standby3 which is considered in 'sync' state.
 $node_standby_3->stop;
@@ -180,12 +180,21 @@ $node_master, qq(standby1|1|quorum
 standby2|1|quorum
 standby4|0|async),
 '2 quorum and 1 async',
-'Any 2(standby1, standby2)');
+'ANY 2(standby1, standby2)');
+
+# Check that state of standbys are not the same as the behaviour of that
+# 'ANY' is specified.
+tset_sync_state(
+$node_master, qq(standby|1|quorum
+standby2|1|quorum
+standby4|0|async),
+'not specify synchronization method',
+'2(standby1, standby2)');
 
 # Start Standby3 which will be considered in 'quorum' state.
 $node_standby_3->start;
 
-# Check that set setting of 'Any 2(*)' chooses all standbys as
+# Check that set setting of 'ANY 2(*)' chooses all standbys as
 # voter.
 test_sync_state(
 $node_master, qq(standby1|1|quorum
@@ -193,4 +202,4 @@ standby2|1|quorum
 standby3|1|quorum
 standby4|1|quorum),
 'all standbys are considered as candidates for quorum commit',
-'Any 2(*)');
+'ANY 2(*)');
