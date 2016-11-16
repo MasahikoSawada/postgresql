@@ -495,12 +495,12 @@ SyncRepGetSyncStandbys(bool	*am_sync)
 
 	if (SyncRepConfig->sync_method == SYNC_REP_PRIORITY)
 		return SyncRepGetSyncStandbysPriority(am_sync);
-	else /* SYNC_REP_QUORUM */
+	else if (SyncRepConfig->sync_method == SYNC_REP_QUORUM)
 		return SyncRepGetSyncStandbysQuorum(am_sync);
 	else
 		ereport(ERROR,
-				errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				("invalid synchronization method is specified \"%d\"",
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				"invalid synchronization method is specified \"%d\"",
 				 SyncRepConfig->sync_method));
 }
 
@@ -874,10 +874,6 @@ SyncRepGetStandbyPriority(void)
 		}
 		standby_name += strlen(standby_name) + 1;
 	}
-
-	/* In quorum method, all sync standby priorities are always 1 */
-	if (found && SyncRepConfig->sync_method == SYNC_REP_QUORUM)
-		priority = 1;
 
 	return (found ? priority : 0);
 }

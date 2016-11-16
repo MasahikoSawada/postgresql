@@ -177,16 +177,16 @@ standby4|1|potential),
 # same priority when synchronous_standby_names uses quorum method.
 test_sync_state(
 $node_master, qq(standby1|1|quorum
-standby2|1|quorum
+standby2|2|quorum
 standby4|0|async),
 '2 quorum and 1 async',
 'ANY 2(standby1, standby2)');
 
 # Check that state of standbys are not the same as the behaviour of that
 # 'ANY' is specified.
-tset_sync_state(
-$node_master, qq(standby|1|quorum
-standby2|1|quorum
+test_sync_state(
+$node_master, qq(standby1|1|quorum
+standby2|2|quorum
 standby4|0|async),
 'not specify synchronization method',
 '2(standby1, standby2)');
