@@ -131,6 +131,10 @@ typedef struct LVRelStats
 	bool		lock_waiter_detected;
 } LVRelStats;
 
+/*
+ * GUC parameter
+ */
+double	vacuum_cleanup_index_scale;
 
 /* A few variables that don't seem worth passing around as parameters */
 static int	elevel = -1;
@@ -477,6 +481,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		PROGRESS_VACUUM_MAX_DEAD_TUPLES
 	};
 	int64		initprog_val[3];
+	float4		cleanupidx_thresh;
 
 	pg_rusage_init(&ru0);
 
@@ -1312,9 +1317,18 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
 								 PROGRESS_VACUUM_PHASE_INDEX_CLEANUP);
 
-	/* Do post-vacuum cleanup and statistics update for each index */
-	for (i = 0; i < nindexes; i++)
-		lazy_cleanup_index(Irel[i], indstats[i], vacrelstats);
+	/*
+	 * Do post-vacuum cleanup and statistics update for each index if
+	 * the number of vacuumed page exceeds threshold.
+	 */
+	cleanupidx_thresh = (float4) nblocks * vacuum_cleanup_index_scale;
+	elog(NOTICE, "scale : %.0f, nblocks : %d, vacuumed : %d, result : ",
+		 vacuum_cleanup_index_scale, nblocks, vacuumed_pages);
+	if (vacuumed_pages > cleanupidx_thresh)
+	{
+		for (i = 0; i < nindexes; i++)
+			lazy_cleanup_index(Irel[i], indstats[i], vacrelstats);
+	}
 
 	/* If no indexes, make log report that lazy_vacuum_heap would've made */
 	if (vacuumed_pages)

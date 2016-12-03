@@ -2164,7 +2164,7 @@ static struct config_int ConfigureNamesInt[] =
 		0, 0, 1000000,
 		NULL, NULL, NULL
 	},
-
+	
 	/*
 	 * See also CheckRequiredParameterValues() if this parameter changes
 	 */
@@ -2983,6 +2983,16 @@ static struct config_real ConfigureNamesReal[] =
 		},
 		&autovacuum_anl_scale,
 		0.1, 0.0, 100.0,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"vacuum_cleanup_index_scale_factor", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Ratio of number of pages containg dead tuple should cleanup index."),
+			NULL
+		},
+		&vacuum_cleanup_index_scale,
+		0.0, 0.0, 100.0,
 		NULL, NULL, NULL
 	},
 
