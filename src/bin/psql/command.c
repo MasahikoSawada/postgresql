@@ -101,7 +101,9 @@ static bool DefineAlias(char *alias, char *command);
 static bool UndefineAlias(char *alias);
 static void ShowAlias(void);
 static bool	LookupAlias(const char *alias, int *index);
-static bool ExecAlias(char *alias, int argc, char **argv);
+static bool ExecAlias(char *sql, int argc, char **argv);
+static char *assignVariables(char *sql, char **variables);
+static char *replaceVariable(char **sql, char *param, char *value);
 
 #ifdef WIN32
 static void checkWin32Codepage(void);
@@ -3858,45 +3860,29 @@ LookupAlias(const char *alias, int *index)
  * Exec alias with variables.
  */
 static bool
-ExecAlias(char *alias, int n_variables, char **variables)
+ExecAlias(char *sql, int n_variables, char **variables)
 {
+	char *sql_command = strdup(sql);
+	
+	fprintf(stderr, "sql = %s, argc = %d\n",
+			sql, n_variables);
 
-	fprintf(stderr, "alias = %s, argc = %d\n",
-			alias, n_variables);
+	sql_command = assignVariables(sql_command, variables);
+	
 	return true;
 }
 
 static char *
 assignVariables(char *sql, char **variables)
 {
-	char	   *p,
-			   *name,
-			   *val;
+	char	   *p;
+	char 	**val = variables;
 
 	p = sql;
 	while ((p = strchr(p, '?')) != NULL)
 	{
-		int			eaten;
-
-		name = parseVariable(p, &eaten);
-		if (name == NULL)
-		{
-			while (*p == ':')
-			{
-				p++;
-			}
-			continue;
-		}
-
-		val = getVariable(st, name);
-		free(name);
-		if (val == NULL)
-		{
-			p++;
-			continue;
-		}
-
-		p = replaceVariable(&sql, p, eaten, val);
+		p = replaceVariable(&sql, p, *val);
+		val++;
 	}
 
 	return sql;
@@ -3905,9 +3891,14 @@ assignVariables(char *sql, char **variables)
 /*
  * Replace.
  */
-staic char *
-replaceVariable(char **sql, char *param, int len, char *value)
+static char *
+replaceVariable(char **sql, char *param, char *value)
 {
 	int valueln = strlen(value);
+	int sqlln = strlen(*sql);
 
+	memmove(param + 1, param + valueln, strlen(param + 1) + 1);
+	memcpy(param, value, valueln);
+
+	return param + valueln;
 }
