@@ -50,9 +50,10 @@
 #include "settings.h"
 #include "variables.h"
 
-#define MAX_ALIASES 128			/* max number of alias allowed */
-#define MAX_ALIAS_LEN 128		/* limit of aliaslength */
-#define MAX_COMMAND_LEN 8192	/* limit of command length */
+#define MAX_ALIASES 128				/* max number of alias allowed */
+#define MAX_ALIAS_LEN 128			/* limit of alias length */
+#define MAX_ALIAS_COMMAND_LEN 8192	/* limit of command length */
+#define MAX_ALIAS_ARGS 8			/* limit of number of argument */
 
 /*
  * Editable database object types.
@@ -66,7 +67,7 @@ typedef enum EditableObjectType
 typedef struct PsqlAlias
 {
 	char alias[MAX_ALIAS_LEN];	/* alias name */
-	char command[MAX_COMMAND_LEN];	/* NULL-terminated command */
+	char command[MAX_ALIAS_COMMAND_LEN];	/* NULL-terminated command */
 } PsqlAlias;
 
 static PsqlAlias psql_aliases[MAX_ALIASES];
@@ -96,10 +97,11 @@ static void printSSLInfo(void);
 static bool printPsetInfo(const char *param, struct printQueryOpt *popt);
 static char *pset_value_string(const char *param, struct printQueryOpt *popt);
 
-static bool exec_alias(char *alias, char *command);
-static bool exec_unalias(char *alias);
-static void show_aliases(void);
-static bool	search_alias(const char *alias, int *index);
+static bool DefineAlias(char *alias, char *command);
+static bool UndefineAlias(char *alias);
+static void ShowAlias(void);
+static bool	LookupAlias(const char *alias, int *index);
+static bool ExecAlias(char *alias, int argc, char **argv);
 
 #ifdef WIN32
 static void checkWin32Codepage(void);
@@ -226,12 +228,27 @@ exec_command(const char *cmd,
 	/* Look at defined alias at first */
 	if (num_aliases > 0)
 	{
-		int alias_index;
-		bool found = search_alias(cmd, &alias_index);
+		int index;
+		bool found = LookupAlias(cmd, &index);
 
 		if (found)
 		{
-			/* exec alias here */
+			char *argv[MAX_ALIAS_ARGS];
+			char *arg = psql_scan_slash_option(scan_state,
+											   OT_NORMAL, NULL, true);
+			int argc = 0;
+
+			while (arg != NULL)
+			{
+				argv[argc++] = arg;
+
+				/* Scan next argument */
+				arg = psql_scan_slash_option(scan_state,
+											 OT_NORMAL, NULL, true);
+			}
+
+			/* Exec alias */
+			ExecAlias(psql_aliases[index].command, argc, argv);
 		}
 	}
 
@@ -239,7 +256,7 @@ exec_command(const char *cmd,
 	 * \a -- toggle field alignment This makes little sense but we keep it
 	 * around.
 	 */
-	if (strcmp(cmd, "a") == 0)
+	else if (strcmp(cmd, "a") == 0)
 	{
 		if (pset.popt.topt.format != PRINT_ALIGNED)
 			success = do_pset("format", "aligned", &pset.popt, pset.quiet);
@@ -265,22 +282,16 @@ exec_command(const char *cmd,
 		command = psql_scan_slash_option(scan_state,
 										 OT_WHOLE_LINE, NULL, true);
 
-		if (strlen(alias) > MAX_ALIAS_LEN)
+		 if (!alias)
+		{
+			/* show current defined aliases */
+			ShowAlias();
+			success = true;
+		}
+		 else if (strlen(alias) > MAX_ALIAS_LEN)
 		{
 			psql_error("\\\%s: length of alias is up to %d\n", cmd, MAX_ALIAS_LEN);
 			success = false;
-
-		}
-		else if (strlen(command) > MAX_COMMAND_LEN)
-		{
-			psql_error("\\\%s: length of command is up to %d\n", cmd, MAX_COMMAND_LEN);
-			success = false;
-		}
-		else if (!alias)
-		{
-			/* show current defined aliases */
-			show_aliases();
-			success = true;
 		}
 		else if (!command)
 		{
@@ -288,11 +299,13 @@ exec_command(const char *cmd,
 			psql_error("\\\%s: missing required argument\n", cmd);
 			success = false;
 		}
-		else
+		else if (strlen(command) > MAX_ALIAS_COMMAND_LEN)
 		{
-			/* define alias */
-			success = exec_alias(alias, command);
+			psql_error("\\\%s: length of command is up to %d\n", cmd, MAX_ALIAS_COMMAND_LEN);
+			success = false;
 		}
+		else /* define alias */
+			success = DefineAlias(alias, command);
 	}
 
 	/* \C -- override table title (formerly change HTML caption) */
@@ -1649,7 +1662,7 @@ exec_command(const char *cmd,
 			success = false;
 		}
 		else
-			success = exec_unalias(alias);
+			success = UndefineAlias(alias);
 	}
 
 	/* \unset */
@@ -3754,10 +3767,10 @@ minimal_error_message(PGresult *res)
  * in psql_aliases then we replace it to new one.
  */
 static bool
-exec_alias(char *alias, char *command)
+DefineAlias(char *alias, char *command)
 {
 	int index;
-	bool found = search_alias(alias, &index);
+	bool found = LookupAlias(alias, &index);
 
 	/*
 	 * Decide insert index. If given alias is already defined,
@@ -3780,10 +3793,10 @@ exec_alias(char *alias, char *command)
  * Undefine given alias and shrink psql_aliases array.
  */
 static bool
-exec_unalias(char *alias)
+UndefineAlias(char *alias)
 {
 	int index;
-	bool found = search_alias(alias, &index);
+	bool found = LookupAlias(alias, &index);
 	PsqlAlias *end = &(psql_aliases[num_aliases]);
 	PsqlAlias *del_alias;
 
@@ -3804,7 +3817,7 @@ exec_unalias(char *alias)
 }
 
 static void
-show_aliases(void)
+ShowAlias(void)
 {
 	int i;
 
@@ -3825,7 +3838,7 @@ show_aliases(void)
  * of array if found.
  */
 static bool
-search_alias(const char *alias, int *index)
+LookupAlias(const char *alias, int *index)
 {
 	int i;
 
@@ -3839,4 +3852,62 @@ search_alias(const char *alias, int *index)
 	}
 
 	return false;
+}
+
+/*
+ * Exec alias with variables.
+ */
+static bool
+ExecAlias(char *alias, int n_variables, char **variables)
+{
+
+	fprintf(stderr, "alias = %s, argc = %d\n",
+			alias, n_variables);
+	return true;
+}
+
+static char *
+assignVariables(char *sql, char **variables)
+{
+	char	   *p,
+			   *name,
+			   *val;
+
+	p = sql;
+	while ((p = strchr(p, '?')) != NULL)
+	{
+		int			eaten;
+
+		name = parseVariable(p, &eaten);
+		if (name == NULL)
+		{
+			while (*p == ':')
+			{
+				p++;
+			}
+			continue;
+		}
+
+		val = getVariable(st, name);
+		free(name);
+		if (val == NULL)
+		{
+			p++;
+			continue;
+		}
+
+		p = replaceVariable(&sql, p, eaten, val);
+	}
+
+	return sql;
+}
+
+/*
+ * Replace.
+ */
+staic char *
+replaceVariable(char **sql, char *param, int len, char *value)
+{
+	int valueln = strlen(value);
+
 }
