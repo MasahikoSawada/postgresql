@@ -103,7 +103,6 @@ static void ShowAlias(void);
 static bool	LookupAlias(const char *alias, int *index);
 static bool ExecAlias(char *sql, int argc, char **argv);
 static char *assignVariables(char *sql, char **variables);
-static char *replaceVariable(char **sql, char *param, char *value);
 
 #ifdef WIN32
 static void checkWin32Codepage(void);
@@ -226,32 +225,28 @@ exec_command(const char *cmd,
 	bool		success = true; /* indicate here if the command ran ok or
 								 * failed */
 	backslashResult status = PSQL_CMD_SKIP_LINE;
+	int index;
+	bool found = LookupAlias(cmd, &index);
 
 	/* Look at defined alias at first */
-	if (num_aliases > 0)
+	if (found)
 	{
-		int index;
-		bool found = LookupAlias(cmd, &index);
+		char *argv[MAX_ALIAS_ARGS];
+		char *arg = psql_scan_slash_option(scan_state,
+										   OT_NORMAL, NULL, true);
+		int argc = 0;
 
-		if (found)
+		while (arg != NULL)
 		{
-			char *argv[MAX_ALIAS_ARGS];
-			char *arg = psql_scan_slash_option(scan_state,
-											   OT_NORMAL, NULL, true);
-			int argc = 0;
+			argv[argc++] = arg;
 
-			while (arg != NULL)
-			{
-				argv[argc++] = arg;
-
-				/* Scan next argument */
-				arg = psql_scan_slash_option(scan_state,
-											 OT_NORMAL, NULL, true);
-			}
-
-			/* Exec alias */
-			ExecAlias(psql_aliases[index].command, argc, argv);
+			/* Scan next argument */
+			arg = psql_scan_slash_option(scan_state,
+										 OT_NORMAL, NULL, true);
 		}
+
+		/* Exec alias */
+		success = ExecAlias(psql_aliases[index].command, argc, argv);
 	}
 
 	/*
@@ -3863,12 +3858,27 @@ static bool
 ExecAlias(char *sql, int n_variables, char **variables)
 {
 	char *sql_command = strdup(sql);
+	char	   *p = sql_command;
+	char 	**val = variables;
+	int		assigned = 0;
 	
-	fprintf(stderr, "sql = %s, argc = %d\n",
+	fprintf(stderr, "[before] sql = %s, argc = %d\n",
 			sql, n_variables);
 
-	sql_command = assignVariables(sql_command, variables);
-	
+	while ((p = strchr(p, '?')) != NULL)
+	{
+		int valueln = strlen(*val);
+
+		memmove(p + valueln, p + 1, strlen(p) + 1);
+		memcpy(p, *val, valueln);
+		val++;
+	}
+
+	//assignVariables(sql_command, variables);
+
+	fprintf(stderr, "[after] sql = %s, argc = %d\n",
+			sql_command, n_variables);
+
 	return true;
 }
 
@@ -3881,24 +3891,12 @@ assignVariables(char *sql, char **variables)
 	p = sql;
 	while ((p = strchr(p, '?')) != NULL)
 	{
-		p = replaceVariable(&sql, p, *val);
+		int valueln = strlen(*val);
+		
+		memmove(p + valueln, p + 1, strlen(p) + 1);
+		memcpy(p, *val, valueln);
 		val++;
 	}
 
 	return sql;
-}
-
-/*
- * Replace.
- */
-static char *
-replaceVariable(char **sql, char *param, char *value)
-{
-	int valueln = strlen(value);
-	int sqlln = strlen(*sql);
-
-	memmove(param + 1, param + valueln, strlen(param + 1) + 1);
-	memcpy(param, value, valueln);
-
-	return param + valueln;
 }
