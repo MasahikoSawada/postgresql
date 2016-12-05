@@ -1322,8 +1322,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	 * the number of vacuumed page exceeds threshold.
 	 */
 	cleanupidx_thresh = (float4) nblocks * vacuum_cleanup_index_scale;
-	elog(NOTICE, "scale : %.0f, nblocks : %d, vacuumed : %d, result : ",
-		 vacuum_cleanup_index_scale, nblocks, vacuumed_pages);
+	elog(WARNING, "scale : %.0f, nblocks : %d, vacuumed : %d, result : %.0f",
+		 vacuum_cleanup_index_scale, nblocks, vacuumed_pages, cleanupidx_thresh);
 	if (vacuumed_pages > cleanupidx_thresh)
 	{
 		for (i = 0; i < nindexes; i++)
