@@ -14,9 +14,9 @@
 #include "datatype/timestamp.h"
 #include "fmgr.h"
 #include "libpq/pqcomm.h"
+#include "port/atomics.h"
 #include "portability/instr_time.h"
 #include "postmaster/pgarch.h"
-#include "storage/barrier.h"
 #include "storage/proc.h"
 #include "utils/hsearch.h"
 #include "utils/relcache.h"
@@ -763,6 +763,7 @@ typedef enum
 	WAIT_EVENT_CLIENT_WRITE,
 	WAIT_EVENT_SSL_OPEN_SERVER,
 	WAIT_EVENT_WAL_RECEIVER_WAIT_START,
+	WAIT_EVENT_LIBPQWALRECEIVER_READ,
 	WAIT_EVENT_WAL_SENDER_WAIT_WAL,
 	WAIT_EVENT_WAL_SENDER_WRITE_DATA
 } WaitEventClient;

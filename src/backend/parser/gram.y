@@ -332,6 +332,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <str>		all_Op MathOp
 
 %type <str>		row_security_cmd RowSecurityDefaultForCmd
+%type <boolean> RowSecurityDefaultPermissive
 %type <node>	RowSecurityOptionalWithCheck RowSecurityOptionalExpr
 %type <list>	RowSecurityDefaultToRole RowSecurityOptionalToRole
 
@@ -341,7 +342,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <accesspriv> privilege
 %type <list>	privileges privilege_list
 %type <privtarget> privilege_target
-%type <funwithargs> function_with_argtypes
+%type <funwithargs> function_with_argtypes aggregate_with_argtypes
 %type <list>	function_with_argtypes_list
 %type <ival>	defacl_privilege_target
 %type <defelt>	DefACLOption
@@ -365,8 +366,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				qualified_name_list any_name any_name_list type_name_list
 				any_operator expr_list attrs
 				target_list opt_target_list insert_column_list set_target_list
-				set_clause_list set_clause multiple_set_clause
-				ctext_expr_list ctext_row def_list operator_def_list indirection opt_indirection
+				set_clause_list set_clause
+				def_list operator_def_list indirection opt_indirection
 				reloption_list group_clause TriggerFuncArgs select_limit
 				opt_select_limit opclass_item_list opclass_drop_list
 				opclass_purpose opt_opfamily transaction_mode_list_or_empty
@@ -454,7 +455,6 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <node>	case_expr case_arg when_clause case_default
 %type <list>	when_clause_list
 %type <ival>	sub_type
-%type <node>	ctext_expr
 %type <value>	NumericOnly
 %type <list>	NumericOnly_list
 %type <alias>	alias_clause opt_alias_clause
@@ -466,7 +466,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <range>	relation_expr
 %type <range>	relation_expr_opt_alias
 %type <node>	tablesample_clause opt_repeatable_clause
-%type <target>	target_el single_set_clause set_target insert_column_item
+%type <target>	target_el set_target insert_column_item
 
 %type <str>		generic_option_name
 %type <node>	generic_option_arg
@@ -3944,14 +3944,14 @@ AlterExtensionContentsStmt:
 					n->objname = list_make1(makeString($7));
 					$$ = (Node *)n;
 				}
-			| ALTER EXTENSION name add_drop AGGREGATE func_name aggr_args
+			| ALTER EXTENSION name add_drop AGGREGATE aggregate_with_argtypes
 				{
 					AlterExtensionContentsStmt *n = makeNode(AlterExtensionContentsStmt);
 					n->extname = $3;
 					n->action = $4;
 					n->objtype = OBJECT_AGGREGATE;
-					n->objname = $6;
-					n->objargs = extractAggrArgTypes($7);
+					n->objname = $6->funcname;
+					n->objargs = $6->funcargs;
 					$$ = (Node *)n;
 				}
 			| ALTER EXTENSION name add_drop CAST '(' Typename AS Typename ')'
@@ -4629,26 +4629,30 @@ AlterUserMappingStmt: ALTER USER MAPPING FOR auth_ident SERVER name alter_generi
 /*****************************************************************************
  *
  *		QUERIES:
- *				CREATE POLICY name ON table [FOR cmd] [TO role, ...]
- *					[USING (qual)] [WITH CHECK (with_check)]
+ *				CREATE POLICY name ON table
+ *					[AS { PERMISSIVE | RESTRICTIVE } ]
+ *					[FOR { SELECT | INSERT | UPDATE | DELETE } ]
+ *					[TO role, ...]
+ *					[USING (qual)] [WITH CHECK (with check qual)]
  *				ALTER POLICY name ON table [TO role, ...]
- *					[USING (qual)] [WITH CHECK (with_check)]
+ *					[USING (qual)] [WITH CHECK (with check qual)]
  *				DROP POLICY name ON table
  *
  *****************************************************************************/
 
 CreatePolicyStmt:
-			CREATE POLICY name ON qualified_name RowSecurityDefaultForCmd
-				RowSecurityDefaultToRole RowSecurityOptionalExpr
-				RowSecurityOptionalWithCheck
+			CREATE POLICY name ON qualified_name RowSecurityDefaultPermissive
+				RowSecurityDefaultForCmd RowSecurityDefaultToRole
+				RowSecurityOptionalExpr RowSecurityOptionalWithCheck
 				{
 					CreatePolicyStmt *n = makeNode(CreatePolicyStmt);
 					n->policy_name = $3;
 					n->table = $5;
-					n->cmd_name = $6;
-					n->roles = $7;
-					n->qual = $8;
-					n->with_check = $9;
+					n->permissive = $6;
+					n->cmd_name = $7;
+					n->roles = $8;
+					n->qual = $9;
+					n->with_check = $10;
 					$$ = (Node *) n;
 				}
 		;
@@ -4710,6 +4714,24 @@ RowSecurityDefaultToRole:
 RowSecurityOptionalToRole:
 			TO role_list			{ $$ = $2; }
 			| /* EMPTY */			{ $$ = NULL; }
+		;
+
+RowSecurityDefaultPermissive:
+			AS IDENT
+				{
+					if (strcmp($2, "permissive") == 0)
+						$$ = true;
+					else if (strcmp($2, "restrictive") == 0)
+						$$ = false;
+					else
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("unrecognized row security option \"%s\"", $2),
+								 errhint("Only PERMISSIVE or RESTRICTIVE policies are supported currently."),
+									 parser_errposition(@2)));
+
+				}
+			| /* EMPTY */			{ $$ = true; }
 		;
 
 RowSecurityDefaultForCmd:
@@ -5415,21 +5437,21 @@ opclass_item:
 					n->order_family = $5;
 					$$ = (Node *) n;
 				}
-			| FUNCTION Iconst func_name func_args
+			| FUNCTION Iconst function_with_argtypes
 				{
 					CreateOpClassItem *n = makeNode(CreateOpClassItem);
 					n->itemtype = OPCLASS_ITEM_FUNCTION;
-					n->name = $3;
-					n->args = extractArgTypes($4);
+					n->name = $3->funcname;
+					n->args = $3->funcargs;
 					n->number = $2;
 					$$ = (Node *) n;
 				}
-			| FUNCTION Iconst '(' type_list ')' func_name func_args
+			| FUNCTION Iconst '(' type_list ')' function_with_argtypes
 				{
 					CreateOpClassItem *n = makeNode(CreateOpClassItem);
 					n->itemtype = OPCLASS_ITEM_FUNCTION;
-					n->name = $6;
-					n->args = extractArgTypes($7);
+					n->name = $6->funcname;
+					n->args = $6->funcargs;
 					n->number = $2;
 					n->class_args = $4;
 					$$ = (Node *) n;
@@ -5820,22 +5842,22 @@ CommentStmt:
 					n->comment = $6;
 					$$ = (Node *) n;
 				}
-			| COMMENT ON AGGREGATE func_name aggr_args IS comment_text
+			| COMMENT ON AGGREGATE aggregate_with_argtypes IS comment_text
 				{
 					CommentStmt *n = makeNode(CommentStmt);
 					n->objtype = OBJECT_AGGREGATE;
-					n->objname = $4;
-					n->objargs = extractAggrArgTypes($5);
-					n->comment = $7;
+					n->objname = $4->funcname;
+					n->objargs = $4->funcargs;
+					n->comment = $6;
 					$$ = (Node *) n;
 				}
-			| COMMENT ON FUNCTION func_name func_args IS comment_text
+			| COMMENT ON FUNCTION function_with_argtypes IS comment_text
 				{
 					CommentStmt *n = makeNode(CommentStmt);
 					n->objtype = OBJECT_FUNCTION;
-					n->objname = $4;
-					n->objargs = extractArgTypes($5);
-					n->comment = $7;
+					n->objname = $4->funcname;
+					n->objargs = $4->funcargs;
+					n->comment = $6;
 					$$ = (Node *) n;
 				}
 			| COMMENT ON OPERATOR any_operator oper_argtypes IS comment_text
@@ -6036,26 +6058,26 @@ SecLabelStmt:
 					n->label = $8;
 					$$ = (Node *) n;
 				}
-			| SECURITY LABEL opt_provider ON AGGREGATE func_name aggr_args
+			| SECURITY LABEL opt_provider ON AGGREGATE aggregate_with_argtypes
 			  IS security_label
 				{
 					SecLabelStmt *n = makeNode(SecLabelStmt);
 					n->provider = $3;
 					n->objtype = OBJECT_AGGREGATE;
-					n->objname = $6;
-					n->objargs = extractAggrArgTypes($7);
-					n->label = $9;
+					n->objname = $6->funcname;
+					n->objargs = $6->funcargs;
+					n->label = $8;
 					$$ = (Node *) n;
 				}
-			| SECURITY LABEL opt_provider ON FUNCTION func_name func_args
+			| SECURITY LABEL opt_provider ON FUNCTION function_with_argtypes
 			  IS security_label
 				{
 					SecLabelStmt *n = makeNode(SecLabelStmt);
 					n->provider = $3;
 					n->objtype = OBJECT_FUNCTION;
-					n->objname = $6;
-					n->objargs = extractArgTypes($7);
-					n->label = $9;
+					n->objname = $6->funcname;
+					n->objargs = $6->funcargs;
+					n->label = $8;
 					$$ = (Node *) n;
 				}
 			| SECURITY LABEL opt_provider ON LARGE_P OBJECT_P NumericOnly
@@ -6534,22 +6556,6 @@ opt_grant_grant_option:
 			| /*EMPTY*/ { $$ = FALSE; }
 		;
 
-function_with_argtypes_list:
-			function_with_argtypes					{ $$ = list_make1($1); }
-			| function_with_argtypes_list ',' function_with_argtypes
-													{ $$ = lappend($1, $3); }
-		;
-
-function_with_argtypes:
-			func_name func_args
-				{
-					FuncWithArgs *n = makeNode(FuncWithArgs);
-					n->funcname = $1;
-					n->funcargs = extractArgTypes($2);
-					$$ = n;
-				}
-		;
-
 /*****************************************************************************
  *
  * GRANT and REVOKE ROLE statements
@@ -6902,6 +6908,22 @@ func_args_list:
 			| func_args_list ',' func_arg			{ $$ = lappend($1, $3); }
 		;
 
+function_with_argtypes_list:
+			function_with_argtypes					{ $$ = list_make1($1); }
+			| function_with_argtypes_list ',' function_with_argtypes
+													{ $$ = lappend($1, $3); }
+		;
+
+function_with_argtypes:
+			func_name func_args
+				{
+					FuncWithArgs *n = makeNode(FuncWithArgs);
+					n->funcname = $1;
+					n->funcargs = extractArgTypes($2);
+					$$ = n;
+				}
+		;
+
 /*
  * func_args_with_defaults is separate because we only want to accept
  * defaults in CREATE FUNCTION, not in ALTER etc.
@@ -7104,6 +7126,16 @@ aggr_args_list:
 			| aggr_args_list ',' aggr_arg			{ $$ = lappend($1, $3); }
 		;
 
+aggregate_with_argtypes:
+			func_name aggr_args
+				{
+					FuncWithArgs *n = makeNode(FuncWithArgs);
+					n->funcname = $1;
+					n->funcargs = extractAggrArgTypes($2);
+					$$ = n;
+				}
+		;
+
 createfunc_opt_list:
 			/* Must be at least one to prevent conflict */
 			createfunc_opt_item						{ $$ = list_make1($1); }
@@ -7285,24 +7317,24 @@ opt_restrict:
  *****************************************************************************/
 
 RemoveFuncStmt:
-			DROP FUNCTION func_name func_args opt_drop_behavior
+			DROP FUNCTION function_with_argtypes opt_drop_behavior
 				{
 					DropStmt *n = makeNode(DropStmt);
 					n->removeType = OBJECT_FUNCTION;
-					n->objects = list_make1($3);
-					n->arguments = list_make1(extractArgTypes($4));
-					n->behavior = $5;
+					n->objects = list_make1($3->funcname);
+					n->arguments = list_make1($3->funcargs);
+					n->behavior = $4;
 					n->missing_ok = false;
 					n->concurrent = false;
 					$$ = (Node *)n;
 				}
-			| DROP FUNCTION IF_P EXISTS func_name func_args opt_drop_behavior
+			| DROP FUNCTION IF_P EXISTS function_with_argtypes opt_drop_behavior
 				{
 					DropStmt *n = makeNode(DropStmt);
 					n->removeType = OBJECT_FUNCTION;
-					n->objects = list_make1($5);
-					n->arguments = list_make1(extractArgTypes($6));
-					n->behavior = $7;
+					n->objects = list_make1($5->funcname);
+					n->arguments = list_make1($5->funcargs);
+					n->behavior = $6;
 					n->missing_ok = true;
 					n->concurrent = false;
 					$$ = (Node *)n;
@@ -7310,24 +7342,24 @@ RemoveFuncStmt:
 		;
 
 RemoveAggrStmt:
-			DROP AGGREGATE func_name aggr_args opt_drop_behavior
+			DROP AGGREGATE aggregate_with_argtypes opt_drop_behavior
 				{
 					DropStmt *n = makeNode(DropStmt);
 					n->removeType = OBJECT_AGGREGATE;
-					n->objects = list_make1($3);
-					n->arguments = list_make1(extractAggrArgTypes($4));
-					n->behavior = $5;
+					n->objects = list_make1($3->funcname);
+					n->arguments = list_make1($3->funcargs);
+					n->behavior = $4;
 					n->missing_ok = false;
 					n->concurrent = false;
 					$$ = (Node *)n;
 				}
-			| DROP AGGREGATE IF_P EXISTS func_name aggr_args opt_drop_behavior
+			| DROP AGGREGATE IF_P EXISTS aggregate_with_argtypes opt_drop_behavior
 				{
 					DropStmt *n = makeNode(DropStmt);
 					n->removeType = OBJECT_AGGREGATE;
-					n->objects = list_make1($5);
-					n->arguments = list_make1(extractAggrArgTypes($6));
-					n->behavior = $7;
+					n->objects = list_make1($5->funcname);
+					n->arguments = list_make1($5->funcargs);
+					n->behavior = $6;
 					n->missing_ok = true;
 					n->concurrent = false;
 					$$ = (Node *)n;
@@ -7626,13 +7658,13 @@ AlterTblSpcStmt:
  *
  *****************************************************************************/
 
-RenameStmt: ALTER AGGREGATE func_name aggr_args RENAME TO name
+RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 				{
 					RenameStmt *n = makeNode(RenameStmt);
 					n->renameType = OBJECT_AGGREGATE;
-					n->object = $3;
-					n->objarg = extractAggrArgTypes($4);
-					n->newname = $7;
+					n->object = $3->funcname;
+					n->objarg = $3->funcargs;
+					n->newname = $6;
 					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
@@ -8158,13 +8190,13 @@ AlterObjectDependsStmt:
  *****************************************************************************/
 
 AlterObjectSchemaStmt:
-			ALTER AGGREGATE func_name aggr_args SET SCHEMA name
+			ALTER AGGREGATE aggregate_with_argtypes SET SCHEMA name
 				{
 					AlterObjectSchemaStmt *n = makeNode(AlterObjectSchemaStmt);
 					n->objectType = OBJECT_AGGREGATE;
-					n->object = $3;
-					n->objarg = extractAggrArgTypes($4);
-					n->newschema = $7;
+					n->object = $3->funcname;
+					n->objarg = $3->funcargs;
+					n->newschema = $6;
 					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
@@ -8412,13 +8444,13 @@ operator_def_elem: ColLabel '=' NONE
  *
  *****************************************************************************/
 
-AlterOwnerStmt: ALTER AGGREGATE func_name aggr_args OWNER TO RoleSpec
+AlterOwnerStmt: ALTER AGGREGATE aggregate_with_argtypes OWNER TO RoleSpec
 				{
 					AlterOwnerStmt *n = makeNode(AlterOwnerStmt);
 					n->objectType = OBJECT_AGGREGATE;
-					n->object = $3;
-					n->objarg = extractAggrArgTypes($4);
-					n->newowner = $7;
+					n->object = $3->funcname;
+					n->objarg = $3->funcargs;
+					n->newowner = $6;
 					$$ = (Node *)n;
 				}
 			| ALTER COLLATION any_name OWNER TO RoleSpec
@@ -9914,67 +9946,16 @@ set_clause_list:
 		;
 
 set_clause:
-			single_set_clause						{ $$ = list_make1($1); }
-			| multiple_set_clause					{ $$ = $1; }
-		;
-
-single_set_clause:
-			set_target '=' ctext_expr
+			set_target '=' a_expr
 				{
-					$$ = $1;
-					$$->val = (Node *) $3;
+					$1->val = (Node *) $3;
+					$$ = list_make1($1);
 				}
-		;
-
-/*
- * Ideally, we'd accept any row-valued a_expr as RHS of a multiple_set_clause.
- * However, per SQL spec the row-constructor case must allow DEFAULT as a row
- * member, and it's pretty unclear how to do that (unless perhaps we allow
- * DEFAULT in any a_expr and let parse analysis sort it out later?).  For the
- * moment, the planner/executor only support a subquery as a multiassignment
- * source anyhow, so we need only accept ctext_row and subqueries here.
- */
-multiple_set_clause:
-			'(' set_target_list ')' '=' ctext_row
+			| '(' set_target_list ')' '=' a_expr
 				{
-					ListCell *col_cell;
-					ListCell *val_cell;
-
-					/*
-					 * Break the ctext_row apart, merge individual expressions
-					 * into the destination ResTargets.  This is semantically
-					 * equivalent to, and much cheaper to process than, the
-					 * general case.
-					 */
-					if (list_length($2) != list_length($5))
-						ereport(ERROR,
-								(errcode(ERRCODE_SYNTAX_ERROR),
-								 errmsg("number of columns does not match number of values"),
-								 parser_errposition(@5)));
-					forboth(col_cell, $2, val_cell, $5)
-					{
-						ResTarget *res_col = (ResTarget *) lfirst(col_cell);
-						Node *res_val = (Node *) lfirst(val_cell);
-
-						res_col->val = res_val;
-					}
-
-					$$ = $2;
-				}
-			| '(' set_target_list ')' '=' select_with_parens
-				{
-					SubLink *sl = makeNode(SubLink);
 					int ncolumns = list_length($2);
 					int i = 1;
 					ListCell *col_cell;
-
-					/* First, convert bare SelectStmt into a SubLink */
-					sl->subLinkType = MULTIEXPR_SUBLINK;
-					sl->subLinkId = 0;		/* will be assigned later */
-					sl->testexpr = NULL;
-					sl->operName = NIL;
-					sl->subselect = $5;
-					sl->location = @5;
 
 					/* Create a MultiAssignRef source for each target */
 					foreach(col_cell, $2)
@@ -9982,7 +9963,7 @@ multiple_set_clause:
 						ResTarget *res_col = (ResTarget *) lfirst(col_cell);
 						MultiAssignRef *r = makeNode(MultiAssignRef);
 
-						r->source = (Node *) sl;
+						r->source = (Node *) $5;
 						r->colno = i;
 						r->ncolumns = ncolumns;
 						res_col->val = (Node *) r;
@@ -10641,17 +10622,22 @@ locked_rels_list:
 		;
 
 
+/*
+ * We should allow ROW '(' expr_list ')' too, but that seems to require
+ * making VALUES a fully reserved word, which will probably break more apps
+ * than allowing the noise-word is worth.
+ */
 values_clause:
-			VALUES ctext_row
+			VALUES '(' expr_list ')'
 				{
 					SelectStmt *n = makeNode(SelectStmt);
-					n->valuesLists = list_make1($2);
+					n->valuesLists = list_make1($3);
 					$$ = (Node *) n;
 				}
-			| values_clause ',' ctext_row
+			| values_clause ',' '(' expr_list ')'
 				{
 					SelectStmt *n = (SelectStmt *) $1;
-					n->valuesLists = lappend(n->valuesLists, $3);
+					n->valuesLists = lappend(n->valuesLists, $4);
 					$$ = (Node *) n;
 				}
 		;
@@ -12042,6 +12028,20 @@ a_expr:		c_expr									{ $$ = $1; }
 												 list_make1($1), @2),
 									 @2);
 				}
+			| DEFAULT
+				{
+					/*
+					 * The SQL spec only allows DEFAULT in "contextually typed
+					 * expressions", but for us, it's easier to allow it in
+					 * any a_expr and then throw error during parse analysis
+					 * if it's in an inappropriate context.  This way also
+					 * lets us say something smarter than "syntax error".
+					 */
+					SetToDefault *n = makeNode(SetToDefault);
+					/* parse analysis will fill in the rest */
+					n->location = @1;
+					$$ = (Node *)n;
+				}
 		;
 
 /*
@@ -13295,36 +13295,6 @@ opt_indirection:
 
 opt_asymmetric: ASYMMETRIC
 			| /*EMPTY*/
-		;
-
-/*
- * The SQL spec defines "contextually typed value expressions" and
- * "contextually typed row value constructors", which for our purposes
- * are the same as "a_expr" and "row" except that DEFAULT can appear at
- * the top level.
- */
-
-ctext_expr:
-			a_expr					{ $$ = (Node *) $1; }
-			| DEFAULT
-				{
-					SetToDefault *n = makeNode(SetToDefault);
-					n->location = @1;
-					$$ = (Node *) n;
-				}
-		;
-
-ctext_expr_list:
-			ctext_expr								{ $$ = list_make1($1); }
-			| ctext_expr_list ',' ctext_expr		{ $$ = lappend($1, $3); }
-		;
-
-/*
- * We should allow ROW '(' ctext_expr_list ')' too, but that seems to require
- * making VALUES a fully reserved word, which will probably break more apps
- * than allowing the noise-word is worth.
- */
-ctext_row: '(' ctext_expr_list ')'					{ $$ = $2; }
 		;
 
 

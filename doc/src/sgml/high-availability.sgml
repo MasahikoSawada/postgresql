@@ -1162,6 +1162,10 @@ synchronous_standby_names = 'FIRST 2 (s1, s2, s3)'
     its name is not in the list.
    </para>
    <para>
+    The synchronous states of standby servers can be viewed using
+    the <structname>pg_stat_replication</structname> view.
+   </para>
+   <para>
     Another example of <varname>synchronous_standby_names</> for multiple
     synchronous standby is:
 <programlisting>
@@ -1247,6 +1251,8 @@ synchronous_standby_names = 'FIRST 2 (s1, s2, s3)'
     will increase according to the length of time the standby has been down.
     The standby is only able to become a synchronous standby
     once it has reached <literal>streaming</> state.
+    This state can be viewed using
+    the <structname>pg_stat_replication</structname> view.
    </para>
 
    <para>

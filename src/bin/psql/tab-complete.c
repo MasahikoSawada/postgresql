@@ -1804,7 +1804,7 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH_LIST4("PLAIN", "EXTERNAL", "EXTENDED", "MAIN");
 	/* ALTER TABLE ALTER [COLUMN] <foo> DROP */
 	else if (Matches7("ALTER", "TABLE", MatchAny, "ALTER", "COLUMN", MatchAny, "DROP") ||
-			 Matches8("ALTER", "TABLE", MatchAny, "TABLE", MatchAny, "ALTER", MatchAny, "DROP"))
+			 Matches6("ALTER", "TABLE", MatchAny, "ALTER", MatchAny, "DROP"))
 		COMPLETE_WITH_LIST2("DEFAULT", "NOT NULL");
 	else if (Matches4("ALTER", "TABLE", MatchAny, "CLUSTER"))
 		COMPLETE_WITH_CONST("ON");
@@ -2162,9 +2162,15 @@ psql_completion(const char *text, int start, int end)
 	/* Complete "CREATE POLICY <name> ON <table>" */
 	else if (Matches4("CREATE", "POLICY", MatchAny, "ON"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tables, NULL);
-	/* Complete "CREATE POLICY <name> ON <table> FOR|TO|USING|WITH CHECK" */
+	/* Complete "CREATE POLICY <name> ON <table> AS|FOR|TO|USING|WITH CHECK" */
 	else if (Matches5("CREATE", "POLICY", MatchAny, "ON", MatchAny))
-		COMPLETE_WITH_LIST4("FOR", "TO", "USING (", "WITH CHECK (");
+		COMPLETE_WITH_LIST5("AS", "FOR", "TO", "USING (", "WITH CHECK (");
+	/* CREATE POLICY <name> ON <table> AS PERMISSIVE|RESTRICTIVE */
+	else if (Matches6("CREATE", "POLICY", MatchAny, "ON", MatchAny, "AS"))
+		COMPLETE_WITH_LIST2("PERMISSIVE", "RESTRICTIVE");
+	/* CREATE POLICY <name> ON <table> AS PERMISSIVE|RESTRICTIVE FOR|TO|USING|WITH CHECK */
+	else if (Matches7("CREATE", "POLICY", MatchAny, "ON", MatchAny, "AS", MatchAny))
+		COMPLETE_WITH_LIST4("FOR", "TO", "USING", "WITH CHECK");
 	/* CREATE POLICY <name> ON <table> FOR ALL|SELECT|INSERT|UPDATE|DELETE */
 	else if (Matches6("CREATE", "POLICY", MatchAny, "ON", MatchAny, "FOR"))
 		COMPLETE_WITH_LIST5("ALL", "SELECT", "INSERT", "UPDATE", "DELETE");
@@ -2183,6 +2189,25 @@ psql_completion(const char *text, int start, int end)
 	/* Complete "CREATE POLICY <name> ON <table> USING (" */
 	else if (Matches6("CREATE", "POLICY", MatchAny, "ON", MatchAny, "USING"))
 		COMPLETE_WITH_CONST("(");
+	/* CREATE POLICY <name> ON <table> AS PERMISSIVE|RESTRICTIVE FOR ALL|SELECT|INSERT|UPDATE|DELETE */
+	else if (Matches8("CREATE", "POLICY", MatchAny, "ON", MatchAny, "AS", MatchAny, "FOR"))
+		COMPLETE_WITH_LIST5("ALL", "SELECT", "INSERT", "UPDATE", "DELETE");
+	/* Complete "CREATE POLICY <name> ON <table> AS PERMISSIVE|RESTRICTIVE FOR INSERT TO|WITH CHECK" */
+	else if (Matches9("CREATE", "POLICY", MatchAny, "ON", MatchAny, "AS", MatchAny, "FOR", "INSERT"))
+		COMPLETE_WITH_LIST2("TO", "WITH CHECK (");
+	/* Complete "CREATE POLICY <name> ON <table> AS PERMISSIVE|RESTRICTIVE FOR SELECT|DELETE TO|USING" */
+	else if (Matches9("CREATE", "POLICY", MatchAny, "ON", MatchAny, "AS", MatchAny, "FOR", "SELECT|DELETE"))
+		COMPLETE_WITH_LIST2("TO", "USING (");
+	/* CREATE POLICY <name> ON <table> AS PERMISSIVE|RESTRICTIVE FOR ALL|UPDATE TO|USING|WITH CHECK */
+	else if (Matches9("CREATE", "POLICY", MatchAny, "ON", MatchAny, "AS", MatchAny, "FOR", "ALL|UPDATE"))
+		COMPLETE_WITH_LIST3("TO", "USING (", "WITH CHECK (");
+	/* Complete "CREATE POLICY <name> ON <table> AS PERMISSIVE|RESTRICTIVE TO <role>" */
+	else if (Matches8("CREATE", "POLICY", MatchAny, "ON", MatchAny, "AS", MatchAny, "TO"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_grant_roles);
+	/* Complete "CREATE POLICY <name> ON <table> AS PERMISSIVE|RESTRICTIVE USING (" */
+	else if (Matches8("CREATE", "POLICY", MatchAny, "ON", MatchAny, "AS", MatchAny, "USING"))
+		COMPLETE_WITH_CONST("(");
+
 
 /* CREATE RULE */
 	/* Complete "CREATE RULE <sth>" with "AS ON" */
