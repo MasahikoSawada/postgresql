@@ -16,6 +16,7 @@
 
 #include "access/genam.h"
 #include "access/heapam.h"
+#include "access/tupconvert.h"
 #include "executor/instrument.h"
 #include "lib/pairingheap.h"
 #include "nodes/params.h"
@@ -320,6 +321,8 @@ typedef struct JunkFilter
  *		projectReturning		for computing a RETURNING list
  *		onConflictSetProj		for computing ON CONFLICT DO UPDATE SET
  *		onConflictSetWhere		list of ON CONFLICT DO UPDATE exprs (qual)
+ *		PartitionCheck			partition check expression
+ *		PartitionCheckExpr		partition check expression state
  * ----------------
  */
 typedef struct ResultRelInfo
@@ -344,6 +347,8 @@ typedef struct ResultRelInfo
 	ProjectionInfo *ri_projectReturning;
 	ProjectionInfo *ri_onConflictSetProj;
 	List	   *ri_onConflictSetWhere;
+	List	   *ri_PartitionCheck;
+	List	   *ri_PartitionCheckExpr;
 } ResultRelInfo;
 
 /* ----------------
@@ -499,14 +504,23 @@ typedef struct TupleHashTableData *TupleHashTable;
 
 typedef struct TupleHashEntryData
 {
-	/* firstTuple must be the first field in this struct! */
 	MinimalTuple firstTuple;	/* copy of first tuple in this group */
-	/* there may be additional data beyond the end of this struct */
-} TupleHashEntryData;			/* VARIABLE LENGTH STRUCT */
+	void	   *additional;		/* user data */
+	uint32		status;			/* hash status */
+	uint32		hash;			/* hash value (cached) */
+} TupleHashEntryData;
+
+/* define paramters necessary to generate the tuple hash table interface */
+#define SH_PREFIX tuplehash
+#define SH_ELEMENT_TYPE TupleHashEntryData
+#define SH_KEY_TYPE MinimalTuple
+#define SH_SCOPE extern
+#define SH_DECLARE
+#include "lib/simplehash.h"
 
 typedef struct TupleHashTableData
 {
-	HTAB	   *hashtab;		/* underlying dynahash table */
+	tuplehash_hash *hashtab;	/* underlying hash table */
 	int			numCols;		/* number of columns in lookup key */
 	AttrNumber *keyColIdx;		/* attr numbers of key columns */
 	FmgrInfo   *tab_hash_funcs; /* hash functions for table datatype(s) */
@@ -521,7 +535,7 @@ typedef struct TupleHashTableData
 	FmgrInfo   *cur_eq_funcs;	/* equality functions for input vs. table */
 }	TupleHashTableData;
 
-typedef HASH_SEQ_STATUS TupleHashIterator;
+typedef tuplehash_iterator TupleHashIterator;
 
 /*
  * Use InitTupleHashIterator/TermTupleHashIterator for a read/write scan.
@@ -529,16 +543,13 @@ typedef HASH_SEQ_STATUS TupleHashIterator;
  * explicit scan termination is needed).
  */
 #define InitTupleHashIterator(htable, iter) \
-	hash_seq_init(iter, (htable)->hashtab)
+	tuplehash_start_iterate(htable->hashtab, iter)
 #define TermTupleHashIterator(iter) \
-	hash_seq_term(iter)
+	((void) 0)
 #define ResetTupleHashIterator(htable, iter) \
-	do { \
-		hash_freeze((htable)->hashtab); \
-		hash_seq_init(iter, (htable)->hashtab); \
-	} while (0)
-#define ScanTupleHashTable(iter) \
-	((TupleHashEntry) hash_seq_search(iter))
+	InitTupleHashIterator(htable, iter)
+#define ScanTupleHashTable(htable, iter) \
+	tuplehash_iterate(htable->hashtab, iter)
 
 
 /* ----------------------------------------------------------------
@@ -1137,6 +1148,15 @@ typedef struct ModifyTableState
 										 * tlist  */
 	TupleTableSlot *mt_conflproj;		/* CONFLICT ... SET ... projection
 										 * target */
+	struct PartitionDispatchData **mt_partition_dispatch_info;
+										/* Tuple-routing support info */
+	int				mt_num_dispatch;	/* Number of entries in the above
+										 * array */
+	int				mt_num_partitions;	/* Number of members in the
+										 * following arrays */
+	ResultRelInfo  *mt_partitions;	/* Per partition result relation */
+	TupleConversionMap **mt_partition_tupconv_maps;
+									/* Per partition tuple conversion map */
 } ModifyTableState;
 
 /* ----------------
@@ -1854,9 +1874,16 @@ typedef struct AggState
 	/* these fields are used in AGG_HASHED mode: */
 	TupleHashTable hashtable;	/* hash table with one entry per group */
 	TupleTableSlot *hashslot;	/* slot for loading hash table */
-	List	   *hash_needed;	/* list of columns needed in hash table */
+	int			numhashGrpCols;	/* number of columns in hash table */
+	int			largestGrpColIdx; /* largest column required for hashing */
+	AttrNumber *hashGrpColIdxInput;	/* and their indices in input slot */
+	AttrNumber *hashGrpColIdxHash;	/* indices for execGrouping in hashtbl */
 	bool		table_filled;	/* hash table filled yet? */
 	TupleHashIterator hashiter; /* for iterating through hash table */
+	/* support for evaluation of agg inputs */
+	TupleTableSlot *evalslot;	/* slot for agg inputs */
+	ProjectionInfo *evalproj;	/* projection machinery */
+	TupleDesc	evaldesc;		/* descriptor of input tuples */
 } AggState;
 
 /* ----------------

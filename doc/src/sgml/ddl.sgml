@@ -1599,9 +1599,11 @@ REVOKE ALL ON accounts FROM PUBLIC;
 
   <para>
    When multiple policies apply to a given query, they are combined using
-   <literal>OR</literal>, so that a row is accessible if any policy allows
-   it.  This is similar to the rule that a given role has the privileges
-   of all roles that they are a member of.
+   either <literal>OR</literal> (for permissive policies, which are the
+   default) or using <literal>AND</literal> (for restrictive policies).
+   This is similar to the rule that a given role has the privileges
+   of all roles that they are a member of.  Permissive vs. restrictive
+   policies are discussed further below.
   </para>
 
   <para>
@@ -1761,6 +1763,56 @@ ERROR:  permission denied for relation passwd
 -- Alice can change her own password; RLS silently prevents updating other rows
 postgres=&gt; update passwd set pwhash = 'abc';
 UPDATE 1
+</programlisting>
+
+  <para>
+   All of the policies constructed thus far have been permissive policies,
+   meaning that when multiple policies are applied they are combined using
+   the "OR" boolean operator.  While permissive policies can be constructed
+   to only allow access to rows in the intended cases, it can be simpler to
+   combine permissive policies with restrictive policies (which the records
+   must pass and which are combined using the "AND" boolean operator).
+   Building on the example above, we add a restrictive policy to require
+   the administrator to be connected over a local unix socket to access the
+   records of the passwd table:
+  </para>
+
+<programlisting>
+CREATE POLICY admin_local_only ON passwd AS RESTRICTIVE TO admin
+    USING (pg_catalog.inet_client_addr() IS NULL);
+</programlisting>
+
+  <para>
+   We can then see that an administrator connecting over a network will not
+   see any records, due to the restrictive policy:
+  </para>
+
+<programlisting>
+=&gt; SELECT current_user;
+ current_user 
+--------------
+ admin
+(1 row)
+
+=&gt; select inet_client_addr();
+ inet_client_addr 
+------------------
+ 127.0.0.1
+(1 row)
+
+=&gt; SELECT current_user;
+ current_user 
+--------------
+ admin
+(1 row)
+
+=&gt; TABLE passwd;
+ user_name | pwhash | uid | gid | real_name | home_phone | extra_info | home_dir | shell
+-----------+--------+-----+-----+-----------+------------+------------+----------+-------
+(0 rows)
+
+=&gt; UPDATE passwd set pwhash = NULL;
+UPDATE 0
 </programlisting>
 
   <para>
@@ -2559,7 +2611,8 @@ VALUES ('Albany', NULL, NULL, 'NY');
 
   <para>
    All check constraints and not-null constraints on a parent table are
-   automatically inherited by its children.  Other types of constraints
+   automatically inherited by its children, unless explicitly specified
+   otherwise with <literal>NO INHERIT</> clauses.  Other types of constraints
    (unique, primary key, and foreign key constraints) are not inherited.
   </para>
 
@@ -2570,10 +2623,12 @@ VALUES ('Albany', NULL, NULL, 'NY');
    same column name appears in multiple parent tables, or in both a parent
    table and the child's definition, then these columns are <quote>merged</>
    so that there is only one such column in the child table.  To be merged,
-   columns must have the same data types, else an error is raised.  The
-   merged column will have copies of all the check constraints coming from
-   any one of the column definitions it came from, and will be marked not-null
-   if any of them are.
+   columns must have the same data types, else an error is raised.
+   Inheritable check constraints and not-null constraints are merged in a
+   similar fashion.  Thus, for example, a merged column will be marked
+   not-null if any one of the column definitions it came from is marked
+   not-null.  Check constraints are merged if they have the same name,
+   and the merge will fail if their conditions are different.
   </para>
 
   <para>
@@ -2625,12 +2680,19 @@ VALUES ('Albany', NULL, NULL, 'NY');
   </para>
 
   <para>
-   Note how table access permissions are handled.  Querying a parent
-   table can automatically access data in child tables without further
-   access privilege checking.  This preserves the appearance that the
-   data is (also) in the parent table.  Accessing the child tables
-   directly is, however, not automatically allowed and would require
-   further privileges to be granted.
+   Inherited queries perform access permission checks on the parent table
+   only.  Thus, for example, granting <literal>UPDATE</> permission on
+   the <structname>cities</> table implies permission to update rows in
+   the <structname>capitals</structname> table as well, when they are
+   accessed through <structname>cities</>.  This preserves the appearance
+   that the data is (also) in the parent table.  But
+   the <structname>capitals</structname> table could not be updated directly
+   without an additional grant.  In a similar way, the parent table's row
+   security policies (see <xref linkend="ddl-rowsecurity">) are applied to
+   rows coming from child tables during an inherited query.  A child table's
+   policies, if any, are applied only when it is the table explicitly named
+   in the query; and in that case, any policies attached to its parent(s) are
+   ignored.
   </para>
 
   <para>

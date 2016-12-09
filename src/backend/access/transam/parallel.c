@@ -24,6 +24,7 @@
 #include "libpq/pqmq.h"
 #include "miscadmin.h"
 #include "optimizer/planmain.h"
+#include "pgstat.h"
 #include "storage/ipc.h"
 #include "storage/sinval.h"
 #include "storage/spin.h"
@@ -453,7 +454,8 @@ LaunchParallelWorkers(ParallelContext *pcxt)
 	snprintf(worker.bgw_name, BGW_MAXLEN, "parallel worker for PID %d",
 			 MyProcPid);
 	worker.bgw_flags =
-		BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION;
+		BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION
+		| BGWORKER_CLASS_PARALLEL;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
 	worker.bgw_restart_time = BGW_NEVER_RESTART;
 	worker.bgw_main = ParallelWorkerMain;
@@ -540,7 +542,8 @@ WaitForParallelWorkersToFinish(ParallelContext *pcxt)
 		if (!anyone_alive)
 			break;
 
-		WaitLatch(&MyProc->procLatch, WL_LATCH_SET, -1);
+		WaitLatch(&MyProc->procLatch, WL_LATCH_SET, -1,
+				  WAIT_EVENT_PARALLEL_FINISH);
 		ResetLatch(&MyProc->procLatch);
 	}
 

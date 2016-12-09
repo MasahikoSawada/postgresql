@@ -732,9 +732,9 @@ LWLockReportWaitStart(LWLock *lock)
 	int			lockId = T_ID(lock);
 
 	if (lock->tranche == 0)
-		pgstat_report_wait_start(WAIT_LWLOCK_NAMED, (uint16) lockId);
+		pgstat_report_wait_start(PG_WAIT_LWLOCK_NAMED | (uint16) lockId);
 	else
-		pgstat_report_wait_start(WAIT_LWLOCK_TRANCHE, lock->tranche);
+		pgstat_report_wait_start(PG_WAIT_LWLOCK_TRANCHE | lock->tranche);
 }
 
 /*
@@ -750,12 +750,12 @@ LWLockReportWaitEnd(void)
  * Return an identifier for an LWLock based on the wait class and event.
  */
 const char *
-GetLWLockIdentifier(uint8 classId, uint16 eventId)
+GetLWLockIdentifier(uint32 classId, uint16 eventId)
 {
-	if (classId == WAIT_LWLOCK_NAMED)
+	if (classId == PG_WAIT_LWLOCK_NAMED)
 		return MainLWLockNames[eventId];
 
-	Assert(classId == WAIT_LWLOCK_TRANCHE);
+	Assert(classId == PG_WAIT_LWLOCK_TRANCHE);
 
 	/*
 	 * It is quite possible that user has registered tranche in one of the
@@ -1780,15 +1780,14 @@ LWLockRelease(LWLock *lock)
 	 * be the latest-acquired lock; so search array backwards.
 	 */
 	for (i = num_held_lwlocks; --i >= 0;)
-	{
 		if (lock == held_lwlocks[i].lock)
-		{
-			mode = held_lwlocks[i].mode;
 			break;
-		}
-	}
+
 	if (i < 0)
 		elog(ERROR, "lock %s %d is not held", T_NAME(lock), T_ID(lock));
+
+	mode = held_lwlocks[i].mode;
+
 	num_held_lwlocks--;
 	for (; i < num_held_lwlocks; i++)
 		held_lwlocks[i] = held_lwlocks[i + 1];

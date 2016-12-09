@@ -38,6 +38,7 @@
 #include "executor/nodeSubplan.h"
 #include "executor/tqueue.h"
 #include "miscadmin.h"
+#include "pgstat.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
@@ -172,6 +173,7 @@ ExecGather(GatherState *node)
 			if (pcxt->nworkers_launched > 0)
 			{
 				node->nreaders = 0;
+				node->nextreader = 0;
 				node->reader =
 					palloc(pcxt->nworkers_launched * sizeof(TupleQueueReader *));
 
@@ -334,6 +336,7 @@ gather_readnext(GatherState *gatherstate)
 		CHECK_FOR_INTERRUPTS();
 
 		/* Attempt to read a tuple, but don't block if none is available. */
+		Assert(gatherstate->nextreader < gatherstate->nreaders);
 		reader = gatherstate->reader[gatherstate->nextreader];
 		tup = TupleQueueReaderNext(reader, true, &readerdone);
 
@@ -387,7 +390,7 @@ gather_readnext(GatherState *gatherstate)
 				return NULL;
 
 			/* Nothing to do except wait for developments. */
-			WaitLatch(MyLatch, WL_LATCH_SET, 0);
+			WaitLatch(MyLatch, WL_LATCH_SET, 0, WAIT_EVENT_EXECUTE_GATHER);
 			ResetLatch(MyLatch);
 			nvisited = 0;
 		}

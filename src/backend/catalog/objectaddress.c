@@ -1204,7 +1204,8 @@ get_relation_by_qualified_name(ObjectType objtype, List *objname,
 								RelationGetRelationName(relation))));
 			break;
 		case OBJECT_TABLE:
-			if (relation->rd_rel->relkind != RELKIND_RELATION)
+			if (relation->rd_rel->relkind != RELKIND_RELATION &&
+				relation->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
 				ereport(ERROR,
 						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 						 errmsg("\"%s\" is not a table",
@@ -2290,23 +2291,18 @@ get_object_namespace(const ObjectAddress *address)
 int
 read_objtype_from_string(const char *objtype)
 {
-	ObjectType	type;
 	int			i;
 
 	for (i = 0; i < lengthof(ObjectTypeMap); i++)
 	{
 		if (strcmp(ObjectTypeMap[i].tm_name, objtype) == 0)
-		{
-			type = ObjectTypeMap[i].tm_type;
-			break;
-		}
+			return ObjectTypeMap[i].tm_type;
 	}
-	if (i >= lengthof(ObjectTypeMap))
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("unrecognized object type \"%s\"", objtype)));
+	ereport(ERROR,
+			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			 errmsg("unrecognized object type \"%s\"", objtype)));
 
-	return type;
+	return -1;					/* keep compiler quiet */
 }
 
 /*
@@ -3249,6 +3245,7 @@ getRelationDescription(StringInfo buffer, Oid relid)
 	switch (relForm->relkind)
 	{
 		case RELKIND_RELATION:
+		case RELKIND_PARTITIONED_TABLE:
 			appendStringInfo(buffer, _("table %s"),
 							 relname);
 			break;
@@ -3706,6 +3703,7 @@ getRelationTypeDescription(StringInfo buffer, Oid relid, int32 objectSubId)
 	switch (relForm->relkind)
 	{
 		case RELKIND_RELATION:
+		case RELKIND_PARTITIONED_TABLE:
 			appendStringInfoString(buffer, "table");
 			break;
 		case RELKIND_INDEX:

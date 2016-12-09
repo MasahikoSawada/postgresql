@@ -81,7 +81,7 @@
 /* Write a character-string (possibly NULL) field */
 #define WRITE_STRING_FIELD(fldname) \
 	(appendStringInfo(str, " :" CppAsString(fldname) " "), \
-	 _outToken(str, node->fldname))
+	 outToken(str, node->fldname))
 
 /* Write a parse location field (actually same as INT case) */
 #define WRITE_LOCATION_FIELD(fldname) \
@@ -95,21 +95,21 @@
 /* Write a bitmapset field */
 #define WRITE_BITMAPSET_FIELD(fldname) \
 	(appendStringInfo(str, " :" CppAsString(fldname) " "), \
-	 _outBitmapset(str, node->fldname))
+	 outBitmapset(str, node->fldname))
 
 
 #define booltostr(x)  ((x) ? "true" : "false")
 
 
 /*
- * _outToken
+ * outToken
  *	  Convert an ordinary string (eg, an identifier) into a form that
  *	  will be decoded back to a plain token by read.c's functions.
  *
  *	  If a null or empty string is given, it is encoded as "<>".
  */
-static void
-_outToken(StringInfo str, const char *s)
+void
+outToken(StringInfo str, const char *s)
 {
 	if (s == NULL || *s == '\0')
 	{
@@ -138,13 +138,6 @@ _outToken(StringInfo str, const char *s)
 			appendStringInfoChar(str, '\\');
 		appendStringInfoChar(str, *s++);
 	}
-}
-
-/* for use by extensions which define extensible nodes */
-void
-outToken(StringInfo str, const char *s)
-{
-	_outToken(str, s);
 }
 
 static void
@@ -185,13 +178,13 @@ _outList(StringInfo str, const List *node)
 }
 
 /*
- * _outBitmapset -
+ * outBitmapset -
  *	   converts a bitmap set of integers
  *
  * Note: the output format is "(b int int ...)", similar to an integer List.
  */
-static void
-_outBitmapset(StringInfo str, const Bitmapset *bms)
+void
+outBitmapset(StringInfo str, const Bitmapset *bms)
 {
 	int			x;
 
@@ -201,13 +194,6 @@ _outBitmapset(StringInfo str, const Bitmapset *bms)
 	while ((x = bms_next_member(bms, x)) >= 0)
 		appendStringInfo(str, " %d", x);
 	appendStringInfoChar(str, ')');
-}
-
-/* for use by extensions which define extensible nodes */
-void
-outBitmapset(StringInfo str, const Bitmapset *bms)
-{
-	_outBitmapset(str, bms);
 }
 
 /*
@@ -632,7 +618,7 @@ _outCustomScan(StringInfo str, const CustomScan *node)
 	WRITE_BITMAPSET_FIELD(custom_relids);
 	/* CustomName is a key to lookup CustomScanMethods */
 	appendStringInfoString(str, " :methods ");
-	_outToken(str, node->methods->CustomName);
+	outToken(str, node->methods->CustomName);
 }
 
 static void
@@ -1196,7 +1182,7 @@ _outBoolExpr(StringInfo str, const BoolExpr *node)
 			break;
 	}
 	appendStringInfoString(str, " :boolop ");
-	_outToken(str, opstr);
+	outToken(str, opstr);
 
 	WRITE_NODE_FIELD(args);
 	WRITE_LOCATION_FIELD(location);
@@ -1609,14 +1595,14 @@ _outPathInfo(StringInfo str, const Path *node)
 {
 	WRITE_ENUM_FIELD(pathtype, NodeTag);
 	appendStringInfoString(str, " :parent_relids ");
-	_outBitmapset(str, node->parent->relids);
+	outBitmapset(str, node->parent->relids);
 	if (node->pathtarget != node->parent->reltarget)
 		WRITE_NODE_FIELD(pathtarget);
 	appendStringInfoString(str, " :required_outer ");
 	if (node->param_info)
-		_outBitmapset(str, node->param_info->ppi_req_outer);
+		outBitmapset(str, node->param_info->ppi_req_outer);
 	else
-		_outBitmapset(str, NULL);
+		outBitmapset(str, NULL);
 	WRITE_BOOL_FIELD(parallel_aware);
 	WRITE_BOOL_FIELD(parallel_safe);
 	WRITE_INT_FIELD(parallel_workers);
@@ -1740,7 +1726,7 @@ _outCustomPath(StringInfo str, const CustomPath *node)
 	WRITE_NODE_FIELD(custom_paths);
 	WRITE_NODE_FIELD(custom_private);
 	appendStringInfoString(str, " :methods ");
-	_outToken(str, node->methods->CustomName);
+	outToken(str, node->methods->CustomName);
 }
 
 static void
@@ -2406,6 +2392,8 @@ _outCreateStmtInfo(StringInfo str, const CreateStmt *node)
 	WRITE_NODE_FIELD(relation);
 	WRITE_NODE_FIELD(tableElts);
 	WRITE_NODE_FIELD(inhRelations);
+	WRITE_NODE_FIELD(partspec);
+	WRITE_NODE_FIELD(partbound);
 	WRITE_NODE_FIELD(ofTypename);
 	WRITE_NODE_FIELD(constraints);
 	WRITE_NODE_FIELD(options);
@@ -2573,6 +2561,16 @@ _outXmlSerialize(StringInfo str, const XmlSerialize *node)
 	WRITE_NODE_FIELD(expr);
 	WRITE_NODE_FIELD(typeName);
 	WRITE_LOCATION_FIELD(location);
+}
+
+static void
+_outTriggerTransition(StringInfo str, const TriggerTransition *node)
+{
+	WRITE_NODE_TYPE("TRIGGERTRANSITION");
+
+	WRITE_STRING_FIELD(name);
+	WRITE_BOOL_FIELD(isNew);
+	WRITE_BOOL_FIELD(isTable);
 }
 
 static void
@@ -2843,15 +2841,17 @@ _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 			break;
 		case RTE_VALUES:
 			WRITE_NODE_FIELD(values_lists);
-			WRITE_NODE_FIELD(values_collations);
+			WRITE_NODE_FIELD(coltypes);
+			WRITE_NODE_FIELD(coltypmods);
+			WRITE_NODE_FIELD(colcollations);
 			break;
 		case RTE_CTE:
 			WRITE_STRING_FIELD(ctename);
 			WRITE_UINT_FIELD(ctelevelsup);
 			WRITE_BOOL_FIELD(self_reference);
-			WRITE_NODE_FIELD(ctecoltypes);
-			WRITE_NODE_FIELD(ctecoltypmods);
-			WRITE_NODE_FIELD(ctecolcollations);
+			WRITE_NODE_FIELD(coltypes);
+			WRITE_NODE_FIELD(coltypmods);
+			WRITE_NODE_FIELD(colcollations);
 			break;
 		default:
 			elog(ERROR, "unrecognized RTE kind: %d", (int) node->rtekind);
@@ -2994,12 +2994,12 @@ _outValue(StringInfo str, const Value *value)
 		case T_String:
 
 			/*
-			 * We use _outToken to provide escaping of the string's content,
+			 * We use outToken to provide escaping of the string's content,
 			 * but we don't want it to do anything with an empty string.
 			 */
 			appendStringInfoChar(str, '"');
 			if (value->val.str[0] != '\0')
-				_outToken(str, value->val.str);
+				outToken(str, value->val.str);
 			appendStringInfoChar(str, '"');
 			break;
 		case T_BitString:
@@ -3281,6 +3281,47 @@ _outForeignKeyCacheInfo(StringInfo str, const ForeignKeyCacheInfo *node)
 		appendStringInfo(str, " %u", node->conpfeqop[i]);
 }
 
+static void
+_outPartitionSpec(StringInfo str, const PartitionSpec *node)
+{
+	WRITE_NODE_TYPE("PARTITIONBY");
+
+	WRITE_STRING_FIELD(strategy);
+	WRITE_NODE_FIELD(partParams);
+	WRITE_LOCATION_FIELD(location);
+}
+
+static void
+_outPartitionElem(StringInfo str, const PartitionElem *node)
+{
+	WRITE_NODE_TYPE("PARTITIONELEM");
+
+	WRITE_STRING_FIELD(name);
+	WRITE_NODE_FIELD(expr);
+	WRITE_NODE_FIELD(collation);
+	WRITE_NODE_FIELD(opclass);
+	WRITE_LOCATION_FIELD(location);
+}
+
+static void
+_outPartitionBoundSpec(StringInfo str, const PartitionBoundSpec *node)
+{
+	WRITE_NODE_TYPE("PARTITIONBOUND");
+
+	WRITE_CHAR_FIELD(strategy);
+	WRITE_NODE_FIELD(listdatums);
+	WRITE_NODE_FIELD(lowerdatums);
+	WRITE_NODE_FIELD(upperdatums);
+}
+
+static void
+_outPartitionRangeDatum(StringInfo str, const PartitionRangeDatum *node)
+{
+	WRITE_NODE_TYPE("PARTRANGEDATUM");
+
+	WRITE_BOOL_FIELD(infinite);
+	WRITE_NODE_FIELD(value);
+}
 
 /*
  * outNode -
@@ -3866,6 +3907,21 @@ outNode(StringInfo str, const void *obj)
 			case T_ForeignKeyCacheInfo:
 				_outForeignKeyCacheInfo(str, obj);
 				break;
+			case T_TriggerTransition:
+				_outTriggerTransition(str, obj);
+				break;
+			case T_PartitionSpec:
+				_outPartitionSpec(str, obj);
+				break;
+			case T_PartitionElem:
+				_outPartitionElem(str, obj);
+				break;
+			case T_PartitionBoundSpec:
+				_outPartitionBoundSpec(str, obj);
+				break;
+			case T_PartitionRangeDatum:
+				_outPartitionRangeDatum(str, obj);
+				break;
 
 			default:
 
@@ -3893,5 +3949,20 @@ nodeToString(const void *obj)
 	/* see stringinfo.h for an explanation of this maneuver */
 	initStringInfo(&str);
 	outNode(&str, obj);
+	return str.data;
+}
+
+/*
+ * bmsToString -
+ *	   returns the ascii representation of the Bitmapset as a palloc'd string
+ */
+char *
+bmsToString(const Bitmapset *bms)
+{
+	StringInfoData str;
+
+	/* see stringinfo.h for an explanation of this maneuver */
+	initStringInfo(&str);
+	outBitmapset(&str, bms);
 	return str.data;
 }
