@@ -58,6 +58,7 @@
 #include "portability/instr_time.h"
 #include "postmaster/autovacuum.h"
 #include "storage/bufmgr.h"
+#include "storage/condition_variable.h"
 #include "storage/freespace.h"
 #include "storage/lmgr.h"
 #include "utils/lsyscache.h"
@@ -123,7 +124,9 @@
 typedef struct LVDeadTuples
 {
 	slock_t		dt_mutex;
-	int			num_dead_tuples; /* current # of entries */
+	ConditionVariable dt_cv;
+	int		dt_count;
+	int		num_dead_tuples; /* current # of entries */
 	ItemPointer dead_tuples; /* array of ItemPointerData */
 	/* Dead tuple ItemPointer follows */
 } LVDeadTuples;
@@ -2726,6 +2729,8 @@ lazy_initialize_dsm(ParallelContext *pcxt, Relation onerel,
 		lv_dead_tuples = (LVDeadTuples *) shm_toc_allocate(pcxt->toc, lv_dead_tuples_size);
 		shm_toc_insert(pcxt->toc, VACUUM_KEY_DEAD_TUPLES, lv_dead_tuples);
 		SpinLockInit(&(lv_dead_tuples->dt_mutex));
+		ConditionVariableInit(&(lv_dead_tuples->dt_cv));
+		lv_dead_tuples->dt_count = 0;
 	}
 
 	/* Prepare DSM for vacuum task */
@@ -2783,3 +2788,5 @@ lazy_initialize_worker(shm_toc *toc, ParallelHeapScanDesc *pscan,
 	*options = vacuum_task->options;
 	*aggressive = vacuum_task->aggressive;
 }
+
+static void
