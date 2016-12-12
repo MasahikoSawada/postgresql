@@ -33,13 +33,15 @@
  * synchronous. In 9.6 we support multiple synchronous standbys.
  * In 10.0 we support two synchronization methods, priority and
  * quorum. The number of synchronous standbys that transactions
- * must wait for replies from and synchronization method are specified
- * in synchronous_standby_names. This parameter also specifies a list
- * of standby names, which determines the priority of each standby for
- * being chosen as a synchronous standby. In priority method, the standbys
- * whose names appear earlier in the list are given higher priority
- * and will be considered as synchronous. Other standby servers appearing
- * later in this list represent potential synchronous standbys. If any of
+ * must wait for replies from and synchronization method are
+ * specified in synchronous_standby_names. The priority method is
+ * represented by FIRST, and the quorum method is represented by ANY
+ * This parameter also specifies a list of standby names, which
+ * determines the priority of each standby for being chosen as a
+ * synchronous standby. In priority method, the standbys whose names
+ * appear earlier in the list are given higher priority and will be
+ * considered as synchronous. Other standby servers appearing later
+ * in this list represent potential synchronous standbys. If any of
  * the current synchronous standbys disconnects for whatever reason,
  * it will be replaced immediately with the next-highest-priority standby.
  * In quorum method, the all standbys appearing in the list are
@@ -476,8 +478,8 @@ SyncRepReleaseWaiters(void)
 }
 
 /*
- * Return the list of sync standbys using according to synchronous method,
- * or NIL if no sync standby is connected. The caller must hold SyncRepLock.
+ * Return the list of sync standbys according to synchronous method, or
+ * reutrn NIL if no sync standby is connected. The caller must hold SyncRepLock.
  *
  * On return, *am_sync is set to true if this walsender is connecting to
  * sync standby. Otherwise it's set to false.
@@ -500,8 +502,8 @@ SyncRepGetSyncStandbys(bool	*am_sync)
 	else
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				"invalid synchronization method is specified \"%d\"",
-				 SyncRepConfig->sync_method));
+				 errmsg("invalid synchronization method is specified \"%d\"",
+						SyncRepConfig->sync_method)));
 }
 
 /*
@@ -511,9 +513,9 @@ SyncRepGetSyncStandbys(bool	*am_sync)
  * synchronous_standby_names specifies. Otherwise return true and
  * store the positions into *writePtr, *flushPtr and *applyPtr.
  *
- * In priority method, we need the oldest these positions among sync
- * standbys. In quorum method, we need the newest these positions
- * specified by SyncRepConfig->num_sync.
+ * In priority method, we need the oldest of these positions among sync
+ * standbys. In quorum method, we need the latest of these positions
+ * as specified by SyncRepConfig->num_sync.
  *
  * On return, *am_sync is set to true if this walsender is connecting to
  * sync standby. Otherwise it's set to false.
@@ -603,7 +605,7 @@ SyncRepGetSyncRecPtr(XLogRecPtr *writePtr, XLogRecPtr *flushPtr,
 		qsort(apply_array, len, sizeof(XLogRecPtr), cmp_lsn);
 
 		/*
-		 * Get N-th newest Write, Flush, Apply positions
+		 * Get N-th latest Write, Flush, Apply positions
 		 * specified by SyncRepConfig->num_sync.
 		 */
 		*writePtr = write_array[SyncRepConfig->num_sync - 1];
@@ -620,7 +622,7 @@ SyncRepGetSyncRecPtr(XLogRecPtr *writePtr, XLogRecPtr *flushPtr,
 }
 
 /*
- * Return the list of sync standbys using quorum method, or
+ * Return the list of sync standbys using quorum method, or return
  * NIL if no sync standby is connected. In quorum method, all standby
  * priorities are same, that is 1. So this function returns the list of
  * standbys except for the standbys which are not active, or connected

@@ -173,8 +173,8 @@ standby2|1|sync
 standby4|1|potential),
 	'potential standby found earlier in array is promoted to sync');
 
-# Check that the state of standbys listed as a voter are having
-# same priority when synchronous_standby_names uses quorum method.
+# Check that the state of standbys listed as a voter when the quroum
+# method is used.
 test_sync_state(
 $node_master, qq(standby1|1|quorum
 standby2|2|quorum
