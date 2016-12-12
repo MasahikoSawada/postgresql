@@ -66,14 +66,8 @@ xdinside		[^"]+
 %%
 {space}+	{ /* ignore */ }
 
-{any_ident}	{
-				yylval.str = pstrdup(yytext);
-				return ANY;
-		}
-{first_ident}	{
-				yylval.str = pstrdup(yytext);
-				return FIRST;
-		}
+{any_ident}	{ return ANY; }
+{first_ident}	{ return FIRST; }
 {xdstart}	{
 				initStringInfo(&xdbuf);
 				BEGIN(xd);

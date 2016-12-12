@@ -3058,13 +3058,7 @@ include_dir 'conf.d'
         that are both currently connected and streaming data in real-time
         (as shown by a state of <literal>streaming</literal> in the
         <link linkend="monitoring-stats-views-table">
-        <literal>pg_stat_replication</></link> view). If the keyword
-        <literal>FIRST</> is specified, other standby servers appearing
-        later in this list represent potential synchronous standbys.
-        If any of the current synchronous standbys disconnects for
-        whatever reason, it will be replaced immediately with the
-        next-highest-priority standby. Specifying more than one standby
-        name can allow very high availability.
+        <literal>pg_stat_replication</></link> view).
        </para>
        <para>
         This parameter specifies a list of standby servers using
@@ -3081,8 +3075,8 @@ FIRST <replaceable class="parameter">num_sync</replaceable> ( <replaceable class
         is the name of a standby server.
         <literal>FIRST</> and <literal>ANY</> specify the method used by
         the master to control the standby servres.
-        </para>
-        <para>
+       </para>
+       <para>
         The keyword <literal>FIRST</>, coupled with <literal>num_sync</>, makes
         transaction commit wait until WAL records are received from the
         <literal>num_sync</> standbys with higher priority number.
@@ -3090,8 +3084,13 @@ FIRST <replaceable class="parameter">num_sync</replaceable> ( <replaceable class
         makes transaction commits wait until their WAL records are received
         by three higher-priority standbys chosen from standby servers
         <literal>s1</>, <literal>s2</>, <literal>s3</> and <literal>s4</>.
-        </para>
-        <para>
+        The other standby servers appearing later in list represent potential
+        synchronous standbys. If any of the current synchronous standbys
+        disconnects for whatever reason, it will be replaced immediately
+        with the next-highest-priority standby. Specifying more than one standby
+        name can allow very high availability.
+       </para>
+       <para>
         The keyword <literal>ANY</>, coupled with <literal>num_sync</>,
         makes transaction commits wait until WAL records are received
         from at least <literal>num_sync</> connected standbys among those
@@ -3099,21 +3098,24 @@ FIRST <replaceable class="parameter">num_sync</replaceable> ( <replaceable class
         example, a setting of <literal>ANY 3 (s1, s2, s3, s4)</> makes
         transaction commits wait until receiving WAL records from at least
         any three standbys of four listed servers <literal>s1</>,
-        <literal>s2</>, <literal>s3</>, <literal>s4</>.
-        </para>
-        <para>
+        <literal>s2</>, <literal>s3</>, <literal>s4</>. The transaction
+        can continue to proceed as long as <literal>num_sync</> standbys
+        live. Specifying more than one standby name can allow very high
+        availability.
+       </para>
+       <para>
         <literal>FIRST</> and <literal>ANY</> are case-insensitive words
         and the standby name having these words are must be double-quoted.
-        </para>
-        <para>
+       </para>
+       <para>
         The third syntax was used before <productname>PostgreSQL</>
         version 9.6 and is still supported. It's the same as the first syntax
         with <literal>FIRST</> and <replaceable class="parameter">num_sync</replaceable>
         equal to 1. For example, <literal>FIRST 1 (s1, s2)</> and <literal>s1, s2</>
         have the same meaning: either <literal>s1</> or <literal>s2</> is
         chosen as a synchronous standby.
-        </para>
-        <note>
+       </para>
+       <note>
          <para>
          If <literal>FIRST</> or <literal>ANY</> are not specified, this parameter
          behaves as if <literal>ANY</> is used. Note that this grammar is incompatible
