@@ -751,6 +751,8 @@ lazy_scan_heap(LVRelStats *vacrelstats, Relation onerel, Relation *Irel,
 		bool		has_dead_tuples;
 		TransactionId visibility_cutoff_xid = InvalidTransactionId;
 
+//		fprintf(stderr, "[%d] (%d) scanning %u block\n", MyProcPid, ParallelWorkerNumber, blkno);
+
 		pgstat_progress_update_param(PROGRESS_VACUUM_HEAP_BLKS_SCANNED, blkno);
 
 		vacuum_delay_point();
@@ -1422,6 +1424,17 @@ lazy_scan_heap(LVRelStats *vacrelstats, Relation onerel, Relation *Irel,
 						tups_vacuumed, vacuumed_pages)));
 
 	lv_endscan(lvscan);
+
+	/* @@@ for debug */
+	ereport(LOG,
+			(errmsg("(%d) scanned pages %u, scanned tuples %f, vacuumed page %u, vacuumed_tuples %f, new dead tuple %f, num index scan %d",
+					ParallelWorkerNumber,
+					vacrelstats->scanned_pages,
+					vacrelstats->scanned_tuples,
+					vacuumed_pages,
+					vacrelstats->tuples_deleted,
+					vacrelstats->new_dead_tuples,
+					vacrelstats->num_index_scans)));
 
 	/*
 	 * This is pretty messy, but we split it up so that we can skip emitting
@@ -2182,6 +2195,11 @@ lazy_record_dead_tuple(LVRelStats *vacrelstats, ItemPointer itemptr)
 		MyDeadTuple->dt_array[MyDeadTuple->n_dt] = *itemptr;
 		(MyDeadTuple->n_dt)++;
 
+		/* @@@ for debugging */
+		fprintf(stderr, "[%d] (%d) record tuple n_dt = %d\n",
+				MyProcPid, ParallelWorkerNumber,
+				MyDeadTuple->n_dt);
+
 		/* XXX : Update progress information here */
 	}
 }
@@ -2192,20 +2210,23 @@ lazy_record_dead_tuple(LVRelStats *vacrelstats, ItemPointer itemptr)
 static void
 lazy_clear_dead_tuple(LVRelStats *vacrelstats)
 {
-	bool do_parallel = vacrelstats->do_parallel;
-
 	/*
 	 * In parallel vacuum, a parallel worker is responsible for
 	 * clearing all dead tuples. Note that we're assumed that only
 	 * one process touches the dead tuple array.
 	 */
-	if (do_parallel)
+	if (vacrelstats->do_parallel)
 	{
 		int i;
 		for (i = 0; i < vacrelstats->parallel_state->nworkers; i++)
 		{
 			LVDeadTuple *dead_tuples = &(vacrelstats->dead_tuples[i]);
 			dead_tuples->n_dt = 0;
+
+			/* @@@ for debugging */
+			fprintf(stderr, "[%d] (%d) clear tuple n_dt = %d\n",
+					MyProcPid, ParallelWorkerNumber,
+					dead_tuples->n_dt);
 		}
 	}
 	else
@@ -2225,8 +2246,10 @@ lazy_tid_reaped(ItemPointer itemptr, void *state)
 	LVRelStats *vacrelstats = (LVRelStats *) state;
 	ItemPointer res;
 	int i;
+	int num = (!vacrelstats->do_parallel) ? 1 :
+		vacrelstats->parallel_state->nworkers;
 
-	for (i = 0; vacrelstats->parallel_state->nworkers; i++)
+	for (i = 0; i < num; i++)
 	{
 		ItemPointer dead_tuples = vacrelstats->dead_tuples[i].dt_array;
 
@@ -2707,7 +2730,7 @@ lazy_initialize_dsm(ParallelContext *pcxt, Relation onerel,
 	int i;
 	int parallel_state_size;
 	int dead_tuples_size = 0;
-	char *base;
+	char *dt_base;
 
 	/* Allocate and intialize DSM for parallel scan description */
 	pscan = (ParallelHeapScanDesc) shm_toc_allocate(pcxt->toc,
@@ -2731,13 +2754,32 @@ lazy_initialize_dsm(ParallelContext *pcxt, Relation onerel,
 	 * the beggning of dead_tuples, remaining memory is used for dead tuple
 	 * array. The base variable points to the begnning of dead tuple array.
 	 */
-	base = (char *)dead_tuples;
-	base += sizeof(LVDeadTuple) * pcxt->nworkers;
+	dt_base = (char *)dead_tuples;
+	dt_base += sizeof(LVDeadTuple) * pcxt->nworkers;
 	for (i = 0; i < pcxt->nworkers; i++)
 	{
 		LVDeadTuple *dt = &(dead_tuples[i]);
 		dt->dt_array = (ItemPointer)
-			(base + sizeof(ItemPointerData) * vacrelstats->max_dead_tuples * i);
+			(dt_base + sizeof(ItemPointerData) * vacrelstats->max_dead_tuples * i);
+	}
+
+	/* @@@ for debugging */
+	fprintf(stderr, "[%d] (0) lvdt size  = %ld, struct addr = %p, array addr = %p\n",
+			MyProcPid,
+			(char *)dt_base - (char *)(dead_tuples[0].dt_array),
+			&(dead_tuples[0].n_dt),
+			&(dead_tuples[0].dt_array));
+	for (i = 1; i < pcxt->nworkers; i++)
+	{
+		LVDeadTuple *dt = &(dead_tuples[i]);
+		LVDeadTuple *prev_dt = &(dead_tuples[i-1]);
+
+		fprintf(stderr, "[%d] (%d) lvdt size  = %ld, struct addr = %p, array addr = %p\n",
+				MyProcPid,
+				i,
+				(char *)dt->dt_array - (char *)prev_dt->dt_array,
+				&(dt->n_dt),
+				&(dt->dt_array));
 	}
 
 	/* Allocate and initialize DSM for vacuum stats for each worker */
@@ -2851,6 +2893,10 @@ lazy_set_vacstate_and_wait(LVRelStats *vacrelstats,
 	 */
 	if (state == VACSTATE_VACUUM_FINISHED && workers_count == pstate->nworkers + 1)
 	{
+		/* @@@ for debugging */
+		fprintf(stderr, "[%d] I'm last worker %d\n",
+				MyProcPid, ParallelWorkerNumber);
+
 		/*
 		 * Forget the now-vacuumed tuples, and press on, but be careful
 		 * not to reset latestRemovedXid since we want that value to be
@@ -2859,11 +2905,23 @@ lazy_set_vacstate_and_wait(LVRelStats *vacrelstats,
 		lazy_clear_dead_tuple(vacrelstats);
 	}
 
+	/* Change my vacstate */
 	lazy_set_vacstate(vacrelstats, state);
+
+	/* @@@ for debugging */
+	fprintf(stderr, "[%d] worker %d vacstate change done state = %d wait\n",
+			MyProcPid, ParallelWorkerNumber, state);
+
+	/* Wake up other waiting parallel worker */
+	ConditionVariableBroadcast(&(pstate->cv));
 
 	/* Sleep until all states of parallel worker become the same state */
 	while (lazy_get_worker_state_count(vacrelstats, state) < pstate->nworkers)
 		ConditionVariableSleep(&(pstate->cv), WAIT_EVENT_PARALLEL_FINISH);
+
+	/* @@@ for debugging */
+	fprintf(stderr, "[%d] worker %d waked up, resume\n",
+			MyProcPid, ParallelWorkerNumber);
 
 	ConditionVariableCancelSleep();
 }
@@ -2890,6 +2948,11 @@ lazy_get_worker_state_count(LVRelStats *vacrelstats,
 	}
 
 	SpinLockRelease(&(pstate->vw_mutex));
+
+	fprintf(stderr, "[%d] (%d) counted state %d, result = %d\n",
+			MyProcPid, ParallelWorkerNumber, state,
+			worker_count);
+
 	return worker_count;
 }
 
@@ -2902,6 +2965,9 @@ lazy_set_vacstate(LVRelStats *vacrelstats, VacWorkerState state)
 	SpinLockAcquire(&(pstate->vw_mutex));
 	*MyVacWorker = state;
 	SpinLockRelease(&(pstate->vw_mutex));
+
+	fprintf(stderr, "[%d] (%d) state changed to %d\n",
+			MyProcPid, ParallelWorkerNumber, state);
 }
 
 /*
