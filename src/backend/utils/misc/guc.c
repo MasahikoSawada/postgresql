@@ -2670,7 +2670,7 @@ static struct config_int ConfigureNamesInt[] =
 			NULL
 		},
 		&parallel_vacuum_workers,
-		0, 0, 1024,
+		-1, -1, 1024,
 		NULL, NULL, NULL
 	},
 
