@@ -99,6 +99,7 @@ static int	SyncRepGetStandbyPriority(void);
 static List *SyncRepGetSyncStandbysPriority(bool *am_sync);
 static List *SyncRepGetSyncStandbysQuorum(bool *am_sync);
 static int	cmp_lsn(const void *a, const void *b);
+static void	swap_lsn(XLogRecPtr *a, XLogRecPtr *b);
 
 #ifdef USE_ASSERT_CHECKING
 static bool SyncRepQueueIsOrderedByLSN(int mode);
@@ -581,6 +582,7 @@ SyncRepGetSyncRecPtr(XLogRecPtr *writePtr, XLogRecPtr *flushPtr,
 		XLogRecPtr	*apply_array;
 		int len;
 		int i = 0;
+		int j;
 
 		len = list_length(sync_standbys);
 		write_array = (XLogRecPtr *) palloc(sizeof(XLogRecPtr) * len);
@@ -600,17 +602,62 @@ SyncRepGetSyncRecPtr(XLogRecPtr *writePtr, XLogRecPtr *flushPtr,
 			i++;
 		}
 
-		qsort(write_array, len, sizeof(XLogRecPtr), cmp_lsn);
-		qsort(flush_array, len, sizeof(XLogRecPtr), cmp_lsn);
-		qsort(apply_array, len, sizeof(XLogRecPtr), cmp_lsn);
+		for (i = 0; i < SyncRepConfig->num_sync; i++)
+		{
+			for (j = len; j > i; j--)
+			{
+				if (write_array[j] > write_array[j-1])
+					swap_lsn(&(write_array[j]), &(write_array[j-1]));
+				if (flush_array[j] > flush_array[j-1])
+					swap_lsn(&(flush_array[j]), &(flush_array[j-1]));
+				if (apply_array[j] > apply_array[j-1])
+					swap_lsn(&(apply_array[j]), &(apply_array[j-1]));
+			}
+		}
+
+		*writePtr = write_array[SyncRepConfig->num_sync - 1];
+		*flushPtr = flush_array[SyncRepConfig->num_sync - 1];
+		*applyPtr = apply_array[SyncRepConfig->num_sync - 1];
+		
+		elog(NOTICE, "======= write %X/%X =========",
+			 (uint32) (*writePtr >> 32),
+			 (uint32) (*writePtr));
+		for (i = 0; i < len; i++)
+		{
+			elog(NOTICE, "write[%d] %X/%X", i,
+				 (uint32) (write_array[i] >> 32),
+				 (uint32) (write_array[i]));
+		}
+
+		elog(NOTICE, "======= flush %X/%X =========",
+			 (uint32) (*flushPtr >> 32),
+			 (uint32) (*flushPtr));
+		for (i = 0; i < len; i++)
+		{
+			elog(NOTICE, "flush[%d] %X/%X", i,
+				 (uint32) (flush_array[i] >> 32),
+				 (uint32) (flush_array[i]));
+		}
+
+		elog(NOTICE, "======= apply %X/%X =========",
+			 (uint32) (*applyPtr >> 32),
+			 (uint32) (*applyPtr));
+		for (i = 0; i < len; i++)
+		{
+			elog(NOTICE, "apply[%d] %X/%X", i,
+				 (uint32) (apply_array[i] >> 32),
+				 (uint32) (apply_array[i]));
+		}
 
 		/*
 		 * Get N-th latest Write, Flush, Apply positions
 		 * specified by SyncRepConfig->num_sync.
 		 */
+		/*
 		*writePtr = write_array[SyncRepConfig->num_sync - 1];
 		*flushPtr = flush_array[SyncRepConfig->num_sync - 1];
 		*applyPtr = apply_array[SyncRepConfig->num_sync - 1];
+		*/
 
 		pfree(write_array);
 		pfree(flush_array);
@@ -1034,6 +1081,14 @@ cmp_lsn(const void *a, const void *b)
 		return 0;
 	else
 		return 1;
+}
+
+static void
+swap_lsn(XLogRecPtr *a, XLogRecPtr *b)
+{
+	XLogRecPtr tmp = *a;
+	*a = *b;
+	*b = tmp;
 }
 
 /*
