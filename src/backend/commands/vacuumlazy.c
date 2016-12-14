@@ -122,6 +122,22 @@
 	(!IsParallelWorker() ||\
 	 (IsParallelWorker() && ((i_num) % (nworkers) == ParallelWorkerNumber)))
 
+#define SetMyVacState(vacrelstats, state) \
+do { \
+	LVParallelState pstate = (LvRelStats* )(vacrelstats)->paralle_state; \
+	SpinLockAcquire(&(pstate->mutex)); \
+	*MyVacState = (state); \
+	SpinLockRelease(&(pstate->mutex)); \
+} while(0);
+
+#define GetMyVacState(vacrelstats, state) \
+do { \
+	LVParallelState pstate = (LvRelStats* )(vacrelstats)->paralle_state; \
+	SpinLockAcquire(&(pstate->mutex)); \
+	(state) = MyVacState; \
+	SpinLockRelease(&(pstate->mutex)); \
+} while(0);
+
 /* Data structure for updating index relation statistics */
 typedef struct LVIndStats
 {
@@ -130,13 +146,6 @@ typedef struct LVIndStats
 	BlockNumber rel_tuples;	/* # of index tuples */
 } LVIndStats;
 
-#define VACSTATE_STARTUP			0x00
-#define VACSTATE_SCANNING			0x01
-#define VACSTATE_VACUUM_PREPARED	0x02
-#define VACSTATE_VACUUMING			0x04
-#define VACSTATE_VACUUM_FINISHED	0x08
-#define VACSTATE_COMPLETE			0x10
-/*
 typedef enum VacWorkerState
 {
 	VACSTATE_STARTUP = 0,
@@ -146,14 +155,13 @@ typedef enum VacWorkerState
 	VACSTATE_VACUUM_FINISHED,
 	VACSTATE_COMPLETE
 } VacWorkerState;
-*/
 
 typedef struct LVParallelState
 {
 	int nworkers;	/* # of parallel vacuum workers */
 	ConditionVariable cv; /* condition variable */
 	slock_t	mutex;
-	uint8 vacstates[FLEXIBLE_ARRAY_MEMBER];
+	VacWorkerState vacstates[FLEXIBLE_ARRAY_MEMBER];
 	/* follows */
 } LVParallelState;
 
@@ -226,7 +234,7 @@ static MultiXactId MultiXactCutoff;
 
 static BufferAccessStrategy vac_strategy;
 static LVDeadTuple *MyDeadTuple = NULL;
-static uint8 *MyVacState = NULL;
+static VacWorkerState *MyVacState = NULL;
 
 /* non-export function prototypes */
 static void lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats);
@@ -276,11 +284,12 @@ static void lv_endscan(LVScanDesc lvscan);
 static BlockNumber lazy_scan_heap_get_nextpage(Relation onerel, LVRelStats* vacrelstats,
 											   LVScanDesc lvscan, bool *all_visible_according_to_vm,
 											   Buffer *vmbuffer, int options, bool aggressive);
-static void lazy_set_vacstate_and_wait(LVRelStats *vacrelstats, uint8 state);
-static void lazy_set_vacstate(LVRelStats *vacrelstats, uint8 state,
-							  bool broadcast);
-static int lazy_get_vacstate_count(LVRelStats *vacrelstats, uint8 states);
+static void lazy_set_vacstate_and_wait(LVRelStats *vacrelstats, VacWorkerState state);
+static void lazy_set_my_vacstate(LVRelStats *vacrelstats, VacWorkerState state);
+static void lazy_set_all_vacstates(LVRelStats *vacrelstats, VacWorkerState state);
+static int lazy_get_vacstate_count(LVRelStats *vacrelstats, VacWorkerState states);
 static long lazy_get_max_dead_tuple(LVRelStats *vacrelstats);
+static void lazy_scan_heap_leader(LVRelStats *vacrelstats);
 
 /*
  *	lazy_vacuum_rel() -- perform LAZY VACUUM for one heap relation
@@ -743,7 +752,7 @@ lazy_scan_heap(LVRelStats *vacrelstats, Relation onerel, Relation *Irel,
 	initprog_val[2] = vacrelstats->max_dead_tuples;
 	pgstat_progress_update_multi_param(3, initprog_index, initprog_val);
 
-	lazy_set_vacstate(vacrelstats, VACSTATE_SCANNING, false);
+	lazy_set_my_vacstate(vacrelstats, VACSTATE_SCANNING);
 
 	while((blkno = lazy_scan_heap_get_nextpage(onerel, vacrelstats, lvscan,
 											   &all_visible_according_to_vm,
@@ -790,7 +799,6 @@ lazy_scan_heap(LVRelStats *vacrelstats, Relation onerel, Relation *Irel,
 			 * to finish.
 			 */
 			lazy_set_vacstate_and_wait(vacrelstats, VACSTATE_VACUUM_PREPARED);
-			lazy_set_vacstate(vacrelstats, VACSTATE_VACUUMING, false);
 			fprintf(stderr, "[%d] (%d)      SYNCED going to vacum actually\n",
 					MyProcPid, ParallelWorkerNumber);
 
@@ -855,7 +863,6 @@ lazy_scan_heap(LVRelStats *vacrelstats, Relation onerel, Relation *Irel,
 			fprintf(stderr, "[%d] (%d)      SYNCED going to NEXT SCAN\n",
 					MyProcPid, ParallelWorkerNumber);
 			vacrelstats->num_index_scans++;
-			lazy_set_vacstate(vacrelstats, VACSTATE_SCANNING, false);
 		}
 
 		/*
@@ -1394,7 +1401,6 @@ lazy_scan_heap(LVRelStats *vacrelstats, Relation onerel, Relation *Irel,
 		fprintf(stderr, "[%d] (%d) LAST VACUUM PREPARED\n",
 			   MyProcPid, ParallelWorkerNumber);
 		lazy_set_vacstate_and_wait(vacrelstats, VACSTATE_VACUUM_PREPARED);
-		lazy_set_vacstate(vacrelstats, VACSTATE_VACUUMING, false);
 		
 		/* Log cleanup info before we touch indexes */
 		vacuum_log_cleanup_info(onerel, vacrelstats);
@@ -1425,7 +1431,7 @@ lazy_scan_heap(LVRelStats *vacrelstats, Relation onerel, Relation *Irel,
 		vacrelstats->num_index_scans++;
 	}
 
-	lazy_set_vacstate(vacrelstats, VACSTATE_COMPLETE, true);
+	lazy_set_my_vacstate(vacrelstats, VACSTATE_COMPLETE);
 
 	/* report all blocks vacuumed; and that we're cleaning up */
 	pgstat_progress_update_param(PROGRESS_VACUUM_HEAP_BLKS_VACUUMED, blkno);
@@ -1817,11 +1823,48 @@ lazy_vacuum_index(Relation indrel,
 	*stats = index_bulk_delete(&ivinfo, *stats,
 							   lazy_tid_reaped, (void *) vacrelstats);
 
+	fprintf(stderr, "[%d] (%d) lazy_vacuum_index : remoted %d\n",
+			MyProcPid, ParallelWorkerNumber, MyDeadTuple->n_dt);
 	ereport(elevel,
 			(errmsg("scanned index \"%s\" to remove %d row versions",
 					RelationGetRelationName(indrel),
 					MyDeadTuple->n_dt),
 			 errdetail("%s.", pg_rusage_show(&ru0))));
+}
+
+/*
+ * Main routine for leader process.
+ */
+static void
+lazy_scan_heap_leader(LVRelStats *vacrelstats)
+{
+	LVParallelState *pstate = vacrelstats->parallel_state;
+	
+	ConditionVariablePrepareToSleep(&(pstate->cv));
+
+	for(;;)
+	{
+		while (lazy_get_vacstate_count(vacrelstats, VACSTATE_VACUUM_PREPARED) < pstate->nworkers)
+			ConditionVariableSleep(&(pstate->cv), WAIT_EVENT_PARALLEL_FINISH);
+
+		/*
+		 * Forget the now-vacuumed tuples, and press on, but be careful
+		 * not to reset latestRemovedXid since we want that value to be
+		 * valid.
+		 */
+		lazy_clear_dead_tuple(vacrelstats);
+		lazy_set_all_vacstates(vacrelstats, VACSTATE_VACUUMING);
+
+		while (lazy_get_vacstate_count(vacrelstats, VACSTATE_VACUUM_FINISHED) < pstate->nworkers)
+			ConditionVariableSleep(&(pstate->cv), WAIT_EVENT_PARALLEL_FINISH);
+
+		lazy_set_all_vacstates(vacrelstats, VACSTATE_SCANNING);
+
+		if (lazy_get_vacstate_count(vacrelstats, VACSTATE_COMPLETE) == pstate->nworkers)
+			break;
+	}
+
+	ConditionVariableCancelSleep();
 }
 
 /*
@@ -2803,6 +2846,7 @@ lazy_initialize_dsm(ParallelContext *pcxt, Relation onerel,
 	dead_tuples_size = sizeof(LVDeadTuple) * pcxt->nworkers;
 	dead_tuples_size += sizeof(ItemPointerData) * vacrelstats->max_dead_tuples * pcxt->nworkers;
 	dead_tuples = (LVDeadTuple *) shm_toc_allocate(pcxt->toc, dead_tuples_size);
+	vacrelstats->dead_tuples = dead_tuples;
 	shm_toc_insert(pcxt->toc, VACUUM_KEY_DEAD_TUPLES, dead_tuples);
 
 	/* Allocate DSM for index vacuum statistics */
@@ -2884,7 +2928,7 @@ lazy_initialize_worker(shm_toc *toc, ParallelHeapScanDesc *pscan,
  */
 static void
 lazy_set_vacstate_and_wait(LVRelStats *vacrelstats,
-						   uint8 state)
+						   VacWorkerState state)
 {
 	LVParallelState *pstate = vacrelstats->parallel_state;
 	uint8 wait_state;
@@ -2894,51 +2938,10 @@ lazy_set_vacstate_and_wait(LVRelStats *vacrelstats,
 	if (!vacrelstats->do_parallel)
 		return;
 
-	Assert(state == VACSTATE_VACUUM_PREPARED || state == VACSTATE_VACUUM_FINISHED);
-
-	if (state == VACSTATE_VACUUM_PREPARED)
-		wait_state = VACSTATE_VACUUM_PREPARED |
-			VACSTATE_VACUUMING |
-			VACSTATE_VACUUM_FINISHED;
-	else if (state == VACSTATE_VACUUM_FINISHED)
-		wait_state = VACSTATE_VACUUM_FINISHED |
-			VACSTATE_SCANNING |
-			VACSTATE_VACUUM_PREPARED;
-
-	worker_count = lazy_get_vacstate_count(vacrelstats, wait_state);
-
-	/*
-	 * At the end of the vacuum on heap and index, we need to
-	 * clear the all dead tuple array by a worker process.
-	 * If I'm a last parallel worker that finished vacuum
-	 * clear the all dead tuple array.
-	 */
-	if (state == VACSTATE_VACUUM_FINISHED && worker_count + 1 == pstate->nworkers)
-	{
-		/* @@@ for debugging */
-		fprintf(stderr, "[%d] I'm last worker %d\n",
-				MyProcPid, ParallelWorkerNumber);
-
-		/*
-		 * Forget the now-vacuumed tuples, and press on, but be careful
-		 * not to reset latestRemovedXid since we want that value to be
-		 * valid.
-		 */
-		if (state == VACSTATE_VACUUM_FINISHED)
-			lazy_clear_dead_tuple(vacrelstats);
-	}
-
-	/* Update my vacuum state */
-	lazy_set_vacstate(vacrelstats, state, false);
-
-	/* Wake up other waiting parallel worker */
-	ConditionVariableBroadcast(&(pstate->cv));
-	fprintf(stderr, "[%d] (%d) send broadcast\n",
-			MyProcPid, ParallelWorkerNumber);
-
 	ConditionVariablePrepareToSleep(&(pstate->cv));
+
 	/* Sleep until all states of parallel worker become the same state */
-	while (lazy_get_vacstate_count(vacrelstats, wait_state) < pstate->nworkers)
+	while (*MyVacStatelazy_get_vacstate_count(vacrelstats, wait_state) < pstate->nworkers)
 	{
 		fprintf(stderr, "[%d] (%d) Sleep... bye\n",
 				MyProcPid, ParallelWorkerNumber);
@@ -2951,25 +2954,44 @@ lazy_set_vacstate_and_wait(LVRelStats *vacrelstats,
 	fprintf(stderr, "[%d] worker %d resume\n",
 			MyProcPid, ParallelWorkerNumber);
 
-	ConditionVariableCancelSleep();
 }
 
 static void
-lazy_set_vacstate(LVRelStats *vacrelstats, uint8 state,
-				  bool broadcast)
+lazy_set_my_vacstate(LVRelStats *vacrelstats, VacWorkerState state)
 {
 	LVParallelState *pstate = vacrelstats->parallel_state;
+
 	/* Change my vacuum state */
 	SpinLockAcquire(&(pstate->mutex));
     *MyVacState = state;
 	SpinLockRelease(&(pstate->mutex));
 
-	if (broadcast)
-		ConditionVariableBroadcast(&(pstate->cv));
+	ConditionVariableBroadcast(&(pstate->cv));
 
 	fprintf(stderr, "[%d] (%d) state changed to %d\n",
 			MyProcPid, ParallelWorkerNumber, state);
 }
+
+static void
+lazy_set_all_vacstate(LVRelStats *vacrelstats, VacWorkerState state)
+{
+	LVParallelState *pstate = vacrelstats->parallel_state;
+	int i;
+
+	/* Change my vacuum state */
+	SpinLockAcquire(&(pstate->mutex));
+
+	for (i = 0; i < pstate->nworkers; i++)
+		parallel_state->vacstates[i] = state;
+			
+	SpinLockRelease(&(pstate->mutex));
+
+	ConditionVariableBroadcast(&(pstate->cv));
+
+	fprintf(stderr, "[%d] (%d) all state changed to %d\n",
+			MyProcPid, ParallelWorkerNumber, state);
+}
+
 
 /*
  * Count workers is given state.
