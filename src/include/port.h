@@ -251,7 +251,7 @@ extern int	pgunlink(const char *path);
 #if defined(WIN32) && !defined(__CYGWIN__)
 extern int	pgsymlink(const char *oldpath, const char *newpath);
 extern int	pgreadlink(const char *path, char *buf, size_t size);
-extern bool pgwin32_is_junction(char *path);
+extern bool pgwin32_is_junction(const char *path);
 
 #define symlink(oldpath, newpath)	pgsymlink(oldpath, newpath)
 #define readlink(path, buf, size)	pgreadlink(path, buf, size)
@@ -361,6 +361,7 @@ extern off_t ftello(FILE *stream);
 
 extern double pg_erand48(unsigned short xseed[3]);
 extern long pg_lrand48(void);
+extern long pg_jrand48(unsigned short xseed[3]);
 extern void pg_srand48(long seed);
 
 #ifndef HAVE_FLS
@@ -453,6 +454,11 @@ extern int	pg_codepage_to_encoding(UINT cp);
 /* port/inet_net_ntop.c */
 extern char *inet_net_ntop(int af, const void *src, int bits,
 			  char *dst, size_t size);
+
+/* port/pg_strong_random.c */
+#ifdef HAVE_STRONG_RANDOM
+extern bool pg_strong_random(void *buf, size_t len);
+#endif
 
 /* port/pgcheckdir.c */
 extern int	pg_check_dir(const char *dir);
