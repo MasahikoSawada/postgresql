@@ -54,17 +54,6 @@ struct WritebackContext;
 extern PGDLLIMPORT int NBuffers;
 
 /* in bufmgr.c */
-#define WRITEBACK_MAX_PENDING_FLUSHES 256
-
-/* FIXME: Also default to on for mmap && msync(MS_ASYNC)? */
-#ifdef HAVE_SYNC_FILE_RANGE
-#define DEFAULT_CHECKPOINT_FLUSH_AFTER 32
-#define DEFAULT_BGWRITER_FLUSH_AFTER 64
-#else
-#define DEFAULT_CHECKPOINT_FLUSH_AFTER 0
-#define DEFAULT_BGWRITER_FLUSH_AFTER 0
-#endif   /* HAVE_SYNC_FILE_RANGE */
-
 extern bool zero_damaged_pages;
 extern int	bgwriter_lru_maxpages;
 extern double bgwriter_lru_multiplier;
@@ -227,6 +216,7 @@ extern void LockBuffer(Buffer buffer, int mode);
 extern bool ConditionalLockBuffer(Buffer buffer);
 extern void LockBufferForCleanup(Buffer buffer);
 extern bool ConditionalLockBufferForCleanup(Buffer buffer);
+extern bool IsBufferCleanupOK(Buffer buffer);
 extern bool HoldingBufferPinThatDelaysRecovery(void);
 
 extern void AbortBufferIO(void);
