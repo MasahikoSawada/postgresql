@@ -234,7 +234,7 @@ DefineSequence(ParseState *pstate, CreateSeqStmt *seq)
 	stmt->tablespacename = NULL;
 	stmt->if_not_exists = seq->if_not_exists;
 
-	address = DefineRelation(stmt, RELKIND_SEQUENCE, seq->ownerId, NULL);
+	address = DefineRelation(stmt, RELKIND_SEQUENCE, seq->ownerId, NULL, NULL);
 	seqoid = address.objectId;
 	Assert(seqoid != InvalidOid);
 
@@ -1475,7 +1475,8 @@ process_owned_by(Relation seqrel, List *owned_by)
 
 		/* Must be a regular or foreign table */
 		if (!(tablerel->rd_rel->relkind == RELKIND_RELATION ||
-			  tablerel->rd_rel->relkind == RELKIND_FOREIGN_TABLE))
+			  tablerel->rd_rel->relkind == RELKIND_FOREIGN_TABLE ||
+			  tablerel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE))
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 					 errmsg("referenced relation \"%s\" is not a table or foreign table",
@@ -1534,8 +1535,8 @@ pg_sequence_parameters(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	TupleDesc	tupdesc;
-	Datum		values[5];
-	bool		isnull[5];
+	Datum		values[6];
+	bool		isnull[6];
 	SeqTable	elm;
 	Relation	seqrel;
 	Buffer		buf;
@@ -1551,7 +1552,7 @@ pg_sequence_parameters(PG_FUNCTION_ARGS)
 				 errmsg("permission denied for sequence %s",
 						RelationGetRelationName(seqrel))));
 
-	tupdesc = CreateTemplateTupleDesc(5, false);
+	tupdesc = CreateTemplateTupleDesc(6, false);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "start_value",
 					   INT8OID, -1, 0);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "minimum_value",
@@ -1562,6 +1563,8 @@ pg_sequence_parameters(PG_FUNCTION_ARGS)
 					   INT8OID, -1, 0);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 5, "cycle_option",
 					   BOOLOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 6, "cache_size",
+					   INT8OID, -1, 0);
 
 	BlessTupleDesc(tupdesc);
 
@@ -1574,11 +1577,52 @@ pg_sequence_parameters(PG_FUNCTION_ARGS)
 	values[2] = Int64GetDatum(seq->max_value);
 	values[3] = Int64GetDatum(seq->increment_by);
 	values[4] = BoolGetDatum(seq->is_cycled);
+	values[5] = Int64GetDatum(seq->cache_value);
 
 	UnlockReleaseBuffer(buf);
 	relation_close(seqrel, NoLock);
 
 	return HeapTupleGetDatum(heap_form_tuple(tupdesc, values, isnull));
+}
+
+/*
+ * Return the last value from the sequence
+ *
+ * Note: This has a completely different meaning than lastval().
+ */
+Datum
+pg_sequence_last_value(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	SeqTable	elm;
+	Relation	seqrel;
+	Buffer		buf;
+	HeapTupleData seqtuple;
+	Form_pg_sequence seq;
+	bool		is_called;
+	int64		result;
+
+	/* open and AccessShareLock sequence */
+	init_sequence(relid, &elm, &seqrel);
+
+	if (pg_class_aclcheck(relid, GetUserId(), ACL_SELECT | ACL_USAGE) != ACLCHECK_OK)
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("permission denied for sequence %s",
+						RelationGetRelationName(seqrel))));
+
+	seq = read_seq_tuple(elm, seqrel, &buf, &seqtuple);
+
+	is_called = seq->is_called;
+	result = seq->last_value;
+
+	UnlockReleaseBuffer(buf);
+	relation_close(seqrel, NoLock);
+
+	if (is_called)
+		PG_RETURN_INT64(result);
+	else
+		PG_RETURN_NULL();
 }
 
 
