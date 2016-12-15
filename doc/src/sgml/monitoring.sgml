@@ -1439,7 +1439,7 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
          </listitem>
          <listitem>
          <para>
-          <literal>quorum</>: This standby is considered as a candidate of quorum commit.
+          <literal>quorum</>: This standby is considered as a voter of quorum commit.
          </para>
          </listitem>
        </itemizedlist>

@@ -182,7 +182,7 @@ standby4|0|async),
 'specify priority method by FIRST',
 'FIRST 2(standby1, standby2)');
 
-# Check that the state of standbys listed as a voter when the quorum
+# Check that the state of standbys listed as voter when the quorum
 # method is used.
 test_sync_state(
 $node_master, qq(standby1|1|quorum
@@ -201,5 +201,5 @@ $node_master, qq(standby1|1|quorum
 standby2|1|quorum
 standby3|1|quorum
 standby4|1|quorum),
-'all standbys are considered as candidates for quorum commit',
+'all standbys are considered as voter of quorum commit',
 'ANY 2(*)');

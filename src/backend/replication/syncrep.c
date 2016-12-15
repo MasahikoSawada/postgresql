@@ -45,7 +45,7 @@
  * standbys. If any of the current synchronous standbys disconnects
  * for whatever reason, it will be replaced immediately with the
  * next-highest-priority standby. In quorum method, the all standbys
- * appearing in the list are considered as a candidate for quorum commit.
+ * appearing in the list are considered as voter of quorum commit.
  *
  * Before the standbys chosen from synchronous_standby_names can
  * become the synchronous standbys they must have caught up with
@@ -665,8 +665,8 @@ SyncRepGetSyncStandbysQuorum(bool *am_sync)
 			continue;
 
 		/*
-		 * Consider this standby as candidate of sync and append
-		 * it to the result.
+		 * Consider this standby as voter of quorum commit and
+		 * append it to the result.
 		 */
 		result = lappend_int(result, i);
 		if (am_sync != NULL && walsnd == MyWalSnd)
