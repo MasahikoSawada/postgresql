@@ -21,7 +21,7 @@ SyncRepConfigData *syncrep_parse_result;
 char	   *syncrep_parse_error_msg;
 
 static SyncRepConfigData *create_syncrep_config(const char *num_sync,
-					List *members, int sync_method);
+					List *members, uint8 sync_method);
 
 /*
  * Bison doesn't allocate anything that needs to live across parser calls,
@@ -61,7 +61,7 @@ result:
 
 standby_config:
 		standby_list						{ $$ = create_syncrep_config("1", $1, SYNC_REP_PRIORITY); }
-		| NUM '(' standby_list ')'			{ $$ = create_syncrep_config($1, $3, SYNC_REP_QUORUM); }
+		| NUM '(' standby_list ')'			{ $$ = create_syncrep_config($1, $3, SYNC_REP_PRIORITY); }
 		| ANY NUM '(' standby_list ')'		{ $$ = create_syncrep_config($2, $4, SYNC_REP_QUORUM); }
 		| FIRST NUM '(' standby_list ')'	{ $$ = create_syncrep_config($2, $4, SYNC_REP_PRIORITY); }
 	;
@@ -77,9 +77,8 @@ standby_name:
 	;
 %%
 
-
 static SyncRepConfigData *
-create_syncrep_config(const char *num_sync, List *members, int sync_method)
+create_syncrep_config(const char *num_sync, List *members, uint8 sync_method)
 {
 	SyncRepConfigData *config;
 	int			size;

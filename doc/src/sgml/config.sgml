@@ -3064,8 +3064,8 @@ include_dir 'conf.d'
         This parameter specifies a list of standby servers using
         either of the following syntaxes:
 <synopsis>
-[ANY] <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="parameter">standby_name</replaceable> [, ...] )
-FIRST <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="parameter">standby_name</replaceable> [, ...] )
+[FIRST] <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="parameter">standby_name</replaceable> [, ...] )
+ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="parameter">standby_name</replaceable> [, ...] )
 <replaceable class="parameter">standby_name</replaceable> [, ...]
 </synopsis>
         where <replaceable class="parameter">num_sync</replaceable> is
@@ -3088,7 +3088,8 @@ FIRST <replaceable class="parameter">num_sync</replaceable> ( <replaceable class
         synchronous standbys. If any of the current synchronous standbys
         disconnects for whatever reason, it will be replaced immediately
         with the next-highest-priority standby. Specifying more than one standby
-        name can allow very high availability.
+        name can allow very high availability. The keyword <literal>FIRST</>
+        is optional.
        </para>
        <para>
         The keyword <literal>ANY</>, coupled with <literal>num_sync</>,
@@ -3115,16 +3116,6 @@ FIRST <replaceable class="parameter">num_sync</replaceable> ( <replaceable class
         have the same meaning: either <literal>s1</> or <literal>s2</> is
         chosen as a synchronous standby.
        </para>
-       <note>
-         <para>
-         If <literal>FIRST</> or <literal>ANY</> are not specified, this parameter
-         behaves as if <literal>ANY</> is used. Note that this grammar is incompatible
-         with <productname>PostgresSQL</> 9.6 which is first version supporting multiple
-         standbys with synchronous replication, where no such keyword <literal>FIRST</>
-         or <literal>ANY</> can be used. Note that the grammer behaves as if <literal>FIRST</>
-         is used, which is incompatible with the post-9.6 version behavior.
-        </para>
-       </note>
        <para>
         The name of a standby server for this purpose is the
         <varname>application_name</> setting of the standby, as set in the

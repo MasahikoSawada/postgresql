@@ -35,17 +35,17 @@
  * quorum. The number of synchronous standbys that transactions
  * must wait for replies from and synchronization method are
  * specified in synchronous_standby_names. The priority method is
- * represented by FIRST, and the quorum method is represented by ANY
- * This parameter also specifies a list of standby names, which
- * determines the priority of each standby for being chosen as a
- * synchronous standby. In priority method, the standbys whose names
- * appear earlier in the list are given higher priority and will be
- * considered as synchronous. Other standby servers appearing later
- * in this list represent potential synchronous standbys. If any of
- * the current synchronous standbys disconnects for whatever reason,
- * it will be replaced immediately with the next-highest-priority standby.
- * In quorum method, the all standbys appearing in the list are
- * considered as a candidate for quorum commit.
+ * represented by FIRST or nothing specified, and the quorum method
+ * is represented by ANY. This parameter also specifies a list of
+ * standby names, which determines the priority of each standby for
+ * being chosen as a synchronous standby. In priority method, the
+ * standbys whose names appear earlier in the list are given higher
+ * priority and will be considered as synchronous. Other standby
+ * servers appearing later in this list represent potential synchronous
+ * standbys. If any of the current synchronous standbys disconnects
+ * for whatever reason, it will be replaced immediately with the
+ * next-highest-priority standby. In quorum method, the all standbys
+ * appearing in the list are considered as a candidate for quorum commit.
  *
  * Before the standbys chosen from synchronous_standby_names can
  * become the synchronous standbys they must have caught up with
@@ -574,7 +574,7 @@ SyncRepGetSyncRecPtr(XLogRecPtr *writePtr, XLogRecPtr *flushPtr,
 				*applyPtr = apply;
 		}
 	}
-	else /* SYNC_REP_QUORUM */
+	else if (SyncRepConfig->sync_method == SYNC_REP_QUORUM)
 	{
 		XLogRecPtr	*write_array;
 		XLogRecPtr	*flush_array;
@@ -616,6 +616,11 @@ SyncRepGetSyncRecPtr(XLogRecPtr *writePtr, XLogRecPtr *flushPtr,
 		pfree(flush_array);
 		pfree(apply_array);
 	}
+	else
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid synchronization method is specified \"%d\"",
+						SyncRepConfig->sync_method)));
 
 	list_free(sync_standbys);
 	return true;
@@ -672,7 +677,7 @@ SyncRepGetSyncStandbysQuorum(bool *am_sync)
 }
 
 /*
- * Return the list of sync standbys using priority method, or
+ * Return the list of sync standbys using priority method, or return
  * NIL if no sync standby is connected. In priority method,
  * if there are multiple standbys with the same priority,
  * the first one found is selected preferentially.

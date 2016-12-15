@@ -2869,7 +2869,7 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 			/*
 			 * More easily understood version of standby state. This is purely
 			 * informational. In quorum method, since all standbys are considered as
-			 * a candidate of quorum commit standby state is  always 'quorum'.
+			 * a candidate of quorum commit standby state is always 'quorum'.
 			 */
 			if (priority == 0)
 				values[7] = CStringGetTextDatum("async");
