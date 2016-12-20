@@ -161,6 +161,11 @@ typedef struct CopyStateData
 	ExprState **defexprs;		/* array of default att expressions */
 	bool		volatile_defexprs;		/* is any of defexprs volatile? */
 	List	   *range_table;
+	PartitionDispatch *partition_dispatch_info;
+	int			num_dispatch;
+	int			num_partitions;
+	ResultRelInfo *partitions;
+	TupleConversionMap **partition_tupconv_maps;
 
 	/*
 	 * These variables are used to reduce overhead in textual COPY FROM.
@@ -385,7 +390,7 @@ ReceiveCopyBegin(CopyState cstate)
 			pq_sendint(&buf, format, 2);		/* per-column formats */
 		pq_endmessage(&buf);
 		cstate->copy_dest = COPY_NEW_FE;
-		cstate->fe_msgbuf = makeStringInfo();
+		cstate->fe_msgbuf = makeLongStringInfo();
 	}
 	else
 	{
@@ -864,8 +869,8 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt, uint64 *processed)
 			 * statement.
 			 *
 			 * In the case that columns are specified in the attribute list,
-			 * create a ColumnRef and ResTarget for each column and add them to
-			 * the target list for the resulting SELECT statement.
+			 * create a ColumnRef and ResTarget for each column and add them
+			 * to the target list for the resulting SELECT statement.
 			 */
 			if (!stmt->attlist)
 			{
@@ -1397,6 +1402,69 @@ BeginCopy(ParseState *pstate,
 					(errcode(ERRCODE_UNDEFINED_COLUMN),
 					 errmsg("table \"%s\" does not have OIDs",
 							RelationGetRelationName(cstate->rel))));
+
+		/* Initialize state for CopyFrom tuple routing. */
+		if (is_from && rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+		{
+			List	   *leaf_parts;
+			ListCell   *cell;
+			int			i,
+						num_parted;
+			ResultRelInfo *leaf_part_rri;
+
+			/* Get the tuple-routing information and lock partitions */
+			cstate->partition_dispatch_info =
+				RelationGetPartitionDispatchInfo(rel, RowExclusiveLock,
+												 &num_parted,
+												 &leaf_parts);
+			cstate->num_dispatch = num_parted;
+			cstate->num_partitions = list_length(leaf_parts);
+			cstate->partitions = (ResultRelInfo *)
+				palloc(cstate->num_partitions *
+					   sizeof(ResultRelInfo));
+			cstate->partition_tupconv_maps = (TupleConversionMap **)
+				palloc0(cstate->num_partitions *
+						sizeof(TupleConversionMap *));
+
+			leaf_part_rri = cstate->partitions;
+			i = 0;
+			foreach(cell, leaf_parts)
+			{
+				Relation	partrel;
+
+				/*
+				 * We locked all the partitions above including the leaf
+				 * partitions.  Note that each of the relations in
+				 * cstate->partitions will be closed by CopyFrom() after it's
+				 * finished with its processing.
+				 */
+				partrel = heap_open(lfirst_oid(cell), NoLock);
+
+				/*
+				 * Verify result relation is a valid target for the current
+				 * operation.
+				 */
+				CheckValidResultRel(partrel, CMD_INSERT);
+
+				InitResultRelInfo(leaf_part_rri,
+								  partrel,
+								  1,	/* dummy */
+								  false,		/* no partition constraint
+												 * check */
+								  0);
+
+				/* Open partition indices */
+				ExecOpenIndices(leaf_part_rri, false);
+
+				if (!equalTupleDescs(tupDesc, RelationGetDescr(partrel)))
+					cstate->partition_tupconv_maps[i] =
+						convert_tuples_by_name(tupDesc,
+											   RelationGetDescr(partrel),
+								 gettext_noop("could not convert row type"));
+				leaf_part_rri++;
+				i++;
+			}
+		}
 	}
 	else
 	{
@@ -1751,6 +1819,12 @@ BeginCopyTo(ParseState *pstate,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 					 errmsg("cannot copy from sequence \"%s\"",
 							RelationGetRelationName(rel))));
+		else if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("cannot copy from partitioned table \"%s\"",
+							RelationGetRelationName(rel)),
+					 errhint("Try the COPY (SELECT ...) TO variant.")));
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
@@ -1907,7 +1981,7 @@ CopyTo(CopyState cstate)
 	cstate->null_print_client = cstate->null_print;		/* default */
 
 	/* We use fe_msgbuf as a per-row buffer regardless of copy_dest */
-	cstate->fe_msgbuf = makeStringInfo();
+	cstate->fe_msgbuf = makeLongStringInfo();
 
 	/* Get info about the columns we need to process. */
 	cstate->out_functions = (FmgrInfo *) palloc(num_phys_attrs * sizeof(FmgrInfo));
@@ -2249,6 +2323,7 @@ CopyFrom(CopyState cstate)
 	Datum	   *values;
 	bool	   *nulls;
 	ResultRelInfo *resultRelInfo;
+	ResultRelInfo *saved_resultRelInfo = NULL;
 	EState	   *estate = CreateExecutorState(); /* for ExecConstraints() */
 	ExprContext *econtext;
 	TupleTableSlot *myslot;
@@ -2269,13 +2344,22 @@ CopyFrom(CopyState cstate)
 
 	Assert(cstate->rel);
 
-	if (cstate->rel->rd_rel->relkind != RELKIND_RELATION)
+	/*
+	 * The target must be a plain relation or have an INSTEAD OF INSERT row
+	 * trigger.  (Currently, such triggers are only allowed on views, so we
+	 * only hint about them in the view case.)
+	 */
+	if (cstate->rel->rd_rel->relkind != RELKIND_RELATION &&
+		cstate->rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE &&
+		!(cstate->rel->trigdesc &&
+		  cstate->rel->trigdesc->trig_insert_instead_row))
 	{
 		if (cstate->rel->rd_rel->relkind == RELKIND_VIEW)
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 					 errmsg("cannot copy to view \"%s\"",
-							RelationGetRelationName(cstate->rel))));
+							RelationGetRelationName(cstate->rel)),
+					 errhint("To enable copying to a view, provide an INSTEAD OF INSERT trigger.")));
 		else if (cstate->rel->rd_rel->relkind == RELKIND_MATVIEW)
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
@@ -2377,6 +2461,7 @@ CopyFrom(CopyState cstate)
 	InitResultRelInfo(resultRelInfo,
 					  cstate->rel,
 					  1,		/* dummy rangetable index */
+					  true,		/* do load partition check expression */
 					  0);
 
 	ExecOpenIndices(resultRelInfo, false);
@@ -2399,11 +2484,13 @@ CopyFrom(CopyState cstate)
 	 * BEFORE/INSTEAD OF triggers, or we need to evaluate volatile default
 	 * expressions. Such triggers or expressions might query the table we're
 	 * inserting to, and act differently if the tuples that have already been
-	 * processed and prepared for insertion are not there.
+	 * processed and prepared for insertion are not there.  We also can't do
+	 * it if the table is partitioned.
 	 */
 	if ((resultRelInfo->ri_TrigDesc != NULL &&
 		 (resultRelInfo->ri_TrigDesc->trig_insert_before_row ||
 		  resultRelInfo->ri_TrigDesc->trig_insert_instead_row)) ||
+		cstate->partition_dispatch_info != NULL ||
 		cstate->volatile_defexprs)
 	{
 		useHeapMultiInsert = false;
@@ -2480,6 +2567,59 @@ CopyFrom(CopyState cstate)
 		slot = myslot;
 		ExecStoreTuple(tuple, slot, InvalidBuffer, false);
 
+		/* Determine the partition to heap_insert the tuple into */
+		if (cstate->partition_dispatch_info)
+		{
+			int			leaf_part_index;
+			TupleConversionMap *map;
+
+			/*
+			 * Away we go ... If we end up not finding a partition after all,
+			 * ExecFindPartition() does not return and errors out instead.
+			 * Otherwise, the returned value is to be used as an index into
+			 * arrays mt_partitions[] and mt_partition_tupconv_maps[] that
+			 * will get us the ResultRelInfo and TupleConversionMap for the
+			 * partition, respectively.
+			 */
+			leaf_part_index = ExecFindPartition(resultRelInfo,
+											 cstate->partition_dispatch_info,
+												slot,
+												estate);
+			Assert(leaf_part_index >= 0 &&
+				   leaf_part_index < cstate->num_partitions);
+
+			/*
+			 * Save the old ResultRelInfo and switch to the one corresponding
+			 * to the selected partition.
+			 */
+			saved_resultRelInfo = resultRelInfo;
+			resultRelInfo = cstate->partitions + leaf_part_index;
+
+			/* We do not yet have a way to insert into a foreign partition */
+			if (resultRelInfo->ri_FdwRoutine)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot route inserted tuples to a foreign table")));
+
+			/*
+			 * For ExecInsertIndexTuples() to work on the partition's indexes
+			 */
+			estate->es_result_relation_info = resultRelInfo;
+
+			/*
+			 * We might need to convert from the parent rowtype to the
+			 * partition rowtype.
+			 */
+			map = cstate->partition_tupconv_maps[leaf_part_index];
+			if (map)
+			{
+				tuple = do_convert_tuple(tuple, map);
+				ExecStoreTuple(tuple, slot, InvalidBuffer, true);
+			}
+
+			tuple->t_tableOid = RelationGetRelid(resultRelInfo->ri_RelationDesc);
+		}
+
 		skip_tuple = false;
 
 		/* BEFORE ROW INSERT Triggers */
@@ -2496,52 +2636,66 @@ CopyFrom(CopyState cstate)
 
 		if (!skip_tuple)
 		{
-			/* Check the constraints of the tuple */
-			if (cstate->rel->rd_att->constr)
-				ExecConstraints(resultRelInfo, slot, estate);
-
-			if (useHeapMultiInsert)
+			if (resultRelInfo->ri_TrigDesc &&
+				resultRelInfo->ri_TrigDesc->trig_insert_instead_row)
 			{
-				/* Add this tuple to the tuple buffer */
-				if (nBufferedTuples == 0)
-					firstBufferedLineNo = cstate->cur_lineno;
-				bufferedTuples[nBufferedTuples++] = tuple;
-				bufferedTuplesSize += tuple->t_len;
-
-				/*
-				 * If the buffer filled up, flush it. Also flush if the total
-				 * size of all the tuples in the buffer becomes large, to
-				 * avoid using large amounts of memory for the buffers when
-				 * the tuples are exceptionally wide.
-				 */
-				if (nBufferedTuples == MAX_BUFFERED_TUPLES ||
-					bufferedTuplesSize > 65535)
-				{
-					CopyFromInsertBatch(cstate, estate, mycid, hi_options,
-										resultRelInfo, myslot, bistate,
-										nBufferedTuples, bufferedTuples,
-										firstBufferedLineNo);
-					nBufferedTuples = 0;
-					bufferedTuplesSize = 0;
-				}
+				/* Pass the data to the INSTEAD ROW INSERT trigger */
+				ExecIRInsertTriggers(estate, resultRelInfo, slot);
 			}
 			else
 			{
-				List	   *recheckIndexes = NIL;
+				/* Check the constraints of the tuple */
+				if (cstate->rel->rd_att->constr ||
+					resultRelInfo->ri_PartitionCheck)
+					ExecConstraints(resultRelInfo, slot, estate);
 
-				/* OK, store the tuple and create index entries for it */
-				heap_insert(cstate->rel, tuple, mycid, hi_options, bistate);
+				if (useHeapMultiInsert)
+				{
+					/* Add this tuple to the tuple buffer */
+					if (nBufferedTuples == 0)
+						firstBufferedLineNo = cstate->cur_lineno;
+					bufferedTuples[nBufferedTuples++] = tuple;
+					bufferedTuplesSize += tuple->t_len;
 
-				if (resultRelInfo->ri_NumIndices > 0)
-					recheckIndexes = ExecInsertIndexTuples(slot, &(tuple->t_self),
-														 estate, false, NULL,
-														   NIL);
+					/*
+					 * If the buffer filled up, flush it.  Also flush if the
+					 * total size of all the tuples in the buffer becomes
+					 * large, to avoid using large amounts of memory for the
+					 * buffer when the tuples are exceptionally wide.
+					 */
+					if (nBufferedTuples == MAX_BUFFERED_TUPLES ||
+						bufferedTuplesSize > 65535)
+					{
+						CopyFromInsertBatch(cstate, estate, mycid, hi_options,
+											resultRelInfo, myslot, bistate,
+											nBufferedTuples, bufferedTuples,
+											firstBufferedLineNo);
+						nBufferedTuples = 0;
+						bufferedTuplesSize = 0;
+					}
+				}
+				else
+				{
+					List	   *recheckIndexes = NIL;
 
-				/* AFTER ROW INSERT Triggers */
-				ExecARInsertTriggers(estate, resultRelInfo, tuple,
-									 recheckIndexes);
+					/* OK, store the tuple and create index entries for it */
+					heap_insert(resultRelInfo->ri_RelationDesc, tuple, mycid,
+								hi_options, bistate);
 
-				list_free(recheckIndexes);
+					if (resultRelInfo->ri_NumIndices > 0)
+						recheckIndexes = ExecInsertIndexTuples(slot,
+															&(tuple->t_self),
+															   estate,
+															   false,
+															   NULL,
+															   NIL);
+
+					/* AFTER ROW INSERT Triggers */
+					ExecARInsertTriggers(estate, resultRelInfo, tuple,
+										 recheckIndexes);
+
+					list_free(recheckIndexes);
+				}
 			}
 
 			/*
@@ -2550,6 +2704,12 @@ CopyFrom(CopyState cstate)
 			 * tuples inserted by an INSERT command.
 			 */
 			processed++;
+
+			if (saved_resultRelInfo)
+			{
+				resultRelInfo = saved_resultRelInfo;
+				estate->es_result_relation_info = resultRelInfo;
+			}
 		}
 	}
 
@@ -2586,6 +2746,32 @@ CopyFrom(CopyState cstate)
 	ExecResetTupleTable(estate->es_tupleTable, false);
 
 	ExecCloseIndices(resultRelInfo);
+
+	/* Close all the partitioned tables, leaf partitions, and their indices */
+	if (cstate->partition_dispatch_info)
+	{
+		int			i;
+
+		/*
+		 * Remember cstate->partition_dispatch_info[0] corresponds to the root
+		 * partitioned table, which we must not try to close, because it is
+		 * the main target table of COPY that will be closed eventually by
+		 * DoCopy().
+		 */
+		for (i = 1; i < cstate->num_dispatch; i++)
+		{
+			PartitionDispatch pd = cstate->partition_dispatch_info[i];
+
+			heap_close(pd->reldesc, NoLock);
+		}
+		for (i = 0; i < cstate->num_partitions; i++)
+		{
+			ResultRelInfo *resultRelInfo = cstate->partitions + i;
+
+			ExecCloseIndices(resultRelInfo);
+			heap_close(resultRelInfo->ri_RelationDesc, NoLock);
+		}
+	}
 
 	FreeExecutorState(estate);
 
@@ -2722,8 +2908,8 @@ BeginCopyFrom(ParseState *pstate,
 	cstate->cur_attval = NULL;
 
 	/* Set up variables to avoid per-attribute overhead. */
-	initStringInfo(&cstate->attribute_buf);
-	initStringInfo(&cstate->line_buf);
+	initLongStringInfo(&cstate->attribute_buf);
+	initLongStringInfo(&cstate->line_buf);
 	cstate->line_buf_converted = false;
 	cstate->raw_buf = (char *) palloc(RAW_BUF_SIZE + 1);
 	cstate->raw_buf_index = cstate->raw_buf_len = 0;
