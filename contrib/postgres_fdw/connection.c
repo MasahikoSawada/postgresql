@@ -810,7 +810,7 @@ postgresResolvePreparedForeignTransaction(Oid serverid, Oid userid, Oid umid,
 				sqlstate = ERRCODE_CONNECTION_FAILURE;
 
 			/*
-			 * If we tried to COMMIT/ABORT a prepared transaction and the pepared
+			 * If we tried to COMMIT/ABORT a prepared transaction and the prepared
 			 * transaction was missing on the foreign server, it was probably
 			 * resolved by some other means. Anyway, it should be considered as resolved.
 			 */
