@@ -1,7 +1,7 @@
 /*-------------------------------------------------------------------------
  *
  * fdw_xact.c
- *		PostgreSQL distributed transaction manager.
+ *		PostgreSQL transaction manager for forign server.
  *
  * This module manages the transactions involving foreign servers.
  *
