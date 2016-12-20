@@ -69,6 +69,10 @@ extern void CheckPointFDWXact(XLogRecPtr redo_horizon);
 extern void RegisterXactForeignServer(Oid serverid, Oid userid, bool can_prepare);
 extern bool FdwTwoPhaseNeeded(void);
 extern void PreCommit_FDWXacts(void);
+extern void KnownFDWXactAdd(XLogReaderState *record);
+extern void KnownFDWXactRemove(TransactionId xid, Oid serverid, Oid userid);
+extern void KnownFDWXactRecreateFiles(XLogRecPtr redo_horizon);
+
 /* For the sake of foreign transaction resolver */
 extern List	*get_dbids_with_unresolved_xact(void);
 
