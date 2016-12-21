@@ -1,7 +1,7 @@
 /*-------------------------------------------------------------------------
  *
  * fdw_xact.c
- *		PostgreSQL distributed transaction manager.
+ *		PostgreSQL transaction manager for forign server.
  *
  * This module manages the transactions involving foreign servers.
  *
@@ -250,6 +250,37 @@ typedef struct
 	/* Upto max_fdw_xacts entries in the array */
 	FDWXact		fdw_xacts[FLEXIBLE_ARRAY_MEMBER];	/* Variable length array */
 } FDWXactGlobalData;
+
+/*
+ * During replay and replication KnownFDWXactList holds info about active foreign server
+ * transactions that weren't moved to files yet. We will need that info by the end of
+ * recovery (including promote) to restore memory state of that transactions.
+ *
+ * Naive approach here is to move each PREPARE record to disk, fsync it and don't have
+ * that list at all, but that provokes a lot of unnecessary fsyncs on small files
+ * causing replica to be slower than master.
+ *
+ * Replay of twophase records happens by the following rules:
+ *		* On PREPARE redo KnownFDWXactAdd() is called to add that transaction to
+ *		  KnownFDWXactList and no more actions are taken.
+ *		* On checkpoint redo we iterate through KnownFDWXactList and move all prepare
+ *		  records that behind redo_horizon to files and deleting them from list.
+ *		* On COMMIT/ABORT we delete file or entry in KnownFDWXactList.
+ *		* At the end of recovery we move all known foreign server transactions to disk
+ *		  to allow RecoverPreparedTransactions/StandbyRecoverPreparedTransactions
+ *		  do their work.
+ */
+typedef struct KnownFDWXact
+{
+	TransactionId	local_xid;
+	Oid				serverid;
+	Oid				userid;
+	XLogRecPtr		fdw_xact_start_lsn;
+	XLogRecPtr		fdw_xact_end_lsn;
+	dlist_node		list_node;
+} KnownFDWXact;
+
+static dlist_head KnownFDWXactList = DLIST_STATIC_INIT(KnownFDWXactList);
 
 static void AtProcExit_FDWXact(int code, Datum arg);
 static bool resolve_fdw_xact(FDWXact fdw_xact,
@@ -1150,7 +1181,7 @@ get_dbids_with_unresolved_xact(void)
 }
 
 /*
- * fdw_xact_redo
+ * fdw_xact_reod
  * Apply the redo log for a foreign transaction.
  */
 extern void
@@ -1158,76 +1189,14 @@ fdw_xact_redo(XLogReaderState *record)
 {
 	char    *rec = XLogRecGetData(record);
 	uint8   info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
-	int             rec_len = XLogRecGetDataLen(record);
-	TransactionId xid = XLogRecGetXid(record);
 
 	if (info == XLOG_FDW_XACT_INSERT)
-	{
-		FDWXactOnDiskData       *fdw_xact_data_file = (FDWXactOnDiskData *)rec;
-		char                            path[MAXPGPATH];
-		int                                     fd;
-		pg_crc32c                       fdw_xact_crc;
-
-		/* Recompute CRC */
-		INIT_CRC32C(fdw_xact_crc);
-		COMP_CRC32C(fdw_xact_crc, rec, rec_len);
-		FIN_CRC32C(fdw_xact_crc);
-
-		FDWXactFilePath(path, xid, fdw_xact_data_file->serverid,
-						fdw_xact_data_file->userid);
-
-		/*
-		 * The file may exist, if it was flushed to disk after creating it. The
-		 * file might have been flushed while it was being crafted, so the
-		 * contents can not be guaranteed to be accurate. Hence truncate and
-		 * rewrite the file.
-		 */
-		fd = OpenTransientFile(path, O_CREAT | O_WRONLY | O_TRUNC | PG_BINARY,
-							   S_IRUSR | S_IWUSR);
-		if (fd < 0)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not create/open foreign transaction state file \"%s\": %m",
-							path)));
-
-		/* The log record is exactly the contents of the file. */
-		if (write(fd, rec, rec_len) != rec_len)
-		{
-			CloseTransientFile(fd);
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not write FDW transaction state file: %s", path)));
-		}
-
-		if (write(fd, &fdw_xact_crc, sizeof(pg_crc32c)) != sizeof(pg_crc32c))
-		{
-			CloseTransientFile(fd);
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not write two-phase state file: %m")));
-		}
-
-		/*
-		 * We must fsync the file because the end-of-replay checkpoint will not do
-		 * so, there being no foreign transaction entry in shared memory yet to
-		 * tell it to.
-		 */
-		if (pg_fsync(fd) != 0)
-		{
-			CloseTransientFile(fd);
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not fsync foreign transaction state file: %m")));
-		}
-
-		CloseTransientFile(fd);
-	}
+		KnownFDWXactAdd(record);
 	else if (info == XLOG_FDW_XACT_REMOVE)
 	{
-		FdwRemoveXlogRec	*fdw_remove_xlog = (FdwRemoveXlogRec *)rec;
-
-		RemoveFDWXactFile(fdw_remove_xlog->xid, fdw_remove_xlog->serverid,
-						  fdw_remove_xlog->userid, true);
+		FdwRemoveXlogRec        *fdw_remove_xlog = (FdwRemoveXlogRec *)rec;
+		KnownFDWXactRemove(fdw_remove_xlog->xid, fdw_remove_xlog->serverid,
+						   fdw_remove_xlog->userid);
 	}
 	else
 		elog(ERROR, "invalid log type %d in foreign transction log record", info);
@@ -1337,8 +1306,6 @@ XlogReadFDWXactData(XLogRecPtr lsn, char **buf, int *len)
 	XLogReaderState		*xlogreader;
 	char				*errormsg;
 
-	Assert(!RecoveryInProgress());
-
 	xlogreader = XLogReaderAllocate(&read_local_xlog_page, NULL);
 	if (!xlogreader)
 		ereport(ERROR,
@@ -1438,8 +1405,21 @@ RecreateFDWXactFile(TransactionId xid, Oid serverid, Oid userid,
 		CloseTransientFile(fd);
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not write foreign transaction file: %m")));
+				 errmsg("could not write foreign transaction state file: %m")));
 	}
+
+	/*
+	 * We must fsync the file because the end-of-replay checkpoint will not do
+	 * so, there being no GXACT in shared memory yet to tell it to.
+	 */
+	if (pg_fsync(fd) != 0)
+	{
+		CloseTransientFile(fd);
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not fsync foreign transaction state file: %m")));
+	}
+
 	if (CloseTransientFile(fd) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
@@ -1989,6 +1969,15 @@ PrescanFDWXacts(TransactionId oldestActiveXid)
 	DIR				*cldir;
 	struct dirent	*clde;
 
+	/*
+	 * Move foreign transactions from kownFDWXactList to files, if any.
+	 * It is possible to skip that step and teach subseuent code about
+	 * KnownFDWXactList, but whole PreSacn() happens
+	 * once during end of recovery or promote, so probably it isn't worth
+	 * complications.
+	 */
+	KnownFDWXactRecreateFiles(InvalidXLogRecPtr);
+
 	cldir = AllocateDir(FDW_XACTS_DIR);
 	while ((clde = ReadDir(cldir, FDW_XACTS_DIR)) != NULL)
 	{
@@ -2112,4 +2101,117 @@ RemoveFDWXactFile(TransactionId xid, Oid serverid, Oid userid, bool giveWarning)
 					(errcode_for_file_access(),
 				   errmsg("could not remove foreign transaction state file \"%s\": %m",
 						  path)));
+}
+
+/*
+ * KnownFDWXactAdd
+ *
+ * Store correspondence of start/end lsn and xid in KnownFDWXactList.
+ * This is called during redo of prepare record to have list of prepared
+ * transactions on foreign server that aren't yet moved to 2PC files by the
+ * end of recovery.
+ */
+void
+KnownFDWXactAdd(XLogReaderState *record)
+{
+	KnownFDWXact *fdw_xact;
+	FDWXactOnDiskData *fdw_xact_data_file = (FDWXactOnDiskData *)record;
+
+	Assert(RecoveryInProgress());
+
+	fdw_xact = (KnownFDWXact *) palloc(sizeof(KnownFDWXact));
+	fdw_xact->local_xid = fdw_xact_data_file->local_xid;
+	fdw_xact->serverid = fdw_xact_data_file->serverid;;
+	fdw_xact->userid = fdw_xact_data_file->userid;;
+	fdw_xact->fdw_xact_start_lsn = record->ReadRecPtr;
+	fdw_xact->fdw_xact_end_lsn = record->EndRecPtr;
+
+	dlist_push_tail(&KnownFDWXactList, &fdw_xact->list_node);
+}
+
+/*
+ * KnownFDWXactRemove
+ *
+ * Forgot about foreign transaction. Called durig commit/abort redo.
+ */
+void
+KnownFDWXactRemove(TransactionId xid, Oid serverid, Oid userid)
+{
+	dlist_mutable_iter miter;
+
+	Assert(RecoveryInProgress());
+
+	dlist_foreach_modify(miter, &KnownFDWXactList)
+	{
+		KnownFDWXact *fdw_xact = dlist_container(KnownFDWXact, list_node,
+												 miter.cur);
+		if (fdw_xact->local_xid == xid &&
+			fdw_xact->serverid == serverid &&
+			fdw_xact->userid == userid)
+		{
+			dlist_delete(miter.cur);
+			/*
+			 * SInce we found entry in KnownFDWXactList we know that file
+			 * isn't on disk yet and we acn end up here.
+			 */
+			return;
+		}
+	}
+
+	/*
+	 * Here we know that file should be removed from disk. But aborting
+	 * recovery because of absence of unnecessary file doesn't seems to
+	 * be a good idea, so call remove with gibeWarning = false.
+	 */
+	RemoveFDWXactFile(xid, serverid, userid, false);
+}
+
+/*
+ * KnownFDWXactRecreateFiles
+ *
+ * Moves foreign server transaction records from WAL to files. Called during
+ * checkpoint replay or PrescanPreparedTransactions.
+ *
+ * redo_horizon = InvalidXLogRecPtr indicates that all transactions from
+ *		KnownFDWXactList should be moved to disk.
+ */
+void
+KnownFDWXactRecreateFiles(XLogRecPtr redo_horizon)
+{
+	dlist_mutable_iter miter;
+	int			serialized_fdw_xacts = 0;
+
+	Assert(RecoveryInProgress());
+
+	TRACE_POSTGRESQL_FDWXACT_CHECKPOINT_START();
+
+	dlist_foreach_modify(miter, &KnownFDWXactList)
+	{
+		KnownFDWXact   *fdw_xact = dlist_container(KnownFDWXact,
+														list_node, miter.cur);
+
+		if (fdw_xact->fdw_xact_end_lsn <= redo_horizon || redo_horizon == InvalidXLogRecPtr)
+		{
+			char	   *buf;
+			int			len;
+
+			XlogReadFDWXactData(fdw_xact->fdw_xact_start_lsn, &buf, &len);
+			RecreateFDWXactFile(fdw_xact->local_xid, fdw_xact->serverid,
+								fdw_xact->userid, buf, len);
+			pfree(buf);
+			dlist_delete(miter.cur);
+			serialized_fdw_xacts++;
+		}
+	}
+
+	TRACE_POSTGRESQL_FDWXACT_CHECKPOINT_DONE();
+
+	if (log_checkpoints && serialized_fdw_xacts > 0)
+		ereport(LOG,
+				(errmsg_plural("%u foreign transaction state file was written "
+							   "for long-running prepared transactions",
+							   "%u foreign transaction state files were written "
+							   "for long-running prepared transactions",
+							   serialized_fdw_xacts,
+							   serialized_fdw_xacts)));
 }
