@@ -155,7 +155,7 @@ CREATE FOREIGN TABLE ft6 (
 
 CREATE FOREIGN TABLE ft7 (
        c1 int NOT NULL
-) SERVER loopback OPTIONS (schema_name 'S 1', table_name 'T 5');       
+) SERVER loopback OPTIONS (schema_name 'S 1', table_name 'T 5');
 
 CREATE FOREIGN TABLE ft8 (
        c1 int NOT NULL
