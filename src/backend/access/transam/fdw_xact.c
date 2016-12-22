@@ -1,7 +1,7 @@
 /*-------------------------------------------------------------------------
  *
  * fdw_xact.c
- *		PostgreSQL transaction manager for forign server.
+ *		PostgreSQL distributed transaction manager for forign server.
  *
  * This module manages the transactions involving foreign servers.
  *
@@ -90,7 +90,7 @@ typedef struct
 													 * server, whenever
 													 * necessary.
 													 */
-	GetPrepareId_function		prepare_id_provider;
+	GetPrepareId_function		get_prepare_id;
 	EndForeignTransaction_function	end_foreign_xact;
 	PrepareForeignTransaction_function	prepare_foreign_xact;
 	ResolvePreparedForeignTransaction_function	resolve_prepared_foreign_xact;
@@ -149,7 +149,7 @@ RegisterXactForeignServer(Oid serverid, Oid userid, bool two_phase_commit)
 	if (two_phase_commit)
 	{
 		if (!fdw_routine->GetPrepareId)
-			elog(ERROR, "no prepared transaction identifier provider function for FDW %s",
+			elog(ERROR, "no prepared transaction identifier providing function for FDW %s",
 					fdw->fdwname);
 
 		if (!fdw_routine->PrepareForeignTransaction)
@@ -170,7 +170,7 @@ RegisterXactForeignServer(Oid serverid, Oid userid, bool two_phase_commit)
 	 * system caches are not available. So save it before hand.
 	 */
 	fdw_conn->servername = foreign_server->servername;
-	fdw_conn->prepare_id_provider = fdw_routine->GetPrepareId;
+	fdw_conn->get_prepare_id = fdw_routine->GetPrepareId;
 	fdw_conn->prepare_foreign_xact = fdw_routine->PrepareForeignTransaction;
 	fdw_conn->resolve_prepared_foreign_xact = fdw_routine->ResolvePreparedForeignTransaction;
 	fdw_conn->end_foreign_xact = fdw_routine->EndForeignTransaction;
@@ -205,7 +205,7 @@ typedef struct FDWXactData
 	TransactionId	local_xid;	/* XID of local transaction */
 	Oid				serverid;	/* foreign server where transaction takes place */
 	Oid				userid;		/* user who initiated the foreign transaction */
-	Oid				umid;
+	Oid				umid;		/* user mapping id for connection key */
 	FDWXactStatus	fdw_xact_status;	/* The state of the foreign transaction.
 										   This doubles as the action to be
 										   taken on this entry.*/
@@ -385,6 +385,7 @@ FDWXactShmemInit(void)
 
 /*
  * PreCommit_FDWXacts
+ *
  * The function is responsible for pre-commit processing on foreign connections.
  * The foreign transactions are prepared on the foreign servers which can
  * execute two-phase-commit protocol. Those will be aborted or committed after
@@ -488,10 +489,10 @@ prepare_foreign_transactions(void)
 		if (!fdw_conn->two_phase_commit)
 			continue;
 
-		Assert(fdw_conn->prepare_id_provider);
-		fdw_xact_info = fdw_conn->prepare_id_provider(fdw_conn->serverid,
-													  fdw_conn->userid,
-													  &fdw_xact_info_len);
+		Assert(fdw_conn->get_prepare_id);
+		fdw_xact_info = fdw_conn->get_prepare_id(fdw_conn->serverid,
+												 fdw_conn->userid,
+												 &fdw_xact_info_len);
 
 		/*
 		 * Register the foreign transaction with the identifier used to prepare
