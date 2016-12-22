@@ -433,16 +433,29 @@ PreCommit_FDWXacts(void)
 	}
 
 	/*
-	 * Here, foreign servers that can not execute two-phase-commit protocol
+	 * Here foreign servers that can not execute two-phase-commit protocol
 	 * already commit the transaction and MyFDWConnections has only foreign
 	 * servers that can execute two-phase-commit protocol. We don't need to use
-	 * two-phase-commit protocol when there is only one foreign server that
-	 * that can execute two-phase-commit.
+	 * two-phase-commit protocol if there is only one foreign server that
+	 * that can execute two-phase-commit and didn't write no local node.
 	 */
-	if (list_length(MyFDWConnections) == 1)
+	if ((list_length(MyFDWConnections) > 1) ||
+		(list_length(MyFDWConnections) == 1 && XactWriteLocalNode))
+	{
+		/*
+		 * Prepare the transactions on the all foreign servers, which can
+		 * execute two-phase-commit protocol.
+		 */
+		prepare_foreign_transactions();
+	}
+	else if (list_length(MyFDWConnections) == 1)
 	{
 		FDWConnection *fdw_conn = lfirst(list_head(MyFDWConnections));
 
+		/*
+		 * We don't need to use two-phase commit protocol only one server remainig
+		 * even if this server can execute two-phase-commit protocol.
+		 */
 		if (!fdw_conn->end_foreign_xact(fdw_conn->serverid, fdw_conn->userid,
 										fdw_conn->umid, true))
 			elog(WARNING, "could not commit transaction on server %s",
@@ -450,14 +463,6 @@ PreCommit_FDWXacts(void)
 
 		/* MyFDWConnections should be cleared here */
 		MyFDWConnections = list_delete_cell(MyFDWConnections, cur, prev);
-	}
-	else
-	{
-		/*
-		 * Prepare the transactions on the foreign servers, which can execute
-		 * two-phase-commit protocol.
-		 */
-		prepare_foreign_transactions();
 	}
 }
 

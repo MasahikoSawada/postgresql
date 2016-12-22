@@ -98,7 +98,7 @@ INSERT INTO "S 1"."T 4"
 	FROM generate_series(1, 100) id;
 DELETE FROM "S 1"."T 4" WHERE c1 % 3 != 0;	-- delete for outer join tests
 INSERT INTO "S 1"."T 5"
-        SELECT id, id FROM generate_series(1,100) id;
+	SELECT generate_series(1, 100);
 
 ANALYZE "S 1"."T 1";
 ANALYZE "S 1"."T 2";
@@ -155,7 +155,7 @@ CREATE FOREIGN TABLE ft6 (
 
 CREATE FOREIGN TABLE ft7 (
        c1 int NOT NULL
-) SERVER loopback OPTIONS (schema_name 'S 1', table_name 'T 5');       
+) SERVER loopback OPTIONS (schema_name 'S 1', table_name 'T 5');
 
 CREATE FOREIGN TABLE ft8 (
        c1 int NOT NULL
@@ -1700,6 +1700,8 @@ ALTER SERVER loopback OPTIONS(ADD two_phase_commit 'of');
 ALTER SERVER loopback2 OPTIONS(ADD two_phase_commit 'on');
 ALTER SERVER loopback3 OPTIONS(ADD two_phase_commit 'on');
 
+\des+
+
 -- one not supporting server
 BEGIN;
 INSERT INTO ft7 VALUES(101);
@@ -1780,7 +1782,3 @@ INSERT INTO "S 1"."T 6" VALUES (3); -- violation on local
 COMMIT;
 SELECT COUNT(*) FROM ft8;
 SELECT COUNT(*) FROM "S 1"."T 6";
-
-
-
-
