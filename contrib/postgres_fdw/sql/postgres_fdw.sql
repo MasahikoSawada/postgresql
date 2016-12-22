@@ -1696,7 +1696,7 @@ ROLLBACK;
 -- test Atomic commit across foreign servers
 -- ===================================================================
 
-ALTER SERVER loopback OPTIONS(ADD two_phase_commit 'of');
+ALTER SERVER loopback OPTIONS(ADD two_phase_commit 'off');
 ALTER SERVER loopback2 OPTIONS(ADD two_phase_commit 'on');
 ALTER SERVER loopback3 OPTIONS(ADD two_phase_commit 'on');
 

@@ -5974,7 +5974,7 @@ CheckRequiredParameterValues(void)
 		RecoveryRequiresIntParameter("max_locks_per_transaction",
 									 max_locks_per_xact,
 									 ControlFile->max_locks_per_xact);
-		RecoveryRequiresIntParameter("max_prepared_foreign_transaction",
+		RecoveryRequiresIntParameter("max_prepared_foreign_transactions",
 									 max_fdw_xacts,
 									 ControlFile->max_fdw_xacts);
 	}

@@ -1,7 +1,7 @@
 /*-------------------------------------------------------------------------
  *
  * fdw_xactdesc.c
- *		PostgreSQL distributed transaction manager.
+ *		PostgreSQL distributed transaction manager for foreign server.
  *
  * This module describes the WAL records for foreign transaction manager.
  *
