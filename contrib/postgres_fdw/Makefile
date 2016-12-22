@@ -23,3 +23,9 @@ top_builddir = ../..
 include $(top_builddir)/src/Makefile.global
 include $(top_srcdir)/contrib/contrib-global.mk
 endif
+
+check:
+	$(pg_regress_check) \
+	    --temp-config $(top_srcdir)/contrib/postgres_fdw/pgfdw.conf \
+	    --temp-instance=./tmp_check \
+	    postgres_fdw
