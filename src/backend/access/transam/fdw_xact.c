@@ -1598,7 +1598,7 @@ GetFDWXactList(FDWXact *fdw_xacts)
 }
 
 /*
- * pg_fdw_resolve
+ * pg_fdw_xact_resolve
  * a user interface to initiate foreign transaction resolution. The function
  * tries to resolve the prepared transactions on foreign servers in the database
  * from where it is run.
@@ -1606,7 +1606,7 @@ GetFDWXactList(FDWXact *fdw_xacts)
  * encountered, whether resolved or not.
  */
 Datum
-pg_fdw_resolve(PG_FUNCTION_ARGS)
+pg_fdw_xact_resolve(PG_FUNCTION_ARGS)
 {
 	MemoryContext	oldcontext;
 	FuncCallContext *funcctx;
@@ -1802,7 +1802,7 @@ pg_fdw_resolve(PG_FUNCTION_ARGS)
  * which is locked by some other backend.
  */
 Datum
-pg_fdw_remove(PG_FUNCTION_ARGS)
+pg_fdw_xact_remove(PG_FUNCTION_ARGS)
 {
 /* Some #defines only for this function to deal with the arguments */
 #define XID_ARGNUM	0
