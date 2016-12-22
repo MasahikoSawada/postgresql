@@ -4316,13 +4316,13 @@ AbortOutOfAnyTransaction(void)
 }
 
 /*
- * RegisterTransactionLocalNode --- remenber to wrote on local node
+ * RegisterTransactionLocalNode --- remember to wrote on local node
  */
 void
 RegisterTransactionLocalNode(void)
 {
-	/* Quick exits if no need to remenber */
-	if (max_fdw_xacts < 1)
+	/* Quick exits if no need to remember */
+	if (max_fdw_xacts == 0)
 		return;
 
 	XactWriteLocalNode = true;
@@ -4335,7 +4335,7 @@ void
 UnregisterTransactionLocalNode(void)
 {
 	/* Quick exits if no need to forget */
-	if (max_fdw_xacts < 1)
+	if (max_fdw_xacts == 0)
 		return;
 
 	XactWriteLocalNode = false;
