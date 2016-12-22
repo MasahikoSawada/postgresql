@@ -932,7 +932,8 @@ advance_aggregates(AggState *aggstate, AggStatePerGroup pergroup)
 
 			/* Load values into fcinfo */
 			/* Start from 1, since the 0th arg will be the transition value */
-			Assert(slot->tts_nvalid >= numTransInputs);
+			Assert(slot->tts_nvalid >= (numTransInputs + inputoff));
+
 			for (i = 0; i < numTransInputs; i++)
 			{
 				fcinfo->arg[i + 1] = slot->tts_values[i + inputoff];
@@ -963,14 +964,13 @@ combine_aggregates(AggState *aggstate, AggStatePerGroup pergroup)
 {
 	int			transno;
 	int			numTrans = aggstate->numtrans;
-	TupleTableSlot *slot = NULL;
+	TupleTableSlot *slot;
 
 	/* combine not supported with grouping sets */
 	Assert(aggstate->phase->numsets == 0);
 
 	/* compute input for all aggregates */
-	if (aggstate->evalproj)
-		slot = ExecProject(aggstate->evalproj, NULL);
+	slot = ExecProject(aggstate->evalproj, NULL);
 
 	for (transno = 0; transno < numTrans; transno++)
 	{
@@ -979,8 +979,7 @@ combine_aggregates(AggState *aggstate, AggStatePerGroup pergroup)
 		FunctionCallInfo fcinfo = &pertrans->transfn_fcinfo;
 		int			inputoff = pertrans->inputoff;
 
-		Assert(slot->tts_nvalid >= 1);
-		Assert(slot->tts_nvalid + inputoff >= 1);
+		Assert(slot->tts_nvalid > inputoff);
 
 		/*
 		 * deserialfn_oid will be set if we must deserialize the input state
@@ -1575,16 +1574,19 @@ finalize_aggregates(AggState *aggstate,
 	Datum	   *aggvalues = econtext->ecxt_aggvalues;
 	bool	   *aggnulls = econtext->ecxt_aggnulls;
 	int			aggno;
+	int			transno;
 
 	Assert(currentSet == 0 ||
 		   ((Agg *) aggstate->ss.ps.plan)->aggstrategy != AGG_HASHED);
 
 	aggstate->current_set = currentSet;
 
-	for (aggno = 0; aggno < aggstate->numaggs; aggno++)
+	/*
+	 * If there were any DISTINCT and/or ORDER BY aggregates, sort their
+	 * inputs and run the transition functions.
+	 */
+	for (transno = 0; transno < aggstate->numtrans; transno++)
 	{
-		AggStatePerAgg peragg = &peraggs[aggno];
-		int			transno = peragg->transno;
 		AggStatePerTrans pertrans = &aggstate->pertrans[transno];
 		AggStatePerGroup pergroupstate;
 
@@ -1603,6 +1605,18 @@ finalize_aggregates(AggState *aggstate,
 												pertrans,
 												pergroupstate);
 		}
+	}
+
+	/*
+	 * Run the final functions.
+	 */
+	for (aggno = 0; aggno < aggstate->numaggs; aggno++)
+	{
+		AggStatePerAgg peragg = &peraggs[aggno];
+		int			transno = peragg->transno;
+		AggStatePerGroup pergroupstate;
+
+		pergroupstate = &pergroup[transno + (currentSet * (aggstate->numtrans))];
 
 		if (DO_AGGSPLIT_SKIPFINAL(aggstate->aggsplit))
 			finalize_partialaggregate(aggstate, peragg, pergroupstate,
