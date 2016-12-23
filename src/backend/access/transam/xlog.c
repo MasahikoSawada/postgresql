@@ -5974,7 +5974,7 @@ CheckRequiredParameterValues(void)
 		RecoveryRequiresIntParameter("max_locks_per_transaction",
 									 max_locks_per_xact,
 									 ControlFile->max_locks_per_xact);
-		RecoveryRequiresIntParameter("max_prepared_foreign_transaction",
+		RecoveryRequiresIntParameter("max_prepared_foreign_transactions",
 									 max_fdw_xacts,
 									 ControlFile->max_fdw_xacts);
 	}
@@ -9457,6 +9457,7 @@ xlog_redo(XLogReaderState *record)
 					(errmsg("unexpected timeline ID %u (should be %u) in checkpoint record",
 							checkPoint.ThisTimeLineID, ThisTimeLineID)));
 
+		KnownFDWXactRecreateFiles(checkPoint.redo);
 		RecoveryRestartPoint(&checkPoint);
 	}
 	else if (info == XLOG_CHECKPOINT_ONLINE)

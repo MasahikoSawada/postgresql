@@ -13,12 +13,17 @@ DO $d$
             OPTIONS (dbname '$$||current_database()||$$',
                      port '$$||current_setting('port')||$$'
             )$$;
+        EXECUTE $$CREATE SERVER loopback3 FOREIGN DATA WRAPPER postgres_fdw
+            OPTIONS (dbname '$$||current_database()||$$',
+                     port '$$||current_setting('port')||$$'
+            )$$;
     END;
 $d$;
 CREATE USER MAPPING FOR public SERVER testserver1
 	OPTIONS (user 'value', password 'value');
 CREATE USER MAPPING FOR CURRENT_USER SERVER loopback;
 CREATE USER MAPPING FOR CURRENT_USER SERVER loopback2;
+CREATE USER MAPPING FOR CURRENT_USER SERVER loopback3;
 -- ===================================================================
 -- create objects used through FDW loopback server
 -- ===================================================================
@@ -52,6 +57,14 @@ CREATE TABLE "S 1"."T 4" (
 	c3 text,
 	CONSTRAINT t4_pkey PRIMARY KEY (c1)
 );
+CREATE TABLE "S 1"."T 5" (
+       c1 int NOT NULL,
+       CONSTRAINT t5_pkey PRIMARY KEY (c1)
+);
+CREATE TABLE "S 1"."T 6" (
+       c1 int NOT NULL,
+       CONSTRAINT t6_pkey PRIMARY KEY (c1)
+);
 INSERT INTO "S 1"."T 1"
 	SELECT id,
 	       id % 10,
@@ -78,10 +91,13 @@ INSERT INTO "S 1"."T 4"
 	       'AAA' || to_char(id, 'FM000')
 	FROM generate_series(1, 100) id;
 DELETE FROM "S 1"."T 4" WHERE c1 % 3 != 0;	-- delete for outer join tests
+INSERT INTO "S 1"."T 5"
+	SELECT generate_series(1, 100);
 ANALYZE "S 1"."T 1";
 ANALYZE "S 1"."T 2";
 ANALYZE "S 1"."T 3";
 ANALYZE "S 1"."T 4";
+ANALYZE "S 1"."T 5";
 -- ===================================================================
 -- create foreign tables
 -- ===================================================================
@@ -124,6 +140,15 @@ CREATE FOREIGN TABLE ft6 (
 	c2 int NOT NULL,
 	c3 text
 ) SERVER loopback2 OPTIONS (schema_name 'S 1', table_name 'T 4');
+CREATE FOREIGN TABLE ft7 (
+       c1 int NOT NULL
+) SERVER loopback OPTIONS (schema_name 'S 1', table_name 'T 5');
+CREATE FOREIGN TABLE ft8 (
+       c1 int NOT NULL
+) SERVER loopback2 OPTIONS (schema_name 'S 1', table_name 'T 5');
+CREATE FOREIGN TABLE ft9 (
+       c1 int NOT NULL
+) SERVER loopback3 OPTIONS (schema_name 'S 1', table_name 'T 5');
 -- A table with oids. CREATE FOREIGN TABLE doesn't support the
 -- WITH OIDS option, but ALTER does.
 CREATE FOREIGN TABLE ft_pg_type (
@@ -188,8 +213,11 @@ ALTER FOREIGN TABLE ft2 ALTER COLUMN c1 OPTIONS (column_name 'C 1');
  public | ft4        | loopback  | (schema_name 'S 1', table_name 'T 3')            | 
  public | ft5        | loopback  | (schema_name 'S 1', table_name 'T 4')            | 
  public | ft6        | loopback2 | (schema_name 'S 1', table_name 'T 4')            | 
+ public | ft7        | loopback  | (schema_name 'S 1', table_name 'T 5')            | 
+ public | ft8        | loopback2 | (schema_name 'S 1', table_name 'T 5')            | 
+ public | ft9        | loopback3 | (schema_name 'S 1', table_name 'T 5')            | 
  public | ft_pg_type | loopback  | (schema_name 'pg_catalog', table_name 'pg_type') | 
-(6 rows)
+(9 rows)
 
 -- Now we should be able to run ANALYZE.
 -- To exercise multiple code paths, we use local stats on ft1
@@ -6972,3 +7000,176 @@ AND ftoptions @> array['fetch_size=60000'];
 (1 row)
 
 ROLLBACK;
+-- ===================================================================
+-- test Atomic commit across foreign servers
+-- ===================================================================
+ALTER SERVER loopback OPTIONS(ADD two_phase_commit 'of');
+ERROR:  two_phase_commit requires a Boolean value
+ALTER SERVER loopback2 OPTIONS(ADD two_phase_commit 'on');
+ALTER SERVER loopback3 OPTIONS(ADD two_phase_commit 'on');
+\des+
+                                                                                                                                                                                                                                                      List of foreign servers
+    Name     |  Owner   | Foreign-data wrapper | Access privileges | Type | Version |                                                                                                                                                                                                          FDW Options                                                                                                                                                                                                           | Description 
+-------------+----------+----------------------+-------------------+------+---------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------
+ loopback    | masahiko | postgres_fdw         |                   |      |         | (dbname 'contrib_regression', port '50848', extensions 'postgres_fdw')                                                                                                                                                                                                                                                                                                                                                         | 
+ loopback2   | masahiko | postgres_fdw         |                   |      |         | (dbname 'contrib_regression', port '50848', two_phase_commit 'on')                                                                                                                                                                                                                                                                                                                                                             | 
+ loopback3   | masahiko | postgres_fdw         |                   |      |         | (dbname 'contrib_regression', port '50848', two_phase_commit 'on')                                                                                                                                                                                                                                                                                                                                                             | 
+ testserver1 | masahiko | postgres_fdw         |                   |      |         | (use_remote_estimate 'false', updatable 'true', fdw_startup_cost '123.456', fdw_tuple_cost '0.123', service 'value', connect_timeout 'value', dbname 'value', host 'value', hostaddr 'value', port 'value', application_name 'value', keepalives 'value', keepalives_idle 'value', keepalives_interval 'value', sslcompression 'value', sslmode 'value', sslcert 'value', sslkey 'value', sslrootcert 'value', sslcrl 'value') | 
+(4 rows)
+
+-- one not supporting server
+BEGIN;
+INSERT INTO ft7 VALUES(101);
+COMMIT;
+SELECT COUNT(*) FROM ft8;
+ count 
+-------
+   101
+(1 row)
+
+-- One not supporting server and one supporting server
+BEGIN;
+INSERT INTO ft7 VALUES(102);
+INSERT INTO ft8 VALUES(103);
+COMMIT;
+SELECT COUNT(*) FROM ft8;
+ count 
+-------
+   103
+(1 row)
+
+-- Two supporting server and one not supporting server.
+BEGIN;
+INSERT INTO ft7 VALUES(104);
+INSERT INTO ft8 VALUES(105);
+INSERT INTO ft9 VALUES(106);
+COMMIT;
+SELECT COUNT(*) FROM ft8;
+ count 
+-------
+   106
+(1 row)
+
+-- one local and one not supporting foreign server
+BEGIN;
+INSERT INTO ft7 VALUES(107);
+INSERT INTO "S 1"."T 6" VALUES (1);
+COMMIT;
+SELECT COUNT(*) FROM ft8;
+ count 
+-------
+   107
+(1 row)
+
+SELECT COUNT(*) FROM "S 1"."T 6";
+ count 
+-------
+     1
+(1 row)
+
+-- one local and one supporting foreign server and not supporting one
+BEGIN;
+INSERT INTO ft7 VALUES(108);
+INSERT INTO ft8 VALUES(109);
+INSERT INTO "S 1"."T 6" VALUES (2);
+COMMIT;
+SELECT COUNT(*) FROM ft8;
+ count 
+-------
+   109
+(1 row)
+
+SELECT COUNT(*) FROM "S 1"."T 6";
+ count 
+-------
+     2
+(1 row)
+
+-- one local and two supporting foreign server and not supporting one
+BEGIN;
+INSERT INTO ft7 VALUES(110);
+INSERT INTO ft8 VALUES(111);
+INSERT INTO ft9 VALUES(112);
+INSERT INTO "S 1"."T 6" VALUES (3);
+COMMIT;
+SELECT COUNT(*) FROM ft8;
+ count 
+-------
+   112
+(1 row)
+
+SELECT COUNT(*) FROM "S 1"."T 6";
+ count 
+-------
+     3
+(1 row)
+
+-- transaction updating on single supporting foreign server with violation on foreign server
+BEGIN;
+INSERT INTO ft8 VALUES(113);
+INSERT INTO ft8 VALUES(110); -- violation on foreign server
+ERROR:  duplicate key value violates unique constraint "t5_pkey"
+DETAIL:  Key (c1)=(110) already exists.
+CONTEXT:  Remote SQL command: INSERT INTO "S 1"."T 5"(c1) VALUES ($1)
+COMMIT;
+SELECT COUNT(*) FROM ft8;
+ count 
+-------
+   112
+(1 row)
+
+-- transaction updating on single supporting foreign server and local with violation on local
+BEGIN;
+INSERT INTO ft8 VALUES(114);
+INSERT INTO "S 1"."T 6" VALUES (4);
+INSERT INTO "S 1"."T 6" VALUES (3); -- violation on local
+ERROR:  duplicate key value violates unique constraint "t6_pkey"
+DETAIL:  Key (c1)=(3) already exists.
+COMMIT;
+SELECT COUNT(*) FROM ft8;
+ count 
+-------
+   112
+(1 row)
+
+SELECT COUNT(*) FROM "S 1"."T 6";
+ count 
+-------
+     3
+(1 row)
+
+-- violation on foreign server supporting 2PC
+BEGIN;
+INSERT INTO ft8 VALUES(115);
+INSERT INTO ft9 VALUES(116);
+INSERT INTO ft9 VALUES(110); -- violation on foreign server
+ERROR:  duplicate key value violates unique constraint "t5_pkey"
+DETAIL:  Key (c1)=(110) already exists.
+CONTEXT:  Remote SQL command: INSERT INTO "S 1"."T 5"(c1) VALUES ($1)
+COMMIT;
+SELECT COUNT(*) FROM ft8;
+ count 
+-------
+   112
+(1 row)
+
+-- transaction involing local and foreign server with violation on local server
+BEGIN;
+INSERT INTO ft8 VALUES(117);
+INSERT INTO ft9 VALUES(118);
+INSERT INTO "S 1"."T 6" VALUES (3); -- violation on local
+ERROR:  duplicate key value violates unique constraint "t6_pkey"
+DETAIL:  Key (c1)=(3) already exists.
+COMMIT;
+SELECT COUNT(*) FROM ft8;
+ count 
+-------
+   112
+(1 row)
+
+SELECT COUNT(*) FROM "S 1"."T 6";
+ count 
+-------
+     3
+(1 row)
+

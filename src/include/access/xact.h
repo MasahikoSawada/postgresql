@@ -74,6 +74,9 @@ extern int	synchronous_commit;
 /* Kluge for 2PC support */
 extern bool MyXactAccessedTempRel;
 
+/* Foreign transaction support */
+extern bool XactWriteLocalNode;
+
 /*
  *	start- and end-of-transaction callbacks for dynamically loaded modules
  */
@@ -356,6 +359,8 @@ extern void RegisterXactCallback(XactCallback callback, void *arg);
 extern void UnregisterXactCallback(XactCallback callback, void *arg);
 extern void RegisterSubXactCallback(SubXactCallback callback, void *arg);
 extern void UnregisterSubXactCallback(SubXactCallback callback, void *arg);
+extern void RegisterTransactionLocalNode(void);
+extern void UnregisterTransactionLocalNode(void);
 
 extern int	xactGetCommittedChildren(TransactionId **ptr);
 

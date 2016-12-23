@@ -15,6 +15,10 @@ DO $d$
             OPTIONS (dbname '$$||current_database()||$$',
                      port '$$||current_setting('port')||$$'
             )$$;
+        EXECUTE $$CREATE SERVER loopback3 FOREIGN DATA WRAPPER postgres_fdw
+            OPTIONS (dbname '$$||current_database()||$$',
+                     port '$$||current_setting('port')||$$'
+            )$$;
     END;
 $d$;
 
@@ -22,6 +26,7 @@ CREATE USER MAPPING FOR public SERVER testserver1
 	OPTIONS (user 'value', password 'value');
 CREATE USER MAPPING FOR CURRENT_USER SERVER loopback;
 CREATE USER MAPPING FOR CURRENT_USER SERVER loopback2;
+CREATE USER MAPPING FOR CURRENT_USER SERVER loopback3;
 
 -- ===================================================================
 -- create objects used through FDW loopback server
@@ -56,6 +61,15 @@ CREATE TABLE "S 1"."T 4" (
 	c3 text,
 	CONSTRAINT t4_pkey PRIMARY KEY (c1)
 );
+CREATE TABLE "S 1"."T 5" (
+       c1 int NOT NULL,
+       CONSTRAINT t5_pkey PRIMARY KEY (c1)
+);
+
+CREATE TABLE "S 1"."T 6" (
+       c1 int NOT NULL,
+       CONSTRAINT t6_pkey PRIMARY KEY (c1)
+);
 
 INSERT INTO "S 1"."T 1"
 	SELECT id,
@@ -83,11 +97,14 @@ INSERT INTO "S 1"."T 4"
 	       'AAA' || to_char(id, 'FM000')
 	FROM generate_series(1, 100) id;
 DELETE FROM "S 1"."T 4" WHERE c1 % 3 != 0;	-- delete for outer join tests
+INSERT INTO "S 1"."T 5"
+	SELECT generate_series(1, 100);
 
 ANALYZE "S 1"."T 1";
 ANALYZE "S 1"."T 2";
 ANALYZE "S 1"."T 3";
 ANALYZE "S 1"."T 4";
+ANALYZE "S 1"."T 5";
 
 -- ===================================================================
 -- create foreign tables
@@ -135,6 +152,19 @@ CREATE FOREIGN TABLE ft6 (
 	c2 int NOT NULL,
 	c3 text
 ) SERVER loopback2 OPTIONS (schema_name 'S 1', table_name 'T 4');
+
+CREATE FOREIGN TABLE ft7 (
+       c1 int NOT NULL
+) SERVER loopback OPTIONS (schema_name 'S 1', table_name 'T 5');
+
+CREATE FOREIGN TABLE ft8 (
+       c1 int NOT NULL
+) SERVER loopback2 OPTIONS (schema_name 'S 1', table_name 'T 5');
+
+CREATE FOREIGN TABLE ft9 (
+       c1 int NOT NULL
+) SERVER loopback3 OPTIONS (schema_name 'S 1', table_name 'T 5');
+
 
 -- A table with oids. CREATE FOREIGN TABLE doesn't support the
 -- WITH OIDS option, but ALTER does.
@@ -1660,3 +1690,95 @@ WHERE ftrelid = 'table30000'::regclass
 AND ftoptions @> array['fetch_size=60000'];
 
 ROLLBACK;
+
+
+-- ===================================================================
+-- test Atomic commit across foreign servers
+-- ===================================================================
+
+ALTER SERVER loopback OPTIONS(ADD two_phase_commit 'off');
+ALTER SERVER loopback2 OPTIONS(ADD two_phase_commit 'on');
+ALTER SERVER loopback3 OPTIONS(ADD two_phase_commit 'on');
+
+\des+
+
+-- one not supporting server
+BEGIN;
+INSERT INTO ft7 VALUES(101);
+COMMIT;
+SELECT COUNT(*) FROM ft8;
+
+-- One not supporting server and one supporting server
+BEGIN;
+INSERT INTO ft7 VALUES(102);
+INSERT INTO ft8 VALUES(103);
+COMMIT;
+SELECT COUNT(*) FROM ft8;
+
+-- Two supporting server and one not supporting server.
+BEGIN;
+INSERT INTO ft7 VALUES(104);
+INSERT INTO ft8 VALUES(105);
+INSERT INTO ft9 VALUES(106);
+COMMIT;
+SELECT COUNT(*) FROM ft8;
+
+-- one local and one not supporting foreign server
+BEGIN;
+INSERT INTO ft7 VALUES(107);
+INSERT INTO "S 1"."T 6" VALUES (1);
+COMMIT;
+SELECT COUNT(*) FROM ft8;
+SELECT COUNT(*) FROM "S 1"."T 6";
+
+-- one local and one supporting foreign server and not supporting one
+BEGIN;
+INSERT INTO ft7 VALUES(108);
+INSERT INTO ft8 VALUES(109);
+INSERT INTO "S 1"."T 6" VALUES (2);
+COMMIT;
+SELECT COUNT(*) FROM ft8;
+SELECT COUNT(*) FROM "S 1"."T 6";
+
+-- one local and two supporting foreign server and not supporting one
+BEGIN;
+INSERT INTO ft7 VALUES(110);
+INSERT INTO ft8 VALUES(111);
+INSERT INTO ft9 VALUES(112);
+INSERT INTO "S 1"."T 6" VALUES (3);
+COMMIT;
+SELECT COUNT(*) FROM ft8;
+SELECT COUNT(*) FROM "S 1"."T 6";
+
+-- transaction updating on single supporting foreign server with violation on foreign server
+BEGIN;
+INSERT INTO ft8 VALUES(113);
+INSERT INTO ft8 VALUES(110); -- violation on foreign server
+COMMIT;
+SELECT COUNT(*) FROM ft8;
+
+-- transaction updating on single supporting foreign server and local with violation on local
+BEGIN;
+INSERT INTO ft8 VALUES(114);
+INSERT INTO "S 1"."T 6" VALUES (4);
+INSERT INTO "S 1"."T 6" VALUES (3); -- violation on local
+COMMIT;
+SELECT COUNT(*) FROM ft8;
+SELECT COUNT(*) FROM "S 1"."T 6";
+
+-- violation on foreign server supporting 2PC
+BEGIN;
+INSERT INTO ft8 VALUES(115);
+INSERT INTO ft9 VALUES(116);
+INSERT INTO ft9 VALUES(110); -- violation on foreign server
+COMMIT;
+SELECT COUNT(*) FROM ft8;
+
+-- transaction involing local and foreign server with violation on local server
+BEGIN;
+INSERT INTO ft8 VALUES(117);
+INSERT INTO ft9 VALUES(118);
+INSERT INTO "S 1"."T 6" VALUES (3); -- violation on local
+COMMIT;
+SELECT COUNT(*) FROM ft8;
+SELECT COUNT(*) FROM "S 1"."T 6";

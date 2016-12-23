@@ -5264,9 +5264,9 @@ DATA(insert OID = 3993 ( dense_rank_final	PGNSP PGUID 12 1 0 2276 0 f f f f f f 
 DESCR("aggregate final function");
 DATA(insert OID = 4109 ( pg_fdw_xacts	PGNSP PGUID 12 1 1000 0 0 f f f f t t v u 0 0 2249 "" "{26, 28,26,26,25,25}" "{o,o,o,o,o,o}" "{dbid, transaction,serverid,userid,status,identifier}" _null_ _null_ pg_fdw_xacts _null_ _null_ _null_ ));
 DESCR("view foreign transactions");
-DATA(insert OID = 4110 ( pg_fdw_resolve	PGNSP PGUID 12 1 1000 0 0 f f f f t t v u 0 0 2249 "" "{26, 28,26,26,25,25}" "{o,o,o,o,o,o}" "{dbid, transaction,serverid,userid,status,identifier}" _null_ _null_ pg_fdw_resolve _null_ _null_ _null_ ));
-DESCR("resolve foreign transactions");
-DATA(insert OID = 4111 ( pg_fdw_remove PGNSP PGUID 12 1 0 0 0 f f f f f f v u 4 0 2278 "28 26 26 26" _null_ _null_ "{transaction,dbid,serverid,userid}" _null_ _null_ pg_fdw_remove _null_ _null_ _null_ ));
+DATA(insert OID = 4110 ( pg_fdw_xact_resolve	PGNSP PGUID 12 1 1000 0 0 f f f f t t v u 0 0 2249 "" "{26, 28,26,26,25,25}" "{o,o,o,o,o,o}" "{dbid, transaction,serverid,userid,status,identifier}" _null_ _null_ pg_fdw_xact_resolve _null_ _null_ _null_ ));
+DESCR("resolve foreign prepared transactions");
+DATA(insert OID = 4111 ( pg_fdw_xact_remove PGNSP PGUID 12 1 0 0 0 f f f f f f v u 4 0 2278 "28 26 26 26" _null_ _null_ "{transaction,dbid,serverid,userid}" _null_ _null_ pg_fdw_xact_remove _null_ _null_ _null_ ));
 DESCR("remove foreign transactions");
 
 /* pg_upgrade support */
