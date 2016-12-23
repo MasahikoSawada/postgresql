@@ -1734,33 +1734,39 @@ COMMIT;
     </para>
 
     <para>
-    When <varname>atomic_foreign_transaction</> is enabled
+    When <varname>max_prepared_foreign_transactions</> is more than zero
     <productname>PostgreSQL</> employs Two-phase commit protocol to achieve
     atomic distributed transaction. All the foreign servers registered should
-    support two-phase commit protocol. In Two-phase commit protocol the commit
-    is processed in two phases: prepare phase and commit phase. In prepare phase,
+    support two-phase commit protocol. The two-phase commit protocol is used for
+    achieving atomic distributed transaction when more than two foreign servers
+    that support two-phase commit protocol are involved with transaction, or
+    transaction involves with one foreign server that support two-phase commit
+    protocol and changes on local data. In other case, for example where only one
+    foreign server that support two-phase commit is involved with transaction,
+    the two-phase commit protocol is not used.  In Two-phase commit protocol is
+    processed in two phases: prepare phase and commit phase. In prepare phase,
     <productname>PostgreSQL</> prepares the transactions on all the foreign
-    servers registered using <function>RegisterXactForeignServer</>.
-    If any of the foreign server fails to prepare transaction, prepare phase fails.
-    In commit phase, all the prepared transactions are committed if prepare
-    phase has succeeded or rolled back if prepare phase fails to prepare
-    transactions on all the foreign servers.
+    servers registered using <function>RegisterXactForeignServer</>. If any of
+    the foreign server fails to prepare transaction, prepare phase fails. In commit
+    phase, all the prepared transactions are committed if prepare phase has succeeded
+    or rolled back if prepare phase fails to prepare transactions on all the foreign
+    servers.
     </para>
 
     <para>
     During prepare phase the distributed transaction manager calls
-    <function>GetPrepareInfo</> to get the prepared transaction identifier for
+    <function>GetPrepareId</> to get the prepared transaction identifier for
     each foreign server involved. It stores this identifier along with the
     serverid and userid for later use. It then calls
-    <function>HandleForeignTransaction</> with the same identifier with action
-    FDW_XACT_PREPARE.
+    <function>ResolvePreparedForeignTranscation</> with the same identifier
+    with action FDW_XACT_RESOLVED.
     </para>
     
     <para>
     During commit phase the distributed transaction manager calls
-    <function>HandleForeignTransaction</> with the same identifier with action
-    FDW_XACT_COMMIT_PREPARED to commit the prepared transaction or
-    FDW_XACT_ABORT_PREPARED to rollback the prepared transaction. In case the
+    <function>ResolveForeignTransaction</> with the same identifier with action
+    FDW_XACT_COMMITTING_PREPARED to commit the prepared transaction or
+    FDW_XACT_ABORTING_PREPARED to rollback the prepared transaction. In case the
     distributed transaction manager fails to commit or rollback a prepared
     transaction because of connection failure, the operation can be tried again
     through built-in <function>pg_fdw_xact</>. One may set up a background worker
@@ -1770,10 +1776,9 @@ COMMIT;
     </para>
 
     <para>
-    When <varname>atomic_foreign_transaction</> is disabled, atomicity can not be
-    guaranteed across foreign servers. If transaction on <productname>PostgreSQL</>
-    is committed, Distributed transaction manager calls
-    <function>HandleForeignTransaction</> to commit the transaction on all the
+    When <varname>max_prepared_foreign_transaction</> is zero, atomicity commit can
+    not be guaranteed across foreign servers. If transaction on <productname>PostgreSQL</>
+    is committed, Distributed transaction manager commit the transaction on all the
     foreign servers registered using <function>RegisterXactForeignServer</>,
     independent of the outcome of the same operation on other foreign servers.
     Thus transactions on some foreign servers may be committed, while the same

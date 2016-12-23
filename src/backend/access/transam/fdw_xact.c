@@ -1,7 +1,7 @@
 /*-------------------------------------------------------------------------
  *
  * fdw_xact.c
- *		PostgreSQL distributed transaction manager.
+ *		PostgreSQL distributed transaction manager for foreign server.
  *
  * This module manages the transactions involving foreign servers.
  *
@@ -90,7 +90,7 @@ typedef struct
 													 * server, whenever
 													 * necessary.
 													 */
-	GetPrepareId_function		prepare_id_provider;
+	GetPrepareId_function		get_prepare_id;
 	EndForeignTransaction_function	end_foreign_xact;
 	PrepareForeignTransaction_function	prepare_foreign_xact;
 	ResolvePreparedForeignTransaction_function	resolve_prepared_foreign_xact;
@@ -148,8 +148,14 @@ RegisterXactForeignServer(Oid serverid, Oid userid, bool two_phase_commit)
 
 	if (two_phase_commit)
 	{
+		if (max_fdw_xacts == 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					 errmsg("prepread foreign transactions are disabled"),
+					 errhint("Set max_prepared_foreign_transactions to a nonzero value.")));
+
 		if (!fdw_routine->GetPrepareId)
-			elog(ERROR, "no prepared transaction identifier provider function for FDW %s",
+			elog(ERROR, "no prepared transaction identifier providing function for FDW %s",
 					fdw->fdwname);
 
 		if (!fdw_routine->PrepareForeignTransaction)
@@ -170,7 +176,7 @@ RegisterXactForeignServer(Oid serverid, Oid userid, bool two_phase_commit)
 	 * system caches are not available. So save it before hand.
 	 */
 	fdw_conn->servername = foreign_server->servername;
-	fdw_conn->prepare_id_provider = fdw_routine->GetPrepareId;
+	fdw_conn->get_prepare_id = fdw_routine->GetPrepareId;
 	fdw_conn->prepare_foreign_xact = fdw_routine->PrepareForeignTransaction;
 	fdw_conn->resolve_prepared_foreign_xact = fdw_routine->ResolvePreparedForeignTransaction;
 	fdw_conn->end_foreign_xact = fdw_routine->EndForeignTransaction;
@@ -205,7 +211,7 @@ typedef struct FDWXactData
 	TransactionId	local_xid;	/* XID of local transaction */
 	Oid				serverid;	/* foreign server where transaction takes place */
 	Oid				userid;		/* user who initiated the foreign transaction */
-	Oid				umid;
+	Oid				umid;		/* user mapping id for connection key */
 	FDWXactStatus	fdw_xact_status;	/* The state of the foreign transaction.
 										   This doubles as the action to be
 										   taken on this entry.*/
@@ -385,13 +391,17 @@ FDWXactShmemInit(void)
 
 /*
  * PreCommit_FDWXacts
+ *
  * The function is responsible for pre-commit processing on foreign connections.
- * The foreign transactions are prepared on the foreign servers which can
- * execute two-phase-commit protocol. Those will be aborted or committed after
- * the current transaction has been aborted or committed resp. We try to commit
- * transactions on rest of the foreign servers now. For these foreign servers
- * it is possible that some transactions commit even if the local transaction
- * aborts.
+ * Basically the foreign transactions are prepared on the foreign servers which
+ * can execute two-phase-commit protocol. But in case of where only one server
+ * that can execute two-phase-commit protocol is involved with transaction and
+ * no changes is made on local data then we don't need to two-phase-commit protocol,
+ * so try to commit transaction on the server. Those will be aborted or committed
+ * after the current transaction has been aborted or committed resp. We try to
+ * commit transactions on rest of the foreign servers now. For these foreign
+ * servers it is possible that some transactions commit even if the local
+ * transaction aborts.
  */
 void
 PreCommit_FDWXacts(void)
@@ -433,16 +443,29 @@ PreCommit_FDWXacts(void)
 	}
 
 	/*
-	 * Here, foreign servers that can not execute two-phase-commit protocol
+	 * Here foreign servers that can not execute two-phase-commit protocol
 	 * already commit the transaction and MyFDWConnections has only foreign
 	 * servers that can execute two-phase-commit protocol. We don't need to use
-	 * two-phase-commit protocol when there is only one foreign server that
-	 * that can execute two-phase-commit.
+	 * two-phase-commit protocol if there is only one foreign server that
+	 * that can execute two-phase-commit and didn't write no local node.
 	 */
-	if (list_length(MyFDWConnections) == 1)
+	if ((list_length(MyFDWConnections) > 1) ||
+		(list_length(MyFDWConnections) == 1 && XactWriteLocalNode))
+	{
+		/*
+		 * Prepare the transactions on the all foreign servers, which can
+		 * execute two-phase-commit protocol.
+		 */
+		prepare_foreign_transactions();
+	}
+	else if (list_length(MyFDWConnections) == 1)
 	{
 		FDWConnection *fdw_conn = lfirst(list_head(MyFDWConnections));
 
+		/*
+		 * We don't need to use two-phase commit protocol only one server remaining
+		 * even if this server can execute two-phase-commit protocol.
+		 */
 		if (!fdw_conn->end_foreign_xact(fdw_conn->serverid, fdw_conn->userid,
 										fdw_conn->umid, true))
 			elog(WARNING, "could not commit transaction on server %s",
@@ -451,17 +474,11 @@ PreCommit_FDWXacts(void)
 		/* MyFDWConnections should be cleared here */
 		MyFDWConnections = list_delete_cell(MyFDWConnections, cur, prev);
 	}
-	else
-	{
-		/*
-		 * Prepare the transactions on the foreign servers, which can execute
-		 * two-phase-commit protocol.
-		 */
-		prepare_foreign_transactions();
-	}
 }
 
 /*
+ * prepare_foreign_transactions
+ *
  * Prepare transactions on the foreign servers which can execute two phase
  * commit protocol. Rest of the foreign servers are ignored.
  */
@@ -476,17 +493,17 @@ prepare_foreign_transactions(void)
 	foreach(lcell, MyFDWConnections)
 	{
 		FDWConnection	*fdw_conn = (FDWConnection *)lfirst(lcell);
-		char			*fdw_xact_info;
-		int				fdw_xact_info_len;
+		char			*fdw_xact_id;
+		int				fdw_xact_id_len;
 		FDWXact			fdw_xact;
 
 		if (!fdw_conn->two_phase_commit)
 			continue;
 
-		Assert(fdw_conn->prepare_id_provider);
-		fdw_xact_info = fdw_conn->prepare_id_provider(fdw_conn->serverid,
-													  fdw_conn->userid,
-													  &fdw_xact_info_len);
+		Assert(fdw_conn->get_prepare_id);
+		fdw_xact_id = fdw_conn->get_prepare_id(fdw_conn->serverid,
+												 fdw_conn->userid,
+												 &fdw_xact_id_len);
 
 		/*
 		 * Register the foreign transaction with the identifier used to prepare
@@ -510,8 +527,8 @@ prepare_foreign_transactions(void)
 		 */
 		fdw_xact = register_fdw_xact(MyDatabaseId, GetTopTransactionId(),
 									 fdw_conn->serverid, fdw_conn->userid,
-									 fdw_conn->umid, fdw_xact_info_len,
-									 fdw_xact_info);
+									 fdw_conn->umid, fdw_xact_id_len,
+									 fdw_xact_id);
 		/*
 		 * Between register_fdw_xact call above till this backend hears back
 		 * from foreign server, the backend may abort the local transaction (say,
@@ -523,19 +540,18 @@ prepare_foreign_transactions(void)
 		 * resolver.
 		 */
 		if (!fdw_conn->prepare_foreign_xact(fdw_conn->serverid, fdw_conn->userid,
-											fdw_conn->umid, fdw_xact_info_len,
-											fdw_xact_info))
+											fdw_conn->umid, fdw_xact_id_len,
+											fdw_xact_id))
 		{
 			/*
 			 * An error occurred, and we didn't prepare the transaction. Delete the
 			 * entry from foreign transaction table. Raise an error, so that the
 			 * local server knows that one of the foreign server has failed to
 			 * prepare the transaction.
-			 * TODO:
-			 * FDW is expected to print the error as a warning and then we
-			 * raise actual error here. But instead, we should pull the
-			 * error text from FDW and add it here in the message or as a
-			 * context or a hint.
+			 *
+			 * XXX : FDW is expected to print the error as a warning and then we
+			 * raise actual error here. But instead, we should pull the error
+			 * text from FDW and add it here in the message or as a context or a hint.
 			 */
 			remove_fdw_xact(fdw_xact);
 
@@ -558,10 +574,10 @@ prepare_foreign_transactions(void)
 }
 /*
  * register_fdw_xact
+ *
  * This function is used to create new foreign transaction entry before an FDW
  * executes the first phase of two-phase commit. The function adds the entry to
- * WAL and then persists it to the disk by creating a file under
- * data/pg_fdw_xact directory.
+ * WAL and will be persisted to the disk under pg_fdw_xact directory when checkpoint.
  */
 static FDWXact
 register_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
@@ -592,28 +608,7 @@ register_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
 	memcpy(fdw_xact_file_data->fdw_xact_id, fdw_xact->fdw_xact_id,
 					fdw_xact->fdw_xact_id_len);
 
-	/*
-	 * The state file isn't valid yet, because we haven't written the correct
-	 * CRC yet.	 Before we do that, insert entry in WAL and flush it to disk.
-	 *
-	 * Between the time we have written the WAL entry and the time we write
-	 * out the correct state file CRC, we have an inconsistency: we have
-	 * recorded the foreign transaction in WAL but not on the disk. We
-	 * use a critical section to force a PANIC if we are unable to complete
-	 * the write --- then, WAL replay should repair the inconsistency.	The
-	 * odds of a PANIC actually occurring should be very tiny given that we
-	 * were able to write the bogus CRC above.
-	 */
 	START_CRIT_SECTION();
-
-	/*
-	 * We have to set delayChkpt here, too; otherwise a checkpoint starting
-	 * immediately after the WAL record is inserted could complete without
-	 * fsync'ing our foreign transaction file. (This is essentially the same
-	 * kind of race condition as the COMMIT-to-clog-write case that
-	 * RecordTransactionCommit uses delayChkpt for; see notes there.)
-	 */
-	MyPgXact->delayChkpt = true;
 
 	/* Add the entry in the xlog and save LSN for checkpointer */
 	XLogBeginInsert();
@@ -621,15 +616,12 @@ register_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
 	fdw_xact->fdw_xact_end_lsn = XLogInsert(RM_FDW_XACT_ID, XLOG_FDW_XACT_INSERT);
 	XLogFlush(fdw_xact->fdw_xact_end_lsn);
 
-	/* If we crash now, we have prepared: WAL replay will fix things */
-
 	/* Store record's start location to read that later on CheckPoint */
 	fdw_xact->fdw_xact_start_lsn = ProcLastRecPtr;
 
 	/* File is written completely, checkpoint can proceed with syncing */
 	fdw_xact->fdw_xact_valid = true;
 
-	MyPgXact->delayChkpt = false;
 	END_CRIT_SECTION();
 
 	pfree(fdw_xact_file_data);
@@ -638,6 +630,7 @@ register_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
 
 /*
  * insert_fdw_xact
+ *
  * Insert a new entry for a given foreign transaction identified by transaction
  * id, foreign server and user mapping, in the shared memory. The inserted entry
  * is returned locked.
@@ -718,6 +711,7 @@ insert_fdw_xact(Oid dboid, TransactionId xid, Oid serverid, Oid userid, Oid umid
 
 /*
  * remove_fdw_xact
+ *
  * Removes the foreign prepared transaction entry from shared memory, disk and
  * logs about the removal in WAL.
  */
@@ -754,6 +748,8 @@ remove_fdw_xact(FDWXact fdw_xact)
 
 			LWLockRelease(FDWXactLock);
 
+			START_CRIT_SECTION();
+
 			/*
 			 * Log that we are removing the foreign transaction entry and remove
 			 * the file from the disk as well.
@@ -762,7 +758,9 @@ remove_fdw_xact(FDWXact fdw_xact)
 			XLogRegisterData((char *)&fdw_remove_xlog, sizeof(fdw_remove_xlog));
 			XLogInsert(RM_FDW_XACT_ID, XLOG_FDW_XACT_REMOVE);
 
-			/* Remove the file from the disk as well. */
+			END_CRIT_SECTION();
+
+			/* Remove the file from the disk if exists. */
 			if (fdw_xact->ondisk)
 				RemoveFDWXactFile(fdw_remove_xlog.xid, fdw_remove_xlog.serverid,
 								  fdw_remove_xlog.userid, true);
@@ -777,6 +775,7 @@ remove_fdw_xact(FDWXact fdw_xact)
 
 /*
  * unlock_fdw_xact
+ *
  * Unlock the foreign transaction entry by wiping out the locking_backend and
  * removing it from the backend's list of foreign transaction.
  */
@@ -800,6 +799,7 @@ unlock_fdw_xact(FDWXact fdw_xact)
 
 /*
  * unlock_fdw_xact_entries
+ *
  * Unlock the foreign transaction entries locked by this backend.
  */
 static void
@@ -814,6 +814,7 @@ unlock_fdw_xact_entries()
 
 /*
  * AtProcExit_FDWXact
+ *
  * When the process exits, unlock the entries it held.
  */
 static void
@@ -824,6 +825,7 @@ AtProcExit_FDWXact(int code, Datum arg)
 
 /*
  * AtEOXact_FDWXacts
+ *
  * The function executes phase 2 of two-phase commit protocol.
  * At the end of transaction perform following actions
  * 1. Mark the entries locked by this backend as ABORTING or COMMITTING
@@ -901,6 +903,7 @@ AtEOXact_FDWXacts(bool is_commit)
 
 /*
  * AtPrepare_FDWXacts
+ *
  * The function is called while preparing a transaction. If there are foreign
  * servers involved in the transaction, this function prepares transactions
  * on those servers.
@@ -936,12 +939,14 @@ AtPrepare_FDWXacts(void)
 	 * after this call.
 	 */
 	MyFDWConnections = NIL;
+
 	/* Set TwoPhaseReady to its default value */
 	TwoPhaseReady = true;
 }
 
 /*
  * FDWXactTwoPhaseFinish
+ *
  * This function is called as part of the COMMIT/ROLLBACK PREPARED command to
  * commit/rollback the foreign transactions prepared as part of the local
  * prepared transaction. The function looks for the foreign transaction entries
@@ -978,24 +983,29 @@ FDWXactTwoPhaseFinish(bool isCommit, TransactionId xid)
 	}
 }
 
+/*
+ * get_prepared_foreign_xact_resolver
+ */
 static ResolvePreparedForeignTransaction_function
 get_prepared_foreign_xact_resolver(FDWXact fdw_xact)
 {
-		ForeignServer		*foreign_server;
-		ForeignDataWrapper	*fdw;
-		FdwRoutine			*fdw_routine;
+	ForeignServer		*foreign_server;
+	ForeignDataWrapper	*fdw;
+	FdwRoutine			*fdw_routine;
 
-		foreign_server = GetForeignServer(fdw_xact->serverid);
-		fdw = GetForeignDataWrapper(foreign_server->fdwid);
-		fdw_routine = GetFdwRoutine(fdw->fdwhandler);
-		if (!fdw_routine->ResolvePreparedForeignTransaction)
-			elog(ERROR, "no foreign transaction resolver routine provided for FDW %s",
-					fdw->fdwname);
-		return fdw_routine->ResolvePreparedForeignTransaction;
+	foreign_server = GetForeignServer(fdw_xact->serverid);
+	fdw = GetForeignDataWrapper(foreign_server->fdwid);
+	fdw_routine = GetFdwRoutine(fdw->fdwhandler);
+	if (!fdw_routine->ResolvePreparedForeignTransaction)
+		elog(ERROR, "no foreign transaction resolver routine provided for FDW %s",
+			 fdw->fdwname);
+
+	return fdw_routine->ResolvePreparedForeignTransaction;
 }
 
 /*
  * resolve_fdw_xact
+ *
  * Resolve the foreign transaction using the foreign data wrapper's transaction
  * handler routine.
  * If the resolution is successful, remove the foreign transaction entry from
@@ -1181,7 +1191,7 @@ get_dbids_with_unresolved_xact(void)
 }
 
 /*
- * fdw_xact_reod
+ * fdw_xact_redo
  * Apply the redo log for a foreign transaction.
  */
 extern void
@@ -1206,12 +1216,13 @@ fdw_xact_redo(XLogReaderState *record)
 
 /*
  * CheckPointFDWXact
+ *
  * Function syncs the foreign transaction files created between the two
- * checkpoints.
- * The foreign transaction entries and hence the corresponding files are expected
- * to be very short-lived. By executing this function at the end, we might have
- * lesser files to fsync, thus reducing some I/O. This is similar to
- * CheckPointTwoPhase().
+ * checkpoints. The foreign transaction entries and hence the corresponding
+ * files are expected to be very short-lived. By executing this function at the
+ * end, we might have lesser files to fsync, thus reducing some I/O. This is
+ * similar to CheckPointTwoPhase().
+ *
  * In order to avoid disk I/O while holding a light weight lock, the function
  * first collects the files which need to be synced under FDWXactLock and then
  * syncs them after releasing the lock. This approach creates a race condition:
@@ -1289,7 +1300,6 @@ CheckPointFDWXact(XLogRecPtr redo_horizon)
 							   serialized_fdw_xacts,
 							   serialized_fdw_xacts)));
 }
-
 
 /*
  * Reads foreign trasasction data from xlog. During checkpoint this data will
@@ -1428,15 +1438,6 @@ RecreateFDWXactFile(TransactionId xid, Oid serverid, Oid userid,
 
 /* Built in functions */
 /*
- * pg_fdw_xact
- *		Produce a view with one row per prepared transaction on foreign server.
- *
- * This function is here so we don't have to export the
- * FDWXactGlobalData struct definition.
- *
- */
-
-/*
  * Structure to hold and iterate over the foreign transactions to be displayed
  * by the built-in functions.
  */
@@ -1448,43 +1449,13 @@ typedef struct
 } WorkingStatus;
 
 /*
- * Returns an array of all foreign prepared transactions for the user-level
- * function pg_fdw_xact.
+ * pg_fdw_xact
+ *		Produce a view with one row per prepared transaction on foreign server.
  *
- * The returned array and all its elements are copies of internal data
- * structures, to minimize the time we need to hold the FDWXactLock.
+ * This function is here so we don't have to export the
+ * FDWXactGlobalData struct definition.
  *
- * WARNING -- we return even those transactions whose information is not
- * completely filled yet. The caller should filter them out if he doesn't want them.
- *
- * The returned array is palloc'd.
  */
-static int
-GetFDWXactList(FDWXact *fdw_xacts)
-{
-	int	num_xacts;
-	int	cnt_xacts;
-
-	LWLockAcquire(FDWXactLock, LW_SHARED);
-
-	if (FDWXactGlobal->num_fdw_xacts == 0)
-	{
-		LWLockRelease(FDWXactLock);
-		*fdw_xacts = NULL;
-		return 0;
-	}
-
-	num_xacts = FDWXactGlobal->num_fdw_xacts;
-	*fdw_xacts = (FDWXact) palloc(sizeof(FDWXactData) * num_xacts);
-	for (cnt_xacts = 0; cnt_xacts < num_xacts; cnt_xacts++)
-		memcpy((*fdw_xacts) + cnt_xacts, FDWXactGlobal->fdw_xacts[cnt_xacts],
-			   sizeof(FDWXactData));
-
-	LWLockRelease(FDWXactLock);
-
-	return num_xacts;
-}
-
 Datum
 pg_fdw_xacts(PG_FUNCTION_ARGS)
 {
@@ -1589,7 +1560,45 @@ pg_fdw_xacts(PG_FUNCTION_ARGS)
 }
 
 /*
- * pg_fdw_resolve
+ * Returns an array of all foreign prepared transactions for the user-level
+ * function pg_fdw_xact.
+ *
+ * The returned array and all its elements are copies of internal data
+ * structures, to minimize the time we need to hold the FDWXactLock.
+ *
+ * WARNING -- we return even those transactions whose information is not
+ * completely filled yet. The caller should filter them out if he doesn't want them.
+ *
+ * The returned array is palloc'd.
+ */
+static int
+GetFDWXactList(FDWXact *fdw_xacts)
+{
+	int	num_xacts;
+	int	cnt_xacts;
+
+	LWLockAcquire(FDWXactLock, LW_SHARED);
+
+	if (FDWXactGlobal->num_fdw_xacts == 0)
+	{
+		LWLockRelease(FDWXactLock);
+		*fdw_xacts = NULL;
+		return 0;
+	}
+
+	num_xacts = FDWXactGlobal->num_fdw_xacts;
+	*fdw_xacts = (FDWXact) palloc(sizeof(FDWXactData) * num_xacts);
+	for (cnt_xacts = 0; cnt_xacts < num_xacts; cnt_xacts++)
+		memcpy((*fdw_xacts) + cnt_xacts, FDWXactGlobal->fdw_xacts[cnt_xacts],
+			   sizeof(FDWXactData));
+
+	LWLockRelease(FDWXactLock);
+
+	return num_xacts;
+}
+
+/*
+ * pg_fdw_xact_resolve
  * a user interface to initiate foreign transaction resolution. The function
  * tries to resolve the prepared transactions on foreign servers in the database
  * from where it is run.
@@ -1597,7 +1606,7 @@ pg_fdw_xacts(PG_FUNCTION_ARGS)
  * encountered, whether resolved or not.
  */
 Datum
-pg_fdw_resolve(PG_FUNCTION_ARGS)
+pg_fdw_xact_resolve(PG_FUNCTION_ARGS)
 {
 	MemoryContext	oldcontext;
 	FuncCallContext *funcctx;
@@ -1793,7 +1802,7 @@ pg_fdw_resolve(PG_FUNCTION_ARGS)
  * which is locked by some other backend.
  */
 Datum
-pg_fdw_remove(PG_FUNCTION_ARGS)
+pg_fdw_xact_remove(PG_FUNCTION_ARGS)
 {
 /* Some #defines only for this function to deal with the arguments */
 #define XID_ARGNUM	0
@@ -1905,10 +1914,10 @@ ReadFDWXactFile(TransactionId xid, Oid serverid, Oid userid)
 	}
 
 	CloseTransientFile(fd);
+
 	/*
 	 * Check the CRC.
 	 */
-
 	INIT_CRC32C(calc_crc);
 	COMP_CRC32C(calc_crc, buf, crc_offset);
 	FIN_CRC32C(calc_crc);
@@ -1938,6 +1947,7 @@ ReadFDWXactFile(TransactionId xid, Oid serverid, Oid userid)
 
 /*
  * PrescanFDWXacts
+ *
  * Read the foreign prepared transactions directory for oldest active
  * transaction. The transactions corresponding to the xids in this directory
  * are not necessarily active per say locally. But we still need those XIDs to
@@ -1971,10 +1981,9 @@ PrescanFDWXacts(TransactionId oldestActiveXid)
 
 	/*
 	 * Move foreign transactions from kownFDWXactList to files, if any.
-	 * It is possible to skip that step and teach subseuent code about
-	 * KnownFDWXactList, but whole PreSacn() happens
-	 * once during end of recovery or promote, so probably it isn't worth
-	 * complications.
+	 * It is possible to skip that step and teach subsequent code about
+	 * KnownFDWXactList, but whole PreScan() happens once during end of
+	 * recovery or promote, so probably it isn't worth complications.
 	 */
 	KnownFDWXactRecreateFiles(InvalidXLogRecPtr);
 
@@ -2013,7 +2022,7 @@ PrescanFDWXacts(TransactionId oldestActiveXid)
 	return oldestActiveXid;
 }
 /*
- * REcoverFDWXactFromFiles
+ * RecoverFDWXactFromFiles
  * Read the foreign prepared transaction information and set it up for further
  * usage.
  */
@@ -2132,7 +2141,7 @@ KnownFDWXactAdd(XLogReaderState *record)
 /*
  * KnownFDWXactRemove
  *
- * Forgot about foreign transaction. Called durig commit/abort redo.
+ * Forgot about foreign transaction. Called during commit/abort redo.
  */
 void
 KnownFDWXactRemove(TransactionId xid, Oid serverid, Oid userid)
@@ -2152,7 +2161,7 @@ KnownFDWXactRemove(TransactionId xid, Oid serverid, Oid userid)
 			dlist_delete(miter.cur);
 			/*
 			 * SInce we found entry in KnownFDWXactList we know that file
-			 * isn't on disk yet and we acn end up here.
+			 * isn't on disk yet and we can end up here.
 			 */
 			return;
 		}
@@ -2161,7 +2170,7 @@ KnownFDWXactRemove(TransactionId xid, Oid serverid, Oid userid)
 	/*
 	 * Here we know that file should be removed from disk. But aborting
 	 * recovery because of absence of unnecessary file doesn't seems to
-	 * be a good idea, so call remove with gibeWarning = false.
+	 * be a good idea, so call remove with giveWarning = false.
 	 */
 	RemoveFDWXactFile(xid, serverid, userid, false);
 }

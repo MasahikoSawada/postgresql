@@ -115,6 +115,8 @@ TransactionId *ParallelCurrentXids;
  */
 bool		MyXactAccessedTempRel = false;
 
+/* Transaction do the write on local node */
+bool		XactWriteLocalNode = false;
 
 /*
  *	transaction states - transaction state from server perspective
@@ -2168,6 +2170,8 @@ CommitTransaction(void)
 	XactTopTransactionId = InvalidTransactionId;
 	nParallelCurrentXids = 0;
 
+	UnregisterTransactionLocalNode();
+
 	/*
 	 * done with commit processing, set current transaction state back to
 	 * default
@@ -2440,6 +2444,8 @@ PrepareTransaction(void)
 	XactTopTransactionId = InvalidTransactionId;
 	nParallelCurrentXids = 0;
 
+	UnregisterTransactionLocalNode();
+
 	/*
 	 * done with 1st phase commit processing, set current transaction state
 	 * back to default
@@ -2624,6 +2630,8 @@ AbortTransaction(void)
 		AtEOXact_FDWXacts(false);
 		pgstat_report_xact_timestamp(0);
 	}
+
+	UnregisterTransactionLocalNode();
 
 	/*
 	 * State remains TRANS_ABORT until CleanupTransaction().
@@ -4305,6 +4313,32 @@ AbortOutOfAnyTransaction(void)
 
 	/* Should be out of all subxacts now */
 	Assert(s->parent == NULL);
+}
+
+/*
+ * RegisterTransactionLocalNode --- remember to wrote on local node
+ */
+void
+RegisterTransactionLocalNode(void)
+{
+	/* Quick exits if no need to remember */
+	if (max_fdw_xacts == 0)
+		return;
+
+	XactWriteLocalNode = true;
+}
+
+/*
+ * UnregisterTransactionLocalNode --- forget to wrote on local node
+ */
+void
+UnregisterTransactionLocalNode(void)
+{
+	/* Quick exits if no need to forget */
+	if (max_fdw_xacts == 0)
+		return;
+
+	XactWriteLocalNode = false;
 }
 
 /*

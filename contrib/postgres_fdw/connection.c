@@ -605,7 +605,7 @@ pgfdw_report_error(int elevel, PGresult *res, PGconn *conn,
 		ereport(elevel,
 				(errcode(sqlstate),
 				 message_primary ? errmsg_internal("%s", message_primary) :
-				 errmsg("unknown error"),
+				 errmsg("could not obtain message string for remote error"),
 			   message_detail ? errdetail_internal("%s", message_detail) : 0,
 				 message_hint ? errhint("%s", message_hint) : 0,
 				 message_context ? errcontext("%s", message_context) : 0,
@@ -624,6 +624,7 @@ pgfdw_report_error(int elevel, PGresult *res, PGconn *conn,
 
 /*
  * postgresGetPrepareId
+ *
  * The function crafts prepared transaction identifier. PostgreSQL documentation
  * mentions two restrictions on the name
  * 1. String literal, less than 200 bytes long.
@@ -652,6 +653,11 @@ postgresGetPrepareId(Oid serverid, Oid userid, int *prep_info_len)
 	return prep_info;
 }
 
+/*
+ * postgresPrepareForeignTransaction
+ *
+ * The function prepares transaction on foreign server.
+ */
 bool
 postgresPrepareForeignTransaction(Oid serverid, Oid userid, Oid umid,
 								  int prep_info_len, char *prep_info)
@@ -671,13 +677,14 @@ postgresPrepareForeignTransaction(Oid serverid, Oid userid, Oid umid,
 	if (found && entry->conn)
 	{
 		bool result;
-
 		PGconn	*conn = entry->conn;
+
 		command = makeStringInfo();
 		appendStringInfo(command, "PREPARE TRANSACTION '%.*s'", prep_info_len,
 																	prep_info);
 		res = PQexec(conn, command->data);
 		result = (PQresultStatus(res) == PGRES_COMMAND_OK);
+
 		if (!result)
 		{
 			/*
@@ -739,6 +746,13 @@ postgresEndForeignTransaction(Oid serverid, Oid userid, Oid umid, bool is_commit
 	return false;
 }
 
+/*
+ * postgresResolvePreparedForeignTransaction
+ *
+ * The function commit or abort prepared transaction on foreign server.
+ * This function could be called when we don't have any connections to the
+ * foreign server involving distributed transaction being resolved.
+ */
 bool
 postgresResolvePreparedForeignTransaction(Oid serverid, Oid userid, Oid umid,
 										  bool is_commit,
@@ -785,6 +799,7 @@ postgresResolvePreparedForeignTransaction(Oid serverid, Oid userid, Oid umid,
 							is_commit ? "COMMIT" : "ROLLBACK",
 							prep_info_len, prep_info);
 		res = PQexec(conn, command->data);
+
 		if (PQresultStatus(res) != PGRES_COMMAND_OK)
 		{
 			int		sqlstate;
