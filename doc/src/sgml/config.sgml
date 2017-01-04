@@ -6531,10 +6531,10 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </listitem>
      </varlistentry>
 
-     <varlistentry id="guc-vacuum-update-index-stats-scale-factor" xreflabel="vacuum_update_index_stats_scale_factor">
-      <term><varname>vacuum_update_index_stats_scale_factor</varname> (<type>floating point</type>)
+     <varlistentry id="guc-vacuum-cleanup-index-scale-factor" xreflabel="vacuum_cleanup_index_scale_factor">
+      <term><varname>vacuum_cleanup_index_scale_factor</varname> (<type>floating point</type>)
       <indexterm>
-       <primary><varname>vacuum_update_index_stats_scale_factor</> configuration parameter</primary>
+       <primary><varname>vacuum_cleanup_indexscale_factor</> configuration parameter</primary>
       </indexterm>
       </term>
       <listitem>
