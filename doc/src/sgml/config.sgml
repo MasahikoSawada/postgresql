@@ -6531,6 +6531,22 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-vacuum-update-index-stats-scale-factor" xreflabel="vacuum_update_index_stats_scale_factor">
+      <term><varname>vacuum_update_index_stats_scale_factor</varname> (<type>floating point</type>)
+      <indexterm>
+       <primary><varname>vacuum_update_index_stats_scale_factor</> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies a fraction of the table pages containing dead tuple
+        prior to vacuum needed to trigger a updating statistics of indexes
+        in any one table. The default is 0.0 (update index statistics
+        if no updated on table). This parameter can only be set anywhere.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-bytea-output" xreflabel="bytea_output">
       <term><varname>bytea_output</varname> (<type>enum</type>)
       <indexterm>
