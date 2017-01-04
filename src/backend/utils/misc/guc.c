@@ -2988,7 +2988,7 @@ static struct config_real ConfigureNamesReal[] =
 
 	{
 		{"vacuum_cleanup_index_scale_factor", PGC_USERSET, CLIENT_CONN_STATEMENT,
-		 gettext_noop("Number of pages containing dead tuple prioir to vacuum as a fraction of relpages."),
+		 gettext_noop("Number of pages containing dead tuple prior to vacuum as a fraction of relpages."),
 			NULL
 		},
 		&vacuum_cleanup_index_scale,
