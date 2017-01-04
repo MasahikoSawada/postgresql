@@ -1353,6 +1353,14 @@ LockCheckConflicts(LockMethod lockMethodTable,
 		return STATUS_FOUND;
 	}
 
+	/* Conflict particular lock type even if we are going to acquire group locking. */
+	if ((lock->tag).locktag_type == LOCKTAG_RELATION_EXTEND)
+	{
+		PROCLOCK_PRINT("LockCheckConflicts: conflicting (group)",
+					   proclock);
+		return STATUS_FOUND;
+	}
+
 	/*
 	 * Locks held in conflicting modes by members of our own lock group are
 	 * not real conflicts; we can subtract those out and see if we still have
