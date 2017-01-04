@@ -3,7 +3,7 @@
  * outfuncs.c
  *	  Output functions for Postgres tree nodes.
  *
- * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -939,7 +939,7 @@ _outRangeVar(StringInfo str, const RangeVar *node)
 	 */
 	WRITE_STRING_FIELD(schemaname);
 	WRITE_STRING_FIELD(relname);
-	WRITE_ENUM_FIELD(inhOpt, InhOption);
+	WRITE_BOOL_FIELD(inh);
 	WRITE_CHAR_FIELD(relpersistence);
 	WRITE_NODE_FIELD(alias);
 	WRITE_LOCATION_FIELD(location);

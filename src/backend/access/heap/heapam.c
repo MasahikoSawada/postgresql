@@ -3,7 +3,7 @@
  * heapam.c
  *	  heap access method code
  *
- * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -2506,7 +2506,7 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 							heaptup->t_len - SizeofHeapTupleHeader);
 
 		/* filtering by origin on a row level is much more efficient */
-		XLogIncludeOrigin();
+		XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
 
 		recptr = XLogInsert(RM_HEAP_ID, info);
 
@@ -2845,7 +2845,7 @@ heap_multi_insert(Relation relation, HeapTuple *tuples, int ntuples,
 			XLogRegisterBufData(0, tupledata, totaldatalen);
 
 			/* filtering by origin on a row level is much more efficient */
-			XLogIncludeOrigin();
+			XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
 
 			recptr = XLogInsert(RM_HEAP2_ID, info);
 
@@ -3307,7 +3307,7 @@ l1:
 		}
 
 		/* filtering by origin on a row level is much more efficient */
-		XLogIncludeOrigin();
+		XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
 
 		recptr = XLogInsert(RM_HEAP_ID, XLOG_HEAP_DELETE);
 
@@ -6034,7 +6034,7 @@ heap_finish_speculative(Relation relation, HeapTuple tuple)
 		XLogBeginInsert();
 
 		/* We want the same filtering on this as on a plain insert */
-		XLogIncludeOrigin();
+		XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
 
 		XLogRegisterData((char *) &xlrec, SizeOfHeapConfirm);
 		XLogRegisterBuffer(0, buffer, REGBUF_STANDARD);
@@ -7702,7 +7702,7 @@ log_heap_update(Relation reln, Buffer oldbuf,
 	}
 
 	/* filtering by origin on a row level is much more efficient */
-	XLogIncludeOrigin();
+	XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
 
 	recptr = XLogInsert(RM_HEAP_ID, info);
 

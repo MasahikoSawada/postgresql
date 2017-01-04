@@ -3,7 +3,7 @@
  * lockcmds.c
  *	  LOCK command support code
  *
- * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -54,7 +54,7 @@ LockTableCommand(LockStmt *lockstmt)
 	foreach(p, lockstmt->relations)
 	{
 		RangeVar   *rv = (RangeVar *) lfirst(p);
-		bool		recurse = interpretInhOption(rv->inhOpt);
+		bool		recurse = rv->inh;
 		Oid			reloid;
 
 		reloid = RangeVarGetRelidExtended(rv, lockstmt->mode, false,

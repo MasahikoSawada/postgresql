@@ -5,7 +5,7 @@
  *
  * See src/backend/access/transam/README for more information.
  *
- * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -5234,7 +5234,7 @@ XactLogCommitRecord(TimestampTz commit_time,
 		XLogRegisterData((char *) (&xl_origin), sizeof(xl_xact_origin));
 
 	/* we allow filtering by xacts */
-	XLogIncludeOrigin();
+	XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
 
 	return XLogInsert(RM_XACT_ID, info);
 }

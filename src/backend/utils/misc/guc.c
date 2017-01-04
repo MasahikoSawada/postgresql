@@ -6,7 +6,7 @@
  * See src/backend/utils/misc/README for more information.
  *
  *
- * Copyright (c) 2000-2016, PostgreSQL Global Development Group
+ * Copyright (c) 2000-2017, PostgreSQL Global Development Group
  * Written by Peter Eisentraut <peter_e@gmx.net>.
  *
  * IDENTIFICATION
@@ -440,7 +440,6 @@ char	   *event_source;
 bool		row_security;
 bool		check_function_bodies = true;
 bool		default_with_oids = false;
-bool		SQL_inheritance = true;
 
 int			log_min_error_statement = ERROR;
 int			log_min_messages = WARNING;
@@ -935,7 +934,7 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
-		{"ssl", PGC_POSTMASTER, CONN_AUTH_SECURITY,
+		{"ssl", PGC_SIGHUP, CONN_AUTH_SECURITY,
 			gettext_noop("Enables SSL connections."),
 			NULL
 		},
@@ -944,7 +943,7 @@ static struct config_bool ConfigureNamesBool[] =
 		check_ssl, NULL, NULL
 	},
 	{
-		{"ssl_prefer_server_ciphers", PGC_POSTMASTER, CONN_AUTH_SECURITY,
+		{"ssl_prefer_server_ciphers", PGC_SIGHUP, CONN_AUTH_SECURITY,
 			gettext_noop("Give priority to server ciphersuite order."),
 			NULL
 		},
@@ -1319,15 +1318,6 @@ static struct config_bool ConfigureNamesBool[] =
 		},
 		&log_hostname,
 		false,
-		NULL, NULL, NULL
-	},
-	{
-		{"sql_inheritance", PGC_USERSET, COMPAT_OPTIONS_PREVIOUS,
-			gettext_noop("Causes subtables to be included by default in various commands."),
-			NULL
-		},
-		&SQL_inheritance,
-		true,
 		NULL, NULL, NULL
 	},
 	{
@@ -2314,7 +2304,7 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_XBLOCKS
 		},
 		&WalWriterFlushAfter,
-		(1024*1024) / XLOG_BLCKSZ, 0, INT_MAX,
+		(1024 * 1024) / XLOG_BLCKSZ, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 
@@ -3455,7 +3445,7 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
-		{"ssl_cert_file", PGC_POSTMASTER, CONN_AUTH_SECURITY,
+		{"ssl_cert_file", PGC_SIGHUP, CONN_AUTH_SECURITY,
 			gettext_noop("Location of the SSL server certificate file."),
 			NULL
 		},
@@ -3465,7 +3455,7 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
-		{"ssl_key_file", PGC_POSTMASTER, CONN_AUTH_SECURITY,
+		{"ssl_key_file", PGC_SIGHUP, CONN_AUTH_SECURITY,
 			gettext_noop("Location of the SSL server private key file."),
 			NULL
 		},
@@ -3475,7 +3465,7 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
-		{"ssl_ca_file", PGC_POSTMASTER, CONN_AUTH_SECURITY,
+		{"ssl_ca_file", PGC_SIGHUP, CONN_AUTH_SECURITY,
 			gettext_noop("Location of the SSL certificate authority file."),
 			NULL
 		},
@@ -3485,7 +3475,7 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
-		{"ssl_crl_file", PGC_POSTMASTER, CONN_AUTH_SECURITY,
+		{"ssl_crl_file", PGC_SIGHUP, CONN_AUTH_SECURITY,
 			gettext_noop("Location of the SSL certificate revocation list file."),
 			NULL
 		},
@@ -3527,7 +3517,7 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
-		{"ssl_ciphers", PGC_POSTMASTER, CONN_AUTH_SECURITY,
+		{"ssl_ciphers", PGC_SIGHUP, CONN_AUTH_SECURITY,
 			gettext_noop("Sets the list of allowed SSL ciphers."),
 			NULL,
 			GUC_SUPERUSER_ONLY
@@ -3542,7 +3532,7 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
-		{"ssl_ecdh_curve", PGC_POSTMASTER, CONN_AUTH_SECURITY,
+		{"ssl_ecdh_curve", PGC_SIGHUP, CONN_AUTH_SECURITY,
 			gettext_noop("Sets the curve to use for ECDH."),
 			NULL,
 			GUC_SUPERUSER_ONLY
