@@ -2164,7 +2164,7 @@ static struct config_int ConfigureNamesInt[] =
 		0, 0, 1000000,
 		NULL, NULL, NULL
 	},
-	
+
 	/*
 	 * See also CheckRequiredParameterValues() if this parameter changes
 	 */
