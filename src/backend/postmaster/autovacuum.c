@@ -2655,6 +2655,7 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 			(dovacuum ? VACOPT_VACUUM : 0) |
 			(doanalyze ? VACOPT_ANALYZE : 0) |
 			(!wraparound ? VACOPT_NOWAIT : 0);
+		tab->at_vacoptions.nworkers = 1;
 		tab->at_params.freeze_min_age = freeze_min_age;
 		tab->at_params.freeze_table_age = freeze_table_age;
 		tab->at_params.multixact_freeze_min_age = multixact_freeze_min_age;

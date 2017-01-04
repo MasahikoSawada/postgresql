@@ -69,6 +69,8 @@
 #include "utils/tqual.h"
 
 
+//#define DEBUG_PARALLEL_VACUUM
+
 /*
  * Space/time tradeoff parameters: do these need to be user-tunable?
  *
@@ -607,7 +609,8 @@ parallel_lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 	lazy_estimate_dsm(pcxt, maxtuples, vacrelstats->nindexes);
 
 #ifdef DEBUG_PARALLEL_VACUUM
-	fprintf(stderr, "--- maxtuples %ld ---\n", maxtuples);
+	fprintf(stderr, "--- maxtuples %ld, nindex %d, para %d ---\n",
+			maxtuples, vacrelstats->nindexes, wnum);
 #endif
 
 	/* Initialize DSM for parallel vacuum */
@@ -650,7 +653,7 @@ lazy_vacuum_worker(dsm_segment *seg, shm_toc *toc)
 	int nindexes_worker;
 
 	fprintf(stderr, " worker %d %d\n", MyProcPid, ParallelWorkerNumber);
-	pg_usleep(10 * 1000L * 1000L);
+	//pg_usleep(10 * 1000L * 1000L);
 
 	/* Look up and initialize information and task */
 	lazy_initialize_worker(toc, &pscan, &vacrelstats, &options,
@@ -1485,7 +1488,7 @@ lazy_scan_heap(LVRelStats *vacrelstats, Relation onerel, Relation *Irel,
 	lv_endscan(lvscan);
 
 	/* @@@ for debug */
-	ereport(LOG,
+	ereport(elevel,
 			(errmsg("(%d) scanned pages %u, scanned tuples %0.f, vacuumed page %u, vacuumed_tuples %0.f, new dead tuple %0.f, num index scan %d",
 					ParallelWorkerNumber,
 					vacrelstats->scanned_pages,
@@ -1535,7 +1538,6 @@ lazy_gather_vacuum_stats(ParallelContext *pcxt, LVRelStats *vacrelstats,
 	int	i;
 	LVRelStats *lvstats_list;
 	LVIndStats *lvindstats_list;
-	LVRelStats *ws;
 
 	lvstats_list = (LVRelStats *) shm_toc_lookup(pcxt->toc, VACUUM_KEY_VACUUM_STATS);
 	lvindstats_list = (LVIndStats *) shm_toc_lookup(pcxt->toc, VACUUM_KEY_INDEX_STATS);
@@ -1555,8 +1557,8 @@ lazy_gather_vacuum_stats(ParallelContext *pcxt, LVRelStats *vacrelstats,
 		vacrelstats->nonempty_pages += wstats->nonempty_pages;
 	}
 
-	ws = lvstats_list + sizeof(LVRelStats);
-	vacrelstats->rel_pages = ws->rel_pages;
+	/* all vacuum worker has same value of rel_pages */
+	vacrelstats->rel_pages = lvstats_list->rel_pages;
 	
 	/* Copy index vacuum statistics on DSM to local memory */
 	memcpy(vacindstats, lvindstats_list, sizeof(LVIndStats) * vacrelstats->nindexes);
