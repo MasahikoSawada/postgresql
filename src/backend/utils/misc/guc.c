@@ -2655,16 +2655,6 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"parallel_vacuum_workers", PGC_USERSET, RESOURCES_ASYNCHRONOUS,
-			gettext_noop("Sets the number of parallel worker for vacuum."),
-			NULL
-		},
-		&parallel_vacuum_workers,
-		-1, -1, 1024,
-		NULL, NULL, NULL
-	},
-
-	{
 		{"max_parallel_workers", PGC_USERSET, RESOURCES_ASYNCHRONOUS,
 			gettext_noop("Sets the maximum number of parallel workers than can be active at one time."),
 			NULL
