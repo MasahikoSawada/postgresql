@@ -2940,10 +2940,16 @@ typedef enum VacuumOption
 	VACOPT_PARALLEL = 1 << 8	/* do VACUUM parallelly */
 } VacuumOption;
 
+typedef struct VacuumOptions
+{
+	VacuumOption flags; /* OR of VacuumOption flags */
+	int nworkers; /* # of parallel vacuum workers */
+} VacuumOptions;
+
 typedef struct VacuumStmt
 {
 	NodeTag		type;
-	int			options;		/* OR of VacuumOption flags */
+	VacuumOptions	options;
 	RangeVar   *relation;		/* single table to process, or NULL */
 	List	   *va_cols;		/* list of column names, or NIL for all */
 } VacuumStmt;

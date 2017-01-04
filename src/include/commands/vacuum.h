@@ -159,7 +159,7 @@ extern int	parallel_vacuum_workers;
 
 /* in commands/vacuum.c */
 extern void ExecVacuum(VacuumStmt *vacstmt, bool isTopLevel);
-extern void vacuum(int options, RangeVar *relation, Oid relid,
+extern void vacuum(VacuumOptions options, RangeVar *relation, Oid relid,
 	   VacuumParams *params, List *va_cols,
 	   BufferAccessStrategy bstrategy, bool isTopLevel);
 extern void vac_open_indexes(Relation relation, LOCKMODE lockmode,
@@ -190,7 +190,7 @@ extern void vac_update_datfrozenxid(void);
 extern void vacuum_delay_point(void);
 
 /* in commands/vacuumlazy.c */
-extern void lazy_vacuum_rel(Relation onerel, int options,
+extern void lazy_vacuum_rel(Relation onerel, VacuumOptions options,
 				VacuumParams *params, BufferAccessStrategy bstrategy);
 
 /* in commands/analyze.c */
