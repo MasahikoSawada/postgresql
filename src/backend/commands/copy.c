@@ -3,7 +3,7 @@
  * copy.c
  *		Implements the COPY utility command
  *
- * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -161,11 +161,14 @@ typedef struct CopyStateData
 	ExprState **defexprs;		/* array of default att expressions */
 	bool		volatile_defexprs;		/* is any of defexprs volatile? */
 	List	   *range_table;
+
 	PartitionDispatch *partition_dispatch_info;
-	int			num_dispatch;
-	int			num_partitions;
-	ResultRelInfo *partitions;
+	int			num_dispatch;		/* Number of entries in the above array */
+	int			num_partitions;		/* Number of members in the following
+									 * arrays */
+	ResultRelInfo  *partitions;		/* Per partition result relation */
 	TupleConversionMap **partition_tupconv_maps;
+	TupleTableSlot *partition_tuple_slot;
 
 	/*
 	 * These variables are used to reduce overhead in textual COPY FROM.
@@ -1409,6 +1412,7 @@ BeginCopy(ParseState *pstate,
 			PartitionDispatch  *partition_dispatch_info;
 			ResultRelInfo	   *partitions;
 			TupleConversionMap **partition_tupconv_maps;
+			TupleTableSlot	   *partition_tuple_slot;
 			int					num_parted,
 								num_partitions;
 
@@ -1416,12 +1420,14 @@ BeginCopy(ParseState *pstate,
 										   &partition_dispatch_info,
 										   &partitions,
 										   &partition_tupconv_maps,
+										   &partition_tuple_slot,
 										   &num_parted, &num_partitions);
 			cstate->partition_dispatch_info = partition_dispatch_info;
 			cstate->num_dispatch = num_parted;
 			cstate->partitions = partitions;
 			cstate->num_partitions = num_partitions;
 			cstate->partition_tupconv_maps = partition_tupconv_maps;
+			cstate->partition_tuple_slot = partition_tuple_slot;
 		}
 	}
 	else
@@ -2420,6 +2426,7 @@ CopyFrom(CopyState cstate)
 					  cstate->rel,
 					  1,		/* dummy rangetable index */
 					  true,		/* do load partition check expression */
+					  NULL,
 					  0);
 
 	ExecOpenIndices(resultRelInfo, false);
@@ -2484,7 +2491,8 @@ CopyFrom(CopyState cstate)
 
 	for (;;)
 	{
-		TupleTableSlot *slot;
+		TupleTableSlot *slot,
+					   *oldslot;
 		bool		skip_tuple;
 		Oid			loaded_oid = InvalidOid;
 
@@ -2526,6 +2534,7 @@ CopyFrom(CopyState cstate)
 		ExecStoreTuple(tuple, slot, InvalidBuffer, false);
 
 		/* Determine the partition to heap_insert the tuple into */
+		oldslot = slot;
 		if (cstate->partition_dispatch_info)
 		{
 			int			leaf_part_index;
@@ -2571,7 +2580,18 @@ CopyFrom(CopyState cstate)
 			map = cstate->partition_tupconv_maps[leaf_part_index];
 			if (map)
 			{
+				Relation	partrel = resultRelInfo->ri_RelationDesc;
+
 				tuple = do_convert_tuple(tuple, map);
+
+				/*
+				 * We must use the partition's tuple descriptor from this
+				 * point on.  Use a dedicated slot from this point on until
+				 * we're finished dealing with the partition.
+				 */
+				slot = cstate->partition_tuple_slot;
+				Assert(slot != NULL);
+				ExecSetSlotDescriptor(slot, RelationGetDescr(partrel));
 				ExecStoreTuple(tuple, slot, InvalidBuffer, true);
 			}
 
@@ -2605,7 +2625,7 @@ CopyFrom(CopyState cstate)
 				/* Check the constraints of the tuple */
 				if (cstate->rel->rd_att->constr ||
 					resultRelInfo->ri_PartitionCheck)
-					ExecConstraints(resultRelInfo, slot, estate);
+					ExecConstraints(resultRelInfo, slot, oldslot, estate);
 
 				if (useHeapMultiInsert)
 				{
@@ -2714,13 +2734,14 @@ CopyFrom(CopyState cstate)
 		 * Remember cstate->partition_dispatch_info[0] corresponds to the root
 		 * partitioned table, which we must not try to close, because it is
 		 * the main target table of COPY that will be closed eventually by
-		 * DoCopy().
+		 * DoCopy().  Also, tupslot is NULL for the root partitioned table.
 		 */
 		for (i = 1; i < cstate->num_dispatch; i++)
 		{
 			PartitionDispatch pd = cstate->partition_dispatch_info[i];
 
 			heap_close(pd->reldesc, NoLock);
+			ExecDropSingleTupleTableSlot(pd->tupslot);
 		}
 		for (i = 0; i < cstate->num_partitions; i++)
 		{
@@ -2729,6 +2750,9 @@ CopyFrom(CopyState cstate)
 			ExecCloseIndices(resultRelInfo);
 			heap_close(resultRelInfo->ri_RelationDesc, NoLock);
 		}
+
+		/* Release the standalone partition tuple descriptor */
+		ExecDropSingleTupleTableSlot(cstate->partition_tuple_slot);
 	}
 
 	FreeExecutorState(estate);

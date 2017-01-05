@@ -3,7 +3,7 @@
  * partition.c
  *		  Partitioning related data structures and functions.
  *
- * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -122,7 +122,7 @@ static List *get_qual_for_list(PartitionKey key, PartitionBoundSpec *spec);
 static List *get_qual_for_range(PartitionKey key, PartitionBoundSpec *spec);
 static Oid get_partition_operator(PartitionKey key, int col,
 					   StrategyNumber strategy, bool *need_relabel);
-static List *generate_partition_qual(Relation rel, bool recurse);
+static List *generate_partition_qual(Relation rel);
 
 static PartitionRangeBound *make_one_range_bound(PartitionKey key, int index,
 					 List *datums, bool lower);
@@ -200,6 +200,8 @@ RelationBuildPartitionDesc(Relation rel)
 		Node	   *boundspec;
 
 		tuple = SearchSysCache1(RELOID, inhrelid);
+		if (!HeapTupleIsValid(tuple))
+			elog(ERROR, "cache lookup failed for relation %u", inhrelid);
 
 		/*
 		 * It is possible that the pg_class tuple of a partition has not been
@@ -914,22 +916,28 @@ get_qual_from_partbound(Relation rel, Relation parent, Node *bound)
  * Returns a list of partition quals
  */
 List *
-RelationGetPartitionQual(Relation rel, bool recurse)
+RelationGetPartitionQual(Relation rel)
 {
 	/* Quick exit */
 	if (!rel->rd_rel->relispartition)
 		return NIL;
 
-	return generate_partition_qual(rel, recurse);
+	return generate_partition_qual(rel);
 }
 
-/* Turn an array of OIDs with N elements into a list */
-#define OID_ARRAY_TO_LIST(arr, N, list) \
+/*
+ * Append OIDs of rel's partitions to the list 'partoids' and for each OID,
+ * append pointer rel to the list 'parents'.
+ */
+#define APPEND_REL_PARTITION_OIDS(rel, partoids, parents) \
 	do\
 	{\
 		int		i;\
-		for (i = 0; i < (N); i++)\
-			(list) = lappend_oid((list), (arr)[i]);\
+		for (i = 0; i < (rel)->rd_partdesc->nparts; i++)\
+		{\
+			(partoids) = lappend_oid((partoids), (rel)->rd_partdesc->oids[i]);\
+			(parents) = lappend((parents), (rel));\
+		}\
 	} while(0)
 
 /*
@@ -944,11 +952,13 @@ PartitionDispatch *
 RelationGetPartitionDispatchInfo(Relation rel, int lockmode,
 								 int *num_parted, List **leaf_part_oids)
 {
-	PartitionDesc rootpartdesc = RelationGetPartitionDesc(rel);
 	PartitionDispatchData **pd;
 	List	   *all_parts = NIL,
-			   *parted_rels;
-	ListCell   *lc;
+			   *all_parents = NIL,
+			   *parted_rels,
+			   *parted_rel_parents;
+	ListCell   *lc1,
+			   *lc2;
 	int			i,
 				k,
 				offset;
@@ -965,10 +975,13 @@ RelationGetPartitionDispatchInfo(Relation rel, int lockmode,
 	 */
 	*num_parted = 1;
 	parted_rels = list_make1(rel);
-	OID_ARRAY_TO_LIST(rootpartdesc->oids, rootpartdesc->nparts, all_parts);
-	foreach(lc, all_parts)
+	/* Root partitioned table has no parent, so NULL for parent */
+	parted_rel_parents = list_make1(NULL);
+	APPEND_REL_PARTITION_OIDS(rel, all_parts, all_parents);
+	forboth(lc1, all_parts, lc2, all_parents)
 	{
-		Relation	partrel = heap_open(lfirst_oid(lc), lockmode);
+		Relation	partrel = heap_open(lfirst_oid(lc1), lockmode);
+		Relation	parent = lfirst(lc2);
 		PartitionDesc partdesc = RelationGetPartitionDesc(partrel);
 
 		/*
@@ -979,7 +992,8 @@ RelationGetPartitionDispatchInfo(Relation rel, int lockmode,
 		{
 			(*num_parted)++;
 			parted_rels = lappend(parted_rels, partrel);
-			OID_ARRAY_TO_LIST(partdesc->oids, partdesc->nparts, all_parts);
+			parted_rel_parents = lappend(parted_rel_parents, parent);
+			APPEND_REL_PARTITION_OIDS(partrel, all_parts, all_parents);
 		}
 		else
 			heap_close(partrel, NoLock);
@@ -1004,10 +1018,12 @@ RelationGetPartitionDispatchInfo(Relation rel, int lockmode,
 										   sizeof(PartitionDispatchData *));
 	*leaf_part_oids = NIL;
 	i = k = offset = 0;
-	foreach(lc, parted_rels)
+	forboth(lc1, parted_rels, lc2, parted_rel_parents)
 	{
-		Relation	partrel = lfirst(lc);
+		Relation	partrel = lfirst(lc1);
+		Relation	parent = lfirst(lc2);
 		PartitionKey partkey = RelationGetPartitionKey(partrel);
+		TupleDesc	 tupdesc = RelationGetDescr(partrel);
 		PartitionDesc partdesc = RelationGetPartitionDesc(partrel);
 		int			j,
 					m;
@@ -1017,6 +1033,27 @@ RelationGetPartitionDispatchInfo(Relation rel, int lockmode,
 		pd[i]->key = partkey;
 		pd[i]->keystate = NIL;
 		pd[i]->partdesc = partdesc;
+		if (parent != NULL)
+		{
+			/*
+			 * For every partitioned table other than root, we must store
+			 * a tuple table slot initialized with its tuple descriptor and
+			 * a tuple conversion map to convert a tuple from its parent's
+			 * rowtype to its own. That is to make sure that we are looking
+			 * at the correct row using the correct tuple descriptor when
+			 * computing its partition key for tuple routing.
+			 */
+			pd[i]->tupslot = MakeSingleTupleTableSlot(tupdesc);
+			pd[i]->tupmap = convert_tuples_by_name(RelationGetDescr(parent),
+												   tupdesc,
+								gettext_noop("could not convert row type"));
+		}
+		else
+		{
+			/* Not required for the root partitioned table */
+			pd[i]->tupslot = NULL;
+			pd[i]->tupmap = NULL;
+		}
 		pd[i]->indexes = (int *) palloc(partdesc->nparts * sizeof(int));
 
 		/*
@@ -1445,7 +1482,7 @@ get_partition_operator(PartitionKey key, int col, StrategyNumber strategy,
  * into cache memory.
  */
 static List *
-generate_partition_qual(Relation rel, bool recurse)
+generate_partition_qual(Relation rel)
 {
 	HeapTuple	tuple;
 	MemoryContext oldcxt;
@@ -1466,8 +1503,8 @@ generate_partition_qual(Relation rel, bool recurse)
 	/* Quick copy */
 	if (rel->rd_partcheck)
 	{
-		if (parent->rd_rel->relispartition && recurse)
-			result = list_concat(generate_partition_qual(parent, true),
+		if (parent->rd_rel->relispartition)
+			result = list_concat(generate_partition_qual(parent),
 								 copyObject(rel->rd_partcheck));
 		else
 			result = copyObject(rel->rd_partcheck);
@@ -1481,6 +1518,10 @@ generate_partition_qual(Relation rel, bool recurse)
 		elog(ERROR, "relation \"%s\" has relispartition = false",
 			 RelationGetRelationName(rel));
 	tuple = SearchSysCache1(RELOID, RelationGetRelid(rel));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for relation %u",
+			 RelationGetRelid(rel));
+
 	boundDatum = SysCacheGetAttr(RELOID, tuple,
 								 Anum_pg_class_relpartbound,
 								 &isnull);
@@ -1493,11 +1534,11 @@ generate_partition_qual(Relation rel, bool recurse)
 	my_qual = get_qual_from_partbound(rel, parent, bound);
 
 	/* If requested, add parent's quals to the list (if any) */
-	if (parent->rd_rel->relispartition && recurse)
+	if (parent->rd_rel->relispartition)
 	{
 		List	   *parent_check;
 
-		parent_check = generate_partition_qual(parent, true);
+		parent_check = generate_partition_qual(parent);
 		result = list_concat(parent_check, my_qual);
 	}
 	else
@@ -1610,12 +1651,25 @@ get_partition_for_tuple(PartitionDispatch *pd,
 	{
 		PartitionKey key = parent->key;
 		PartitionDesc partdesc = parent->partdesc;
+		TupleTableSlot *myslot = parent->tupslot;
+		TupleConversionMap *map = parent->tupmap;
 
 		/* Quick exit */
 		if (partdesc->nparts == 0)
 		{
 			*failed_at = RelationGetRelid(parent->reldesc);
 			return -1;
+		}
+
+		if (myslot != NULL)
+		{
+			HeapTuple	tuple = ExecFetchSlotTuple(slot);
+
+			ExecClearTuple(myslot);
+			Assert(map != NULL);
+			tuple = do_convert_tuple(tuple, map);
+			ExecStoreTuple(tuple, myslot, InvalidBuffer, true);
+			slot = myslot;
 		}
 
 		/* Extract partition key from tuple */
