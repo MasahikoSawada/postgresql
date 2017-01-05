@@ -23,7 +23,17 @@
  * of index scans performed.  So we don't use maintenance_work_mem memory for
  * the TID array, just enough to hold as many heap tuples as fit on one page.
  *
- * In PostgreSQL 10, we support parallel option for lazy vacuum.
+ * In PostgreSQL 10, we support parallel option for lazy vacuum. In parallel
+ * lazy vacuum the multiple vacuum workers parallelly get page number using
+ * parallel heap scan and process it. The spaces for the array of dead tuple
+ * TIDs of each worker are allocated in dynamic shared memory before parallel
+ * lazy vacuum begins by launcher process. Each indexes on table is assigned
+ * to a vacuum worker. That is, the number of assigned indexes could be different
+ * between vacuum workers. In case where table has index, all of vacuum workers
+ * make two synchronization points at where before reclaiming dead tuple TIDs
+ * actually and after reclaimed them using condition variables. After all of
+ * vacuum worker finished, the launcher process gathers the lazy vacuum statistics
+ * and update them.
  *
  * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -105,7 +115,7 @@
  */
 #define SKIP_PAGES_THRESHOLD	((BlockNumber) 32)
 
-/* DSM key for parallel vacuum */
+/* DSM key for parallel lazy vacuum */
 #define VACUUM_KEY_PARALLEL_SCAN	50
 #define VACUUM_KEY_VACUUM_STATS		51
 #define VACUUM_KEY_INDEX_STATS		52
@@ -133,6 +143,7 @@ typedef struct LVIndStats
 	BlockNumber rel_tuples;	/* # of index tuples */
 } LVIndStats;
 
+/* Vacuum worker state */
 #define VACSTATE_STARTUP			0x01
 #define VACSTATE_SCANNING			0x02
 #define VACSTATE_VACUUM_PREPARED	0x04
@@ -140,39 +151,24 @@ typedef struct LVIndStats
 #define VACSTATE_VACUUM_FINISHED	0x10
 #define VACSTATE_COMPLETE			0x20
 
-/*
- * Vacuum worker state */
-/*
-typedef enum VacWorkerState
-{
-	VACSTATE_STARTUP = 0,
-	VACSTATE_SCANNING,
-	VACSTATE_VACUUM_PREPARED,
-	VACSTATE_VACUUMING,
-	VACSTATE_VACUUM_FINISHED,
-	VACSTATE_COMPLETE
-} VacWorkerState;
-*/
-
 typedef struct VacWorker
 {
-	uint8 state;
-	uint32 round;
+	uint8 state;	/* current state of vacuum worker */
+	uint32 round;	/* current round number */
 } VacWorker;
 
 typedef struct LVParallelState
 {
 	int nworkers;			/* # of parallel vacuum workers */
-	ConditionVariable cv;	/* condition variable for synchronization */
-	slock_t	mutex;			/* mutex for vacworkers */
+	ConditionVariable cv;	/* condition variable for making synchronization points*/
+	slock_t	mutex;			/* mutex for vacworkers state */
 	VacWorker vacworkers[FLEXIBLE_ARRAY_MEMBER];
-//	VacWorkerState vacstates[FLEXIBLE_ARRAY_MEMBER];
-	/* vacuum workers follows */
+	/* each vacuum workers state follows */
 } LVParallelState;
 
 typedef struct LVDeadTuple
 {
-	int n_dt; /* # of dead tuple */
+	int n_dt; 				/* # of dead tuple */
 	ItemPointer dt_array;	/* NB: Each list is ordered by TID address */
 } LVDeadTuple;
 
@@ -215,7 +211,7 @@ typedef struct LVScanDescData *LVScanDesc;
 
 /*
  * Vacuum relevant options and thresholds we need share with parallel
- * vacuum worker.
+ * vacuum workers.
  */
 typedef struct VacuumTask
 {
@@ -235,8 +231,8 @@ static TransactionId FreezeLimit;
 static MultiXactId MultiXactCutoff;
 
 static BufferAccessStrategy vac_strategy;
-static LVDeadTuple *MyDeadTuple = NULL;
-static VacWorker *MyVacWorker = NULL;
+static LVDeadTuple *MyDeadTuple = NULL; /* pointer to my dead tuple space */
+static VacWorker *MyVacWorker = NULL;	/* pointer to my vacuum worker state */
 
 /* non-export function prototypes */
 static void lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats);
@@ -570,23 +566,13 @@ vacuum_log_cleanup_info(Relation rel, LVRelStats *vacrelstats)
 }
 
 /*
- * Launch parallel vacuum workers specified by wnum and then enter the main
- * logic for arbiter process. After all worker finished, gather the vacuum
- * result of all vacuum workers. In parallel vacuum, All of vacuum workers
- * scan a relation using parallel heap scan description that is stored in
- * DSM tagged by VACUUM_KEY_PARALLEL_SCAN, and each vacuum worker is assigned
- * different indexes.  The vacuum relevant options and some threshoulds,
- * for example, OldestXmin, FreezeLimit and MultiXactCutoff, are stored in DSM
- * tagged by VACUUM_KEY_TASK.  Each worker has its own dead tuple array in
- * DSM tagged by VACUUM_KEY_DEAD_TUPLES. And information related to parallel
- * vacuum is stored in DSM tagged by VACUUM_KEY_PARALLEL_STATE. Updating index
- * statistics according to result of index vaucum can not be done by vacuum
- * worker, so we store such statistics into DSM tagged by VACUUM_KEY_INDEX_STATS
- * once, and the launcher process will update it later. The above six memory
- * spaces in DSM are shared by all of vacuum workers.
+ * Launch parallel vacuum workers specified by wnum and wait for all vacuum
+ * worker finish. Before launch vacuum worker, initialize dynamic shared memory
+ * and stores relevant data to it. After all worker finished, gather the vacuum
+ * statistics of all vacuum workers.
  *
  * The vacuum worker assigned to some indexes is responsible for vacuum on
- * index.
+ * assigned index.
  */
 static void
 parallel_lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
@@ -639,7 +625,7 @@ parallel_lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 }
 
 /*
- * Entry function of parallel vacuum worker.
+ * Entry point of parallel vacuum worker.
  */
 static void
 lazy_vacuum_worker(dsm_segment *seg, shm_toc *toc)
@@ -688,8 +674,9 @@ lazy_vacuum_worker(dsm_segment *seg, shm_toc *toc)
  *      worker reached to that point first need to wait for other vacuum workers
  *      reached to the same point.
  *
- *		This routine scans heap pages using parallel heap scan infrastructure
- *		if pscan is not NULL. Otherwise we use LVScanDesc instead.
+ *      In parallel lazy scan, pscan is not NULL and we get next page number
+ *      using parallel heap scan. We make two synchronization points at where
+ *      before reclaiming dead tuple actually and after reclaimed them.
  *
  *		If there are no indexes then we can reclaim line pointers on the fly;
  *		dead line pointers need only be retained until all index pointers that
@@ -801,9 +788,9 @@ lazy_scan_heap(LVRelStats *vacrelstats, Relation onerel, Relation *Irel,
 			int64		hvp_val[2];
 
 			/*
-			 * Here, scanning heap is done and going to reclaim dead tuples
-			 * actually. Because other vacuum worker might not finished yet,
-			 * we need to wait for other workers to finish.
+			 * Here scanning heap is done and we are going to reclaim dead
+			 * tuples actually. Because other vacuum worker could not finished
+			 * yet, we wait for all other workers finish.
 			 */
 			lazy_set_vacstate_and_wait_prepared(vacrelstats->pstate);
 #ifdef DEBUG_PARALLEL_VACUUM
@@ -830,7 +817,7 @@ lazy_scan_heap(LVRelStats *vacrelstats, Relation onerel, Relation *Irel,
 			pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
 										 PROGRESS_VACUUM_PHASE_VACUUM_INDEX);
 
-			/* Remove assidned index entries */
+			/* Remove assigned index entries */
 			for (i = 0; i < nindexes; i++)
 			{
 				if (IsAssignedIndex(i, vacrelstats->pstate->nworkers))
@@ -858,16 +845,16 @@ lazy_scan_heap(LVRelStats *vacrelstats, Relation onerel, Relation *Irel,
 			/*
 			 * Forget the now-vacuumed tuples, and press on, but be careful
 			 * not to reset latestRemovedXid since we want that value to be
-			 * valid. In parallel vacuum, we do that later process.
+			 * valid. In parallel lazy vacuum, we do that later process.
 			 */
 			if (vacrelstats->pstate == NULL)
 				lazy_clear_dead_tuple(vacrelstats);
 
 			/*
-			 * Here, we've done to vacuum on heap and going to begin the next
-			 * scan on heap. Wait until all vacuum worker to finished vacuum.
-			 * Once all vacuum worker finished, all of dead tuple array is cleared
-			 * by arbiter process.
+			 * Here we've done vacuum on the heap and index and we are going
+			 * to begin the next round scan on heap. Wait until all vacuum worker
+			 * finished vacuum. After all vacuum worker finished, all of dead
+			 * tuple array is cleared by a process.
 			 */
 			lazy_set_vacstate_and_wait_finished(vacrelstats);
 #ifdef DEBUG_PARALLEL_VACUUM
@@ -1899,9 +1886,9 @@ lazy_cleanup_index(Relation indrel,
 
 	/*
 	 * Now update statistics in pg_class, but only if the index says the count
-	 * is accurate.
-	 * In parallel lazy vacuum, the worker can not update these information by
-	 * itself, so save to DSM and then the launcher process will update it later.
+	 * is accurate. In parallel lazy vacuum, the worker can not update these
+	 * information by itself, so save to DSM and then the launcher process
+	 * updates it later.
 	 */
 	if (!stats->estimated_count)
 	{
@@ -2221,10 +2208,10 @@ count_nondeletable_pages(Relation onerel, LVRelStats *vacrelstats)
 /*
  * lazy_space_alloc - space allocation decisions for lazy vacuum
  *
- * If we are in parallel lazy vacuum then the space for dead tuple
- * locatons are already allocated in DSM, so we allocate space for
- * dead tuple locations in local memory only when in not parallel
- * lazy vacuum. Also set MyDeadTuple.
+ * In parallel lazy vacuum the space for dead tuple locations are already
+ * allocated in dynamic shared memory, so we allocate space for dead tuple
+ * locations in local memory only when in not parallel lazy vacuum and set
+ * MyDeadTuple.
  *
  * See the comments at the head of this file for rationale.
  */
@@ -2249,20 +2236,21 @@ lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks)
 	else
 	{
 		/*
-		 * Initialize the dead tuple array. LVDeadTuple array is structed at
-		 * the beggning of dead_tuples variable, so remaining area is used for
-		 * dead tuple array. The base variable points to the begnning of dead
-		 * tuple array.
+		 * In parallel lazy vacuum, we initialize the dead tuple array.
+		 * LVDeadTuple array is structed at the beginning of dead_tuples variable,
+		 * so remaining space can be used for dead tuple array. The dt_base variable
+		 * points to the beginning of dead tuple array.
 		 */
 
 		char *dt_base = (char *)vacrelstats->dead_tuples;
 		LVDeadTuple *dt = &(vacrelstats->dead_tuples[ParallelWorkerNumber]);
 
-		/* Adjust dt_base to the end of LVDeadTuple array */
+		/* Adjust dt_base to the beginning of dead tuple array */
 		dt_base += sizeof(LVDeadTuple) * vacrelstats->pstate->nworkers;
 		dt->dt_array = (ItemPointer)
 			(dt_base + sizeof(ItemPointerData) * vacrelstats->max_dead_tuples * ParallelWorkerNumber);
 
+		/* set MyDeadTuple */
 		MyDeadTuple = dt;
 
 		/* @@@ for debugging */
@@ -2291,9 +2279,8 @@ lazy_record_dead_tuple(LVRelStats *vacrelstats, ItemPointer itemptr)
 	if (MyDeadTuple->n_dt < vacrelstats->max_dead_tuples)
 	{
 		/*
-		 * In parallel vacuum, since each paralell vacuum worker has own
-		 * dead tuple array we don't need to do this exclusively even in
-		 * parallel vacuum.
+		 * In parallel lzy vacuum, since each parallel vacuum worker has
+		 * its own dead tuple array we don't need to do this exclusively.
 		 */
 		MyDeadTuple->dt_array[MyDeadTuple->n_dt] = *itemptr;
 		(MyDeadTuple->n_dt)++;
@@ -2309,8 +2296,8 @@ static void
 lazy_clear_dead_tuple(LVRelStats *vacrelstats)
 {
 	/*
-	 * In parallel vacuum, a parallel worker is responsible for
-	 * clearing all dead tuples. Note that we're assumed that only
+	 * In parallel lazy vacuum one of the parallel worker is responsible
+	 * for clearing all dead tuples. Note that we're assumed that only
 	 * one process touches the dead tuple array.
 	 */
 	if (vacrelstats->pstate != NULL && vacrelstats->nindexes != 0)
@@ -2358,10 +2345,10 @@ lazy_tid_reaped(ItemPointer itemptr, void *state)
 		vacrelstats->pstate->nworkers;
 
 	/*
-	 * In parallel vacuum, all dead tuple TID address is stored into
-	 * DSM together but entire that area is not order. However, since
-	 * each dead tuple that are used by corresponding vacuum worker is
-	 * ordered by TID address we can do bearch 'num' times.
+	 * In parallel lazy vacuum all dead tuple TID location are stored into
+	 * dynamic shared memory together and entire dead tuple arrays is not
+	 * ordered. However since each dead tuple array corresponding vacuum
+	 * worker is ordered by TID location we can search 'num' times.
 	 */
 	for (i = 0; i < num; i++)
 	{
@@ -2524,7 +2511,7 @@ heap_page_is_all_visible(Relation rel, Buffer buf,
 }
 
 /*
- * Return the block number we need to scan, or InvalidBlockNumber if scan
+ * Return the block number we need to scan next, or InvalidBlockNumber if scan
  * is done.
  *
  * Except when aggressive is set, we want to skip pages that are
@@ -2548,11 +2535,11 @@ heap_page_is_all_visible(Relation rel, Buffer buf,
  * nblocks if there's no such block.  We also set up the skipping_blocks
  * flag correctly at this stage.
  *
- * In parallel mode, we scan heap pages using parallel heap scan infrastructure.
- * Each worker calls heap_parallelscan_nextpage() in order to get exclusively
- * block number we need to scan at next. If given block is all-visible
- * according to visibility map, we skip to scan this block immediately unlike
- * not parallelly lazy scan.
+ * In parallel mode, vacrelstats->pstate is not NULL. We scan heap pages
+ * using parallel heap scan description. Each worker calls heap_parallelscan_nextpage()
+ * in order to exclusively get  block number we need to scan at next.
+ * If given block is all-visible according to visibility map, we skip to
+ * scan this block immediately unlike not parallelly lazy scan.
  *
  * Note: The value returned by visibilitymap_get_status could be slightly
  * out-of-date, since we make this test before reading the corresponding
@@ -2586,12 +2573,14 @@ lazy_scan_heap_get_nextpage(Relation onerel, LVRelStats *vacrelstats,
 	if (vacrelstats->pstate != NULL)
 	{
 		/*
-		 * In parallel vacuum, since it's hard to know how many consecutive all-visible
-		 * pages exits on this relation, we skip to scan the heap page immidiately.
+		 * In parallel lazy vacuum since it's hard to know how many consecutive
+		 * all-visible pages exits on table we skip to scan the heap page immediately.
+		 * if it is all-visible page.
 		 */
 		while ((blkno = heap_parallelscan_nextpage(lvscan->heapscan)) != InvalidBlockNumber)
 		{
 			*all_visible_according_to_vm = false;
+			vacuum_delay_point();
 
 			/* Consider to skip scan page according visibility map */
 			if ((options & VACOPT_DISABLE_PAGE_SKIPPING) == 0 &&
@@ -2615,7 +2604,7 @@ lazy_scan_heap_get_nextpage(Relation onerel, LVRelStats *vacrelstats,
 				{
 					if ((vmstatus & VISIBILITYMAP_ALL_VISIBLE) != 0)
 					{
-						if ((vmstatus & VISIBILITYMAP_ALL_FROZEN) == 0)
+						if ((vmstatus & VISIBILITYMAP_ALL_FROZEN) != 0)
 							vacrelstats->frozenskipped_pages++;
 						continue;
 					}
@@ -2849,7 +2838,7 @@ lazy_initialize_dsm(ParallelContext *pcxt, Relation onerel,
 	int dead_tuples_size;
 	int pstate_size;
 
-	/* Allocate and intialize DSM for parallel scan description */
+	/* Allocate and initialize DSM for parallel scan description */
 	pscan = (ParallelHeapScanDesc) shm_toc_allocate(pcxt->toc,
 													heap_parallelscan_estimate(SnapshotAny));
 
@@ -2880,7 +2869,7 @@ lazy_initialize_dsm(ParallelContext *pcxt, Relation onerel,
 	shm_toc_insert(pcxt->toc, VACUUM_KEY_INDEX_STATS, lvindstats);
 
 
-	/* Allocate and initialize DSM for paralle state */
+	/* Allocate and initialize DSM for parallel state */
 	pstate_size = sizeof(LVParallelState) + sizeof(VacWorker) * pcxt->nworkers;
 	pstate = (LVParallelState *) shm_toc_allocate(pcxt->toc, pstate_size);
 	shm_toc_insert(pcxt->toc, VACUUM_KEY_PARALLEL_STATE, pstate);
@@ -2947,8 +2936,8 @@ lazy_initialize_worker(shm_toc *toc, ParallelHeapScanDesc *pscan,
 }
 
 /*
- * Set my vacuum state exclusively and wait until its state is changed
- * by arbiter process.
+ * Set my vacuum state exclusively and wait until all vacuum workers
+ * finish vacuum.
  */
 static void
 lazy_set_vacstate_and_wait_finished(LVRelStats *vacrelstats)
@@ -2966,18 +2955,23 @@ lazy_set_vacstate_and_wait_finished(LVRelStats *vacrelstats)
 	/* Change my vacstate */
 	round = MyVacWorker->round;
 	MyVacWorker->state = VACSTATE_VACUUM_FINISHED;
-	//round = lazy_set_my_vacstate(pstate, VACSTATE_VACUUM_FINISHED, false, false);
 
-	/* If I'm a last worker to reached here */
+	/* Check all vacuum worker states */
 	n_count = lazy_count_vacstate_finished(pstate, round, &n_comp);
 
+	/*
+	 * If I'm a last running worker who has reached here then clear
+	 * dead tuple. Note that clearing dead tuple array must be done
+	 * by only one worker and during acquiring lock.
+	 */
 	if ((n_count + n_comp) == pstate->nworkers)
 		lazy_clear_dead_tuple(vacrelstats);
 
 	SpinLockRelease(&(pstate->mutex));
 
-	/* Sleep until my vacstate is changed to next state by arbiter process */
 	ConditionVariablePrepareToSleep(&(pstate->cv));
+
+	/* Wait for all of vacuum worker reached here */
 	while (!lazy_check_vacstate_finished(pstate, round))
 	{
 #ifdef DEBUG_PARALLEL_VACUUM
@@ -2992,6 +2986,7 @@ lazy_set_vacstate_and_wait_finished(LVRelStats *vacrelstats)
 	}
 	ConditionVariableCancelSleep();
 
+	/* For next round scan, change its state and increment round number */
 	lazy_set_my_vacstate(pstate, VACSTATE_SCANNING, true, false);
 
 	/* @@@ for debugging */
@@ -3001,6 +2996,10 @@ lazy_set_vacstate_and_wait_finished(LVRelStats *vacrelstats)
 #endif
 }
 
+/*
+ * Set my vacuum state exclusively and wait until all vacuum workers
+ * prepared vacuum.
+ */
 static void
 lazy_set_vacstate_and_wait_prepared(LVParallelState *pstate)
 {
@@ -3035,14 +3034,14 @@ lazy_set_vacstate_and_wait_prepared(LVParallelState *pstate)
 	fprintf(stderr, "[%d] worker prepared - %d resume\n",
 			MyProcPid, ParallelWorkerNumber);
 #endif
+
+	/* For next round scan, change its state */
 	lazy_set_my_vacstate(pstate, VACSTATE_VACUUMING, false, false);
 }
 
 /*
- * Set my vacstate. Since the arbiter process could touch all of vacstate
- * we need to get my vacstate exclusively. After set my state, wake other
- * waiting process if required. This process must be called by vacuum worker
- * process.
+ * Set my vacstate. After set state we increment its round and notice other
+ * waiting process if required. Return current its round number.
  */
 static uint32
 lazy_set_my_vacstate(LVParallelState *pstate, uint8 state, bool nextloop,
@@ -3050,7 +3049,7 @@ lazy_set_my_vacstate(LVParallelState *pstate, uint8 state, bool nextloop,
 {
 	uint32 round;
 
-	/* Quick exit if in not parallle vacuum */
+	/* Quick exit if in not parallel vacuum */
 	if (pstate == NULL)
 		return 0;
 
@@ -3060,12 +3059,14 @@ lazy_set_my_vacstate(LVParallelState *pstate, uint8 state, bool nextloop,
 
 	MyVacWorker->state = state;
 	round = MyVacWorker->round;
-	
-	SpinLockRelease(&(pstate->mutex));
 
+	/* Increment its round number */
 	if (nextloop)
 		(MyVacWorker->round)++;
 
+	SpinLockRelease(&(pstate->mutex));
+
+	/* Notice other waiting vacuum worker */
 	if (broadcast)
 		ConditionVariableBroadcast(&(pstate->cv));
 
@@ -3077,6 +3078,11 @@ lazy_set_my_vacstate(LVParallelState *pstate, uint8 state, bool nextloop,
 	return round;
 }
 
+/*
+ * Check if all vacuum worker has finished to scan heap and prepared to
+ * reclaim dead tuple. Return true if all vacuum worker has prepared.
+ * Otherwise return false.
+ */
 static bool
 lazy_check_vacstate_prepared(LVParallelState *pstate, uint32 round)
 {
@@ -3088,6 +3094,10 @@ lazy_check_vacstate_prepared(LVParallelState *pstate, uint32 round)
 
 	SpinLockAcquire(&(pstate->mutex));
 
+	/*
+	 * Count vacuum workers who are in coutable_state on same round and
+	 * who are in VACSTATE_COMPLETE state.
+	 */
 	for (i = 0; i < pstate->nworkers; i++)
 	{
 		VacWorker *vacworker = &(pstate->vacworkers[i]);
@@ -3108,6 +3118,10 @@ lazy_check_vacstate_prepared(LVParallelState *pstate, uint32 round)
 	return (n_count + n_comp) == pstate->nworkers;
 }
 
+/*
+ * Check if all vacuum worker has finished vacuum on table and index.
+ * Return true if all vacuum worker has finished. Otherwise return false.
+ */
 static bool
 lazy_check_vacstate_finished(LVParallelState *pstate, uint32 round)
 {
@@ -3125,9 +3139,10 @@ lazy_check_vacstate_finished(LVParallelState *pstate, uint32 round)
 }
 
 /*
- * Count the number of vacuum worker that is in the same state or is in
- * ahread state on next round.
- * Caller must hold mutex lock.
+ * When counting the number of vacuum worker who has finished to vacuum
+ * on table and index, some vacuum workers could proceed to subsequent
+ * state on next round. We count the number of vacuum worker who is in the same
+ * state or is in subsequent state on next round. Caller must hold mutex lock.
  */
 static int
 lazy_count_vacstate_finished(LVParallelState *pstate, uint32 round, int *n_complete)
@@ -3156,7 +3171,7 @@ lazy_count_vacstate_finished(LVParallelState *pstate, uint32 round, int *n_compl
 }
 
 /*
- * Return the number of maximun dead tuples can be stored accroding
+ * Return the number of maximum dead tuples can be stored according
  * to vac_work_mem.
  */
 static long
