@@ -5,7 +5,7 @@
  *	  commands.  At one time acted as an interface between the Lisp and C
  *	  systems.
  *
- * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -1479,7 +1479,13 @@ ProcessUtilitySlow(ParseState *pstate,
 				break;
 
 			case T_AlterTSConfigurationStmt:
-				address = AlterTSConfiguration((AlterTSConfigurationStmt *) parsetree);
+				AlterTSConfiguration((AlterTSConfigurationStmt *) parsetree);
+				/*
+				 * Commands are stashed in MakeConfigurationMapping and
+				 * DropConfigurationMapping, which are called from
+				 * AlterTSConfiguration
+				 */
+				commandCollected = true;
 				break;
 
 			case T_AlterTableMoveAllStmt:

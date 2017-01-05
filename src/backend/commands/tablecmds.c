@@ -3,7 +3,7 @@
  * tablecmds.c
  *	  Commands for creating and altering table structures and settings
  *
- * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -1184,7 +1184,7 @@ ExecuteTruncate(TruncateStmt *stmt)
 	{
 		RangeVar   *rv = lfirst(cell);
 		Relation	rel;
-		bool		recurse = interpretInhOption(rv->inhOpt);
+		bool		recurse = rv->inh;
 		Oid			myrelid;
 
 		rel = heap_openrv(rv, AccessExclusiveLock);
@@ -1324,6 +1324,7 @@ ExecuteTruncate(TruncateStmt *stmt)
 						  rel,
 						  0,	/* dummy rangetable index */
 						  false,
+						  NULL,
 						  0);
 		resultRelInfo++;
 	}
@@ -1604,8 +1605,8 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 	 * execute if the user attempts to create a table with hundreds of
 	 * thousands of columns.
 	 *
-	 * Note that we also need to check that any we do not exceed this figure
-	 * after including columns from inherited relations.
+	 * Note that we also need to check that we do not exceed this figure after
+	 * including columns from inherited relations.
 	 */
 	if (list_length(schema) > MaxHeapAttributeNumber)
 		ereport(ERROR,
@@ -2655,7 +2656,7 @@ renameatt(RenameStmt *stmt)
 		renameatt_internal(relid,
 						   stmt->subname,		/* old att name */
 						   stmt->newname,		/* new att name */
-						   interpretInhOption(stmt->relation->inhOpt),	/* recursive? */
+						   stmt->relation->inh, /* recursive? */
 						   false,		/* recursing? */
 						   0,	/* expected inhcount */
 						   stmt->behavior);
@@ -2807,7 +2808,8 @@ RenameConstraint(RenameStmt *stmt)
 		rename_constraint_internal(relid, typid,
 								   stmt->subname,
 								   stmt->newname,
-		 stmt->relation ? interpretInhOption(stmt->relation->inhOpt) : false,	/* recursive? */
+								   (stmt->relation &&
+									stmt->relation->inh),		/* recursive? */
 								   false,		/* recursing? */
 								   0 /* expected inhcount */ );
 
@@ -3049,9 +3051,7 @@ AlterTable(Oid relid, LOCKMODE lockmode, AlterTableStmt *stmt)
 
 	CheckTableNotInUse(rel, "ALTER TABLE");
 
-	ATController(stmt,
-				 rel, stmt->cmds, interpretInhOption(stmt->relation->inhOpt),
-				 lockmode);
+	ATController(stmt, rel, stmt->cmds, stmt->relation->inh, lockmode);
 }
 
 /*
@@ -10902,6 +10902,46 @@ MergeAttributesIntoExisting(Relation child_rel, Relation parent_rel)
 		}
 	}
 
+	/*
+	 * If the parent has an OID column, so must the child, and we'd better
+	 * update the child's attinhcount and attislocal the same as for normal
+	 * columns.  We needn't check data type or not-nullness though.
+	 */
+	if (tupleDesc->tdhasoid)
+	{
+		/*
+		 * Here we match by column number not name; the match *must* be the
+		 * system column, not some random column named "oid".
+		 */
+		tuple = SearchSysCacheCopy2(ATTNUM,
+							   ObjectIdGetDatum(RelationGetRelid(child_rel)),
+									Int16GetDatum(ObjectIdAttributeNumber));
+		if (HeapTupleIsValid(tuple))
+		{
+			Form_pg_attribute childatt = (Form_pg_attribute) GETSTRUCT(tuple);
+
+			/* See comments above; these changes should be the same */
+			childatt->attinhcount++;
+
+			if (child_is_partition)
+			{
+				Assert(childatt->attinhcount == 1);
+				childatt->attislocal = false;
+			}
+
+			simple_heap_update(attrrel, &tuple->t_self, tuple);
+			CatalogUpdateIndexes(attrrel, tuple);
+			heap_freetuple(tuple);
+		}
+		else
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_DATATYPE_MISMATCH),
+					 errmsg("child table is missing column \"%s\"",
+							"oid")));
+		}
+	}
+
 	heap_close(attrrel, RowExclusiveLock);
 }
 
@@ -12743,7 +12783,7 @@ transformPartitionSpec(Relation rel, PartitionSpec *partspec, char *strategy)
 	RangeTblEntry *rte;
 	ListCell   *l;
 
-	newspec = (PartitionSpec *) makeNode(PartitionSpec);
+	newspec = makeNode(PartitionSpec);
 
 	newspec->strategy = partspec->strategy;
 	newspec->location = partspec->location;
@@ -12996,7 +13036,6 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd)
 			   *existConstraint;
 	SysScanDesc scan;
 	ScanKeyData skey;
-	HeapTuple	tuple;
 	AttrNumber	attno;
 	int			natts;
 	TupleDesc	tupleDesc;
@@ -13018,7 +13057,7 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd)
 				 errmsg("\"%s\" is already a partition",
 						RelationGetRelationName(attachRel))));
 
-	if (attachRel->rd_rel->reloftype)
+	if (OidIsValid(attachRel->rd_rel->reloftype))
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("cannot attach a typed table as partition")));
@@ -13119,9 +13158,10 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd)
 		if (attribute->attisdropped)
 			continue;
 
-		/* Find same column in parent (matching on column name). */
-		tuple = SearchSysCacheCopyAttName(RelationGetRelid(rel), attributeName);
-		if (!HeapTupleIsValid(tuple))
+		/* Try to find the column in parent (matching on column name) */
+		if (!SearchSysCacheExists2(ATTNAME,
+								   ObjectIdGetDatum(RelationGetRelid(rel)),
+								   CStringGetDatum(attributeName)))
 			ereport(ERROR,
 					(errcode(ERRCODE_DATATYPE_MISMATCH),
 					 errmsg("table \"%s\" contains column \"%s\" not found in parent \"%s\"",
@@ -13151,7 +13191,7 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd)
 	 */
 	partConstraint = list_concat(get_qual_from_partbound(attachRel, rel,
 														 cmd->bound),
-								 RelationGetPartitionQual(rel, true));
+								 RelationGetPartitionQual(rel));
 	partConstraint = (List *) eval_const_expressions(NULL,
 													 (Node *) partConstraint);
 	partConstraint = (List *) canonicalize_qual((Expr *) partConstraint);
@@ -13167,7 +13207,6 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd)
 	 * There is a case in which we cannot rely on just the result of the
 	 * proof.
 	 */
-	tupleDesc = RelationGetDescr(attachRel);
 	attachRel_constr = tupleDesc->constr;
 	existConstraint = NIL;
 	if (attachRel_constr != NULL)
@@ -13246,7 +13285,7 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd)
 			skip_validate = true;
 
 		/*
-		 * We choose to err on the safer side, ie, give up on skipping the the
+		 * We choose to err on the safer side, i.e., give up on skipping the
 		 * validation scan, if the partition key column doesn't have the NOT
 		 * NULL constraint and the table is to become a list partition that
 		 * does not accept nulls.  In this case, the partition predicate
