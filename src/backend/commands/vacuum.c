@@ -195,6 +195,15 @@ vacuum(VacuumOptions options, RangeVar *relation, Oid relid, VacuumParams *param
 				 errmsg("VACUUM option DISABLE_PAGE_SKIPPING cannot be used with FULL")));
 
 	/*
+	 * Sanity check PARALLEL option.
+	 */
+	if ((options.flags & VACOPT_FULL) != 0 &&
+		(options.flags & VACOPT_PARALLEL) != 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("VACUUM option PARALLEL cannnot be used with FULL")));
+
+	/*
 	 * Send info about dead objects to the statistics collector, unless we are
 	 * in autovacuum --- autovacuum.c does this for itself.
 	 */
