@@ -1841,6 +1841,7 @@ lazy_vacuum_index(Relation indrel,
 {
 	IndexVacuumInfo ivinfo;
 	PGRUsage	ru0;
+	double total_n_dead_tuples = 0;
 
 	pg_rusage_init(&ru0);
 
@@ -1855,14 +1856,29 @@ lazy_vacuum_index(Relation indrel,
 	*stats = index_bulk_delete(&ivinfo, *stats,
 							   lazy_tid_reaped, (void *) vacrelstats);
 
+	/* Count total number of scanned tuples during index vacuum */
+	if (vacrelstats->pstate == NULL)
+		total_n_dead_tuples = MyDeadTuple->n_dt;
+	else
+	{
+		int i;
+
+		/*
+		 * Since there is no vacuum worker who updates dead tuple during
+		 * reclaim phase. We can read them without acquiring lock.
+		 */
+		for (i = 0; i < vacrelstats->pstate->nworkers; i++)
+			total_n_dead_tuples += (vacrelstats->dead_tuples[i]).n_dt;
+	}
+
 #ifdef DEBUG_PARALLEL_VACUUM
 	fprintf(stderr, "[%d] (%d) lazy_vacuum_index : remoted %d\n",
 			MyProcPid, ParallelWorkerNumber, MyDeadTuple->n_dt);
 #endif
 	ereport(elevel,
-			(errmsg("scanned index \"%s\" to remove %d row versions",
+			(errmsg("scanned index \"%s\" to remove %0.f row versions",
 					RelationGetRelationName(indrel),
-					MyDeadTuple->n_dt),
+					total_n_dead_tuples),
 			 errdetail("%s.", pg_rusage_show(&ru0))));
 }
 
@@ -2349,14 +2365,15 @@ lazy_tid_reaped(ItemPointer itemptr, void *state)
 	LVRelStats *vacrelstats = (LVRelStats *) state;
 	ItemPointer res;
 	int i;
-	int num = (vacrelstats->pstate == NULL) ? 1 :
-		vacrelstats->pstate->nworkers;
+	int num = (vacrelstats->pstate == NULL) ? 1 : vacrelstats->pstate->nworkers;
 
 	/*
 	 * In parallel lazy vacuum all dead tuple TID location are stored into
 	 * dynamic shared memory together and entire dead tuple arrays is not
 	 * ordered. However since each dead tuple array corresponding vacuum
-	 * worker is ordered by TID location we can search 'num' times.
+	 * worker is ordered by TID location we can search 'num' times. Here
+	 * since no write happends vacuum worker access the dead tuple array
+	 * without acquiring lock.
 	 */
 	for (i = 0; i < num; i++)
 	{
