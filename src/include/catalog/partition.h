@@ -4,7 +4,7 @@
  *		Header file for structures and utility functions related to
  *		partitioning
  *
- * Copyright (c) 2007-2016, PostgreSQL Global Development Group
+ * Copyright (c) 2007-2017, PostgreSQL Global Development Group
  *
  * src/include/catalog/partition.h
  *
@@ -47,6 +47,11 @@ typedef struct PartitionDescData *PartitionDesc;
  *	key			Partition key information of the table
  *	keystate	Execution state required for expressions in the partition key
  *	partdesc	Partition descriptor of the table
+ *	tupslot		A standalone TupleTableSlot initialized with this table's tuple
+ *				descriptor
+ *	tupmap		TupleConversionMap to convert from the parent's rowtype to
+ *				this table's rowtype (when extracting the partition key of a
+ *				tuple just before routing it through this table)
  *	indexes		Array with partdesc->nparts members (for details on what
  *				individual members represent, see how they are set in
  *				RelationGetPartitionDispatchInfo())
@@ -58,6 +63,8 @@ typedef struct PartitionDispatchData
 	PartitionKey			key;
 	List				   *keystate;	/* list of ExprState */
 	PartitionDesc			partdesc;
+	TupleTableSlot		   *tupslot;
+	TupleConversionMap	   *tupmap;
 	int					   *indexes;
 } PartitionDispatchData;
 
@@ -70,7 +77,7 @@ extern bool partition_bounds_equal(PartitionKey key,
 extern void check_new_partition_bound(char *relname, Relation parent, Node *bound);
 extern Oid get_partition_parent(Oid relid);
 extern List *get_qual_from_partbound(Relation rel, Relation parent, Node *bound);
-extern List *RelationGetPartitionQual(Relation rel, bool recurse);
+extern List *RelationGetPartitionQual(Relation rel);
 
 /* For tuple routing */
 extern PartitionDispatch *RelationGetPartitionDispatchInfo(Relation rel,

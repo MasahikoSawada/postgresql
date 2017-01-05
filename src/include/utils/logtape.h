@@ -5,7 +5,7 @@
  *
  * See logtape.c for explanations.
  *
- * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/utils/logtape.h
@@ -35,9 +35,9 @@ extern void LogicalTapeRewindForRead(LogicalTapeSet *lts, int tapenum,
 						 size_t buffer_size);
 extern void LogicalTapeRewindForWrite(LogicalTapeSet *lts, int tapenum);
 extern void LogicalTapeFreeze(LogicalTapeSet *lts, int tapenum);
-extern bool LogicalTapeBackspace(LogicalTapeSet *lts, int tapenum,
+extern size_t LogicalTapeBackspace(LogicalTapeSet *lts, int tapenum,
 					 size_t size);
-extern bool LogicalTapeSeek(LogicalTapeSet *lts, int tapenum,
+extern void LogicalTapeSeek(LogicalTapeSet *lts, int tapenum,
 				long blocknum, int offset);
 extern void LogicalTapeTell(LogicalTapeSet *lts, int tapenum,
 				long *blocknum, int *offset);

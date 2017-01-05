@@ -5,7 +5,7 @@
  *
  * Author: Magnus Hagander <magnus@hagander.net>
  *
- * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *		  src/bin/pg_basebackup/receivelog.c
@@ -679,7 +679,7 @@ ReceiveXlogStream(PGconn *conn, StreamCtl *stream)
 	}
 
 error:
-	if (walfile != NULL && stream->walmethod->close(walfile, CLOSE_NORMAL) != 0)
+	if (walfile != NULL && stream->walmethod->close(walfile, CLOSE_NO_RENAME) != 0)
 		fprintf(stderr, _("%s: could not close file \"%s\": %s\n"),
 		  progname, current_walfile_name, stream->walmethod->getlasterror());
 	walfile = NULL;

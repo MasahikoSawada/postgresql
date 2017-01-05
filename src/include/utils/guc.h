@@ -4,7 +4,7 @@
  * External declarations pertaining to backend/utils/misc/guc.c and
  * backend/utils/misc/guc-file.l
  *
- * Copyright (c) 2000-2016, PostgreSQL Global Development Group
+ * Copyright (c) 2000-2017, PostgreSQL Global Development Group
  * Written by Peter Eisentraut <peter_e@gmx.net>.
  *
  * src/include/utils/guc.h
@@ -244,7 +244,6 @@ extern bool log_btree_build_stats;
 
 extern PGDLLIMPORT bool check_function_bodies;
 extern bool default_with_oids;
-extern bool SQL_inheritance;
 
 extern int	log_min_error_statement;
 extern int	log_min_messages;

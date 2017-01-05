@@ -3,7 +3,7 @@
  * nodeModifyTable.c
  *	  routines to handle ModifyTable nodes.
  *
- * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -262,6 +262,7 @@ ExecInsert(ModifyTableState *mtstate,
 	Relation	resultRelationDesc;
 	Oid			newId;
 	List	   *recheckIndexes = NIL;
+	TupleTableSlot *oldslot = slot;
 
 	/*
 	 * get the heap tuple out of the tuple table slot, making sure we have a
@@ -318,7 +319,18 @@ ExecInsert(ModifyTableState *mtstate,
 		map = mtstate->mt_partition_tupconv_maps[leaf_part_index];
 		if (map)
 		{
+			Relation partrel = resultRelInfo->ri_RelationDesc;
+
 			tuple = do_convert_tuple(tuple, map);
+
+			/*
+			 * We must use the partition's tuple descriptor from this
+			 * point on, until we're finished dealing with the partition.
+			 * Use the dedicated slot for that.
+			 */
+			slot = mtstate->mt_partition_tuple_slot;
+			Assert(slot != NULL);
+			ExecSetSlotDescriptor(slot, RelationGetDescr(partrel));
 			ExecStoreTuple(tuple, slot, InvalidBuffer, true);
 		}
 	}
@@ -421,7 +433,7 @@ ExecInsert(ModifyTableState *mtstate,
 		 * Check the constraints of the tuple
 		 */
 		if (resultRelationDesc->rd_att->constr || resultRelInfo->ri_PartitionCheck)
-			ExecConstraints(resultRelInfo, slot, estate);
+			ExecConstraints(resultRelInfo, slot, oldslot, estate);
 
 		/* Remember to wrote on local node for foreign transaction */
 		RegisterTransactionLocalNode();
@@ -983,10 +995,12 @@ lreplace:;
 								 resultRelInfo, slot, estate);
 
 		/*
-		 * Check the constraints of the tuple
+		 * Check the constraints of the tuple.  Note that we pass the same
+		 * slot for the orig_slot argument, because unlike ExecInsert(), no
+		 * tuple-routing is performed here, hence the slot remains unchanged.
 		 */
 		if (resultRelationDesc->rd_att->constr || resultRelInfo->ri_PartitionCheck)
-			ExecConstraints(resultRelInfo, slot, estate);
+			ExecConstraints(resultRelInfo, slot, slot, estate);
 
 		/* Remember to wrote on local node for foreign transaction */
 		RegisterTransactionLocalNode();
@@ -1730,6 +1744,7 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 		PartitionDispatch  *partition_dispatch_info;
 		ResultRelInfo	   *partitions;
 		TupleConversionMap **partition_tupconv_maps;
+		TupleTableSlot	   *partition_tuple_slot;
 		int					num_parted,
 							num_partitions;
 
@@ -1737,12 +1752,14 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 									   &partition_dispatch_info,
 									   &partitions,
 									   &partition_tupconv_maps,
+									   &partition_tuple_slot,
 									   &num_parted, &num_partitions);
 		mtstate->mt_partition_dispatch_info = partition_dispatch_info;
 		mtstate->mt_num_dispatch = num_parted;
 		mtstate->mt_partitions = partitions;
 		mtstate->mt_num_partitions = num_partitions;
 		mtstate->mt_partition_tupconv_maps = partition_tupconv_maps;
+		mtstate->mt_partition_tuple_slot = partition_tuple_slot;
 	}
 
 	/*
@@ -2067,12 +2084,14 @@ ExecEndModifyTable(ModifyTableState *node)
 	 * Remember node->mt_partition_dispatch_info[0] corresponds to the root
 	 * partitioned table, which we must not try to close, because it is the
 	 * main target table of the query that will be closed by ExecEndPlan().
+	 * Also, tupslot is NULL for the root partitioned table.
 	 */
 	for (i = 1; i < node->mt_num_dispatch; i++)
 	{
 		PartitionDispatch pd = node->mt_partition_dispatch_info[i];
 
 		heap_close(pd->reldesc, NoLock);
+		ExecDropSingleTupleTableSlot(pd->tupslot);
 	}
 	for (i = 0; i < node->mt_num_partitions; i++)
 	{
@@ -2081,6 +2100,10 @@ ExecEndModifyTable(ModifyTableState *node)
 		ExecCloseIndices(resultRelInfo);
 		heap_close(resultRelInfo->ri_RelationDesc, NoLock);
 	}
+
+	/* Release the standalone partition tuple descriptor, if any */
+	if (node->mt_partition_tuple_slot)
+		ExecDropSingleTupleTableSlot(node->mt_partition_tuple_slot);
 
 	/*
 	 * Free the exprcontext
