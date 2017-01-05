@@ -60,7 +60,7 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] ANALYZE [ <replaceable class="PARAMETER">
    with normal reading and writing of the table, as an exclusive lock
    is not obtained.  However, extra space is not returned to the operating
    system (in most cases); it's just kept available for re-use within the
-  same table.  <command>VACUUM FULL</command> rewrites the entire contents
+   same table.  <command>VACUUM FULL</command> rewrites the entire contents
    of the table into a new disk file with no extra space, allowing unused
    space to be returned to the operating system.  This form is much slower and
    requires an exclusive lock on each table while it is being processed.

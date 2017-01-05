@@ -24,16 +24,21 @@
  * the TID array, just enough to hold as many heap tuples as fit on one page.
  *
  * In PostgreSQL 10, we support parallel option for lazy vacuum. In parallel
- * lazy vacuum the multiple vacuum workers parallelly get page number using
- * parallel heap scan and process it. The spaces for the array of dead tuple
- * TIDs of each worker are allocated in dynamic shared memory before parallel
- * lazy vacuum begins by launcher process. Each indexes on table is assigned
- * to a vacuum worker. That is, the number of assigned indexes could be different
- * between vacuum workers. In case where table has index, all of vacuum workers
- * make two synchronization points at where before reclaiming dead tuple TIDs
- * actually and after reclaimed them using condition variables. After all of
- * vacuum worker finished, the launcher process gathers the lazy vacuum statistics
- * and update them.
+ * lazy vacuum the multiple vacuum worker processes get page number parallelly
+ * using parallel heap scan and process it.  The memory spaces for the array
+ * of dead tuple TIDs of each worker are allocated in dynamic shared memory in
+ * advance by launcher process.  The vacuum workers has its vacuum state and
+ * round.  Since the vacuum state is the cyclical state the round value indicates
+ * how many laps vacuum worker did so far.  Vacuum worker increments its
+ * round after finished the reclaim phase. If table has index, each indexes on
+ * table is assigned to each vacuum worker.  That is, the number of indexes
+ * assigned could be different between vacuum workers.  Because the dead tuple
+ * TIDs need to be shared with all vacuum worker in order to reclaim index
+ * garbage and be cleared after all vacuum worker finished reclaim phase,
+ * vacuum worker synchronizes other vacuum workers at two points where before
+ * reclaim phase begins and where after reclaim phase finished.  After all of
+ * vacuum worker finished to work, the launcher process gathers the lazy vacuum
+ * statistics and update them.
  *
  * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -144,17 +149,17 @@ typedef struct LVIndStats
 } LVIndStats;
 
 /* Vacuum worker state */
-#define VACSTATE_STARTUP			0x01
-#define VACSTATE_SCANNING			0x02
-#define VACSTATE_VACUUM_PREPARED	0x04
-#define VACSTATE_VACUUMING			0x08
-#define VACSTATE_VACUUM_FINISHED	0x10
-#define VACSTATE_COMPLETE			0x20
+#define VACSTATE_STARTUP			0x01	/* startup state */
+#define VACSTATE_SCANNING			0x02	/* heap scan phase */
+#define VACSTATE_VACUUM_PREPARED	0x04	/* finished to scan heap */
+#define VACSTATE_VACUUMING			0x08	/* vacuuming on table and index */
+#define VACSTATE_VACUUM_FINISHED	0x10	/* finished to vacuum */
+#define VACSTATE_COMPLETE			0x20	/* complete to vacuum */
 
 typedef struct VacWorker
 {
 	uint8 state;	/* current state of vacuum worker */
-	uint32 round;	/* current round number */
+	uint32 round;	/* current laps */
 } VacWorker;
 
 typedef struct LVParallelState
@@ -199,13 +204,16 @@ typedef struct LVRelStats
 	LVParallelState *pstate;
 } LVRelStats;
 
-/* Scan description data for lazy vacuum */
+/*
+ * Scan description data for lazy vacuum. In parallel lazy vacuum,
+ * we use only heapscan instead.
+ */
 typedef struct LVScanDescData
 {
 	BlockNumber lv_cblock;					/* current scanning block number */
-	BlockNumber lv_next_unskippable_block;	/* block number we should scan */
+	BlockNumber lv_next_unskippable_block;	/* next block number we cannot skip */
 	BlockNumber lv_nblocks;					/* the number blocks of relation */
-	HeapScanDesc heapscan;					/* Field for parallel lazy vacuum */
+	HeapScanDesc heapscan;					/* field for parallel lazy vacuum */
 } LVScanDescData;
 typedef struct LVScanDescData *LVScanDesc;
 
@@ -215,7 +223,7 @@ typedef struct LVScanDescData *LVScanDesc;
  */
 typedef struct VacuumTask
 {
-	int				options;
+	int				options;	/* VACUUM optoins */
 	bool			aggressive;	/* does each worker need to aggressive vacuum? */
 	TransactionId	oldestxmin;
 	TransactionId	freezelimit;
@@ -231,6 +239,7 @@ static TransactionId FreezeLimit;
 static MultiXactId MultiXactCutoff;
 
 static BufferAccessStrategy vac_strategy;
+
 static LVDeadTuple *MyDeadTuple = NULL; /* pointer to my dead tuple space */
 static VacWorker *MyVacWorker = NULL;	/* pointer to my vacuum worker state */
 
@@ -1546,7 +1555,7 @@ lazy_gather_vacuum_stats(ParallelContext *pcxt, LVRelStats *vacrelstats,
 
 	/* all vacuum worker has same value of rel_pages */
 	vacrelstats->rel_pages = lvstats_list->rel_pages;
-	
+
 	/* Copy index vacuum statistics on DSM to local memory */
 	memcpy(vacindstats, lvindstats_list, sizeof(LVIndStats) * vacrelstats->nindexes);
 }
@@ -1677,8 +1686,7 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
  */
 static int
 lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
-				 int tupindex, LVRelStats *vacrelstats,
-				 Buffer *vmbuffer)
+				 int tupindex, LVRelStats *vacrelstats, Buffer *vmbuffer)
 {
 	Page		page = BufferGetPage(buffer);
 	OffsetNumber unused[MaxOffsetNumber];
