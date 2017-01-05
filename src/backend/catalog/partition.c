@@ -122,7 +122,7 @@ static List *get_qual_for_list(PartitionKey key, PartitionBoundSpec *spec);
 static List *get_qual_for_range(PartitionKey key, PartitionBoundSpec *spec);
 static Oid get_partition_operator(PartitionKey key, int col,
 					   StrategyNumber strategy, bool *need_relabel);
-static List *generate_partition_qual(Relation rel, bool recurse);
+static List *generate_partition_qual(Relation rel);
 
 static PartitionRangeBound *make_one_range_bound(PartitionKey key, int index,
 					 List *datums, bool lower);
@@ -200,6 +200,8 @@ RelationBuildPartitionDesc(Relation rel)
 		Node	   *boundspec;
 
 		tuple = SearchSysCache1(RELOID, inhrelid);
+		if (!HeapTupleIsValid(tuple))
+			elog(ERROR, "cache lookup failed for relation %u", inhrelid);
 
 		/*
 		 * It is possible that the pg_class tuple of a partition has not been
@@ -914,13 +916,13 @@ get_qual_from_partbound(Relation rel, Relation parent, Node *bound)
  * Returns a list of partition quals
  */
 List *
-RelationGetPartitionQual(Relation rel, bool recurse)
+RelationGetPartitionQual(Relation rel)
 {
 	/* Quick exit */
 	if (!rel->rd_rel->relispartition)
 		return NIL;
 
-	return generate_partition_qual(rel, recurse);
+	return generate_partition_qual(rel);
 }
 
 /*
@@ -1480,7 +1482,7 @@ get_partition_operator(PartitionKey key, int col, StrategyNumber strategy,
  * into cache memory.
  */
 static List *
-generate_partition_qual(Relation rel, bool recurse)
+generate_partition_qual(Relation rel)
 {
 	HeapTuple	tuple;
 	MemoryContext oldcxt;
@@ -1501,8 +1503,8 @@ generate_partition_qual(Relation rel, bool recurse)
 	/* Quick copy */
 	if (rel->rd_partcheck)
 	{
-		if (parent->rd_rel->relispartition && recurse)
-			result = list_concat(generate_partition_qual(parent, true),
+		if (parent->rd_rel->relispartition)
+			result = list_concat(generate_partition_qual(parent),
 								 copyObject(rel->rd_partcheck));
 		else
 			result = copyObject(rel->rd_partcheck);
@@ -1516,6 +1518,10 @@ generate_partition_qual(Relation rel, bool recurse)
 		elog(ERROR, "relation \"%s\" has relispartition = false",
 			 RelationGetRelationName(rel));
 	tuple = SearchSysCache1(RELOID, RelationGetRelid(rel));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for relation %u",
+			 RelationGetRelid(rel));
+
 	boundDatum = SysCacheGetAttr(RELOID, tuple,
 								 Anum_pg_class_relpartbound,
 								 &isnull);
@@ -1528,11 +1534,11 @@ generate_partition_qual(Relation rel, bool recurse)
 	my_qual = get_qual_from_partbound(rel, parent, bound);
 
 	/* If requested, add parent's quals to the list (if any) */
-	if (parent->rd_rel->relispartition && recurse)
+	if (parent->rd_rel->relispartition)
 	{
 		List	   *parent_check;
 
-		parent_check = generate_partition_qual(parent, true);
+		parent_check = generate_partition_qual(parent);
 		result = list_concat(parent_check, my_qual);
 	}
 	else

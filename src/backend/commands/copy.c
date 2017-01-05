@@ -161,11 +161,14 @@ typedef struct CopyStateData
 	ExprState **defexprs;		/* array of default att expressions */
 	bool		volatile_defexprs;		/* is any of defexprs volatile? */
 	List	   *range_table;
+
 	PartitionDispatch *partition_dispatch_info;
-	int			num_dispatch;
-	int			num_partitions;
-	ResultRelInfo *partitions;
+	int			num_dispatch;		/* Number of entries in the above array */
+	int			num_partitions;		/* Number of members in the following
+									 * arrays */
+	ResultRelInfo  *partitions;		/* Per partition result relation */
 	TupleConversionMap **partition_tupconv_maps;
+	TupleTableSlot *partition_tuple_slot;
 
 	/*
 	 * These variables are used to reduce overhead in textual COPY FROM.
@@ -1409,6 +1412,7 @@ BeginCopy(ParseState *pstate,
 			PartitionDispatch  *partition_dispatch_info;
 			ResultRelInfo	   *partitions;
 			TupleConversionMap **partition_tupconv_maps;
+			TupleTableSlot	   *partition_tuple_slot;
 			int					num_parted,
 								num_partitions;
 
@@ -1416,12 +1420,14 @@ BeginCopy(ParseState *pstate,
 										   &partition_dispatch_info,
 										   &partitions,
 										   &partition_tupconv_maps,
+										   &partition_tuple_slot,
 										   &num_parted, &num_partitions);
 			cstate->partition_dispatch_info = partition_dispatch_info;
 			cstate->num_dispatch = num_parted;
 			cstate->partitions = partitions;
 			cstate->num_partitions = num_partitions;
 			cstate->partition_tupconv_maps = partition_tupconv_maps;
+			cstate->partition_tuple_slot = partition_tuple_slot;
 		}
 	}
 	else
@@ -2420,6 +2426,7 @@ CopyFrom(CopyState cstate)
 					  cstate->rel,
 					  1,		/* dummy rangetable index */
 					  true,		/* do load partition check expression */
+					  NULL,
 					  0);
 
 	ExecOpenIndices(resultRelInfo, false);
@@ -2434,15 +2441,6 @@ CopyFrom(CopyState cstate)
 	ExecSetSlotDescriptor(myslot, tupDesc);
 	/* Triggers might need a slot as well */
 	estate->es_trig_tuple_slot = ExecInitExtraTupleSlot(estate);
-
-	/*
-	 * Initialize a dedicated slot to manipulate tuples of any given
-	 * partition's rowtype.
-	 */
-	if (cstate->partition_dispatch_info)
-		estate->es_partition_tuple_slot = ExecInitExtraTupleSlot(estate);
-	else
-		estate->es_partition_tuple_slot = NULL;
 
 	/*
 	 * It's more efficient to prepare a bunch of tuples for insertion, and
@@ -2494,7 +2492,7 @@ CopyFrom(CopyState cstate)
 	for (;;)
 	{
 		TupleTableSlot *slot,
-					   *oldslot = NULL;
+					   *oldslot;
 		bool		skip_tuple;
 		Oid			loaded_oid = InvalidOid;
 
@@ -2536,6 +2534,7 @@ CopyFrom(CopyState cstate)
 		ExecStoreTuple(tuple, slot, InvalidBuffer, false);
 
 		/* Determine the partition to heap_insert the tuple into */
+		oldslot = slot;
 		if (cstate->partition_dispatch_info)
 		{
 			int			leaf_part_index;
@@ -2590,8 +2589,7 @@ CopyFrom(CopyState cstate)
 				 * point on.  Use a dedicated slot from this point on until
 				 * we're finished dealing with the partition.
 				 */
-				oldslot = slot;
-				slot = estate->es_partition_tuple_slot;
+				slot = cstate->partition_tuple_slot;
 				Assert(slot != NULL);
 				ExecSetSlotDescriptor(slot, RelationGetDescr(partrel));
 				ExecStoreTuple(tuple, slot, InvalidBuffer, true);
@@ -2627,7 +2625,7 @@ CopyFrom(CopyState cstate)
 				/* Check the constraints of the tuple */
 				if (cstate->rel->rd_att->constr ||
 					resultRelInfo->ri_PartitionCheck)
-					ExecConstraints(resultRelInfo, slot, estate);
+					ExecConstraints(resultRelInfo, slot, oldslot, estate);
 
 				if (useHeapMultiInsert)
 				{
@@ -2689,10 +2687,6 @@ CopyFrom(CopyState cstate)
 			{
 				resultRelInfo = saved_resultRelInfo;
 				estate->es_result_relation_info = resultRelInfo;
-
-				/* Switch back to the slot corresponding to the root table */
-				Assert(oldslot != NULL);
-				slot = oldslot;
 			}
 		}
 	}
@@ -2756,6 +2750,9 @@ CopyFrom(CopyState cstate)
 			ExecCloseIndices(resultRelInfo);
 			heap_close(resultRelInfo->ri_RelationDesc, NoLock);
 		}
+
+		/* Release the standalone partition tuple descriptor */
+		ExecDropSingleTupleTableSlot(cstate->partition_tuple_slot);
 	}
 
 	FreeExecutorState(estate);
