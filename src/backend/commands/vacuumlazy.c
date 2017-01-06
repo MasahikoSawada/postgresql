@@ -647,8 +647,10 @@ lazy_vacuum_worker(dsm_segment *seg, shm_toc *toc)
 	Relation *indrel;
 	int nindexes_worker;
 
+#ifdef DEBUG_PARALLEL_VACUUM
 	fprintf(stderr, " worker %d %d\n", MyProcPid, ParallelWorkerNumber);
 	//pg_usleep(10 * 1000L * 1000L);
+#endif
 
 	/* Look up and initialize information and task */
 	lazy_initialize_worker(toc, &pscan, &vacrelstats, &options,
@@ -714,7 +716,7 @@ lazy_scan_heap(LVRelStats *vacrelstats, Relation onerel, Relation *Irel,
 	Buffer		vmbuffer = InvalidBuffer;
 	xl_heap_freeze_tuple *frozen;
 	StringInfoData buf;
-	bool		all_visible_according_to_vm;
+	bool		all_visible_according_to_vm = false;
 
 	const int	initprog_index[] = {
 		PROGRESS_VACUUM_PHASE,
@@ -1483,6 +1485,7 @@ lazy_scan_heap(LVRelStats *vacrelstats, Relation onerel, Relation *Irel,
 
 	lv_endscan(lvscan);
 
+#ifdef DEBUG_PARALLEL_VACUUM
 	/* @@@ for debug */
 	ereport(elevel,
 			(errmsg("(%d) scanned pages %u, scanned tuples %0.f, vacuumed page %u, vacuumed_tuples %0.f, new dead tuple %0.f, num index scan %d",
@@ -1493,6 +1496,7 @@ lazy_scan_heap(LVRelStats *vacrelstats, Relation onerel, Relation *Irel,
 					vacrelstats->tuples_deleted,
 					vacrelstats->new_dead_tuples,
 					vacrelstats->num_index_scans)));
+#endif
 
 	/*
 	 * This is pretty messy, but we split it up so that we can skip emitting
