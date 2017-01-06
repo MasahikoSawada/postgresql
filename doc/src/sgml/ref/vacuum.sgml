@@ -137,8 +137,8 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] ANALYZE [ <replaceable class="PARAMETER">
       </replaceable> background workers. Collecting garbage on table is processed
       in block-level parallel. For tables with indexes, parallel vacuum assigns each
       index to each parallel vacuum worker and all garbages on a index are processed
-      by particular parallel vacuum worker. This option can not use with
-      <literal>FULL</> option.
+      by particular parallel vacuum worker. This option can not use with <literal>FULL</>
+      option.
      </para>
     </listitem>
    </varlistentry>
