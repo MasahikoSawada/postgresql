@@ -133,9 +133,12 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] ANALYZE [ <replaceable class="PARAMETER">
     <term><literal>PARALLEL <replaceable class="PARAMETER">N</replaceable></literal></term>
     <listitem>
      <para>
-      Execute <command>VACUUM</command> parallelly with <replaceable class="PARAMETER">N
-      </replaceable> parallel workers. This option can not use
-      with <literal>FULL</>.
+      Execute <command>VACUUM</command> in parallel by <replaceable class="PARAMETER">N
+      </replaceable> background workers. Collecting garbage on table is processed
+      in parallel per block. For tables with indexes, parallel vacuum assigns each index
+      to each parallel vacuum worker and all garbages on a index are processed by
+      particular parallel vacuum worker. <replaceable classThis option can not use
+      with <literal>FULL</> option.
      </para>
     </listitem>
    </varlistentry>
