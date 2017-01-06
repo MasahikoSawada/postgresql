@@ -178,7 +178,7 @@ static void processCASbits(int cas_bits, int location, const char *constrType,
 			   bool *deferrable, bool *initdeferred, bool *not_valid,
 			   bool *no_inherit, core_yyscan_t yyscanner);
 static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
-static VacuumOptions *processVacOpt(VacuumOption opt, int nworkers);
+static VacuumOptions *makeVacOpt(VacuumOption opt, int nworkers);
 
 %}
 
@@ -9722,7 +9722,7 @@ cluster_index_specification:
 VacuumStmt: VACUUM opt_full opt_freeze opt_verbose
 				{
 					VacuumStmt *n = makeNode(VacuumStmt);
-					VacuumOptions *vacopts = processVacOpt(VACOPT_VACUUM, 1);
+					VacuumOptions *vacopts = makeVacOpt(VACOPT_VACUUM, 1);
 					if ($2)
 						vacopts->flags |= VACOPT_FULL;
 					if ($3)
@@ -9732,15 +9732,15 @@ VacuumStmt: VACUUM opt_full opt_freeze opt_verbose
 
 					n->options.flags = vacopts->flags;
 					n->options.nworkers = 1;
-					pfree(vacopts);
 					n->relation = NULL;
 					n->va_cols = NIL;
 					$$ = (Node *)n;
+					pfree(vacopts);
 				}
 			| VACUUM opt_full opt_freeze opt_verbose qualified_name
 				{
 					VacuumStmt *n = makeNode(VacuumStmt);
-					VacuumOptions *vacopts = processVacOpt(VACOPT_VACUUM, 1);
+					VacuumOptions *vacopts = makeVacOpt(VACOPT_VACUUM, 1);
 					if ($2)
 						vacopts->flags |= VACOPT_FULL;
 					if ($3)
@@ -9750,25 +9750,22 @@ VacuumStmt: VACUUM opt_full opt_freeze opt_verbose
 
 					n->options.flags = vacopts->flags;
 					n->options.nworkers = 1;
-					pfree(vacopts);
 					n->relation = $5;
 					n->va_cols = NIL;
 					$$ = (Node *)n;
+					pfree(vacopts);
 				}
 			| VACUUM opt_full opt_freeze opt_verbose AnalyzeStmt
 				{
 					VacuumStmt *n = (VacuumStmt *) $5;
-					VacuumOptions *vacopts = processVacOpt(VACOPT_VACUUM, 1);
+					n->options.flags |= VACOPT_VACUUM;
 					if ($2)
-						vacopts->flags |= VACOPT_FULL;
+						n->options.flags |= VACOPT_FULL;
 					if ($3)
-						vacopts->flags |= VACOPT_FREEZE;
+						n->options.flags |= VACOPT_FREEZE;
 					if ($4)
-						vacopts->flags |= VACOPT_VERBOSE;
-
-					n->options.flags = vacopts->flags;
+						n->options.flags |= VACOPT_VERBOSE;
 					n->options.nworkers = 1;
-					pfree(vacopts);
 					$$ = (Node *)n;
 				}
 			| VACUUM '(' vacuum_option_list ')'
@@ -9808,16 +9805,16 @@ vacuum_option_list:
 				if (vacopts1->nworkers < vacopts2->nworkers)
 					vacopts1->nworkers = vacopts2->nworkers;
 
-				pfree(vacopts2);
 				$$ = vacopts1;
+				pfree(vacopts2);
 			}
 		;
 
 vacuum_option_elem:
-			analyze_keyword		{ $$ = processVacOpt(VACOPT_ANALYZE, 1); }
-			| VERBOSE			{ $$ = processVacOpt(VACOPT_VERBOSE, 1); }
-			| FREEZE			{ $$ = processVacOpt(VACOPT_FREEZE, 1); }
-			| FULL				{ $$ = processVacOpt(VACOPT_FULL, 1); }
+			analyze_keyword		{ $$ = makeVacOpt(VACOPT_ANALYZE, 1); }
+			| VERBOSE			{ $$ = makeVacOpt(VACOPT_VERBOSE, 1); }
+			| FREEZE			{ $$ = makeVacOpt(VACOPT_FREEZE, 1); }
+			| FULL				{ $$ = makeVacOpt(VACOPT_FULL, 1); }
 			| PARALLEL ICONST
 				{
 					if ($2 < 1)
@@ -9825,12 +9822,12 @@ vacuum_option_elem:
 								(errcode(ERRCODE_SYNTAX_ERROR),
 								 errmsg("parallel vacuum degree must be more than 1"),
 								 parser_errposition(@1)));
-					$$ = processVacOpt(VACOPT_PARALLEL, $2);
+					$$ = makeVacOpt(VACOPT_PARALLEL, $2);
 				}
 			| IDENT
 				{
 					if (strcmp($1, "disable_page_skipping") == 0)
-						$$ = processVacOpt(VACOPT_DISABLE_PAGE_SKIPPING, 1);
+						$$ = makeVacOpt(VACOPT_DISABLE_PAGE_SKIPPING, 1);
 					else
 						ereport(ERROR,
 								(errcode(ERRCODE_SYNTAX_ERROR),
@@ -9842,32 +9839,32 @@ AnalyzeStmt:
 			analyze_keyword opt_verbose
 				{
 					VacuumStmt *n = makeNode(VacuumStmt);
-					VacuumOptions *vacopts = processVacOpt(VACOPT_ANALYZE, 1);
+					VacuumOptions *vacopts = makeVacOpt(VACOPT_ANALYZE, 1);
 
 					if ($2)
 						vacopts->flags |= VACOPT_VERBOSE;
 
 					n->options.flags = vacopts->flags;
 					n->options.nworkers = 1;
-					pfree(vacopts);
 					n->relation = NULL;
 					n->va_cols = NIL;
 					$$ = (Node *)n;
+					pfree(vacopts);
 				}
 			| analyze_keyword opt_verbose qualified_name opt_name_list
 				{
 					VacuumStmt *n = makeNode(VacuumStmt);
-					VacuumOptions *vacopts = processVacOpt(VACOPT_ANALYZE, 1);
+					VacuumOptions *vacopts = makeVacOpt(VACOPT_ANALYZE, 1);
 
 					if ($2)
 						vacopts->flags |= VACOPT_VERBOSE;
 
 					n->options.flags = vacopts->flags;
 					n->options.nworkers = 1;
-					pfree(vacopts);
 					n->relation = $3;
 					n->va_cols = $4;
 					$$ = (Node *)n;
+					pfree(vacopts);
 				}
 		;
 
@@ -15334,7 +15331,7 @@ makeRecursiveViewSelect(char *relname, List *aliases, Node *query)
 }
 
 static VacuumOptions *
-processVacOpt(VacuumOption opt, int nworkers)
+makeVacOpt(VacuumOption opt, int nworkers)
 {
 	VacuumOptions *vacopts = palloc(sizeof(VacuumOptions));
 
