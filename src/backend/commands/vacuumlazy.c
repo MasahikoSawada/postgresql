@@ -391,7 +391,7 @@ lazy_vacuum_rel(Relation onerel, VacuumOptions options, VacuumParams *params,
 
 		/* Do the vacuuming in parallel */
 		parallel_lazy_scan_heap(onerel, vacrelstats, options.flags, aggressive,
-								options.nworkers - 1);
+								options.nworkers);
 	}
 	else
 	{
@@ -673,13 +673,13 @@ lazy_vacuum_worker(dsm_segment *seg, shm_toc *toc)
  *		all-visible if appropriate.  When done, or when we run low on space for
  *		dead-tuple TIDs, invoke vacuuming of assigned indexes and call lazy_vacuum_heap
  *		to reclaim dead line pointers. In parallel vacuum, we need to synchronize
- *      at where scanning heap finished and vacuuming heap finished. The vacuum
- *      worker reached to that point first need to wait for other vacuum workers
- *      reached to the same point.
+ *		at where scanning heap finished and vacuuming heap finished. The vacuum
+ *		worker reached to that point first need to wait for other vacuum workers
+ *		reached to the same point.
  *
- *      In parallel lazy scan, pscan is not NULL and we get next page number
- *      using parallel heap scan. We make two synchronization points at where
- *      before reclaiming dead tuple actually and after reclaimed them.
+ *		In parallel lazy scan, pscan is not NULL and we get next page number
+ *		using parallel heap scan. We make two synchronization points at where
+ *		before reclaiming dead tuple actually and after reclaimed them.
  *
  *		If there are no indexes then we can reclaim line pointers on the fly;
  *		dead line pointers need only be retained until all index pointers that
