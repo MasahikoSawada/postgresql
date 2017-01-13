@@ -623,7 +623,7 @@ main(int argc, char **argv)
 		|| numWorkers > MAXIMUM_WAIT_OBJECTS
 #endif
 		)
-		exit_horribly(NULL, "%s: invalid number of parallel jobs\n", progname);
+		exit_horribly(NULL, "invalid number of parallel jobs\n");
 
 	/* Parallel backup only in the directory archive format so far */
 	if (archiveFormat != archDirectory && numWorkers > 1)
@@ -1216,7 +1216,7 @@ expand_schema_name_patterns(Archive *fout,
 
 		res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
 		if (strict_names && PQntuples(res) == 0)
-			exit_horribly(NULL, "no matching tables were found for pattern \"%s\"\n", cell->val);
+			exit_horribly(NULL, "no matching schemas were found for pattern \"%s\"\n", cell->val);
 
 		for (i = 0; i < PQntuples(res); i++)
 		{
@@ -5643,6 +5643,9 @@ getOwnedSeqs(Archive *fout, TableInfo tblinfo[], int numTables)
 			continue;			/* not an owned sequence */
 
 		owning_tab = findTableByOid(seqinfo->owning_tab);
+		if (owning_tab == NULL)
+			exit_horribly(NULL, "failed sanity check, parent table OID %u of sequence OID %u not found\n",
+						  seqinfo->owning_tab, seqinfo->dobj.catId.oid);
 
 		/*
 		 * We need to dump the components that are being dumped for the table
@@ -15583,7 +15586,11 @@ dumpSequence(Archive *fout, TableInfo *tbinfo)
 	{
 		TableInfo  *owning_tab = findTableByOid(tbinfo->owning_tab);
 
-		if (owning_tab && owning_tab->dobj.dump & DUMP_COMPONENT_DEFINITION)
+		if (owning_tab == NULL)
+			exit_horribly(NULL, "failed sanity check, parent table OID %u of sequence OID %u not found\n",
+						  tbinfo->owning_tab, tbinfo->dobj.catId.oid);
+
+		if (owning_tab->dobj.dump & DUMP_COMPONENT_DEFINITION)
 		{
 			resetPQExpBuffer(query);
 			appendPQExpBuffer(query, "ALTER SEQUENCE %s",
