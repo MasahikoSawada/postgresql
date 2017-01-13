@@ -2238,6 +2238,9 @@ PrepareTransaction(void)
 	 * the transaction-abort path.
 	 */
 
+	/* Prepare step for foreign transactions */
+	AtPrepare_FDWXacts();
+
 	/* Shut down the deferred-trigger manager */
 	AfterTriggerEndXact(true);
 
@@ -2335,7 +2338,6 @@ PrepareTransaction(void)
 	AtPrepare_PgStat();
 	AtPrepare_MultiXact();
 	AtPrepare_RelationMap();
-	AtPrepare_FDWXacts();
 
 	/*
 	 * Here is where we really truly prepare.
