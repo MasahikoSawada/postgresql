@@ -11,7 +11,7 @@
  * Note: This file must be includable in both frontend and backend contexts,
  * to allow stand-alone tools like pg_receivexlog to deal with WAL files.
  *
- * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/access/xlog_internal.h
@@ -284,8 +284,8 @@ extern const RmgrData RmgrTable[];
 /*
  * Exported to support xlog switching from checkpointer
  */
-extern pg_time_t GetLastSegSwitchTime(void);
-extern XLogRecPtr RequestXLogSwitch(void);
+extern pg_time_t GetLastSegSwitchData(XLogRecPtr *lastSwitchLSN);
+extern XLogRecPtr RequestXLogSwitch(bool mark_uninmportant);
 
 extern void GetOldestRestartPoint(XLogRecPtr *oldrecptr, TimeLineID *oldtli);
 

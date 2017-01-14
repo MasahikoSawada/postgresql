@@ -5,7 +5,7 @@
  *
  * See src/backend/access/transam/README for more information.
  *
- * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -2238,6 +2238,9 @@ PrepareTransaction(void)
 	 * the transaction-abort path.
 	 */
 
+	/* Prepare step for foreign transactions */
+	AtPrepare_FDWXacts();
+
 	/* Shut down the deferred-trigger manager */
 	AfterTriggerEndXact(true);
 
@@ -2335,7 +2338,6 @@ PrepareTransaction(void)
 	AtPrepare_PgStat();
 	AtPrepare_MultiXact();
 	AtPrepare_RelationMap();
-	AtPrepare_FDWXacts();
 
 	/*
 	 * Here is where we really truly prepare.
@@ -5282,7 +5284,7 @@ XactLogCommitRecord(TimestampTz commit_time,
 		XLogRegisterData((char *) (&xl_origin), sizeof(xl_xact_origin));
 
 	/* we allow filtering by xacts */
-	XLogIncludeOrigin();
+	XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
 
 	return XLogInsert(RM_XACT_ID, info);
 }

@@ -3,7 +3,7 @@
  * policy.c
  *	  Commands for manipulating policies.
  *
- * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/backend/commands/policy.c
@@ -177,7 +177,7 @@ policy_role_list_to_array(List *roles, int *num_roles)
 		}
 		else
 			role_oids[i++] =
-				ObjectIdGetDatum(get_rolespec_oid((Node *) spec, false));
+				ObjectIdGetDatum(get_rolespec_oid(spec, false));
 	}
 
 	return role_oids;

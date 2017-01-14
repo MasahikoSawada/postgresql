@@ -4,7 +4,7 @@
  *	  pg_dump is a utility for dumping out a postgres database
  *	  into a script file.
  *
- * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *	pg_dump will read the system catalogs in a database and dump out a
@@ -623,7 +623,7 @@ main(int argc, char **argv)
 		|| numWorkers > MAXIMUM_WAIT_OBJECTS
 #endif
 		)
-		exit_horribly(NULL, "%s: invalid number of parallel jobs\n", progname);
+		exit_horribly(NULL, "invalid number of parallel jobs\n");
 
 	/* Parallel backup only in the directory archive format so far */
 	if (archiveFormat != archDirectory && numWorkers > 1)
@@ -1216,7 +1216,7 @@ expand_schema_name_patterns(Archive *fout,
 
 		res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
 		if (strict_names && PQntuples(res) == 0)
-			exit_horribly(NULL, "no matching tables were found for pattern \"%s\"\n", cell->val);
+			exit_horribly(NULL, "no matching schemas were found for pattern \"%s\"\n", cell->val);
 
 		for (i = 0; i < PQntuples(res); i++)
 		{
@@ -5643,6 +5643,9 @@ getOwnedSeqs(Archive *fout, TableInfo tblinfo[], int numTables)
 			continue;			/* not an owned sequence */
 
 		owning_tab = findTableByOid(seqinfo->owning_tab);
+		if (owning_tab == NULL)
+			exit_horribly(NULL, "failed sanity check, parent table OID %u of sequence OID %u not found\n",
+						  seqinfo->owning_tab, seqinfo->dobj.catId.oid);
 
 		/*
 		 * We need to dump the components that are being dumped for the table
@@ -5736,7 +5739,7 @@ getPartitions(Archive *fout, int *numPartitions)
 	PGresult   *res;
 	int			ntups;
 	int			i;
-	PQExpBuffer query = createPQExpBuffer();
+	PQExpBuffer query;
 	PartInfo    *partinfo;
 
 	int			i_partrelid;
@@ -5749,6 +5752,8 @@ getPartitions(Archive *fout, int *numPartitions)
 		*numPartitions = 0;
 		return NULL;
 	}
+
+	query = createPQExpBuffer();
 
 	/* Make sure we are in proper schema */
 	selectSourceSchema(fout, "pg_catalog");
@@ -7067,13 +7072,15 @@ getTransforms(Archive *fout, int *numTransforms)
 void
 getTablePartitionKeyInfo(Archive *fout, TableInfo *tblinfo, int numTables)
 {
-	PQExpBuffer q = createPQExpBuffer();
+	PQExpBuffer q;
 	int			i;
 	PGresult   *res;
 
 	/* No partitioned tables before 10 */
 	if (fout->remoteVersion < 100000)
 		return;
+
+	q = createPQExpBuffer();
 
 	for (i = 0; i < numTables; i++)
 	{
@@ -7094,6 +7101,8 @@ getTablePartitionKeyInfo(Archive *fout, TableInfo *tblinfo, int numTables)
 		Assert(PQntuples(res) == 1);
 		tbinfo->partkeydef = pg_strdup(PQgetvalue(res, 0, 0));
 	}
+
+	destroyPQExpBuffer(q);
 }
 
 /*
@@ -15430,8 +15439,7 @@ dumpSequence(Archive *fout, TableInfo *tbinfo)
 	if (fout->remoteVersion >= 100000)
 	{
 		appendPQExpBuffer(query,
-						  "SELECT relname, "
-						  "seqstart, seqincrement, "
+						  "SELECT seqstart, seqincrement, "
 						  "CASE WHEN seqincrement > 0 AND seqmax = %s THEN NULL "
 						  "     WHEN seqincrement < 0 AND seqmax = -1 THEN NULL "
 						  "     ELSE seqmax "
@@ -15450,8 +15458,7 @@ dumpSequence(Archive *fout, TableInfo *tbinfo)
 	else if (fout->remoteVersion >= 80400)
 	{
 		appendPQExpBuffer(query,
-						  "SELECT sequence_name, "
-						  "start_value, increment_by, "
+						  "SELECT start_value, increment_by, "
 				   "CASE WHEN increment_by > 0 AND max_value = %s THEN NULL "
 				   "     WHEN increment_by < 0 AND max_value = -1 THEN NULL "
 						  "     ELSE max_value "
@@ -15467,8 +15474,7 @@ dumpSequence(Archive *fout, TableInfo *tbinfo)
 	else
 	{
 		appendPQExpBuffer(query,
-						  "SELECT sequence_name, "
-						  "0 AS start_value, increment_by, "
+						  "SELECT 0 AS start_value, increment_by, "
 				   "CASE WHEN increment_by > 0 AND max_value = %s THEN NULL "
 				   "     WHEN increment_by < 0 AND max_value = -1 THEN NULL "
 						  "     ELSE max_value "
@@ -15493,24 +15499,14 @@ dumpSequence(Archive *fout, TableInfo *tbinfo)
 		exit_nicely(1);
 	}
 
-	/* Disable this check: it fails if sequence has been renamed */
-#ifdef NOT_USED
-	if (strcmp(PQgetvalue(res, 0, 0), tbinfo->dobj.name) != 0)
-	{
-		write_msg(NULL, "query to get data of sequence \"%s\" returned name \"%s\"\n",
-				  tbinfo->dobj.name, PQgetvalue(res, 0, 0));
-		exit_nicely(1);
-	}
-#endif
-
-	startv = PQgetvalue(res, 0, 1);
-	incby = PQgetvalue(res, 0, 2);
+	startv = PQgetvalue(res, 0, 0);
+	incby = PQgetvalue(res, 0, 1);
+	if (!PQgetisnull(res, 0, 2))
+		maxv = PQgetvalue(res, 0, 2);
 	if (!PQgetisnull(res, 0, 3))
-		maxv = PQgetvalue(res, 0, 3);
-	if (!PQgetisnull(res, 0, 4))
-		minv = PQgetvalue(res, 0, 4);
-	cache = PQgetvalue(res, 0, 5);
-	cycled = (strcmp(PQgetvalue(res, 0, 6), "t") == 0);
+		minv = PQgetvalue(res, 0, 3);
+	cache = PQgetvalue(res, 0, 4);
+	cycled = (strcmp(PQgetvalue(res, 0, 5), "t") == 0);
 
 	/*
 	 * DROP must be fully qualified in case same name appears in pg_catalog
@@ -15590,7 +15586,11 @@ dumpSequence(Archive *fout, TableInfo *tbinfo)
 	{
 		TableInfo  *owning_tab = findTableByOid(tbinfo->owning_tab);
 
-		if (owning_tab && owning_tab->dobj.dump & DUMP_COMPONENT_DEFINITION)
+		if (owning_tab == NULL)
+			exit_horribly(NULL, "failed sanity check, parent table OID %u of sequence OID %u not found\n",
+						  tbinfo->owning_tab, tbinfo->dobj.catId.oid);
+
+		if (owning_tab->dobj.dump & DUMP_COMPONENT_DEFINITION)
 		{
 			resetPQExpBuffer(query);
 			appendPQExpBuffer(query, "ALTER SEQUENCE %s",
