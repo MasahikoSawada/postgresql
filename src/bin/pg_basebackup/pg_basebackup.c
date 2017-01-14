@@ -4,7 +4,7 @@
  *
  * Author: Magnus Hagander <magnus@hagander.net>
  *
- * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *		  src/bin/pg_basebackup/pg_basebackup.c
@@ -61,6 +61,16 @@ typedef struct TablespaceList
  */
 #define MINIMUM_VERSION_FOR_PG_WAL	100000
 
+/*
+ * Different ways to include WAL
+ */
+typedef enum
+{
+	NO_WAL,
+	FETCH_WAL,
+	STREAM_WAL
+} IncludeWal;
+
 /* Global options */
 static char *basedir = NULL;
 static TablespaceList tablespace_dirs = {NULL, NULL};
@@ -71,8 +81,7 @@ static bool noclean = false;
 static bool showprogress = false;
 static int	verbose = 0;
 static int	compresslevel = 0;
-static bool includewal = false;
-static bool streamwal = false;
+static IncludeWal includewal = STREAM_WAL;
 static bool fastcheckpoint = false;
 static bool writerecoveryconf = false;
 static bool do_sync = true;
@@ -325,8 +334,7 @@ usage(void)
 	printf(_("  -S, --slot=SLOTNAME    replication slot to use\n"));
 	printf(_("  -T, --tablespace-mapping=OLDDIR=NEWDIR\n"
 	  "                         relocate tablespace in OLDDIR to NEWDIR\n"));
-	printf(_("  -x, --xlog             include required WAL files in backup (fetch mode)\n"));
-	printf(_("  -X, --xlog-method=fetch|stream\n"
+	printf(_("  -X, --xlog-method=none|fetch|stream\n"
 			 "                         include required WAL files with specified method\n"));
 	printf(_("      --xlogdir=XLOGDIR  location for the transaction log directory\n"));
 	printf(_("  -z, --gzip             compress tar output\n"));
@@ -1698,9 +1706,13 @@ BaseBackup(void)
 	 * If WAL streaming was requested, also check that the server is new
 	 * enough for that.
 	 */
-	if (streamwal && !CheckServerVersionForStreaming(conn))
+	if (includewal == STREAM_WAL && !CheckServerVersionForStreaming(conn))
 	{
-		/* Error message already written in CheckServerVersionForStreaming() */
+		/*
+		 * Error message already written in CheckServerVersionForStreaming(),
+		 * but add a hint about using -X none.
+		 */
+		fprintf(stderr, _("HINT: use -X none or -X fetch to disable log streaming\n"));
 		disconnect_and_exit(1);
 	}
 
@@ -1728,9 +1740,9 @@ BaseBackup(void)
 		psprintf("BASE_BACKUP LABEL '%s' %s %s %s %s %s %s",
 				 escaped_label,
 				 showprogress ? "PROGRESS" : "",
-				 includewal && !streamwal ? "WAL" : "",
+				 includewal == FETCH_WAL ? "WAL" : "",
 				 fastcheckpoint ? "FAST" : "",
-				 includewal ? "NOWAIT" : "",
+				 includewal == NO_WAL ? "" : "NOWAIT",
 				 maxrate_clause ? maxrate_clause : "",
 				 format == 't' ? "TABLESPACE_MAP" : "");
 
@@ -1773,7 +1785,7 @@ BaseBackup(void)
 	PQclear(res);
 	MemSet(xlogend, 0, sizeof(xlogend));
 
-	if (verbose && includewal)
+	if (verbose && includewal != NO_WAL)
 		fprintf(stderr, _("transaction log start point: %s on timeline %u\n"),
 				xlogstart, starttli);
 
@@ -1830,7 +1842,7 @@ BaseBackup(void)
 	 * If we're streaming WAL, start the streaming session before we start
 	 * receiving the actual data chunks.
 	 */
-	if (streamwal)
+	if (includewal == STREAM_WAL)
 	{
 		if (verbose)
 			fprintf(stderr, _("%s: starting background WAL receiver\n"),
@@ -1876,7 +1888,7 @@ BaseBackup(void)
 		disconnect_and_exit(1);
 	}
 	strlcpy(xlogend, PQgetvalue(res, 0, 0), sizeof(xlogend));
-	if (verbose && includewal)
+	if (verbose && includewal != NO_WAL)
 		fprintf(stderr, "transaction log end point: %s\n", xlogend);
 	PQclear(res);
 
@@ -2035,7 +2047,6 @@ main(int argc, char **argv)
 		{"write-recovery-conf", no_argument, NULL, 'R'},
 		{"slot", required_argument, NULL, 'S'},
 		{"tablespace-mapping", required_argument, NULL, 'T'},
-		{"xlog", no_argument, NULL, 'x'},
 		{"xlog-method", required_argument, NULL, 'X'},
 		{"gzip", no_argument, NULL, 'z'},
 		{"compress", required_argument, NULL, 'Z'},
@@ -2078,7 +2089,7 @@ main(int argc, char **argv)
 
 	atexit(cleanup_directories_atexit);
 
-	while ((c = getopt_long(argc, argv, "D:F:r:RT:xX:l:nNzZ:d:c:h:p:U:s:S:wWvP",
+	while ((c = getopt_long(argc, argv, "D:F:r:RT:X:l:nNzZ:d:c:h:p:U:s:S:wWvP",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -2111,38 +2122,26 @@ main(int argc, char **argv)
 			case 'T':
 				tablespace_list_append(optarg);
 				break;
-			case 'x':
-				if (includewal)
-				{
-					fprintf(stderr,
-					 _("%s: cannot specify both --xlog and --xlog-method\n"),
-							progname);
-					exit(1);
-				}
-
-				includewal = true;
-				streamwal = false;
-				break;
 			case 'X':
-				if (includewal)
+				if (strcmp(optarg, "n") == 0 ||
+					strcmp(optarg, "none") == 0)
 				{
-					fprintf(stderr,
-					 _("%s: cannot specify both --xlog and --xlog-method\n"),
-							progname);
-					exit(1);
+					includewal = NO_WAL;
 				}
-
-				includewal = true;
-				if (strcmp(optarg, "f") == 0 ||
+				else if (strcmp(optarg, "f") == 0 ||
 					strcmp(optarg, "fetch") == 0)
-					streamwal = false;
+				{
+					includewal = FETCH_WAL;
+				}
 				else if (strcmp(optarg, "s") == 0 ||
 						 strcmp(optarg, "stream") == 0)
-					streamwal = true;
+				{
+					includewal = STREAM_WAL;
+				}
 				else
 				{
 					fprintf(stderr,
-							_("%s: invalid xlog-method option \"%s\", must be \"fetch\" or \"stream\"\n"),
+							_("%s: invalid xlog-method option \"%s\", must be \"fetch\", \"stream\" or \"none\"\n"),
 							progname, optarg);
 					exit(1);
 				}
@@ -2268,7 +2267,7 @@ main(int argc, char **argv)
 		exit(1);
 	}
 
-	if (format == 't' && streamwal && strcmp(basedir, "-") == 0)
+	if (format == 't' && includewal == STREAM_WAL && strcmp(basedir, "-") == 0)
 	{
 		fprintf(stderr,
 			_("%s: cannot stream transaction logs in tar mode to stdout\n"),
@@ -2278,7 +2277,7 @@ main(int argc, char **argv)
 		exit(1);
 	}
 
-	if (replication_slot && !streamwal)
+	if (replication_slot && includewal != STREAM_WAL)
 	{
 		fprintf(stderr,
 			_("%s: replication slots can only be used with WAL streaming\n"),

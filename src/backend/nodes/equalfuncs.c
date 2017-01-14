@@ -18,7 +18,7 @@
  * "x" to be considered equal() to another reference to "x" in the query.
  *
  *
- * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -108,7 +108,7 @@ _equalRangeVar(const RangeVar *a, const RangeVar *b)
 	COMPARE_STRING_FIELD(catalogname);
 	COMPARE_STRING_FIELD(schemaname);
 	COMPARE_STRING_FIELD(relname);
-	COMPARE_SCALAR_FIELD(inhOpt);
+	COMPARE_SCALAR_FIELD(inh);
 	COMPARE_SCALAR_FIELD(relpersistence);
 	COMPARE_NODE_FIELD(alias);
 	COMPARE_LOCATION_FIELD(location);

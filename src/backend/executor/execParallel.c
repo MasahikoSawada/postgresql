@@ -3,7 +3,7 @@
  * execParallel.c
  *	  Support routines for parallel execution.
  *
- * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * This file contains routines that are intended to support setting up,
@@ -486,7 +486,6 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate, int nworkers)
 		shm_toc_insert(pcxt->toc, PARALLEL_KEY_DSA, area_space);
 		pei->area = dsa_create_in_place(area_space, dsa_minsize,
 										LWTRANCHE_PARALLEL_QUERY_DSA,
-										"parallel_query_dsa",
 										pcxt->seg);
 	}
 
@@ -518,7 +517,7 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate, int nworkers)
 }
 
 /*
- * Copy instrumentation information about this node and its descendents from
+ * Copy instrumentation information about this node and its descendants from
  * dynamic shared memory.
  */
 static bool
@@ -666,7 +665,7 @@ ExecParallelGetQueryDesc(shm_toc *toc, DestReceiver *receiver,
 }
 
 /*
- * Copy instrumentation information from this node and its descendents into
+ * Copy instrumentation information from this node and its descendants into
  * dynamic shared memory, so that the parallel leader can retrieve it.
  */
 static bool
@@ -706,7 +705,7 @@ ExecParallelReportInstrumentation(PlanState *planstate,
 }
 
 /*
- * Initialize the PlanState and its descendents with the information
+ * Initialize the PlanState and its descendants with the information
  * retrieved from shared memory.  This has to be done once the PlanState
  * is allocated and initialized by executor; that is, after ExecutorStart().
  */
@@ -743,10 +742,11 @@ ExecParallelInitializeWorker(PlanState *planstate, shm_toc *toc)
 /*
  * Main entrypoint for parallel query worker processes.
  *
- * We reach this function from ParallelMain, so the setup necessary to create
- * a sensible parallel environment has already been done; ParallelMain worries
- * about stuff like the transaction state, combo CID mappings, and GUC values,
- * so we don't need to deal with any of that here.
+ * We reach this function from ParallelWorkerMain, so the setup necessary to
+ * create a sensible parallel environment has already been done;
+ * ParallelWorkerMain worries about stuff like the transaction state, combo
+ * CID mappings, and GUC values, so we don't need to deal with any of that
+ * here.
  *
  * Our job is to deal with concerns specific to the executor.  The parallel
  * group leader will have stored a serialized PlannedStmt, and it's our job

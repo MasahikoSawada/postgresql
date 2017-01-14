@@ -3,7 +3,7 @@
  * readfuncs.c
  *	  Reader functions for Postgres tree nodes.
  *
- * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -449,7 +449,7 @@ _readRangeVar(void)
 
 	READ_STRING_FIELD(schemaname);
 	READ_STRING_FIELD(relname);
-	READ_ENUM_FIELD(inhOpt, InhOption);
+	READ_BOOL_FIELD(inh);
 	READ_CHAR_FIELD(relpersistence);
 	READ_NODE_FIELD(alias);
 	READ_LOCATION_FIELD(location);

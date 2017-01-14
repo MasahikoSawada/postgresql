@@ -922,7 +922,7 @@ AtPrepare_FDWXacts(void)
 	if (!TwoPhaseReady)
 		ereport(ERROR,
 				(errcode(ERRCODE_T_R_INTEGRITY_CONSTRAINT_VIOLATION),
-				 errmsg("can not prepare the transaction because some foreign server/s involved in transaction can not prepare the transaction")));
+				 errmsg("can not prepare the transaction because some foreign servers involved in transaction can not prepare the transaction")));
 
 	/* Prepare transactions on participating foreign servers. */
 	prepare_foreign_transactions();

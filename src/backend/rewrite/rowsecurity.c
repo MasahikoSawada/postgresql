@@ -29,7 +29,7 @@
  * in the current environment, but that may change if the row_security GUC or
  * the current role changes.
  *
- * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  */
 #include "postgres.h"
@@ -703,7 +703,7 @@ add_with_check_options(Relation rel,
 		 */
 		WithCheckOption *wco;
 
-		wco = (WithCheckOption *) makeNode(WithCheckOption);
+		wco = makeNode(WithCheckOption);
 		wco->kind = kind;
 		wco->relname = pstrdup(RelationGetRelationName(rel));
 		wco->polname = NULL;
@@ -735,7 +735,7 @@ add_with_check_options(Relation rel,
 				qual = copyObject(qual);
 				ChangeVarNodes((Node *) qual, 1, rt_index, 0);
 
-				wco = (WithCheckOption *) makeNode(WithCheckOption);
+				wco = makeNode(WithCheckOption);
 				wco->kind = kind;
 				wco->relname = pstrdup(RelationGetRelationName(rel));
 				wco->polname = pstrdup(policy->policy_name);
@@ -755,7 +755,7 @@ add_with_check_options(Relation rel,
 		 */
 		WithCheckOption *wco;
 
-		wco = (WithCheckOption *) makeNode(WithCheckOption);
+		wco = makeNode(WithCheckOption);
 		wco->kind = kind;
 		wco->relname = pstrdup(RelationGetRelationName(rel));
 		wco->polname = NULL;
