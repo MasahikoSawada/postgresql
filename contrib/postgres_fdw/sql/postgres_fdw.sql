@@ -1725,45 +1725,27 @@ ALTER SERVER loopback3 OPTIONS(ADD two_phase_commit 'on');
 
 \des+
 
--- one not supporting server
+-- one server not supporting 2PC.
 BEGIN;
 INSERT INTO ft7 VALUES(101);
 COMMIT;
 SELECT COUNT(*) FROM ft8;
 
--- One not supporting server and one supporting server
+-- One server supporting 2PC and another one server not supporting 2PC.
 BEGIN;
 INSERT INTO ft7 VALUES(102);
 INSERT INTO ft8 VALUES(103);
 COMMIT;
 SELECT COUNT(*) FROM ft8;
 
--- Two supporting server and one not supporting server.
+-- Two supporting server.
 BEGIN;
-INSERT INTO ft7 VALUES(104);
 INSERT INTO ft8 VALUES(105);
 INSERT INTO ft9 VALUES(106);
 COMMIT;
 SELECT COUNT(*) FROM ft8;
 
--- one local and one not supporting foreign server
-BEGIN;
-INSERT INTO ft7 VALUES(107);
-INSERT INTO "S 1"."T 6" VALUES (1);
-COMMIT;
-SELECT COUNT(*) FROM ft8;
-SELECT COUNT(*) FROM "S 1"."T 6";
-
--- one local and one supporting foreign server and not supporting one
-BEGIN;
-INSERT INTO ft7 VALUES(108);
-INSERT INTO ft8 VALUES(109);
-INSERT INTO "S 1"."T 6" VALUES (2);
-COMMIT;
-SELECT COUNT(*) FROM ft8;
-SELECT COUNT(*) FROM "S 1"."T 6";
-
--- one local and two supporting foreign server and not supporting one
+-- Local changes and two servers supporting 2PC.
 BEGIN;
 INSERT INTO ft7 VALUES(110);
 INSERT INTO ft8 VALUES(111);
@@ -1773,14 +1755,14 @@ COMMIT;
 SELECT COUNT(*) FROM ft8;
 SELECT COUNT(*) FROM "S 1"."T 6";
 
--- transaction updating on single supporting foreign server with violation on foreign server
+-- transaction updating on single supporting foreign server with violation on foreign server.
 BEGIN;
 INSERT INTO ft8 VALUES(113);
 INSERT INTO ft8 VALUES(110); -- violation on foreign server
 COMMIT;
 SELECT COUNT(*) FROM ft8;
 
--- transaction updating on single supporting foreign server and local with violation on local
+-- transaction updating on single supporting foreign server and local with violation on local.
 BEGIN;
 INSERT INTO ft8 VALUES(114);
 INSERT INTO "S 1"."T 6" VALUES (4);
@@ -1789,7 +1771,7 @@ COMMIT;
 SELECT COUNT(*) FROM ft8;
 SELECT COUNT(*) FROM "S 1"."T 6";
 
--- violation on foreign server supporting 2PC
+-- violation on foreign server supporting 2PC.
 BEGIN;
 INSERT INTO ft8 VALUES(115);
 INSERT INTO ft9 VALUES(116);
@@ -1797,7 +1779,7 @@ INSERT INTO ft9 VALUES(110); -- violation on foreign server
 COMMIT;
 SELECT COUNT(*) FROM ft8;
 
--- transaction involing local and foreign server with violation on local server
+-- transaction involing local and foreign server with violation on local server.
 BEGIN;
 INSERT INTO ft8 VALUES(117);
 INSERT INTO ft9 VALUES(118);

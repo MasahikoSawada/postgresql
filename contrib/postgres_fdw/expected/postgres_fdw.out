@@ -7090,21 +7090,20 @@ ROLLBACK;
 -- ===================================================================
 -- test Atomic commit across foreign servers
 -- ===================================================================
-ALTER SERVER loopback OPTIONS(ADD two_phase_commit 'of');
-ERROR:  two_phase_commit requires a Boolean value
+ALTER SERVER loopback OPTIONS(ADD two_phase_commit 'off');
 ALTER SERVER loopback2 OPTIONS(ADD two_phase_commit 'on');
 ALTER SERVER loopback3 OPTIONS(ADD two_phase_commit 'on');
 \des+
                                                                                                                                                                                                                                                       List of foreign servers
     Name     |  Owner   | Foreign-data wrapper | Access privileges | Type | Version |                                                                                                                                                                                                          FDW Options                                                                                                                                                                                                           | Description 
 -------------+----------+----------------------+-------------------+------+---------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------
- loopback    | masahiko | postgres_fdw         |                   |      |         | (dbname 'contrib_regression', port '50848', extensions 'postgres_fdw')                                                                                                                                                                                                                                                                                                                                                         | 
+ loopback    | masahiko | postgres_fdw         |                   |      |         | (dbname 'contrib_regression', port '50848', extensions 'postgres_fdw', two_phase_commit 'off')                                                                                                                                                                                                                                                                                                                                 | 
  loopback2   | masahiko | postgres_fdw         |                   |      |         | (dbname 'contrib_regression', port '50848', two_phase_commit 'on')                                                                                                                                                                                                                                                                                                                                                             | 
  loopback3   | masahiko | postgres_fdw         |                   |      |         | (dbname 'contrib_regression', port '50848', two_phase_commit 'on')                                                                                                                                                                                                                                                                                                                                                             | 
  testserver1 | masahiko | postgres_fdw         |                   |      |         | (use_remote_estimate 'false', updatable 'true', fdw_startup_cost '123.456', fdw_tuple_cost '0.123', service 'value', connect_timeout 'value', dbname 'value', host 'value', hostaddr 'value', port 'value', application_name 'value', keepalives 'value', keepalives_idle 'value', keepalives_interval 'value', sslcompression 'value', sslmode 'value', sslcert 'value', sslkey 'value', sslrootcert 'value', sslcrl 'value') | 
 (4 rows)
 
--- one not supporting server
+-- one server not supporting 2PC.
 BEGIN;
 INSERT INTO ft7 VALUES(101);
 COMMIT;
@@ -7114,7 +7113,7 @@ SELECT COUNT(*) FROM ft8;
    101
 (1 row)
 
--- One not supporting server and one supporting server
+-- One server supporting 2PC and another one server not supporting 2PC.
 BEGIN;
 INSERT INTO ft7 VALUES(102);
 INSERT INTO ft8 VALUES(103);
@@ -7125,54 +7124,18 @@ SELECT COUNT(*) FROM ft8;
    103
 (1 row)
 
--- Two supporting server and one not supporting server.
+-- Two supporting server.
 BEGIN;
-INSERT INTO ft7 VALUES(104);
 INSERT INTO ft8 VALUES(105);
 INSERT INTO ft9 VALUES(106);
 COMMIT;
 SELECT COUNT(*) FROM ft8;
  count 
 -------
-   106
+   105
 (1 row)
 
--- one local and one not supporting foreign server
-BEGIN;
-INSERT INTO ft7 VALUES(107);
-INSERT INTO "S 1"."T 6" VALUES (1);
-COMMIT;
-SELECT COUNT(*) FROM ft8;
- count 
--------
-   107
-(1 row)
-
-SELECT COUNT(*) FROM "S 1"."T 6";
- count 
--------
-     1
-(1 row)
-
--- one local and one supporting foreign server and not supporting one
-BEGIN;
-INSERT INTO ft7 VALUES(108);
-INSERT INTO ft8 VALUES(109);
-INSERT INTO "S 1"."T 6" VALUES (2);
-COMMIT;
-SELECT COUNT(*) FROM ft8;
- count 
--------
-   109
-(1 row)
-
-SELECT COUNT(*) FROM "S 1"."T 6";
- count 
--------
-     2
-(1 row)
-
--- one local and two supporting foreign server and not supporting one
+-- Local changes and two servers supporting 2PC.
 BEGIN;
 INSERT INTO ft7 VALUES(110);
 INSERT INTO ft8 VALUES(111);
@@ -7182,16 +7145,16 @@ COMMIT;
 SELECT COUNT(*) FROM ft8;
  count 
 -------
-   112
+   108
 (1 row)
 
 SELECT COUNT(*) FROM "S 1"."T 6";
  count 
 -------
-     3
+     1
 (1 row)
 
--- transaction updating on single supporting foreign server with violation on foreign server
+-- transaction updating on single supporting foreign server with violation on foreign server.
 BEGIN;
 INSERT INTO ft8 VALUES(113);
 INSERT INTO ft8 VALUES(110); -- violation on foreign server
@@ -7202,10 +7165,10 @@ COMMIT;
 SELECT COUNT(*) FROM ft8;
  count 
 -------
-   112
+   108
 (1 row)
 
--- transaction updating on single supporting foreign server and local with violation on local
+-- transaction updating on single supporting foreign server and local with violation on local.
 BEGIN;
 INSERT INTO ft8 VALUES(114);
 INSERT INTO "S 1"."T 6" VALUES (4);
@@ -7216,16 +7179,16 @@ COMMIT;
 SELECT COUNT(*) FROM ft8;
  count 
 -------
-   112
+   108
 (1 row)
 
 SELECT COUNT(*) FROM "S 1"."T 6";
  count 
 -------
-     3
+     1
 (1 row)
 
--- violation on foreign server supporting 2PC
+-- violation on foreign server supporting 2PC.
 BEGIN;
 INSERT INTO ft8 VALUES(115);
 INSERT INTO ft9 VALUES(116);
@@ -7237,10 +7200,10 @@ COMMIT;
 SELECT COUNT(*) FROM ft8;
  count 
 -------
-   112
+   108
 (1 row)
 
--- transaction involing local and foreign server with violation on local server
+-- transaction involing local and foreign server with violation on local server.
 BEGIN;
 INSERT INTO ft8 VALUES(117);
 INSERT INTO ft9 VALUES(118);
@@ -7251,12 +7214,12 @@ COMMIT;
 SELECT COUNT(*) FROM ft8;
  count 
 -------
-   112
+   108
 (1 row)
 
 SELECT COUNT(*) FROM "S 1"."T 6";
  count 
 -------
-     3
+     1
 (1 row)
 
