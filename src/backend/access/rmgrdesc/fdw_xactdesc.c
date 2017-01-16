@@ -30,6 +30,7 @@ fdw_xact_desc(StringInfo buf, XLogReaderState *record)
 		appendStringInfo(buf, "Foreign server oid: %u", fdw_insert_xlog->serverid);
 		appendStringInfo(buf, " user oid: %u", fdw_insert_xlog->userid);
 		appendStringInfo(buf, " database id: %u", fdw_insert_xlog->dboid);
+		appendStringInfo(buf, " local xid: %u", fdw_insert_xlog->local_xid);
 		/* TODO: This should be really interpreted by each FDW */
 		/* TODO: we also need to assess whether we want to add this information */
 		appendStringInfo(buf, " foreign transaction info: ");
@@ -42,6 +43,7 @@ fdw_xact_desc(StringInfo buf, XLogReaderState *record)
 		appendStringInfo(buf, "Foreign server oid: %u", fdw_remove_xlog->serverid);
 		appendStringInfo(buf, " user oid: %u", fdw_remove_xlog->userid);
 		appendStringInfo(buf, " database id: %u", fdw_remove_xlog->dbid);
+		appendStringInfo(buf, " local xid: %u", fdw_remove_xlog->xid);
 	}
 
 }
