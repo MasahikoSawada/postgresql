@@ -727,6 +727,7 @@ remove_fdw_xact(FDWXact fdw_xact)
 		if (FDWXactGlobal->fdw_xacts[cnt] == fdw_xact)
 		{
 			FdwRemoveXlogRec	fdw_remove_xlog;
+			XLogRecPtr			recptr;
 
 			/* Fill up the log record before releasing the entry */
 			fdw_remove_xlog.serverid = fdw_xact->serverid;
@@ -756,7 +757,8 @@ remove_fdw_xact(FDWXact fdw_xact)
 			 */
 			XLogBeginInsert();
 			XLogRegisterData((char *)&fdw_remove_xlog, sizeof(fdw_remove_xlog));
-			XLogInsert(RM_FDW_XACT_ID, XLOG_FDW_XACT_REMOVE);
+			recptr = XLogInsert(RM_FDW_XACT_ID, XLOG_FDW_XACT_REMOVE);
+			XLogFlush(recptr);
 
 			END_CRIT_SECTION();
 
@@ -2124,7 +2126,7 @@ void
 KnownFDWXactAdd(XLogReaderState *record)
 {
 	KnownFDWXact *fdw_xact;
-	FDWXactOnDiskData *fdw_xact_data_file = (FDWXactOnDiskData *)record;
+	FDWXactOnDiskData *fdw_xact_data_file = (FDWXactOnDiskData *)XLogRecGetData(record);
 
 	Assert(RecoveryInProgress());
 
