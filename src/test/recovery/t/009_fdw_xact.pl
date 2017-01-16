@@ -32,8 +32,8 @@ my $fs1_port = $node_fs1->port;
 my $fs2_port = $node_fs2->port;
 $node_fs1->init;
 $node_fs2->init;
-$node_fs1->append_conf('postgresql.conf', "max_prepared_transactions = 10");		   
-$node_fs2->append_conf('postgresql.conf', "max_prepared_transactions = 10");		   
+$node_fs1->append_conf('postgresql.conf', "max_prepared_transactions = 10");
+$node_fs2->append_conf('postgresql.conf', "max_prepared_transactions = 10");
 $node_fs1->start;
 $node_fs2->start;
 
