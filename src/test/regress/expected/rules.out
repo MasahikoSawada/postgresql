@@ -1323,6 +1323,13 @@ pg_cursors| SELECT c.name,
     c.is_scrollable,
     c.creation_time
    FROM pg_cursor() c(name, statement, is_holdable, is_binary, is_scrollable, creation_time);
+pg_fdw_xacts| SELECT f.dbid,
+    f.transaction,
+    f.serverid,
+    f.userid,
+    f.status,
+    f.identifier
+   FROM pg_fdw_xacts() f(dbid, transaction, serverid, userid, status, identifier);
 pg_file_settings| SELECT a.sourcefile,
     a.sourceline,
     a.seqno,
