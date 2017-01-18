@@ -8,7 +8,7 @@
  * The extension launches foreign transaction resolver launcher process as a
  * background worker. The launcher then launches separate background worker
  * process to resolve the foreign transaction in each database. The worker
- * process simply connects to the database specified and calls pg_fdw_resolve()
+ * process simply connects to the database specified and calls pg_fdw_xact_resolve()
  * function, which tries to resolve the transactions.
  *
  * Copyright (C) 2016, PostgreSQL Global Development Group
@@ -291,7 +291,7 @@ FDWXactWorker_SIGTERM(SIGNAL_ARGS)
 static void
 FDWXactResolver_worker_main(Datum dbid_datum)
 {
-	char	*command = "SELECT pg_fdw_resolve()";
+	char	*command = "SELECT pg_fdw_xact_resolve()";
 	Oid		dbid = DatumGetObjectId(dbid_datum);
 	int		ret;
 
@@ -349,7 +349,7 @@ FDWXactResolver_worker_main(Datum dbid_datum)
 	ret = SPI_execute(command, false, 0);
 
 	if (ret < 0)
-		elog(LOG, "error running pg_fdw_resolve() within database %d",
+		elog(LOG, "error running pg_fdw_xact_resolve() within database %d",
 			 dbid);
 
 	/*
