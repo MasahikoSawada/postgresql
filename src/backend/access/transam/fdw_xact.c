@@ -198,7 +198,7 @@ typedef enum
 	FDW_XACT_PREPARING,			/* foreign transaction is (being) prepared */
 	FDW_XACT_COMMITTING_PREPARED,	/* foreign prepared transaction is to be committed */
 	FDW_XACT_ABORTING_PREPARED,	/* foreign prepared transaction is to be aborted */
-	FDW_XACT_RESOLVED			/* Status used only by pg_fdw_resolve().
+	FDW_XACT_RESOLVED			/* Status used only by pg_fdw_xact_resolve().
 								   It doesn't appear in the in-memory entry. */
 } FDWXactStatus;
 
