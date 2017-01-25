@@ -1165,34 +1165,6 @@ search_fdw_xact(TransactionId xid, Oid dbid, Oid serverid, Oid userid,
 }
 
 /*
- * get_dbids_with_unresolved_xact
- * returns the oids of the databases containing unresolved foreign transactions.
- * The function is used by pg_fdw_xact_resolver extension. Returns NIL if
- * no such entry exists.
- */
-List *
-get_dbids_with_unresolved_xact(void)
-{
-	int		cnt_xact;
-	List	*dbid_list = NIL;
-
-	LWLockAcquire(FDWXactLock, LW_SHARED);
-	for (cnt_xact = 0; cnt_xact < FDWXactGlobal->num_fdw_xacts; cnt_xact++)
-	{
-		FDWXact	fdw_xact;
-
-		fdw_xact = FDWXactGlobal->fdw_xacts[cnt_xact];
-
-		/* Skip locked entry as someone must be working on it */
-		if (fdw_xact->locking_backend == InvalidBackendId)
-			dbid_list = list_append_unique_oid(dbid_list, fdw_xact->dboid);
-	}
-	LWLockRelease(FDWXactLock);
-
-	return dbid_list;
-}
-
-/*
  * fdw_xact_redo
  * Apply the redo log for a foreign transaction.
  */
