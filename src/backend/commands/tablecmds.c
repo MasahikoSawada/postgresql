@@ -1324,7 +1324,6 @@ ExecuteTruncate(TruncateStmt *stmt)
 		InitResultRelInfo(resultRelInfo,
 						  rel,
 						  0,	/* dummy rangetable index */
-						  false,
 						  NULL,
 						  0);
 		resultRelInfo++;
@@ -4461,8 +4460,7 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 
 					values[ex->attnum - 1] = ExecEvalExpr(ex->exprstate,
 														  econtext,
-													 &isnull[ex->attnum - 1],
-														  NULL);
+													 &isnull[ex->attnum - 1]);
 				}
 
 				/*
@@ -12058,6 +12056,18 @@ ATPrepChangePersistence(Relation rel, bool toLogged)
 	}
 
 	/*
+	 * Check that the table is not part any publication when changing to
+	 * UNLOGGED as UNLOGGED tables can't be published.
+	 */
+	if (!toLogged &&
+		list_length(GetRelationPublications(RelationGetRelid(rel))) > 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("cannot change table \"%s\" to unlogged because it is part of a publication",
+						RelationGetRelationName(rel)),
+				 errdetail("Unlogged relations cannot be replicated.")));
+
+	/*
 	 * Check existing foreign key constraints to preserve the invariant that
 	 * permanent tables cannot reference unlogged ones.  Self-referencing
 	 * foreign keys can safely be ignored.
@@ -13455,6 +13465,7 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd)
 			constr = linitial(partConstraint);
 			my_constr = make_ands_implicit((Expr *) constr);
 			tab->partition_constraint = map_partition_varattnos(my_constr,
+																1,
 																part_rel,
 																rel);
 			/* keep our lock until commit */
