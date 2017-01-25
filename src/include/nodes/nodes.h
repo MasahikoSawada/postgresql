@@ -43,6 +43,7 @@ typedef enum NodeTag
 	 */
 	T_Plan,
 	T_Result,
+	T_ProjectSet,
 	T_ModifyTable,
 	T_Append,
 	T_MergeAppend,
@@ -91,6 +92,7 @@ typedef enum NodeTag
 	 */
 	T_PlanState,
 	T_ResultState,
+	T_ProjectSetState,
 	T_ModifyTableState,
 	T_AppendState,
 	T_MergeAppendState,
@@ -245,6 +247,7 @@ typedef enum NodeTag
 	T_UniquePath,
 	T_GatherPath,
 	T_ProjectionPath,
+	T_ProjectSetPath,
 	T_SortPath,
 	T_GroupPath,
 	T_UpperUniquePath,
@@ -408,6 +411,11 @@ typedef enum NodeTag
 	T_CreateTransformStmt,
 	T_CreateAmStmt,
 	T_PartitionCmd,
+	T_CreatePublicationStmt,
+	T_AlterPublicationStmt,
+	T_CreateSubscriptionStmt,
+	T_AlterSubscriptionStmt,
+	T_DropSubscriptionStmt,
 
 	/*
 	 * TAGS FOR PARSE TREE NODES (parsenodes.h)
