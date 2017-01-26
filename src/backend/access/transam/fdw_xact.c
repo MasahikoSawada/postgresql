@@ -5,7 +5,7 @@
  *
  * This module manages the transactions involving foreign servers.
  *
- * Copyright (c) 2016, PostgreSQL Global Development Group
+ * Copyright (c) 2017, PostgreSQL Global Development Group
  *
  * src/backend/access/transam/fdw_xact.c
  *
