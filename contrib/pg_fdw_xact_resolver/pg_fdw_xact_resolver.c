@@ -9,9 +9,10 @@
  * background worker. The launcher then launches separate background worker
  * process to resolve the foreign transaction in each database. The worker
  * process simply connects to the database specified and calls pg_fdw_xact_resolve()
- * function, which tries to resolve the transactions.
+ * function, which tries to resolve the transactions. The launcher process
+ * launches at most one worker at a time.
  *
- * Copyright (C) 2016, PostgreSQL Global Development Group
+ * Copyright (C) 2017, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *		contrib/pg_fdw_xact_resolver/pg_fdw_xact_resolver.c
@@ -171,8 +172,9 @@ FDWXactResolverMain(Datum main_arg)
 	BackgroundWorker worker;
 	BackgroundWorkerHandle *handle = NULL;
 	pid_t		pid;
+	List	*dbid_list = NIL;
 	TimestampTz launched_time = GetCurrentTimestamp();
-	TimestampTz next_launch_time = launched_time + fx_resolver_naptime * 1000L;
+	TimestampTz next_launch_time = launched_time + (fx_resolver_naptime * 1000L);
 
 	ereport(LOG,
 			(errmsg("pg_fdw_xact_resolver launcher started")));
@@ -182,17 +184,7 @@ FDWXactResolverMain(Datum main_arg)
 												 * file */
 	pqsignal(SIGTERM, FDWXactResolver_SIGTERM);	/* request shutdown */
 	pqsignal(SIGQUIT, FDWXactResolver_SIGQUIT);	/* hard crash time */
-	pqsignal(SIGALRM, SIG_IGN);
-	pqsignal(SIGPIPE, SIG_IGN);
 	pqsignal(SIGUSR1, FDWXactResolver_SIGUSR1);
-	pqsignal(SIGUSR2, SIG_IGN);
-
-	/* Reset some signals that are accepted by postmaster but not here */
-	pqsignal(SIGCHLD, SIG_DFL);
-	pqsignal(SIGTTIN, SIG_DFL);
-	pqsignal(SIGTTOU, SIG_DFL);
-	pqsignal(SIGCONT, SIG_DFL);
-	pqsignal(SIGWINCH, SIG_DFL);
 
 	/* Unblock signals */
 	BackgroundWorkerUnblockSignals();
@@ -206,8 +198,6 @@ FDWXactResolverMain(Datum main_arg)
 	while (!got_sigterm)
 	{
 		int		rc;
-		List	*dbid_list = NIL;
-		ListCell *cell;
 		int naptime_msec;
 		TimestampTz current_time = GetCurrentTimestamp();
 
@@ -261,55 +251,54 @@ FDWXactResolverMain(Datum main_arg)
 				status = GetBackgroundWorkerPid(handle, &pid);
 				if (status == BGWH_STOPPED)
 					handle = NULL;
+
+				elog(WARNING, "status : %d, handle is NULL : %d", status,
+					handle == NULL);
 			}
 		}
+
+		current_time = GetCurrentTimestamp();
 
 		/*
 		 * If no background worker is running, we can start one if there are
 		 * unresolved foreign transactions.
 		 */
 		if (!handle &&
-			TimestampDifferenceExceeds(next_launch_time,
-									   GetCurrentTimestamp(),
-									   naptime_msec))
+			TimestampDifferenceExceeds(next_launch_time, current_time, naptime_msec))
 		{
+			Oid dbid;
 
-			/* Get the database list */
-			dbid_list = get_database_list();
+			/* Get the database list if empty*/
+			if (!dbid_list)
+				dbid_list = get_database_list();
 
-			foreach(cell, dbid_list)
-			{
-				Oid dbid = lfirst_oid(cell);
+			/* Work on the first dbid, and remove it from the list */
+			dbid = linitial_oid(dbid_list);
+			dbid_list = list_delete_oid(dbid_list, dbid);
 
-				/* Work on the first dbid, and remove it from the list */
-				dbid = linitial_oid(dbid_list);
+			Assert(OidIsValid(dbid));
 
-				Assert(OidIsValid(dbid));
+			/* Start the foreign transaction resolver */
+			worker.bgw_flags = BGWORKER_SHMEM_ACCESS |
+				BGWORKER_BACKEND_DATABASE_CONNECTION;
+			worker.bgw_start_time = BgWorkerStart_RecoveryFinished;
 
-				/* Start the foreign transaction resolver */
-				worker.bgw_flags = BGWORKER_SHMEM_ACCESS |
-					BGWORKER_BACKEND_DATABASE_CONNECTION;
-				worker.bgw_start_time = BgWorkerStart_RecoveryFinished;
+			/* We will start another worker if needed */
+			worker.bgw_restart_time = BGW_NEVER_RESTART;
+			worker.bgw_main = FDWXactResolver_worker_main;
+			snprintf(worker.bgw_name, BGW_MAXLEN, "foreign transaction resolver (dbid %u)", dbid);
+			worker.bgw_main_arg = ObjectIdGetDatum(dbid);
 
-				/* We will start another worker if needed */
-				worker.bgw_restart_time = BGW_NEVER_RESTART;
-				worker.bgw_main = FDWXactResolver_worker_main;
-				snprintf(worker.bgw_name, BGW_MAXLEN, "foreign transaction resolver (dbid %u)", dbid);
-				worker.bgw_main_arg = ObjectIdGetDatum(dbid);
-
-				/* set bgw_notify_pid so that we can wait for it to finish */
-				worker.bgw_notify_pid = MyProcPid;
-
-				RegisterDynamicBackgroundWorker(&worker, &handle);
-			}
+			/* set bgw_notify_pid so that we can wait for it to finish */
+			worker.bgw_notify_pid = MyProcPid;
+			
+			RegisterDynamicBackgroundWorker(&worker, &handle);
 
 			/* Set next launch time */
-			launched_time = GetCurrentTimestamp();
+			launched_time = current_time;
 			next_launch_time = TimestampTzPlusMilliseconds(launched_time,
 														   fx_resolver_naptime * 1000L);
 		}
-
-		list_free(dbid_list);
 	}
 
 	/* Time to exit */
@@ -342,17 +331,6 @@ FDWXactResolver_worker_main(Datum dbid_datum)
 	 */
 	pqsignal(SIGTERM, FDWXactWorker_SIGTERM);
 	pqsignal(SIGQUIT, FDWXactWorker_SIGTERM);
-	pqsignal(SIGALRM, SIG_IGN);
-	pqsignal(SIGPIPE, SIG_IGN);
-	pqsignal(SIGUSR1, SIG_IGN);
-	pqsignal(SIGUSR2, SIG_IGN);
-
-	/* Reset some signals that are accepted by postmaster but not here */
-	pqsignal(SIGCHLD, SIG_DFL);
-	pqsignal(SIGTTIN, SIG_DFL);
-	pqsignal(SIGTTOU, SIG_DFL);
-	pqsignal(SIGCONT, SIG_DFL);
-	pqsignal(SIGWINCH, SIG_DFL);
 
 	/* Unblock signals */
 	BackgroundWorkerUnblockSignals();
@@ -413,6 +391,9 @@ static List *
 get_database_list(void)
 {
 	List *dblist = NIL;
+	ListCell *cell;
+	ListCell *next;
+	ListCell *prev = NULL;
 	HeapScanDesc scan;
 	HeapTuple tup;
 	Relation rel;
@@ -448,5 +429,20 @@ get_database_list(void)
 
 	CommitTransactionCommand();
 
+	for (cell = list_head(dblist); cell != NULL; cell = next)
+	{
+		Oid dbid = lfirst_oid(cell);
+		bool exists;
+
+		next = lnext(cell);
+
+		exists = fdw_xact_exists(InvalidTransactionId, dbid, InvalidOid, InvalidOid);
+
+		if (!exists)
+			dblist = list_delete_cell(dblist, cell, prev);
+		else
+			prev = cell;
+	}
+	
 	return dblist;
 }

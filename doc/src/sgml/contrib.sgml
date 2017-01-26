@@ -127,6 +127,7 @@ CREATE EXTENSION <replaceable>module_name</> FROM unpackaged;
  &passwordcheck;
  &pgbuffercache;
  &pgcrypto;
+ &pg-fdw-xact-resolver
  &pgfreespacemap;
  &pgprewarm;
  &pgrowlocks;

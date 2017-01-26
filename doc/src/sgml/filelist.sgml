@@ -133,6 +133,7 @@
 <!ENTITY passwordcheck   SYSTEM "passwordcheck.sgml">
 <!ENTITY pgbuffercache   SYSTEM "pgbuffercache.sgml">
 <!ENTITY pgcrypto        SYSTEM "pgcrypto.sgml">
+<!ENTITY pg-fdw-xact-resolver SYSTEM "pg-fdw-xact-resolver.sgml">
 <!ENTITY pgfreespacemap  SYSTEM "pgfreespacemap.sgml">
 <!ENTITY pgprewarm       SYSTEM "pgprewarm.sgml">
 <!ENTITY pgrowlocks      SYSTEM "pgrowlocks.sgml">
