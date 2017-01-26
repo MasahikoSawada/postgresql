@@ -291,7 +291,7 @@ FDWXactResolverMain(Datum main_arg)
 
 			/* set bgw_notify_pid so that we can wait for it to finish */
 			worker.bgw_notify_pid = MyProcPid;
-			
+
 			RegisterDynamicBackgroundWorker(&worker, &handle);
 
 			/* Set next launch time */
@@ -443,6 +443,6 @@ get_database_list(void)
 		else
 			prev = cell;
 	}
-	
+
 	return dblist;
 }
