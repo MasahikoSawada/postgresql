@@ -251,9 +251,6 @@ FDWXactResolverMain(Datum main_arg)
 				status = GetBackgroundWorkerPid(handle, &pid);
 				if (status == BGWH_STOPPED)
 					handle = NULL;
-
-				elog(WARNING, "status : %d, handle is NULL : %d", status,
-					handle == NULL);
 			}
 		}
 
