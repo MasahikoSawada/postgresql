@@ -272,27 +272,31 @@ FDWXactResolverMain(Datum main_arg)
 			if (!dbid_list)
 				dbid_list = get_database_list();
 
-			/* Work on the first dbid, and remove it from the list */
-			dbid = linitial_oid(dbid_list);
-			dbid_list = list_delete_oid(dbid_list, dbid);
+			/* Launch a worker if dbid_list has database */
+			if (dbid_list)
+			{
+				/* Work on the first dbid, and remove it from the list */
+				dbid = linitial_oid(dbid_list);
+				dbid_list = list_delete_oid(dbid_list, dbid);
 
-			Assert(OidIsValid(dbid));
+				Assert(OidIsValid(dbid));
 
-			/* Start the foreign transaction resolver */
-			worker.bgw_flags = BGWORKER_SHMEM_ACCESS |
-				BGWORKER_BACKEND_DATABASE_CONNECTION;
-			worker.bgw_start_time = BgWorkerStart_RecoveryFinished;
+				/* Start the foreign transaction resolver */
+				worker.bgw_flags = BGWORKER_SHMEM_ACCESS |
+					BGWORKER_BACKEND_DATABASE_CONNECTION;
+				worker.bgw_start_time = BgWorkerStart_RecoveryFinished;
 
-			/* We will start another worker if needed */
-			worker.bgw_restart_time = BGW_NEVER_RESTART;
-			worker.bgw_main = FDWXactResolver_worker_main;
-			snprintf(worker.bgw_name, BGW_MAXLEN, "foreign transaction resolver (dbid %u)", dbid);
-			worker.bgw_main_arg = ObjectIdGetDatum(dbid);
+				/* We will start another worker if needed */
+				worker.bgw_restart_time = BGW_NEVER_RESTART;
+				worker.bgw_main = FDWXactResolver_worker_main;
+				snprintf(worker.bgw_name, BGW_MAXLEN, "foreign transaction resolver (dbid %u)", dbid);
+				worker.bgw_main_arg = ObjectIdGetDatum(dbid);
 
-			/* set bgw_notify_pid so that we can wait for it to finish */
-			worker.bgw_notify_pid = MyProcPid;
+				/* set bgw_notify_pid so that we can wait for it to finish */
+				worker.bgw_notify_pid = MyProcPid;
 
-			RegisterDynamicBackgroundWorker(&worker, &handle);
+				RegisterDynamicBackgroundWorker(&worker, &handle);
+			}
 
 			/* Set next launch time */
 			launched_time = current_time;
@@ -429,6 +433,10 @@ get_database_list(void)
 
 	CommitTransactionCommand();
 
+	/*
+	 * Check if database has foreign transaction entry. Delete entry
+	 * from the list if the database has.
+	 */
 	for (cell = list_head(dblist); cell != NULL; cell = next)
 	{
 		Oid dbid = lfirst_oid(cell);
