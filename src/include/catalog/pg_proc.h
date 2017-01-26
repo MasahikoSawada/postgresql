@@ -5269,7 +5269,7 @@ DATA(insert OID = 3992 ( dense_rank			PGNSP PGUID 12 1 0 2276 0 t f f f f f i s 
 DESCR("rank of hypothetical row without gaps");
 DATA(insert OID = 3993 ( dense_rank_final	PGNSP PGUID 12 1 0 2276 0 f f f f f f i s 2 0 20 "2281 2276" "{2281,2276}" "{i,v}" _null_ _null_ _null_ hypothetical_dense_rank_final _null_ _null_ _null_ ));
 DESCR("aggregate final function");
-DATA(insert OID = 4109 ( pg_fdw_xacts	PGNSP PGUID 12 1 1000 0 0 f f f f t t v u 0 0 2249 "" "{26, 28,26,26,25,25}" "{o,o,o,o,o,o}" "{dbid, transaction,serverid,userid,status,identifier}" _null_ _null_ pg_fdw_xacts _null_ _null_ _null_ ));
+DATA(insert OID = 4109 ( pg_fdw_xacts	PGNSP PGUID 12 1 1000 0 0 f f f f t t v u 0 0 2249 "" "{26,28,26,26,25,25}" "{o,o,o,o,o,o}" "{dbid, transaction,serverid,userid,status,identifier}" _null_ _null_ pg_fdw_xacts _null_ _null_ _null_ ));
 DESCR("view foreign transactions");
 DATA(insert OID = 4110 ( pg_fdw_xact_resolve	PGNSP PGUID 12 1 1000 0 0 f f f f t t v u 0 0 2249 "" "{26, 28,26,26,25,25}" "{o,o,o,o,o,o}" "{dbid, transaction,serverid,userid,status,identifier}" _null_ _null_ pg_fdw_xact_resolve _null_ _null_ _null_ ));
 DESCR("resolve foreign prepared transactions");
