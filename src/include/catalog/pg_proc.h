@@ -2915,7 +2915,8 @@ DATA(insert OID = 3776 (  pg_stat_reset_single_table_counters	PGNSP PGUID 12 1 0
 DESCR("statistics: reset collected statistics for a single table or index in the current database");
 DATA(insert OID = 3777 (  pg_stat_reset_single_function_counters	PGNSP PGUID 12 1 0 0 0 f f f f t f v s 1 0 2278 "26" _null_ _null_ _null_ _null_ _null_ pg_stat_reset_single_function_counters _null_ _null_ _null_ ));
 DESCR("statistics: reset collected statistics for a single function in the current database");
-
+DATA(insert OID = 3353 (  pg_stat_get_bgworkers	PGNSP PGUID 12 1 10 0 0 f f f f f t s r 0 0 2249 "" "{23,25,25,25,23,25,23}" "{o,o,o,o,o,o,o}" "{pid,name,func_name,lib_name,flags,start_time,restart_time}" _null_ _null_ pg_stat_get_bgworkers _null_ _null_ _null_ ));
+DESCR("statistics: information about background workers");
 DATA(insert OID = 3163 (  pg_trigger_depth				PGNSP PGUID 12 1 0 0 0 f f f f t f s s 0 0 23 "" _null_ _null_ _null_ _null_ _null_ pg_trigger_depth _null_ _null_ _null_ ));
 DESCR("current trigger depth");
 

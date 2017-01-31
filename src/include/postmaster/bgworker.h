@@ -41,6 +41,8 @@
 #ifndef BGWORKER_H
 #define BGWORKER_H
 
+#include "fmgr.h"
+
 /*---------------------------------------------------------------------
  * External module API.
  *---------------------------------------------------------------------
@@ -149,5 +151,7 @@ extern void BackgroundWorkerInitializeConnectionByOid(Oid dboid, Oid useroid);
 /* Block/unblock signals in a background worker process */
 extern void BackgroundWorkerBlockSignals(void);
 extern void BackgroundWorkerUnblockSignals(void);
+
+extern Datum pg_stat_get_bgworkers(PG_FUNCTION_ARGS);
 
 #endif   /* BGWORKER_H */

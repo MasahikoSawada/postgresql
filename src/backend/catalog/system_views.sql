@@ -867,6 +867,17 @@ CREATE VIEW pg_stat_progress_vacuum AS
     FROM pg_stat_get_progress_info('VACUUM') AS S
 		LEFT JOIN pg_database D ON S.datid = D.oid;
 
+CREATE VIEW pg_stat_bgworkers AS
+	SELECT
+		s.pid,
+		s.name,
+		s.func_name,
+		s.lib_name,
+		s.flags,
+		s.start_time,
+		s.restart_time
+	FROM pg_stat_get_bgworkers() AS s;
+
 CREATE VIEW pg_user_mappings AS
     SELECT
         U.oid       AS umid,

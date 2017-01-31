@@ -14,6 +14,7 @@
 
 #include <unistd.h>
 
+#include "funcapi.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -32,8 +33,10 @@
 #include "storage/shmem.h"
 #include "tcop/tcopprot.h"
 #include "utils/ascii.h"
+#include "utils/builtins.h"
 #include "utils/ps_status.h"
 #include "utils/timeout.h"
+#include "utils/timestamp.h"
 
 /*
  * The postmaster's list of registered background workers, in private memory.
@@ -1116,4 +1119,117 @@ TerminateBackgroundWorker(BackgroundWorkerHandle *handle)
 	/* Make sure the postmaster notices the change to shared memory. */
 	if (signal_postmaster)
 		SendPostmasterSignal(PMSIGNAL_BACKGROUND_WORKER_CHANGE);
+}
+
+Datum
+pg_stat_get_bgworkers(PG_FUNCTION_ARGS)
+{
+#define PG_STAT_GET_BGWORKERS_COLS 7
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+	int slotno;
+
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not "\
+						"allowed in this context")));
+
+	/* Build a tupledescriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	for (slotno = 0; slotno < max_worker_processes; slotno++)
+	{
+		BackgroundWorkerSlot *bgw = &(BackgroundWorkerData->slot[slotno]);
+		Datum	values[PG_STAT_GET_BGWORKERS_COLS];
+		bool	nulls[PG_STAT_GET_BGWORKERS_COLS];
+		char	*bgw_start_time;
+
+		/* NOt count not started or dead bgworker */
+		if (bgw->pid == InvalidPid || bgw->pid == 0)
+			continue;
+
+		memset(nulls, 0, sizeof(nulls));
+
+		/* pid */
+		values[0] = Int32GetDatum(bgw->pid);
+
+		if (!superuser())
+		{
+			/*
+			 * Only superuers can see details. Other users only get the
+			 * pid value to know it's a bgworker, but not details.
+			 */
+			MemSet(&nulls[1], true, PG_STAT_GET_BGWORKERS_COLS - 1);
+		}
+		else
+		{
+			if (bgw->worker.bgw_name != NULL)
+			{
+				/* bgworker name */
+				values[1] = CStringGetTextDatum(bgw->worker.bgw_name);
+				/* function name */
+				nulls[2] = true;
+				/* library name */
+				nulls[3] = true;
+			}
+			else
+			{
+				/* bgworker name */
+				nulls[1] = true;
+				/* function name */
+				values[2] = CStringGetTextDatum(bgw->worker.bgw_function_name);
+				/* library name */
+				values[3] = CStringGetTextDatum(bgw->worker.bgw_library_name);
+			}
+
+			/* bgworker flags */
+			values[4] = Int32GetDatum(bgw->worker.bgw_flags);
+
+			/* start time */
+			elog(NOTICE, "start %d", bgw->worker.bgw_start_time);
+			switch (bgw->worker.bgw_start_time)
+			{
+				case BgWorkerStart_PostmasterStart:
+					bgw_start_time = "Postmaster Start";
+					break;
+				case BgWorkerStart_ConsistentState:
+					bgw_start_time = "Consistent State";
+					break;
+				case BgWorkerStart_RecoveryFinished:
+					bgw_start_time = "Recovery Finished";
+					break;
+				default:
+					bgw_start_time = "unknown";
+			}
+			values[5] = CStringGetTextDatum(bgw_start_time);
+
+			/* restart time */
+			values[6] = Int32GetDatum(bgw->worker.bgw_restart_time);
+		}
+
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+
+	tuplestore_donestoring(tupstore);
+
+	return (Datum) 0;
 }
