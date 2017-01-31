@@ -510,8 +510,7 @@ ProcedureCreate(const char *procedureName,
 											 Anum_pg_proc_proargdefaults,
 											 &isnull);
 			Assert(!isnull);
-			oldDefaults = (List *) stringToNode(TextDatumGetCString(proargdefaults));
-			Assert(IsA(oldDefaults, List));
+			oldDefaults = castNode(List, stringToNode(TextDatumGetCString(proargdefaults)));
 			Assert(list_length(oldDefaults) == oldproc->pronargdefaults);
 
 			/* new list can have more defaults than old, advance over 'em */
@@ -931,7 +930,7 @@ fmgr_sql_validator(PG_FUNCTION_ARGS)
 			querytree_list = NIL;
 			foreach(lc, raw_parsetree_list)
 			{
-				RawStmt    *parsetree = (RawStmt *) lfirst(lc);
+				RawStmt    *parsetree = castNode(RawStmt, lfirst(lc));
 				List	   *querytree_sublist;
 
 				querytree_sublist = pg_analyze_and_rewrite_params(parsetree,

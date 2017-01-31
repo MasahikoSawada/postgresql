@@ -52,6 +52,7 @@
 #include "nodes/makefuncs.h"
 #include "storage/fd.h"
 #include "tcop/utility.h"
+#include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
@@ -713,7 +714,7 @@ execute_sql_string(const char *sql, const char *filename)
 	 */
 	foreach(lc1, raw_parsetree_list)
 	{
-		RawStmt    *parsetree = (RawStmt *) lfirst(lc1);
+		RawStmt    *parsetree = castNode(RawStmt, lfirst(lc1));
 		List	   *stmt_list;
 		ListCell   *lc2;
 
@@ -725,7 +726,7 @@ execute_sql_string(const char *sql, const char *filename)
 
 		foreach(lc2, stmt_list)
 		{
-			PlannedStmt *stmt = (PlannedStmt *) lfirst(lc2);
+			PlannedStmt *stmt = castNode(PlannedStmt, lfirst(lc2));
 
 			CommandCounterIncrement();
 
@@ -3240,6 +3241,16 @@ ExecAlterExtensionContentsStmt(AlterExtensionContentsStmt *stmt,
 		 * OK, add the dependency.
 		 */
 		recordDependencyOn(&object, &extension, DEPENDENCY_EXTENSION);
+
+		/*
+		 * Also record the initial ACL on the object, if any.
+		 *
+		 * Note that this will handle the object's ACLs, as well as any ACLs
+		 * on object subIds.  (In other words, when the object is a table,
+		 * this will record the table's ACL and the ACLs for the columns on
+		 * the table, if any).
+		 */
+		recordExtObjInitPriv(object.objectId, object.classId);
 	}
 	else
 	{
@@ -3267,6 +3278,16 @@ ExecAlterExtensionContentsStmt(AlterExtensionContentsStmt *stmt,
 		 */
 		if (object.classId == RelationRelationId)
 			extension_config_remove(extension.objectId, object.objectId);
+
+		/*
+		 * Remove all the initial ACLs, if any.
+		 *
+		 * Note that this will remove the object's ACLs, as well as any ACLs
+		 * on object subIds.  (In other words, when the object is a table,
+		 * this will remove the table's ACL and the ACLs for the columns on
+		 * the table, if any).
+		 */
+		removeExtObjInitPriv(object.objectId, object.classId);
 	}
 
 	InvokeObjectPostAlterHook(ExtensionRelationId, extension.objectId, 0);
