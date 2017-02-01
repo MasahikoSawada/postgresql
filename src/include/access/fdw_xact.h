@@ -3,8 +3,7 @@
  *
  * PostgreSQL distributed transaction manager
  *
- * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
- * Portions Copyright (c) 1994, Regents of the University of California
+ * Portions Copyright (c) 2017, PostgreSQL Global Development Group
  *
  * src/include/access/fdw_xact.h
  */
@@ -72,8 +71,5 @@ extern void PreCommit_FDWXacts(void);
 extern void KnownFDWXactAdd(XLogReaderState *record);
 extern void KnownFDWXactRemove(TransactionId xid, Oid serverid, Oid userid);
 extern void KnownFDWXactRecreateFiles(XLogRecPtr redo_horizon);
-
-/* For the sake of foreign transaction resolver */
-extern List	*get_dbids_with_unresolved_xact(void);
 
 #endif /* FDW_XACT_H */

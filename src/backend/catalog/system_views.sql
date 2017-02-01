@@ -136,7 +136,7 @@ CREATE VIEW pg_tables AS
         C.relrowsecurity AS rowsecurity
     FROM pg_class C LEFT JOIN pg_namespace N ON (N.oid = C.relnamespace)
          LEFT JOIN pg_tablespace T ON (T.oid = C.reltablespace)
-    WHERE C.relkind = 'r';
+    WHERE C.relkind IN ('r', 'P');
 
 CREATE VIEW pg_matviews AS
     SELECT
@@ -248,6 +248,15 @@ CREATE VIEW pg_stats WITH (security_barrier) AS
 
 REVOKE ALL on pg_statistic FROM public;
 
+CREATE VIEW pg_publication_tables AS
+    SELECT
+        P.pubname AS pubname,
+        N.nspname AS schemaname,
+        C.relname AS tablename
+    FROM pg_publication P, pg_class C
+         JOIN pg_namespace N ON (N.oid = C.relnamespace)
+    WHERE C.oid IN (SELECT relid FROM pg_get_publication_tables(P.pubname));
+
 CREATE VIEW pg_locks AS
     SELECT * FROM pg_lock_status() AS L;
 
@@ -283,7 +292,7 @@ CREATE VIEW pg_fdw_xacts AS
 CREATE VIEW pg_seclabels AS
 SELECT
 	l.objoid, l.classoid, l.objsubid,
-	CASE WHEN rel.relkind = 'r' THEN 'table'::text
+	CASE WHEN rel.relkind IN ('r', 'P') THEN 'table'::text
 		 WHEN rel.relkind = 'v' THEN 'view'::text
 		 WHEN rel.relkind = 'm' THEN 'materialized view'::text
 		 WHEN rel.relkind = 'S' THEN 'sequence'::text
@@ -452,6 +461,12 @@ CREATE VIEW pg_file_settings AS
 
 REVOKE ALL on pg_file_settings FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION pg_show_all_file_settings() FROM PUBLIC;
+
+CREATE VIEW pg_hba_file_rules AS
+   SELECT * FROM pg_hba_file_rules() AS A;
+
+REVOKE ALL on pg_hba_file_rules FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pg_hba_file_rules() FROM PUBLIC;
 
 CREATE VIEW pg_timezone_abbrevs AS
     SELECT * FROM pg_timezone_abbrevs();
@@ -711,6 +726,20 @@ CREATE VIEW pg_stat_wal_receiver AS
     FROM pg_stat_get_wal_receiver() s
     WHERE s.pid IS NOT NULL;
 
+CREATE VIEW pg_stat_subscription AS
+    SELECT
+            su.oid AS subid,
+            su.subname,
+            st.pid,
+            st.received_lsn,
+            st.last_msg_send_time,
+            st.last_msg_receipt_time,
+            st.latest_end_lsn,
+            st.latest_end_time
+    FROM pg_subscription su
+            LEFT JOIN pg_stat_get_subscription(NULL) st
+                      ON (st.subid = su.oid);
+
 CREATE VIEW pg_stat_ssl AS
     SELECT
             S.pid,
@@ -868,6 +897,8 @@ CREATE VIEW pg_replication_origin_status AS
     FROM pg_show_replication_origin_status();
 
 REVOKE ALL ON pg_replication_origin_status FROM public;
+
+REVOKE ALL ON pg_subscription FROM public;
 
 --
 -- We have a few function definitions in here, too.

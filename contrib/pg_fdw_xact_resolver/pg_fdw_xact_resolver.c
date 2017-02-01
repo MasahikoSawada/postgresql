@@ -8,10 +8,11 @@
  * The extension launches foreign transaction resolver launcher process as a
  * background worker. The launcher then launches separate background worker
  * process to resolve the foreign transaction in each database. The worker
- * process simply connects to the database specified and calls pg_fdw_resolve()
- * function, which tries to resolve the transactions.
+ * process simply connects to the database specified and calls pg_fdw_xact_resolve()
+ * function, which tries to resolve the transactions. The launcher process
+ * launches at most one worker at a time.
  *
- * Copyright (C) 2016, PostgreSQL Global Development Group
+ * Copyright (C) 2017, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *		contrib/pg_fdw_xact_resolver/pg_fdw_xact_resolver.c
@@ -30,14 +31,18 @@
 #include "storage/shmem.h"
 
 /* these headers are used by this particular worker's code */
+#include "access/heapam.h"
+#include "access/htup_details.h"
 #include "access/xact.h"
 #include "access/fdw_xact.h"
+#include "catalog/pg_database.h"
 #include "executor/spi.h"
 #include "fmgr.h"
 #include "lib/stringinfo.h"
 #include "pgstat.h"
 #include "utils/builtins.h"
 #include "utils/snapmgr.h"
+#include "utils/timestamp.h"
 #include "tcop/utility.h"
 
 PG_MODULE_MAGIC;
@@ -55,9 +60,10 @@ static volatile sig_atomic_t got_sigusr1 = false;
 
 static void FDWXactResolver_worker_main(Datum dbid_datum);
 static void FDWXactResolverMain(Datum main_arg);
+static List *get_database_list(void);
 
-/* How frequently the resolver demon checks for unresolved transactions? */
-#define FDW_XACT_RESOLVE_NAP_TIME (10 * 1000L)
+/* GUC variable */
+static int fx_resolver_naptime;
 
 /*
  * Signal handler for SIGTERM
@@ -130,6 +136,17 @@ _PG_init(void)
 	if (!process_shared_preload_libraries_in_progress)
 		return;
 
+	DefineCustomIntVariable("pg_fdw_xact_resolver.naptime",
+							"Time to sleep between pg_fdw_xact_resolver runs.",
+							NULL,
+							&fx_resolver_naptime,
+							60,
+							1,
+							INT_MAX,
+							PGC_SIGHUP,
+							0,
+							NULL, NULL, NULL);
+
 	/* set up common data for all our workers */
 	/*
 	 * For some reason unless background worker set
@@ -139,7 +156,7 @@ _PG_init(void)
 	 */
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_RecoveryFinished;
-	worker.bgw_restart_time = 0;	/* restart immediately */
+	worker.bgw_restart_time = 5;
 	snprintf(worker.bgw_name, BGW_MAXLEN, "foreign transaction resolver launcher");
 	worker.bgw_main = FDWXactResolverMain;
 	worker.bgw_main_arg = (Datum) 0;/* Craft some dummy arg. */
@@ -155,27 +172,25 @@ FDWXactResolverMain(Datum main_arg)
 	BackgroundWorker worker;
 	BackgroundWorkerHandle *handle = NULL;
 	pid_t		pid;
+	List	*dbid_list = NIL;
+	TimestampTz launched_time = GetCurrentTimestamp();
+	TimestampTz next_launch_time = launched_time + (fx_resolver_naptime * 1000L);
+
+	ereport(LOG,
+			(errmsg("pg_fdw_xact_resolver launcher started")));
 
 	/* Properly accept or ignore signals the postmaster might send us */
 	pqsignal(SIGHUP, FDWXactResolver_SIGHUP);		/* set flag to read config
 												 * file */
-	pqsignal(SIGINT, SIG_IGN);
 	pqsignal(SIGTERM, FDWXactResolver_SIGTERM);	/* request shutdown */
 	pqsignal(SIGQUIT, FDWXactResolver_SIGQUIT);	/* hard crash time */
-	pqsignal(SIGALRM, SIG_IGN);
-	pqsignal(SIGPIPE, SIG_IGN);
 	pqsignal(SIGUSR1, FDWXactResolver_SIGUSR1);
-	pqsignal(SIGUSR2, SIG_IGN);
-
-	/* Reset some signals that are accepted by postmaster but not here */
-	pqsignal(SIGCHLD, SIG_DFL);
-	pqsignal(SIGTTIN, SIG_DFL);
-	pqsignal(SIGTTOU, SIG_DFL);
-	pqsignal(SIGCONT, SIG_DFL);
-	pqsignal(SIGWINCH, SIG_DFL);
 
 	/* Unblock signals */
 	BackgroundWorkerUnblockSignals();
+
+	/* Initialize connection */
+	BackgroundWorkerInitializeConnection(NULL, NULL);
 
 	/*
 	 * Main loop: do this until the SIGTERM handler tells us to terminate
@@ -183,43 +198,14 @@ FDWXactResolverMain(Datum main_arg)
 	while (!got_sigterm)
 	{
 		int		rc;
-		List	*dbid_list = NIL;
-		/*
-		 * If no background worker is running, we can start one if there are
-		 * unresolved foreign transactions.
-		 */
-		if (!handle)
-		{
-			/*
-			 * If we do not know which databases have foreign servers with
-			 * unresolved foreign transactions, get the list.
-			 */
-			if (!dbid_list)
-				dbid_list = get_dbids_with_unresolved_xact();
+		int naptime_msec;
+		TimestampTz current_time = GetCurrentTimestamp();
 
-			if (dbid_list)
-			{
-				/* Work on the first dbid, and remove it from the list */
-				Oid dbid = linitial_oid(dbid_list);
-				dbid_list = list_delete_first(dbid_list);
+		/* Determine sleep time */
+		naptime_msec = (fx_resolver_naptime * 1000L) - (current_time - launched_time);
 
-				Assert(OidIsValid(dbid));
-
-				/* Start the foreign transaction resolver */
-				worker.bgw_flags = BGWORKER_SHMEM_ACCESS |
-					BGWORKER_BACKEND_DATABASE_CONNECTION;
-				worker.bgw_start_time = BgWorkerStart_RecoveryFinished;
-				/* We will start another worker if needed */
-				worker.bgw_restart_time = BGW_NEVER_RESTART;
-				worker.bgw_main = FDWXactResolver_worker_main;
-				snprintf(worker.bgw_name, BGW_MAXLEN, "foreign transaction resolver (dbid %u)", dbid);
-				worker.bgw_main_arg = ObjectIdGetDatum(dbid);
-				/* set bgw_notify_pid so that we can wait for it to finish */
-				worker.bgw_notify_pid = MyProcPid;
-
-				RegisterDynamicBackgroundWorker(&worker, &handle);
-			}
-		}
+		if (naptime_msec < 0)
+			naptime_msec = 0;
 
 		/*
 		 * Background workers mustn't call usleep() or any direct equivalent:
@@ -229,7 +215,7 @@ FDWXactResolverMain(Datum main_arg)
 		 */
 		rc = WaitLatch(MyLatch,
 					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-					   FDW_XACT_RESOLVE_NAP_TIME,
+					   naptime_msec,
 					   WAIT_EVENT_PG_SLEEP);
 		ResetLatch(MyLatch);
 
@@ -238,8 +224,15 @@ FDWXactResolverMain(Datum main_arg)
 			proc_exit(1);
 
 		/*
-		 * In case of a SIGHUP, just reload the configuration.
+		 * Postmaster wants to stop this process. Exit with non-zero code, so
+		 * that the postmaster starts this process again. The worker processes
+		 * will receive the signal and end themselves. This process will restart
+		 * them if necessary.
 		 */
+		if (got_sigquit)
+			proc_exit(2);
+
+		/* In case of a SIGHUP, just reload the configuration */
 		if (got_sighup)
 		{
 			got_sighup = false;
@@ -261,14 +254,52 @@ FDWXactResolverMain(Datum main_arg)
 			}
 		}
 
+		current_time = GetCurrentTimestamp();
+
 		/*
-		 * Postmaster wants to stop this process. Exit with non-zero code, so
-		 * that the postmaster starts this process again. The worker processes
-		 * will receive the signal and end themselves. This process will restart
-		 * them if necessary.
+		 * If no background worker is running, we can start one if there are
+		 * unresolved foreign transactions.
 		 */
-		if (got_sigquit)
-			proc_exit(2);
+		if (!handle &&
+			TimestampDifferenceExceeds(next_launch_time, current_time, naptime_msec))
+		{
+			Oid dbid;
+
+			/* Get the database list if empty*/
+			if (!dbid_list)
+				dbid_list = get_database_list();
+
+			/* Launch a worker if dbid_list has database */
+			if (dbid_list)
+			{
+				/* Work on the first dbid, and remove it from the list */
+				dbid = linitial_oid(dbid_list);
+				dbid_list = list_delete_oid(dbid_list, dbid);
+
+				Assert(OidIsValid(dbid));
+
+				/* Start the foreign transaction resolver */
+				worker.bgw_flags = BGWORKER_SHMEM_ACCESS |
+					BGWORKER_BACKEND_DATABASE_CONNECTION;
+				worker.bgw_start_time = BgWorkerStart_RecoveryFinished;
+
+				/* We will start another worker if needed */
+				worker.bgw_restart_time = BGW_NEVER_RESTART;
+				worker.bgw_main = FDWXactResolver_worker_main;
+				snprintf(worker.bgw_name, BGW_MAXLEN, "foreign transaction resolver (dbid %u)", dbid);
+				worker.bgw_main_arg = ObjectIdGetDatum(dbid);
+
+				/* set bgw_notify_pid so that we can wait for it to finish */
+				worker.bgw_notify_pid = MyProcPid;
+
+				RegisterDynamicBackgroundWorker(&worker, &handle);
+			}
+
+			/* Set next launch time */
+			launched_time = current_time;
+			next_launch_time = TimestampTzPlusMilliseconds(launched_time,
+														   fx_resolver_naptime * 1000L);
+		}
 	}
 
 	/* Time to exit */
@@ -291,7 +322,7 @@ FDWXactWorker_SIGTERM(SIGNAL_ARGS)
 static void
 FDWXactResolver_worker_main(Datum dbid_datum)
 {
-	char	*command = "SELECT pg_fdw_resolve()";
+	char	*command = "SELECT * FROM pg_fdw_xact_resolve() WHERE status = 'resolved'";
 	Oid		dbid = DatumGetObjectId(dbid_datum);
 	int		ret;
 
@@ -301,18 +332,6 @@ FDWXactResolver_worker_main(Datum dbid_datum)
 	 */
 	pqsignal(SIGTERM, FDWXactWorker_SIGTERM);
 	pqsignal(SIGQUIT, FDWXactWorker_SIGTERM);
-	pqsignal(SIGINT, SIG_IGN);
-	pqsignal(SIGALRM, SIG_IGN);
-	pqsignal(SIGPIPE, SIG_IGN);
-	pqsignal(SIGUSR1, SIG_IGN);
-	pqsignal(SIGUSR2, SIG_IGN);
-
-	/* Reset some signals that are accepted by postmaster but not here */
-	pqsignal(SIGCHLD, SIG_DFL);
-	pqsignal(SIGTTIN, SIG_DFL);
-	pqsignal(SIGTTOU, SIG_DFL);
-	pqsignal(SIGCONT, SIG_DFL);
-	pqsignal(SIGWINCH, SIG_DFL);
 
 	/* Unblock signals */
 	BackgroundWorkerUnblockSignals();
@@ -349,8 +368,12 @@ FDWXactResolver_worker_main(Datum dbid_datum)
 	ret = SPI_execute(command, false, 0);
 
 	if (ret < 0)
-		elog(LOG, "error running pg_fdw_resolve() within database %d",
+		elog(LOG, "error running pg_fdw_xact_resolve() within database %d",
 			 dbid);
+
+	if (SPI_processed > 0)
+		ereport(LOG,
+				(errmsg("resolved %lu foreign transactions", SPI_processed)));
 
 	/*
 	 * And finish our transaction.
@@ -362,4 +385,69 @@ FDWXactResolver_worker_main(Datum dbid_datum)
 
 	/* Done exit now */
 	proc_exit(0);
+}
+
+/* Get database list */
+static List *
+get_database_list(void)
+{
+	List *dblist = NIL;
+	ListCell *cell;
+	ListCell *next;
+	ListCell *prev = NULL;
+	HeapScanDesc scan;
+	HeapTuple tup;
+	Relation rel;
+	MemoryContext resultcxt;
+
+	/* This is the context that we will allocate our output data in */
+	resultcxt = CurrentMemoryContext;
+
+	SetCurrentStatementStartTimestamp();
+	StartTransactionCommand();
+	(void) GetTransactionSnapshot();
+
+	rel = heap_open(DatabaseRelationId, AccessShareLock);
+	scan = heap_beginscan_catalog(rel, 0, NULL);
+
+	while (HeapTupleIsValid(tup = heap_getnext(scan, ForwardScanDirection)))
+	{
+		MemoryContext oldcxt;
+
+		/*
+		 * Allocate our results in the caller's context, not the
+		 * transaction's. We do this inside the loop, and restore the original
+		 * context at the end, so that leaky things like heap_getnext() are
+		 * not called in a potentially long-lived context.
+		 */
+		oldcxt = MemoryContextSwitchTo(resultcxt);
+		dblist = lappend_oid(dblist, HeapTupleGetOid(tup));
+		MemoryContextSwitchTo(oldcxt);
+	}
+
+	heap_endscan(scan);
+	heap_close(rel, AccessShareLock);
+
+	CommitTransactionCommand();
+
+	/*
+	 * Check if database has foreign transaction entry. Delete entry
+	 * from the list if the database has.
+	 */
+	for (cell = list_head(dblist); cell != NULL; cell = next)
+	{
+		Oid dbid = lfirst_oid(cell);
+		bool exists;
+
+		next = lnext(cell);
+
+		exists = fdw_xact_exists(InvalidTransactionId, dbid, InvalidOid, InvalidOid);
+
+		if (!exists)
+			dblist = list_delete_cell(dblist, cell, prev);
+		else
+			prev = cell;
+	}
+
+	return dblist;
 }
