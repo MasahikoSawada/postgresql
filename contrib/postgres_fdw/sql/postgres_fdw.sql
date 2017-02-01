@@ -671,12 +671,12 @@ select sum(c1%3), sum(distinct c1%3 order by c1%3) filter (where c1%3 < 2), c2 f
 
 -- Outer query is aggregation query
 explain (verbose, costs off)
-select distinct (select count(*) filter (where t2.c2 = 6 and t2.c1 < 10) from ft1 t1 where t1.c1 = 6) from ft2 t2 order by 1;
-select distinct (select count(*) filter (where t2.c2 = 6 and t2.c1 < 10) from ft1 t1 where t1.c1 = 6) from ft2 t2 order by 1;
+select distinct (select count(*) filter (where t2.c2 = 6 and t2.c1 < 10) from ft1 t1 where t1.c1 = 6) from ft2 t2 where t2.c2 % 6 = 0 order by 1;
+select distinct (select count(*) filter (where t2.c2 = 6 and t2.c1 < 10) from ft1 t1 where t1.c1 = 6) from ft2 t2 where t2.c2 % 6 = 0 order by 1;
 -- Inner query is aggregation query
 explain (verbose, costs off)
-select distinct (select count(t1.c1) filter (where t2.c2 = 6 and t2.c1 < 10) from ft1 t1 where t1.c1 = 6) from ft2 t2 order by 1;
-select distinct (select count(t1.c1) filter (where t2.c2 = 6 and t2.c1 < 10) from ft1 t1 where t1.c1 = 6) from ft2 t2 order by 1;
+select distinct (select count(t1.c1) filter (where t2.c2 = 6 and t2.c1 < 10) from ft1 t1 where t1.c1 = 6) from ft2 t2 where t2.c2 % 6 = 0 order by 1;
+select distinct (select count(t1.c1) filter (where t2.c2 = 6 and t2.c1 < 10) from ft1 t1 where t1.c1 = 6) from ft2 t2 where t2.c2 % 6 = 0 order by 1;
 
 -- Aggregate not pushed down as FILTER condition is not pushable
 explain (verbose, costs off)
@@ -832,8 +832,8 @@ select sum(c2) * (random() <= 1)::int as sum from ft1 order by 1;
 -- LATERAL join, with parameterization
 set enable_hashagg to false;
 explain (verbose, costs off)
-select c2, sum from "S 1"."T 1" t1, lateral (select sum(t2.c1 + t1."C 1") sum from ft2 t2 group by t2.c1) qry where t1.c2 * 2 = qry.sum and t1.c2 < 10 order by 1;
-select c2, sum from "S 1"."T 1" t1, lateral (select sum(t2.c1 + t1."C 1") sum from ft2 t2 group by t2.c1) qry where t1.c2 * 2 = qry.sum and t1.c2 < 10 order by 1;
+select c2, sum from "S 1"."T 1" t1, lateral (select sum(t2.c1 + t1."C 1") sum from ft2 t2 group by t2.c1) qry where t1.c2 * 2 = qry.sum and t1.c2 < 3 and t1."C 1" < 100 order by 1;
+select c2, sum from "S 1"."T 1" t1, lateral (select sum(t2.c1 + t1."C 1") sum from ft2 t2 group by t2.c1) qry where t1.c2 * 2 = qry.sum and t1.c2 < 3 and t1."C 1" < 100 order by 1;
 reset enable_hashagg;
 
 -- Check with placeHolderVars
@@ -1725,45 +1725,27 @@ ALTER SERVER loopback3 OPTIONS(ADD two_phase_commit 'on');
 
 \des+
 
--- one not supporting server
+-- one server not supporting 2PC.
 BEGIN;
 INSERT INTO ft7 VALUES(101);
 COMMIT;
 SELECT COUNT(*) FROM ft8;
 
--- One not supporting server and one supporting server
+-- One server supporting 2PC and another one server not supporting 2PC.
 BEGIN;
 INSERT INTO ft7 VALUES(102);
 INSERT INTO ft8 VALUES(103);
 COMMIT;
 SELECT COUNT(*) FROM ft8;
 
--- Two supporting server and one not supporting server.
+-- Two supporting server.
 BEGIN;
-INSERT INTO ft7 VALUES(104);
 INSERT INTO ft8 VALUES(105);
 INSERT INTO ft9 VALUES(106);
 COMMIT;
 SELECT COUNT(*) FROM ft8;
 
--- one local and one not supporting foreign server
-BEGIN;
-INSERT INTO ft7 VALUES(107);
-INSERT INTO "S 1"."T 6" VALUES (1);
-COMMIT;
-SELECT COUNT(*) FROM ft8;
-SELECT COUNT(*) FROM "S 1"."T 6";
-
--- one local and one supporting foreign server and not supporting one
-BEGIN;
-INSERT INTO ft7 VALUES(108);
-INSERT INTO ft8 VALUES(109);
-INSERT INTO "S 1"."T 6" VALUES (2);
-COMMIT;
-SELECT COUNT(*) FROM ft8;
-SELECT COUNT(*) FROM "S 1"."T 6";
-
--- one local and two supporting foreign server and not supporting one
+-- Local changes and two servers supporting 2PC.
 BEGIN;
 INSERT INTO ft7 VALUES(110);
 INSERT INTO ft8 VALUES(111);
@@ -1773,14 +1755,14 @@ COMMIT;
 SELECT COUNT(*) FROM ft8;
 SELECT COUNT(*) FROM "S 1"."T 6";
 
--- transaction updating on single supporting foreign server with violation on foreign server
+-- transaction updating on single supporting foreign server with violation on foreign server.
 BEGIN;
 INSERT INTO ft8 VALUES(113);
 INSERT INTO ft8 VALUES(110); -- violation on foreign server
 COMMIT;
 SELECT COUNT(*) FROM ft8;
 
--- transaction updating on single supporting foreign server and local with violation on local
+-- transaction updating on single supporting foreign server and local with violation on local.
 BEGIN;
 INSERT INTO ft8 VALUES(114);
 INSERT INTO "S 1"."T 6" VALUES (4);
@@ -1789,7 +1771,7 @@ COMMIT;
 SELECT COUNT(*) FROM ft8;
 SELECT COUNT(*) FROM "S 1"."T 6";
 
--- violation on foreign server supporting 2PC
+-- violation on foreign server supporting 2PC.
 BEGIN;
 INSERT INTO ft8 VALUES(115);
 INSERT INTO ft9 VALUES(116);
@@ -1797,7 +1779,7 @@ INSERT INTO ft9 VALUES(110); -- violation on foreign server
 COMMIT;
 SELECT COUNT(*) FROM ft8;
 
--- transaction involing local and foreign server with violation on local server
+-- transaction involing local and foreign server with violation on local server.
 BEGIN;
 INSERT INTO ft8 VALUES(117);
 INSERT INTO ft9 VALUES(118);

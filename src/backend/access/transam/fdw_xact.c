@@ -5,7 +5,7 @@
  *
  * This module manages the transactions involving foreign servers.
  *
- * Copyright (c) 2016, PostgreSQL Global Development Group
+ * Copyright (c) 2017, PostgreSQL Global Development Group
  *
  * src/backend/access/transam/fdw_xact.c
  *
@@ -198,7 +198,7 @@ typedef enum
 	FDW_XACT_PREPARING,			/* foreign transaction is (being) prepared */
 	FDW_XACT_COMMITTING_PREPARED,	/* foreign prepared transaction is to be committed */
 	FDW_XACT_ABORTING_PREPARED,	/* foreign prepared transaction is to be aborted */
-	FDW_XACT_RESOLVED			/* Status used only by pg_fdw_resolve().
+	FDW_XACT_RESOLVED			/* Status used only by pg_fdw_xact_resolve().
 								   It doesn't appear in the in-memory entry. */
 } FDWXactStatus;
 
@@ -727,6 +727,7 @@ remove_fdw_xact(FDWXact fdw_xact)
 		if (FDWXactGlobal->fdw_xacts[cnt] == fdw_xact)
 		{
 			FdwRemoveXlogRec	fdw_remove_xlog;
+			XLogRecPtr			recptr;
 
 			/* Fill up the log record before releasing the entry */
 			fdw_remove_xlog.serverid = fdw_xact->serverid;
@@ -756,7 +757,8 @@ remove_fdw_xact(FDWXact fdw_xact)
 			 */
 			XLogBeginInsert();
 			XLogRegisterData((char *)&fdw_remove_xlog, sizeof(fdw_remove_xlog));
-			XLogInsert(RM_FDW_XACT_ID, XLOG_FDW_XACT_REMOVE);
+			recptr = XLogInsert(RM_FDW_XACT_ID, XLOG_FDW_XACT_REMOVE);
+			XLogFlush(recptr);
 
 			END_CRIT_SECTION();
 
@@ -1160,34 +1162,6 @@ search_fdw_xact(TransactionId xid, Oid dbid, Oid serverid, Oid userid,
 	LWLockRelease(FDWXactLock);
 
 	return entry_exists;
-}
-
-/*
- * get_dbids_with_unresolved_xact
- * returns the oids of the databases containing unresolved foreign transactions.
- * The function is used by pg_fdw_xact_resolver extension. Returns NIL if
- * no such entry exists.
- */
-List *
-get_dbids_with_unresolved_xact(void)
-{
-	int		cnt_xact;
-	List	*dbid_list = NIL;
-
-	LWLockAcquire(FDWXactLock, LW_SHARED);
-	for (cnt_xact = 0; cnt_xact < FDWXactGlobal->num_fdw_xacts; cnt_xact++)
-	{
-		FDWXact	fdw_xact;
-
-		fdw_xact = FDWXactGlobal->fdw_xacts[cnt_xact];
-
-		/* Skip locked entry as someone must be working on it */
-		if (fdw_xact->locking_backend == InvalidBackendId)
-			dbid_list = list_append_unique_oid(dbid_list, fdw_xact->dboid);
-	}
-	LWLockRelease(FDWXactLock);
-
-	return dbid_list;
 }
 
 /*
@@ -2124,7 +2098,7 @@ void
 KnownFDWXactAdd(XLogReaderState *record)
 {
 	KnownFDWXact *fdw_xact;
-	FDWXactOnDiskData *fdw_xact_data_file = (FDWXactOnDiskData *)record;
+	FDWXactOnDiskData *fdw_xact_data_file = (FDWXactOnDiskData *)XLogRecGetData(record);
 
 	Assert(RecoveryInProgress());
 
