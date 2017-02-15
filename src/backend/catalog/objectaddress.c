@@ -770,7 +770,7 @@ static void getRelationIdentity(StringInfo buffer, Oid relid, List **objname);
  *
  * Note: If the object is not found, we don't give any indication of the
  * reason.  (It might have been a missing schema if the name was qualified, or
- * an inexistant type name in case of a cast, function or operator; etc).
+ * a nonexistent type name in case of a cast, function or operator; etc).
  * Currently there is only one caller that might be interested in such info, so
  * we don't spend much effort here.  If more callers start to care, it might be
  * better to add some support for that in this function.
@@ -1835,7 +1835,10 @@ get_object_address_publication_rel(List *objname, List *objargs,
 	/* Now look up the pg_publication tuple */
 	pub = GetPublicationByName(pubname, missing_ok);
 	if (!pub)
+	{
+		relation_close(relation, AccessShareLock);
 		return address;
+	}
 
 	/* Find the publication relation mapping in syscache. */
 	address.objectId =
@@ -1849,6 +1852,7 @@ get_object_address_publication_rel(List *objname, List *objargs,
 					(errcode(ERRCODE_UNDEFINED_OBJECT),
 					 errmsg("publication relation \"%s\" in publication \"%s\" does not exist",
 							RelationGetRelationName(relation), pubname)));
+		relation_close(relation, AccessShareLock);
 		return address;
 	}
 

@@ -3941,7 +3941,11 @@ SeqOptList: SeqOptElem								{ $$ = list_make1($1); }
 			| SeqOptList SeqOptElem					{ $$ = lappend($1, $2); }
 		;
 
-SeqOptElem: CACHE NumericOnly
+SeqOptElem: AS SimpleTypename
+				{
+					$$ = makeDefElem("as", (Node *)$2, @1);
+				}
+			| CACHE NumericOnly
 				{
 					$$ = makeDefElem("cache", (Node *)$2, @1);
 				}
@@ -11312,7 +11316,7 @@ table_ref:	relation_expr opt_alias_clause
 					n->lateral = true;
 					n->subquery = $2;
 					n->alias = $3;
-					/* same coment as above */
+					/* same comment as above */
 					if ($3 == NULL)
 					{
 						if (IsA($2, SelectStmt) &&
