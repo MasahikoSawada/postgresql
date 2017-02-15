@@ -156,7 +156,7 @@ ExecSerializePlan(Plan *plan, EState *estate)
 	pstmt->planTree = plan;
 	pstmt->rtable = estate->es_range_table;
 	pstmt->resultRelations = NIL;
-	pstmt->subplans = NIL;
+	pstmt->subplans = estate->es_plannedstmt->subplans;
 	pstmt->rewindPlanIDs = NULL;
 	pstmt->rowMarks = NIL;
 	pstmt->relationOids = NIL;
@@ -533,7 +533,7 @@ ExecParallelRetrieveInstrumentation(PlanState *planstate,
 	int			plan_node_id = planstate->plan->plan_node_id;
 	MemoryContext oldcontext;
 
-	/* Find the instumentation for this node. */
+	/* Find the instrumentation for this node. */
 	for (i = 0; i < instrumentation->num_plan_nodes; ++i)
 		if (instrumentation->plan_node_id[i] == plan_node_id)
 			break;
