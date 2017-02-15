@@ -1,11 +1,11 @@
 /*-------------------------------------------------------------------------
  *
- * pg_xlogdump.c - decode and display WAL
+ * pg_waldump.c - decode and display WAL
  *
  * Copyright (c) 2013-2017, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
- *		  src/bin/pg_xlogdump/pg_xlogdump.c
+ *		  src/bin/pg_waldump/pg_waldump.c
  *-------------------------------------------------------------------------
  */
 
@@ -465,7 +465,12 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 					   rnode.spcNode, rnode.dbNode, rnode.relNode,
 					   blk);
 			if (XLogRecHasBlockImage(record, block_id))
-				printf(" FPW");
+			{
+				if (XLogRecBlockImageApply(record, block_id))
+					printf(" FPW");
+				else
+					printf(" FPW for WAL verification");
+			}
 		}
 		putchar('\n');
 	}
@@ -489,7 +494,10 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 				if (record->blocks[block_id].bimg_info &
 					BKPIMAGE_IS_COMPRESSED)
 				{
-					printf(" (FPW); hole: offset: %u, length: %u, compression saved: %u\n",
+					printf(" (FPW%s); hole: offset: %u, length: %u, "
+						   "compression saved: %u\n",
+						   XLogRecBlockImageApply(record, block_id) ?
+						   "" : " for WAL verification",
 						   record->blocks[block_id].hole_offset,
 						   record->blocks[block_id].hole_length,
 						   BLCKSZ -
@@ -498,7 +506,9 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 				}
 				else
 				{
-					printf(" (FPW); hole: offset: %u, length: %u\n",
+					printf(" (FPW%s); hole: offset: %u, length: %u\n",
+						   XLogRecBlockImageApply(record, block_id) ?
+						   "" : " for WAL verification",
 						   record->blocks[block_id].hole_offset,
 						   record->blocks[block_id].hole_length);
 				}
@@ -726,7 +736,7 @@ main(int argc, char **argv)
 	int			option;
 	int			optindex = 0;
 
-	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_xlogdump"));
+	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_waldump"));
 	progname = get_progname(argv[0]);
 
 	memset(&private, 0, sizeof(XLogDumpPrivate));
@@ -835,7 +845,7 @@ main(int argc, char **argv)
 				}
 				break;
 			case 'V':
-				puts("pg_xlogdump (PostgreSQL) " PG_VERSION);
+				puts("pg_waldump (PostgreSQL) " PG_VERSION);
 				exit(EXIT_SUCCESS);
 				break;
 			case 'x':

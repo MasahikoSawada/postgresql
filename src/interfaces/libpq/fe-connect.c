@@ -2908,7 +2908,7 @@ keep_going:						/* We will come back to here until there is
 			}
 
 			/*
-			 * If a read-write connection is requisted check for same.
+			 * If a read-write connection is requested check for same.
 			 */
 			if (conn->target_session_attrs != NULL &&
 				strcmp(conn->target_session_attrs, "read-write") == 0)
@@ -6312,22 +6312,23 @@ passwordFromFile(char *hostname, char *port, char *dbname,
 
 
 /*
- *	If the connection failed, we should mention if
- *	we got the password from the pgpassfile in case that
- *	password is wrong.
+ *	If the connection failed due to bad password, we should mention
+ *	if we got the password from the pgpassfile.
  */
 static void
 pgpassfileWarning(PGconn *conn)
 {
 	/* If it was 'invalid authorization', add pgpassfile mention */
 	/* only works with >= 9.0 servers */
-	if (conn->pgpassfile_used && conn->password_needed && conn->result &&
-		strcmp(PQresultErrorField(conn->result, PG_DIAG_SQLSTATE),
-			   ERRCODE_INVALID_PASSWORD) == 0)
+	if (conn->pgpassfile_used && conn->password_needed && conn->result)
 	{
-		appendPQExpBuffer(&conn->errorMessage,
+		const char *sqlstate = PQresultErrorField(conn->result,
+												  PG_DIAG_SQLSTATE);
+
+		if (sqlstate && strcmp(sqlstate, ERRCODE_INVALID_PASSWORD) == 0)
+			appendPQExpBuffer(&conn->errorMessage,
 					  libpq_gettext("password retrieved from file \"%s\"\n"),
-						  conn->pgpassfile);
+							  conn->pgpassfile);
 	}
 }
 

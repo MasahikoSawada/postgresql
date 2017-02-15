@@ -469,7 +469,7 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 		 */
 		seqstmt = makeNode(CreateSeqStmt);
 		seqstmt->sequence = makeRangeVar(snamespace, sname, -1);
-		seqstmt->options = NIL;
+		seqstmt->options = list_make1(makeDefElem("as", (Node *) makeTypeNameFromOid(column->typeName->typeOid, -1), -1));
 
 		/*
 		 * If this is ALTER ADD COLUMN, make sure the sequence will be owned
@@ -3050,7 +3050,7 @@ transformAttachPartition(CreateStmtContext *cxt, PartitionCmd *cmd)
 				 errmsg("\"%s\" is not partitioned",
 						RelationGetRelationName(parentRel))));
 
-	/* tranform the values */
+	/* transform the values */
 	Assert(RelationGetPartitionKey(parentRel) != NULL);
 	cxt->partbound = transformPartitionBound(cxt->pstate, parentRel,
 											 cmd->bound);
