@@ -773,12 +773,8 @@ float8_timestamptz(PG_FUNCTION_ARGS)
 	{
 		/* Out of range? */
 		if (seconds <
-			(float8) SECS_PER_DAY * (DATETIME_MIN_JULIAN - UNIX_EPOCH_JDATE))
-			ereport(ERROR,
-					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-					 errmsg("timestamp out of range: \"%g\"", seconds)));
-
-		if (seconds >=
+			(float8) SECS_PER_DAY * (DATETIME_MIN_JULIAN - UNIX_EPOCH_JDATE)
+			|| seconds >=
 			(float8) SECS_PER_DAY * (TIMESTAMP_END_JULIAN - UNIX_EPOCH_JDATE))
 			ereport(ERROR,
 					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
@@ -788,7 +784,8 @@ float8_timestamptz(PG_FUNCTION_ARGS)
 		seconds -= ((POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) * SECS_PER_DAY);
 
 #ifdef HAVE_INT64_TIMESTAMP
-		result = seconds * USECS_PER_SEC;
+		seconds = rint(seconds * USECS_PER_SEC);
+		result = (int64) seconds;
 #else
 		result = seconds;
 #endif
@@ -1623,12 +1620,15 @@ make_interval(PG_FUNCTION_ARGS)
 	result->month = years * MONTHS_PER_YEAR + months;
 	result->day = weeks * 7 + days;
 
-	secs += hours * (double) SECS_PER_HOUR + mins * (double) SECS_PER_MINUTE;
-
 #ifdef HAVE_INT64_TIMESTAMP
-	result->time = (int64) (secs * USECS_PER_SEC);
+	secs = rint(secs * USECS_PER_SEC);
+	result->time = hours * ((int64) SECS_PER_HOUR * USECS_PER_SEC) +
+		mins * ((int64) SECS_PER_MINUTE * USECS_PER_SEC) +
+		(int64) secs;
 #else
-	result->time = secs;
+	result->time = hours * (double) SECS_PER_HOUR +
+		mins * (double) SECS_PER_MINUTE +
+		secs;
 #endif
 
 	PG_RETURN_INTERVAL_P(result);

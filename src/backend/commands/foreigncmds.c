@@ -257,8 +257,7 @@ AlterForeignDataWrapperOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerI
 		tup = heap_modify_tuple(tup, RelationGetDescr(rel), repl_val, repl_null,
 								repl_repl);
 
-		simple_heap_update(rel, &tup->t_self, tup);
-		CatalogUpdateIndexes(rel, tup);
+		CatalogTupleUpdate(rel, &tup->t_self, tup);
 
 		/* Update owner dependency reference */
 		changeDependencyOnOwner(ForeignDataWrapperRelationId,
@@ -398,8 +397,7 @@ AlterForeignServerOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerId)
 		tup = heap_modify_tuple(tup, RelationGetDescr(rel), repl_val, repl_null,
 								repl_repl);
 
-		simple_heap_update(rel, &tup->t_self, tup);
-		CatalogUpdateIndexes(rel, tup);
+		CatalogTupleUpdate(rel, &tup->t_self, tup);
 
 		/* Update owner dependency reference */
 		changeDependencyOnOwner(ForeignServerRelationId, HeapTupleGetOid(tup),
@@ -630,8 +628,7 @@ CreateForeignDataWrapper(CreateFdwStmt *stmt)
 
 	tuple = heap_form_tuple(rel->rd_att, values, nulls);
 
-	fdwId = simple_heap_insert(rel, tuple);
-	CatalogUpdateIndexes(rel, tuple);
+	fdwId = CatalogTupleInsert(rel, tuple);
 
 	heap_freetuple(tuple);
 
@@ -787,8 +784,7 @@ AlterForeignDataWrapper(AlterFdwStmt *stmt)
 	tp = heap_modify_tuple(tp, RelationGetDescr(rel),
 						   repl_val, repl_null, repl_repl);
 
-	simple_heap_update(rel, &tp->t_self, tp);
-	CatalogUpdateIndexes(rel, tp);
+	CatalogTupleUpdate(rel, &tp->t_self, tp);
 
 	heap_freetuple(tp);
 
@@ -851,7 +847,7 @@ RemoveForeignDataWrapperById(Oid fdwId)
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for foreign-data wrapper %u", fdwId);
 
-	simple_heap_delete(rel, &tp->t_self);
+	CatalogTupleDelete(rel, &tp->t_self);
 
 	ReleaseSysCache(tp);
 
@@ -942,9 +938,7 @@ CreateForeignServer(CreateForeignServerStmt *stmt)
 
 	tuple = heap_form_tuple(rel->rd_att, values, nulls);
 
-	srvId = simple_heap_insert(rel, tuple);
-
-	CatalogUpdateIndexes(rel, tuple);
+	srvId = CatalogTupleInsert(rel, tuple);
 
 	heap_freetuple(tuple);
 
@@ -1057,8 +1051,7 @@ AlterForeignServer(AlterForeignServerStmt *stmt)
 	tp = heap_modify_tuple(tp, RelationGetDescr(rel),
 						   repl_val, repl_null, repl_repl);
 
-	simple_heap_update(rel, &tp->t_self, tp);
-	CatalogUpdateIndexes(rel, tp);
+	CatalogTupleUpdate(rel, &tp->t_self, tp);
 
 	InvokeObjectPostAlterHook(ForeignServerRelationId, srvId, 0);
 
@@ -1102,7 +1095,7 @@ RemoveForeignServerById(Oid srvId)
 						NameStr(srvForm->srvname))));
 	}
 
-	simple_heap_delete(rel, &tp->t_self);
+	CatalogTupleDelete(rel, &tp->t_self);
 
 	ReleaseSysCache(tp);
 
@@ -1205,9 +1198,7 @@ CreateUserMapping(CreateUserMappingStmt *stmt)
 
 	tuple = heap_form_tuple(rel->rd_att, values, nulls);
 
-	umId = simple_heap_insert(rel, tuple);
-
-	CatalogUpdateIndexes(rel, tuple);
+	umId = CatalogTupleInsert(rel, tuple);
 
 	heap_freetuple(tuple);
 
@@ -1322,8 +1313,7 @@ AlterUserMapping(AlterUserMappingStmt *stmt)
 	tp = heap_modify_tuple(tp, RelationGetDescr(rel),
 						   repl_val, repl_null, repl_repl);
 
-	simple_heap_update(rel, &tp->t_self, tp);
-	CatalogUpdateIndexes(rel, tp);
+	CatalogTupleUpdate(rel, &tp->t_self, tp);
 
 	ObjectAddressSet(address, UserMappingRelationId, umId);
 
@@ -1439,7 +1429,7 @@ RemoveUserMappingById(Oid umId)
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for user mapping %u", umId);
 
-	simple_heap_delete(rel, &tp->t_self);
+	CatalogTupleDelete(rel, &tp->t_self);
 
 	ReleaseSysCache(tp);
 
@@ -1510,8 +1500,7 @@ CreateForeignTable(CreateForeignTableStmt *stmt, Oid relid)
 
 	tuple = heap_form_tuple(ftrel->rd_att, values, nulls);
 
-	simple_heap_insert(ftrel, tuple);
-	CatalogUpdateIndexes(ftrel, tuple);
+	CatalogTupleInsert(ftrel, tuple);
 
 	heap_freetuple(tuple);
 
