@@ -357,6 +357,15 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
      </row>
 
      <row>
+      <entry><structname>pg_stat_bgworker</><indexterm><primary>pg_stat_bgworker</primary></indexterm></entry>
+      <entry>ONe row per background worker process,
+       showing information about running background
+       worker process's setting. See
+       <xref linkend="pg-stat-bgworker-view"> for details.
+      </entry>
+     </row>
+
+     <row>
       <entry><structname>pg_stat_database</><indexterm><primary>pg_stat_database</primary></indexterm></entry>
       <entry>One row per database, showing database-wide statistics. See
        <xref linkend="pg-stat-database-view"> for details.
@@ -1831,6 +1840,82 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
   <para>
    The <structname>pg_stat_bgwriter</structname> view will always have a
    single row, containing global data for the cluster.
+  </para>
+
+  <table id="pg-stat-bgworker-view" xreflabel="pg_stat_bgworker">
+   <title><structname>pg_stat_bgworker</structname> View</title>
+
+   <tgroup cols="3">
+    <thead>
+     <row>
+      <entry>Column</entry>
+      <entry>Type</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry><structfield>pid</entry>
+      <entry><type>integer</type></entry>
+      <entry>Process ID of this background worker process</entry>
+     </row>
+     <row>
+      <entry><structfield>name</entry>
+      <entry><type>text</type></entry>
+      <entry>Name of this background worker process</entry>
+     </row>
+     <row>
+      <entry><structfield>func_name</entry>
+      <entry><type>text</type></entry>
+      <entry></entry>
+     </row>
+     <row>
+      <entry><structfield>lib_name</entry>
+      <entry><type>text</type></entry>
+      <entry></entry>
+     </row>
+     <row>
+      <entry><structfield>flags</entry>
+      <entry><type>integer</type></entry>
+      <entry></entry>
+     </row>
+     <row>
+      <entry><structfield>start_time</entry>
+      <entry><type>text</type></entry>
+      <entry>ajsdf;a
+       Possible values are:
+       <itemizedlist>
+        <listitem>
+         <para>
+          <literal>Postmaster Start</literal>:
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>Consistent State</literal>:
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>Recovery Finished</literal>:
+         </para>
+        </listitem>
+       </itemizedlist>
+      </entry>
+     </row>
+     <row>
+      <entry><structfield>restart_time</entry>
+      <entry><type>integer</type></entry>
+      <entry></entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+   The <structname>pg_stat_bgworker</structname> view will contain
+   one row for each background worker process in the cluster.
   </para>
 
   <table id="pg-stat-database-view" xreflabel="pg_stat_database">
