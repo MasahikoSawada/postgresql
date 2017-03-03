@@ -161,6 +161,9 @@ BTPageOpaque
 BTPageOpaqueData
 BTPageStat
 BTPageState
+BTParallelScanDesc
+BTParallelScanDescData
+BTPS_State
 BTScanOpaque
 BTScanOpaqueData
 BTScanPos
@@ -1264,6 +1267,8 @@ OverrideSearchPath
 OverrideStackEntry
 PACE_HEADER
 PACL
+ParallelIndexScanDesc
+ParallelIndexScanDescData
 PATH
 PBOOL
 PCtxtHandle
@@ -1936,6 +1941,9 @@ SimpleStringList
 SimpleStringListCell
 SingleBoundSortItem
 Size
+SlabBlock
+SlabContext
+SlabChunk
 SlabSlot
 SlotNumber
 SlruCtl
@@ -1993,7 +2001,6 @@ SplitLR
 SplitVar
 SplitedPageLayout
 StackElem
-StandardChunkHeader
 StartBlobPtr
 StartBlobsPtr
 StartDataPtr

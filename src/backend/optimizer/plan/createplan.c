@@ -81,6 +81,7 @@ static Plan *create_join_plan(PlannerInfo *root, JoinPath *best_path);
 static Plan *create_append_plan(PlannerInfo *root, AppendPath *best_path);
 static Plan *create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path);
 static Result *create_result_plan(PlannerInfo *root, ResultPath *best_path);
+static ProjectSet *create_project_set_plan(PlannerInfo *root, ProjectSetPath *best_path);
 static Material *create_material_plan(PlannerInfo *root, MaterialPath *best_path,
 					 int flags);
 static Plan *create_unique_plan(PlannerInfo *root, UniquePath *best_path,
@@ -264,6 +265,7 @@ static SetOp *make_setop(SetOpCmd cmd, SetOpStrategy strategy, Plan *lefttree,
 		   long numGroups);
 static LockRows *make_lockrows(Plan *lefttree, List *rowMarks, int epqParam);
 static Result *make_result(List *tlist, Node *resconstantqual, Plan *subplan);
+static ProjectSet *make_project_set(List *tlist, Plan *subplan);
 static ModifyTable *make_modifytable(PlannerInfo *root,
 				 CmdType operation, bool canSetTag,
 				 Index nominalRelation,
@@ -392,6 +394,10 @@ create_plan_recurse(PlannerInfo *root, Path *best_path, int flags)
 												   (ResultPath *) best_path);
 			}
 			break;
+		case T_ProjectSet:
+			plan = (Plan *) create_project_set_plan(root,
+											   (ProjectSetPath *) best_path);
+			break;
 		case T_Material:
 			plan = (Plan *) create_material_plan(root,
 												 (MaterialPath *) best_path,
@@ -502,8 +508,7 @@ create_scan_plan(PlannerInfo *root, Path *best_path, int flags)
 	{
 		case T_IndexScan:
 		case T_IndexOnlyScan:
-			Assert(IsA(best_path, IndexPath));
-			scan_clauses = ((IndexPath *) best_path)->indexinfo->indrestrictinfo;
+			scan_clauses = castNode(IndexPath, best_path)->indexinfo->indrestrictinfo;
 			break;
 		default:
 			scan_clauses = rel->baserestrictinfo;
@@ -1135,6 +1140,31 @@ create_result_plan(PlannerInfo *root, ResultPath *best_path)
 	quals = order_qual_clauses(root, best_path->quals);
 
 	plan = make_result(tlist, (Node *) quals, NULL);
+
+	copy_generic_path_info(&plan->plan, (Path *) best_path);
+
+	return plan;
+}
+
+/*
+ * create_project_set_plan
+ *	  Create a ProjectSet plan for 'best_path'.
+ *
+ *	  Returns a Plan node.
+ */
+static ProjectSet *
+create_project_set_plan(PlannerInfo *root, ProjectSetPath *best_path)
+{
+	ProjectSet *plan;
+	Plan	   *subplan;
+	List	   *tlist;
+
+	/* Since we intend to project, we don't need to constrain child tlist */
+	subplan = create_plan_recurse(root, best_path->subpath, 0);
+
+	tlist = build_path_tlist(root, &best_path->path);
+
+	plan = make_project_set(tlist, subplan);
 
 	copy_generic_path_info(&plan->plan, (Path *) best_path);
 
@@ -2419,9 +2449,8 @@ create_indexscan_plan(PlannerInfo *root,
 	qpqual = NIL;
 	foreach(l, scan_clauses)
 	{
-		RestrictInfo *rinfo = (RestrictInfo *) lfirst(l);
+		RestrictInfo *rinfo = castNode(RestrictInfo, lfirst(l));
 
-		Assert(IsA(rinfo, RestrictInfo));
 		if (rinfo->pseudoconstant)
 			continue;			/* we may drop pseudoconstants here */
 		if (list_member_ptr(indexquals, rinfo))
@@ -2577,10 +2606,9 @@ create_bitmap_scan_plan(PlannerInfo *root,
 	qpqual = NIL;
 	foreach(l, scan_clauses)
 	{
-		RestrictInfo *rinfo = (RestrictInfo *) lfirst(l);
+		RestrictInfo *rinfo = castNode(RestrictInfo, lfirst(l));
 		Node	   *clause = (Node *) rinfo->clause;
 
-		Assert(IsA(rinfo, RestrictInfo));
 		if (rinfo->pseudoconstant)
 			continue;			/* we may drop pseudoconstants here */
 		if (list_member(indexquals, clause))
@@ -2789,9 +2817,9 @@ create_bitmap_subplan(PlannerInfo *root, Path *bitmapqual,
 		ListCell   *l;
 
 		/* Use the regular indexscan plan build machinery... */
-		iscan = (IndexScan *) create_indexscan_plan(root, ipath,
-													NIL, NIL, false);
-		Assert(IsA(iscan, IndexScan));
+		iscan = castNode(IndexScan,
+						 create_indexscan_plan(root, ipath,
+											   NIL, NIL, false));
 		/* then convert to a bitmap indexscan */
 		plan = (Plan *) make_bitmap_indexscan(iscan->scan.scanrelid,
 											  iscan->indexid,
@@ -3360,13 +3388,13 @@ create_customscan_plan(PlannerInfo *root, CustomPath *best_path,
 	 * Invoke custom plan provider to create the Plan node represented by the
 	 * CustomPath.
 	 */
-	cplan = (CustomScan *) best_path->methods->PlanCustomPath(root,
-															  rel,
-															  best_path,
-															  tlist,
-															  scan_clauses,
-															  custom_plans);
-	Assert(IsA(cplan, CustomScan));
+	cplan = castNode(CustomScan,
+					 best_path->methods->PlanCustomPath(root,
+														rel,
+														best_path,
+														tlist,
+														scan_clauses,
+														custom_plans));
 
 	/*
 	 * Copy cost data from Path to Plan; no need to make custom-plan providers
@@ -3652,7 +3680,7 @@ create_mergejoin_plan(PlannerInfo *root,
 	i = 0;
 	foreach(lc, best_path->path_mergeclauses)
 	{
-		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+		RestrictInfo *rinfo = castNode(RestrictInfo, lfirst(lc));
 		EquivalenceClass *oeclass;
 		EquivalenceClass *ieclass;
 		PathKey    *opathkey;
@@ -3662,7 +3690,6 @@ create_mergejoin_plan(PlannerInfo *root,
 		ListCell   *l2;
 
 		/* fetch outer/inner eclass from mergeclause */
-		Assert(IsA(rinfo, RestrictInfo));
 		if (rinfo->outer_is_left)
 		{
 			oeclass = rinfo->left_ec;
@@ -4197,11 +4224,9 @@ fix_indexqual_references(PlannerInfo *root, IndexPath *index_path)
 
 	forboth(lcc, index_path->indexquals, lci, index_path->indexqualcols)
 	{
-		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lcc);
+		RestrictInfo *rinfo = castNode(RestrictInfo, lfirst(lcc));
 		int			indexcol = lfirst_int(lci);
 		Node	   *clause;
-
-		Assert(IsA(rinfo, RestrictInfo));
 
 		/*
 		 * Replace any outer-relation variables with nestloop params.
@@ -4500,21 +4525,32 @@ get_switched_clauses(List *clauses, Relids outerrelids)
  *		plan node, sort the list into the order we want to check the quals
  *		in at runtime.
  *
+ * When security barrier quals are used in the query, we may have quals with
+ * different security levels in the list.  Quals of lower security_level
+ * must go before quals of higher security_level, except that we can grant
+ * exceptions to move up quals that are leakproof.  When security level
+ * doesn't force the decision, we prefer to order clauses by estimated
+ * execution cost, cheapest first.
+ *
  * Ideally the order should be driven by a combination of execution cost and
  * selectivity, but it's not immediately clear how to account for both,
  * and given the uncertainty of the estimates the reliability of the decisions
- * would be doubtful anyway.  So we just order by estimated per-tuple cost,
- * being careful not to change the order when (as is often the case) the
- * estimates are identical.
+ * would be doubtful anyway.  So we just order by security level then
+ * estimated per-tuple cost, being careful not to change the order when
+ * (as is often the case) the estimates are identical.
  *
  * Although this will work on either bare clauses or RestrictInfos, it's
  * much faster to apply it to RestrictInfos, since it can re-use cost
- * information that is cached in RestrictInfos.
+ * information that is cached in RestrictInfos.  XXX in the bare-clause
+ * case, we are also not able to apply security considerations.  That is
+ * all right for the moment, because the bare-clause case doesn't occur
+ * anywhere that barrier quals could be present, but it would be better to
+ * get rid of it.
  *
  * Note: some callers pass lists that contain entries that will later be
  * removed; this is the easiest way to let this routine see RestrictInfos
- * instead of bare clauses.  It's OK because we only sort by cost, but
- * a cost/selectivity combination would likely do the wrong thing.
+ * instead of bare clauses.  This is another reason why trying to consider
+ * selectivity in the ordering would likely do the wrong thing.
  */
 static List *
 order_qual_clauses(PlannerInfo *root, List *clauses)
@@ -4523,6 +4559,7 @@ order_qual_clauses(PlannerInfo *root, List *clauses)
 	{
 		Node	   *clause;
 		Cost		cost;
+		Index		security_level;
 	} QualItem;
 	int			nitems = list_length(clauses);
 	QualItem   *items;
@@ -4548,6 +4585,27 @@ order_qual_clauses(PlannerInfo *root, List *clauses)
 		cost_qual_eval_node(&qcost, clause, root);
 		items[i].clause = clause;
 		items[i].cost = qcost.per_tuple;
+		if (IsA(clause, RestrictInfo))
+		{
+			RestrictInfo *rinfo = (RestrictInfo *) clause;
+
+			/*
+			 * If a clause is leakproof, it doesn't have to be constrained by
+			 * its nominal security level.  If it's also reasonably cheap
+			 * (here defined as 10X cpu_operator_cost), pretend it has
+			 * security_level 0, which will allow it to go in front of
+			 * more-expensive quals of lower security levels.  Of course, that
+			 * will also force it to go in front of cheaper quals of its own
+			 * security level, which is not so great, but we can alleviate
+			 * that risk by applying the cost limit cutoff.
+			 */
+			if (rinfo->leakproof && items[i].cost < 10 * cpu_operator_cost)
+				items[i].security_level = 0;
+			else
+				items[i].security_level = rinfo->security_level;
+		}
+		else
+			items[i].security_level = 0;
 		i++;
 	}
 
@@ -4564,9 +4622,13 @@ order_qual_clauses(PlannerInfo *root, List *clauses)
 		/* insert newitem into the already-sorted subarray */
 		for (j = i; j > 0; j--)
 		{
-			if (newitem.cost >= items[j - 1].cost)
+			QualItem   *olditem = &items[j - 1];
+
+			if (newitem.security_level > olditem->security_level ||
+				(newitem.security_level == olditem->security_level &&
+				 newitem.cost >= olditem->cost))
 				break;
-			items[j] = items[j - 1];
+			items[j] = *olditem;
 		}
 		items[j] = newitem;
 	}
@@ -5636,6 +5698,16 @@ materialize_finished_plan(Plan *subplan)
 
 	matplan = (Plan *) make_material(subplan);
 
+	/*
+	 * XXX horrid kluge: if there are any initPlans attached to the subplan,
+	 * move them up to the Material node, which is now effectively the top
+	 * plan node in its query level.  This prevents failure in
+	 * SS_finalize_plan(), which see for comments.  We don't bother adjusting
+	 * the subplan's cost estimate for this.
+	 */
+	matplan->initPlan = subplan->initPlan;
+	subplan->initPlan = NIL;
+
 	/* Set cost data */
 	cost_material(&matpath,
 				  subplan->startup_cost,
@@ -6027,6 +6099,25 @@ make_result(List *tlist,
 }
 
 /*
+ * make_project_set
+ *	  Build a ProjectSet plan node
+ */
+static ProjectSet *
+make_project_set(List *tlist,
+				 Plan *subplan)
+{
+	ProjectSet *node = makeNode(ProjectSet);
+	Plan	   *plan = &node->plan;
+
+	plan->targetlist = tlist;
+	plan->qual = NIL;
+	plan->lefttree = subplan;
+	plan->righttree = NULL;
+
+	return node;
+}
+
+/*
  * make_modifytable
  *	  Build a ModifyTable plan node
  */
@@ -6192,6 +6283,15 @@ is_projection_capable_path(Path *path)
 			 * projection to its dummy path.
 			 */
 			return IS_DUMMY_PATH(path);
+		case T_ProjectSet:
+
+			/*
+			 * Although ProjectSet certainly projects, say "no" because we
+			 * don't want the planner to randomly replace its tlist with
+			 * something else; the SRFs have to stay at top level.  This might
+			 * get relaxed later.
+			 */
+			return false;
 		default:
 			break;
 	}
@@ -6219,6 +6319,15 @@ is_projection_capable_plan(Plan *plan)
 		case T_Append:
 		case T_MergeAppend:
 		case T_RecursiveUnion:
+			return false;
+		case T_ProjectSet:
+
+			/*
+			 * Although ProjectSet certainly projects, say "no" because we
+			 * don't want the planner to randomly replace its tlist with
+			 * something else; the SRFs have to stay at top level.  This might
+			 * get relaxed later.
+			 */
 			return false;
 		default:
 			break;

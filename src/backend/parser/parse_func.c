@@ -1515,8 +1515,7 @@ func_get_detail(List *funcname,
 											 &isnull);
 			Assert(!isnull);
 			str = TextDatumGetCString(proargdefaults);
-			defaults = (List *) stringToNode(str);
-			Assert(IsA(defaults, List));
+			defaults = castNode(List, stringToNode(str));
 			pfree(str);
 
 			/* Delete any unused defaults from the returned list */
@@ -2141,7 +2140,12 @@ check_srf_call_placement(ParseState *pstate, int location)
 			errkind = true;
 			break;
 		case EXPR_KIND_VALUES:
-			/* okay */
+			/* SRFs are presently not supported by nodeValuesscan.c */
+			errkind = true;
+			break;
+		case EXPR_KIND_VALUES_SINGLE:
+			/* okay, since we process this like a SELECT tlist */
+			pstate->p_hasTargetSRFs = true;
 			break;
 		case EXPR_KIND_CHECK_CONSTRAINT:
 		case EXPR_KIND_DOMAIN_CHECK:

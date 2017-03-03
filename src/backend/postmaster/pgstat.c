@@ -3303,6 +3303,12 @@ pgstat_get_wait_activity(WaitEventActivity w)
 		case WAIT_EVENT_WAL_WRITER_MAIN:
 			event_name = "WalWriterMain";
 			break;
+		case WAIT_EVENT_LOGICAL_LAUNCHER_MAIN:
+			event_name = "LogicalLauncherMain";
+			break;
+		case WAIT_EVENT_LOGICAL_APPLY_MAIN:
+			event_name = "LogicalApplyMain";
+			break;
 		/* no default case, so that compiler will warn */
 	}
 
@@ -3367,6 +3373,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 			break;
 		case WAIT_EVENT_BGWORKER_STARTUP:
 			event_name = "BgWorkerStartup";
+			break;
+		case WAIT_EVENT_BTREE_PAGE:
+			event_name = "BtreePage";
 			break;
 		case WAIT_EVENT_EXECUTE_GATHER:
 			event_name = "ExecuteGather";

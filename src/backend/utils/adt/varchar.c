@@ -22,6 +22,7 @@
 #include "nodes/nodeFuncs.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/varlena.h"
 #include "mb/pg_wchar.h"
 
 
@@ -553,11 +554,10 @@ varcharsend(PG_FUNCTION_ARGS)
 Datum
 varchar_transform(PG_FUNCTION_ARGS)
 {
-	FuncExpr   *expr = (FuncExpr *) PG_GETARG_POINTER(0);
+	FuncExpr   *expr = castNode(FuncExpr, PG_GETARG_POINTER(0));
 	Node	   *ret = NULL;
 	Node	   *typmod;
 
-	Assert(IsA(expr, FuncExpr));
 	Assert(list_length(expr->args) >= 2);
 
 	typmod = (Node *) lsecond(expr->args);

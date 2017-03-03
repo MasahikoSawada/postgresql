@@ -255,7 +255,7 @@ INSERT INTO tmp3 values (5,50);
 -- Try (and fail) to add constraint due to invalid source columns
 ALTER TABLE tmp3 add constraint tmpconstr foreign key(c) references tmp2 match full;
 
--- Try (and fail) to add constraint due to invalide destination columns explicitly given
+-- Try (and fail) to add constraint due to invalid destination columns explicitly given
 ALTER TABLE tmp3 add constraint tmpconstr foreign key(a) references tmp2(b) match full;
 
 -- Try (and fail) to add constraint due to invalid data
@@ -1335,6 +1335,28 @@ select relname, conname, coninhcount, conislocal, connoinherit
   where relname like 'test_inh_check%' and c.conrelid = r.oid
   order by 1, 2;
 
+-- ALTER COLUMN TYPE with different schema in children
+-- Bug at https://postgr.es/m/20170102225618.GA10071@telsasoft.com
+CREATE TABLE test_type_diff (f1 int);
+CREATE TABLE test_type_diff_c (extra smallint) INHERITS (test_type_diff);
+ALTER TABLE test_type_diff ADD COLUMN f2 int;
+INSERT INTO test_type_diff_c VALUES (1, 2, 3);
+ALTER TABLE test_type_diff ALTER COLUMN f2 TYPE bigint USING f2::bigint;
+
+CREATE TABLE test_type_diff2 (int_two int2, int_four int4, int_eight int8);
+CREATE TABLE test_type_diff2_c1 (int_four int4, int_eight int8, int_two int2);
+CREATE TABLE test_type_diff2_c2 (int_eight int8, int_two int2, int_four int4);
+CREATE TABLE test_type_diff2_c3 (int_two int2, int_four int4, int_eight int8);
+ALTER TABLE test_type_diff2_c1 INHERIT test_type_diff2;
+ALTER TABLE test_type_diff2_c2 INHERIT test_type_diff2;
+ALTER TABLE test_type_diff2_c3 INHERIT test_type_diff2;
+INSERT INTO test_type_diff2_c1 VALUES (1, 2, 3);
+INSERT INTO test_type_diff2_c2 VALUES (4, 5, 6);
+INSERT INTO test_type_diff2_c3 VALUES (7, 8, 9);
+ALTER TABLE test_type_diff2 ALTER COLUMN int_four TYPE int8 USING int_four::int8;
+-- whole-row references are disallowed
+ALTER TABLE test_type_diff2 ALTER COLUMN int_four TYPE int4 USING (pg_column_size(test_type_diff2));
+
 -- check for rollback of ANALYZE corrupting table property flags (bug #11638)
 CREATE TABLE check_fk_presence_1 (id int PRIMARY KEY, t text);
 CREATE TABLE check_fk_presence_2 (id int REFERENCES check_fk_presence_1, t text);
@@ -1807,7 +1829,7 @@ CREATE UNLOGGED TABLE unlogged3(f1 SERIAL PRIMARY KEY, f2 INTEGER REFERENCES unl
 ALTER TABLE unlogged3 SET LOGGED; -- skip self-referencing foreign key
 ALTER TABLE unlogged2 SET LOGGED; -- fails because a foreign key to an unlogged table exists
 ALTER TABLE unlogged1 SET LOGGED;
--- check relpersistence of an unlogged table after changing to permament
+-- check relpersistence of an unlogged table after changing to permanent
 SELECT relname, relkind, relpersistence FROM pg_class WHERE relname ~ '^unlogged1'
 UNION ALL
 SELECT 'toast table', t.relkind, t.relpersistence FROM pg_class r JOIN pg_class t ON t.oid = r.reltoastrelid WHERE r.relname ~ '^unlogged1'
@@ -1895,18 +1917,23 @@ ALTER TABLE partitioned ALTER COLUMN b TYPE char(5);
 -- cannot drop NOT NULL on columns in the range partition key
 ALTER TABLE partitioned ALTER COLUMN a DROP NOT NULL;
 
--- partitioned table cannot partiticipate in regular inheritance
-CREATE TABLE foo (
+-- it's fine however to drop one on the list partition key column
+CREATE TABLE list_partitioned (a int not null) partition by list (a);
+ALTER TABLE list_partitioned ALTER a DROP NOT NULL;
+DROP TABLE list_partitioned;
+
+-- partitioned table cannot participate in regular inheritance
+CREATE TABLE nonpartitioned (
 	a int,
 	b int
 );
-ALTER TABLE partitioned INHERIT foo;
-ALTER TABLE foo INHERIT partitioned;
+ALTER TABLE partitioned INHERIT nonpartitioned;
+ALTER TABLE nonpartitioned INHERIT partitioned;
 
 -- cannot add NO INHERIT constraint to partitioned tables
 ALTER TABLE partitioned ADD CONSTRAINT chk_a CHECK (a > 0) NO INHERIT;
 
-DROP TABLE partitioned, foo;
+DROP TABLE partitioned, nonpartitioned;
 
 --
 -- ATTACH PARTITION
@@ -2112,6 +2139,11 @@ ALTER TABLE list_parted2 ATTACH PARTITION list_parted2 FOR VALUES IN (0);
 -- DETACH PARTITION
 --
 
+-- check that the table is partitioned at all
+CREATE TABLE regular_table (a int);
+ALTER TABLE regular_table DETACH PARTITION any_name;
+DROP TABLE regular_table;
+
 -- check that the partition being detached exists at all
 ALTER TABLE list_parted2 DETACH PARTITION part_4;
 
@@ -2167,5 +2199,33 @@ ALTER TABLE part_2 INHERIT inh_test;
 ALTER TABLE list_parted2 DROP COLUMN b;
 ALTER TABLE list_parted2 ALTER COLUMN b TYPE text;
 
--- cleanup
-DROP TABLE list_parted, list_parted2, range_parted CASCADE;
+-- cleanup: avoid using CASCADE
+DROP TABLE list_parted, part_1;
+DROP TABLE list_parted2, part_2, part_5, part_5_a;
+DROP TABLE range_parted, part1, part2;
+
+-- more tests for certain multi-level partitioning scenarios
+create table p (a int, b int) partition by range (a, b);
+create table p1 (b int, a int not null) partition by range (b);
+create table p11 (like p1);
+alter table p11 drop a;
+alter table p11 add a int;
+alter table p11 drop a;
+alter table p11 add a int not null;
+-- attnum for key attribute 'a' is different in p, p1, and p11
+select attrelid::regclass, attname, attnum
+from pg_attribute
+where attname = 'a'
+ and (attrelid = 'p'::regclass
+   or attrelid = 'p1'::regclass
+   or attrelid = 'p11'::regclass)
+order by attrelid::regclass::text;
+
+alter table p1 attach partition p11 for values from (2) to (5);
+
+insert into p1 (a, b) values (2, 3);
+-- check that partition validation scan correctly detects violating rows
+alter table p attach partition p1 for values from (1, 2) to (1, 10);
+
+-- cleanup: avoid using CASCADE
+drop table p, p1, p11;

@@ -72,7 +72,8 @@ typedef bool (*aminsert_function) (Relation indexRelation,
 											   bool *isnull,
 											   ItemPointer heap_tid,
 											   Relation heapRelation,
-											   IndexUniqueCheck checkUnique);
+											   IndexUniqueCheck checkUnique,
+											   struct IndexInfo *indexInfo);
 
 /* bulk delete */
 typedef IndexBulkDeleteResult *(*ambulkdelete_function) (IndexVacuumInfo *info,
@@ -94,7 +95,8 @@ typedef void (*amcostestimate_function) (struct PlannerInfo *root,
 													 Cost *indexStartupCost,
 													 Cost *indexTotalCost,
 											   Selectivity *indexSelectivity,
-												   double *indexCorrelation);
+													 double *indexCorrelation,
+													 double *indexPages);
 
 /* parse index reloptions */
 typedef bytea *(*amoptions_function) (Datum reloptions,
@@ -137,6 +139,18 @@ typedef void (*ammarkpos_function) (IndexScanDesc scan);
 /* restore marked scan position */
 typedef void (*amrestrpos_function) (IndexScanDesc scan);
 
+/*
+ * Callback function signatures - for parallel index scans.
+ */
+
+/* estimate size of parallel scan descriptor */
+typedef Size (*amestimateparallelscan_function) (void);
+
+/* prepare for parallel index scan */
+typedef void (*aminitparallelscan_function) (void *target);
+
+/* (re)start parallel index scan */
+typedef void (*amparallelrescan_function) (IndexScanDesc scan);
 
 /*
  * API struct for an index AM.  Note this must be stored in a single palloc'd
@@ -175,6 +189,8 @@ typedef struct IndexAmRoutine
 	bool		amclusterable;
 	/* does AM handle predicate locks? */
 	bool		ampredlocks;
+	/* does AM support parallel scan? */
+	bool		amcanparallel;
 	/* type of data stored in index, or InvalidOid if variable */
 	Oid			amkeytype;
 
@@ -196,13 +212,16 @@ typedef struct IndexAmRoutine
 	amendscan_function amendscan;
 	ammarkpos_function ammarkpos;		/* can be NULL */
 	amrestrpos_function amrestrpos;		/* can be NULL */
+
+	/* interface functions to support parallel index scans */
+	amestimateparallelscan_function amestimateparallelscan;		/* can be NULL */
+	aminitparallelscan_function aminitparallelscan;		/* can be NULL */
+	amparallelrescan_function amparallelrescan; /* can be NULL */
 } IndexAmRoutine;
 
 
 /* Functions in access/index/amapi.c */
 extern IndexAmRoutine *GetIndexAmRoutine(Oid amhandler);
 extern IndexAmRoutine *GetIndexAmRoutineByAmId(Oid amoid, bool noerror);
-
-extern Datum amvalidate(PG_FUNCTION_ARGS);
 
 #endif   /* AMAPI_H */

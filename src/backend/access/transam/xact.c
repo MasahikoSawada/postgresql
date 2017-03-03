@@ -42,6 +42,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "replication/logical.h"
+#include "replication/logicallauncher.h"
 #include "replication/origin.h"
 #include "replication/syncrep.h"
 #include "replication/walsender.h"
@@ -2135,6 +2136,7 @@ CommitTransaction(void)
 	AtEOXact_HashTables(true);
 	AtEOXact_PgStat(true);
 	AtEOXact_Snapshot(true);
+	AtCommit_ApplyLauncher();
 	pgstat_report_xact_timestamp(0);
 
 	CurrentResourceOwner = NULL;
@@ -2750,7 +2752,7 @@ CommitTransactionCommand(void)
 			 * These shouldn't happen.  TBLOCK_DEFAULT means the previous
 			 * StartTransactionCommand didn't set the STARTED state
 			 * appropriately, while TBLOCK_PARALLEL_INPROGRESS should be ended
-			 * by EndParallelWorkerTranaction(), not this function.
+			 * by EndParallelWorkerTransaction(), not this function.
 			 */
 		case TBLOCK_DEFAULT:
 		case TBLOCK_PARALLEL_INPROGRESS:

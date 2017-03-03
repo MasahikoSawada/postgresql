@@ -720,6 +720,9 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 
 			/* next tuple in this chunk */
 			idx += MAXALIGN(hashTupleSize);
+
+			/* allow this loop to be cancellable */
+			CHECK_FOR_INTERRUPTS();
 		}
 
 		/* we're done with this chunk - free it and proceed to the next one */
@@ -959,7 +962,7 @@ ExecHashGetHashValue(HashJoinTable hashtable,
 		/*
 		 * Get the join attribute value of the tuple
 		 */
-		keyval = ExecEvalExpr(keyexpr, econtext, &isNull, NULL);
+		keyval = ExecEvalExpr(keyexpr, econtext, &isNull);
 
 		/*
 		 * If the attribute is NULL, and the join operator is strict, then
@@ -1599,6 +1602,9 @@ ExecHashRemoveNextSkewBucket(HashJoinTable hashtable)
 		}
 
 		hashTuple = nextHashTuple;
+
+		/* allow this loop to be cancellable */
+		CHECK_FOR_INTERRUPTS();
 	}
 
 	/*

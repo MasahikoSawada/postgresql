@@ -113,6 +113,7 @@
 #include "postmaster/pgarch.h"
 #include "postmaster/postmaster.h"
 #include "postmaster/syslogger.h"
+#include "replication/logicallauncher.h"
 #include "replication/walsender.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
@@ -126,6 +127,7 @@
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
 #include "utils/timeout.h"
+#include "utils/varlena.h"
 
 #ifdef EXEC_BACKEND
 #include "storage/spin.h"
@@ -942,6 +944,14 @@ PostmasterMain(int argc, char *argv[])
 #endif
 
 	/*
+	 * Register the apply launcher.  Since it registers a background worker,
+	 * it needs to be called before InitializeMaxBackends(), and it's probably
+	 * a good idea to call it before any modules had chance to take the
+	 * background worker slots.
+	 */
+	ApplyLauncherRegister();
+
+	/*
 	 * process any libraries that should be preloaded at postmaster start
 	 */
 	process_shared_preload_libraries();
@@ -1221,6 +1231,13 @@ PostmasterMain(int argc, char *argv[])
 	 * postmaster's SIGUSR1 signal handler.
 	 */
 	RemovePromoteSignalFiles();
+
+	/* Remove any outdated file holding the current log filenames. */
+	if (unlink(LOG_METAINFO_DATAFILE) < 0 && errno != ENOENT)
+		ereport(LOG,
+				(errcode_for_file_access(),
+				 errmsg("could not remove file \"%s\": %m",
+					LOG_METAINFO_DATAFILE)));
 
 	/*
 	 * If enabled, start up syslogger collection subprocess
@@ -3040,9 +3057,9 @@ CleanupBackgroundWorker(int pid,
 						int exitstatus) /* child's exit status */
 {
 	char		namebuf[MAXPGPATH];
-	slist_iter	iter;
+	slist_mutable_iter	iter;
 
-	slist_foreach(iter, &BackgroundWorkerList)
+	slist_foreach_modify(iter, &BackgroundWorkerList)
 	{
 		RegisteredBgWorker *rw;
 
@@ -3116,7 +3133,7 @@ CleanupBackgroundWorker(int pid,
 		rw->rw_backend = NULL;
 		rw->rw_pid = 0;
 		rw->rw_child_slot = 0;
-		ReportBackgroundWorkerPID(rw);	/* report child death */
+		ReportBackgroundWorkerExit(&iter);	/* report child death */
 
 		LogChildExit(EXIT_STATUS_0(exitstatus) ? DEBUG1 : LOG,
 					 namebuf, pid, exitstatus);
@@ -5146,7 +5163,7 @@ RandomCancelKey(int32 *cancel_key)
 }
 
 /*
- * Count up number of child processes of specified types (dead_end chidren
+ * Count up number of child processes of specified types (dead_end children
  * are always excluded).
  */
 static int

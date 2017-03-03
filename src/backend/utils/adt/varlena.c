@@ -34,6 +34,7 @@
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
 #include "utils/sortsupport.h"
+#include "utils/varlena.h"
 
 
 /* GUC variable */
@@ -68,7 +69,7 @@ typedef struct
 	int			last_returned;	/* Last comparison result (cache) */
 	bool		cache_blob;		/* Does buf2 contain strxfrm() blob, etc? */
 	bool		collate_c;
-	bool		bpchar;			/* Sorting pbchar, not varchar/text/bytea? */
+	bool		bpchar;			/* Sorting bpchar, not varchar/text/bytea? */
 	hyperLogLogState abbr_card; /* Abbreviated key cardinality state */
 	hyperLogLogState full_card; /* Full key cardinality state */
 	double		prop_card;		/* Required cardinality proportion */
@@ -294,7 +295,7 @@ byteain(PG_FUNCTION_ARGS)
 			 */
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-					 errmsg("invalid input syntax for type bytea")));
+					 errmsg("invalid input syntax for type %s", "bytea")));
 		}
 	}
 
@@ -335,7 +336,7 @@ byteain(PG_FUNCTION_ARGS)
 			 */
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-					 errmsg("invalid input syntax for type bytea")));
+					 errmsg("invalid input syntax for type %s", "bytea")));
 		}
 	}
 

@@ -119,6 +119,7 @@ blhandler(PG_FUNCTION_ARGS)
 	amroutine->amstorage = false;
 	amroutine->amclusterable = false;
 	amroutine->ampredlocks = false;
+	amroutine->amcanparallel = false;
 	amroutine->amkeytype = InvalidOid;
 
 	amroutine->ambuild = blbuild;
@@ -138,6 +139,9 @@ blhandler(PG_FUNCTION_ARGS)
 	amroutine->amendscan = blendscan;
 	amroutine->ammarkpos = NULL;
 	amroutine->amrestrpos = NULL;
+	amroutine->amestimateparallelscan = NULL;
+	amroutine->aminitparallelscan = NULL;
+	amroutine->amparallelrescan = NULL;
 
 	PG_RETURN_POINTER(amroutine);
 }

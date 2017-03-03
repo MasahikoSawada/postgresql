@@ -278,8 +278,9 @@ CreateProceduralLanguage(CreatePLangStmt *stmt)
 			{
 				ereport(WARNING,
 						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-						 errmsg("changing return type of function %s from \"opaque\" to \"language_handler\"",
-								NameListToString(stmt->plhandler))));
+				  errmsg("changing return type of function %s from %s to %s",
+						 NameListToString(stmt->plhandler),
+						 "opaque", "language_handler")));
 				SetFunctionReturnType(handlerOid, LANGUAGE_HANDLEROID);
 			}
 			else
@@ -377,7 +378,7 @@ create_proc_lang(const char *languageName, bool replace,
 
 		/* Okay, do it... */
 		tup = heap_modify_tuple(oldtup, tupDesc, values, nulls, replaces);
-		simple_heap_update(rel, &tup->t_self, tup);
+		CatalogTupleUpdate(rel, &tup->t_self, tup);
 
 		ReleaseSysCache(oldtup);
 		is_update = true;
@@ -386,12 +387,9 @@ create_proc_lang(const char *languageName, bool replace,
 	{
 		/* Creating a new language */
 		tup = heap_form_tuple(tupDesc, values, nulls);
-		simple_heap_insert(rel, tup);
+		CatalogTupleInsert(rel, tup);
 		is_update = false;
 	}
-
-	/* Need to update indexes for either the insert or update case */
-	CatalogUpdateIndexes(rel, tup);
 
 	/*
 	 * Create dependencies for the new language.  If we are updating an
@@ -538,7 +536,7 @@ DropProceduralLanguageById(Oid langOid)
 	if (!HeapTupleIsValid(langTup))		/* should not happen */
 		elog(ERROR, "cache lookup failed for language %u", langOid);
 
-	simple_heap_delete(rel, &langTup->t_self);
+	CatalogTupleDelete(rel, &langTup->t_self);
 
 	ReleaseSysCache(langTup);
 

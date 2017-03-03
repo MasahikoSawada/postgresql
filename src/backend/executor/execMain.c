@@ -43,6 +43,7 @@
 #include "access/xact.h"
 #include "catalog/namespace.h"
 #include "catalog/partition.h"
+#include "catalog/pg_publication.h"
 #include "commands/matview.h"
 #include "commands/trigger.h"
 #include "executor/execdebug.h"
@@ -59,6 +60,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/rls.h"
+#include "utils/ruleutils.h"
 #include "utils/snapmgr.h"
 #include "utils/tqual.h"
 
@@ -94,6 +96,10 @@ static char *ExecBuildSlotValueDescription(Oid reloid,
 							  TupleDesc tupdesc,
 							  Bitmapset *modifiedCols,
 							  int maxfieldlen);
+static char *ExecBuildSlotPartitionKeyDescription(Relation rel,
+									 Datum *values,
+									 bool *isnull,
+									 int maxfieldlen);
 static void EvalPlanQualStart(EPQState *epqstate, EState *parentestate,
 				  Plan *planTree);
 
@@ -188,6 +194,8 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	if (queryDesc->plannedstmt->nParamExec > 0)
 		estate->es_param_exec_vals = (ParamExecData *)
 			palloc0(queryDesc->plannedstmt->nParamExec * sizeof(ParamExecData));
+
+	estate->es_sourceText = queryDesc->sourceText;
 
 	/*
 	 * If non-read-only query, set the command ID to mark output tuples with
@@ -824,10 +832,10 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 
 			resultRelationOid = getrelid(resultRelationIndex, rangeTable);
 			resultRelation = heap_open(resultRelationOid, RowExclusiveLock);
+
 			InitResultRelInfo(resultRelInfo,
 							  resultRelation,
 							  resultRelationIndex,
-							  true,
 							  NULL,
 							  estate->es_instrument);
 			resultRelInfo++;
@@ -1024,7 +1032,7 @@ CheckValidResultRel(Relation resultRel, CmdType operation)
 	{
 		case RELKIND_RELATION:
 		case RELKIND_PARTITIONED_TABLE:
-			/* OK */
+			CheckCmdReplicaIdentity(resultRel, operation);
 			break;
 		case RELKIND_SEQUENCE:
 			ereport(ERROR,
@@ -1218,10 +1226,11 @@ void
 InitResultRelInfo(ResultRelInfo *resultRelInfo,
 				  Relation resultRelationDesc,
 				  Index resultRelationIndex,
-				  bool load_partition_check,
 				  Relation partition_root,
 				  int instrument_options)
 {
+	List	   *partition_check = NIL;
+
 	MemSet(resultRelInfo, 0, sizeof(ResultRelInfo));
 	resultRelInfo->type = T_ResultRelInfo;
 	resultRelInfo->ri_RangeTableIndex = resultRelationIndex;
@@ -1257,13 +1266,38 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
 	resultRelInfo->ri_ConstraintExprs = NULL;
 	resultRelInfo->ri_junkFilter = NULL;
 	resultRelInfo->ri_projectReturning = NULL;
-	if (load_partition_check)
-		resultRelInfo->ri_PartitionCheck =
-							RelationGetPartitionQual(resultRelationDesc);
+
 	/*
-	 * The following gets set to NULL unless we are initializing leaf
-	 * partitions for tuple-routing.
+	 * If partition_root has been specified, that means we are building the
+	 * ResultRelationInfo for one of its leaf partitions.  In that case, we
+	 * need *not* initialize the leaf partition's constraint, but rather the
+	 * the partition_root's (if any).  We must do that explicitly like this,
+	 * because implicit partition constraints are not inherited like user-
+	 * defined constraints and would fail to be enforced by ExecConstraints()
+	 * after a tuple is routed to a leaf partition.
 	 */
+	if (partition_root)
+	{
+		/*
+		 * Root table itself may or may not be a partition; partition_check
+		 * would be NIL in the latter case.
+		 */
+		partition_check = RelationGetPartitionQual(partition_root);
+
+		/*
+		 * This is not our own partition constraint, but rather an ancestor's.
+		 * So any Vars in it bear the ancestor's attribute numbers.  We must
+		 * switch them to our own. (dummy varno = 1)
+		 */
+		if (partition_check != NIL)
+			partition_check = map_partition_varattnos(partition_check, 1,
+													  resultRelationDesc,
+													  partition_root);
+	}
+	else
+		partition_check = RelationGetPartitionQual(resultRelationDesc);
+
+	resultRelInfo->ri_PartitionCheck = partition_check;
 	resultRelInfo->ri_PartitionRoot = partition_root;
 }
 
@@ -1327,7 +1361,6 @@ ExecGetTriggerResultRel(EState *estate, Oid relid)
 	InitResultRelInfo(rInfo,
 					  rel,
 					  0,		/* dummy rangetable index */
-					  true,
 					  NULL,
 					  estate->es_instrument);
 	estate->es_trig_target_relations =
@@ -1566,10 +1599,6 @@ ExecutePlan(EState *estate,
 	if (numberTuples || dest->mydest == DestIntoRel)
 		use_parallel_mode = false;
 
-	/*
-	 * If a tuple count was supplied, we must force the plan to run without
-	 * parallelism, because we might exit early.
-	 */
 	if (use_parallel_mode)
 		EnterParallelMode();
 
@@ -1728,10 +1757,10 @@ ExecPartitionCheck(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
 	 */
 	if (resultRelInfo->ri_PartitionCheckExpr == NULL)
 	{
-		List *qual = resultRelInfo->ri_PartitionCheck;
+		List	   *qual = resultRelInfo->ri_PartitionCheck;
 
 		resultRelInfo->ri_PartitionCheckExpr = (List *)
-									ExecPrepareExpr((Expr *) qual, estate);
+			ExecPrepareExpr((Expr *) qual, estate);
 	}
 
 	/*
@@ -1811,7 +1840,7 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 				ereport(ERROR,
 						(errcode(ERRCODE_NOT_NULL_VIOLATION),
 						 errmsg("null value in column \"%s\" violates not-null constraint",
-						  NameStr(orig_tupdesc->attrs[attrChk - 1]->attname)),
+						 NameStr(orig_tupdesc->attrs[attrChk - 1]->attname)),
 						 val_desc ? errdetail("Failing row contains %s.", val_desc) : 0,
 						 errtablecol(orig_rel, attrChk)));
 			}
@@ -1874,9 +1903,9 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 												 64);
 		ereport(ERROR,
 				(errcode(ERRCODE_CHECK_VIOLATION),
-				 errmsg("new row for relation \"%s\" violates partition constraint",
-						RelationGetRelationName(orig_rel)),
-		  val_desc ? errdetail("Failing row contains %s.", val_desc) : 0));
+		  errmsg("new row for relation \"%s\" violates partition constraint",
+				 RelationGetRelationName(orig_rel)),
+			val_desc ? errdetail("Failing row contains %s.", val_desc) : 0));
 	}
 }
 
@@ -3092,7 +3121,7 @@ ExecSetupPartitionTupleRouting(Relation rel,
 	*partitions = (ResultRelInfo *) palloc(*num_partitions *
 										   sizeof(ResultRelInfo));
 	*tup_conv_maps = (TupleConversionMap **) palloc0(*num_partitions *
-										   sizeof(TupleConversionMap *));
+											   sizeof(TupleConversionMap *));
 
 	/*
 	 * Initialize an empty slot that will be used to manipulate tuples of any
@@ -3131,8 +3160,7 @@ ExecSetupPartitionTupleRouting(Relation rel,
 
 		InitResultRelInfo(leaf_part_rri,
 						  partrel,
-						  1,	 /* dummy */
-						  false,
+						  1,	/* dummy */
 						  rel,
 						  0);
 
@@ -3165,36 +3193,123 @@ int
 ExecFindPartition(ResultRelInfo *resultRelInfo, PartitionDispatch *pd,
 				  TupleTableSlot *slot, EState *estate)
 {
-	int		result;
-	Oid		failed_at;
-	ExprContext *econtext = GetPerTupleExprContext(estate);
+	int			result;
+	PartitionDispatchData *failed_at;
+	TupleTableSlot *failed_slot;
 
-	econtext->ecxt_scantuple = slot;
-	result = get_partition_for_tuple(pd, slot, estate, &failed_at);
+	result = get_partition_for_tuple(pd, slot, estate,
+									 &failed_at, &failed_slot);
 	if (result < 0)
 	{
-		Relation	rel = resultRelInfo->ri_RelationDesc;
+		Relation	failed_rel;
+		Datum		key_values[PARTITION_MAX_KEYS];
+		bool		key_isnull[PARTITION_MAX_KEYS];
 		char	   *val_desc;
-		Bitmapset  *insertedCols,
-				   *updatedCols,
-				   *modifiedCols;
-		TupleDesc	tupDesc = RelationGetDescr(rel);
+		ExprContext *ecxt = GetPerTupleExprContext(estate);
 
-		insertedCols = GetInsertedColumns(resultRelInfo, estate);
-		updatedCols = GetUpdatedColumns(resultRelInfo, estate);
-		modifiedCols = bms_union(insertedCols, updatedCols);
-		val_desc = ExecBuildSlotValueDescription(RelationGetRelid(rel),
-												 slot,
-												 tupDesc,
-												 modifiedCols,
-												 64);
-		Assert(OidIsValid(failed_at));
+		failed_rel = failed_at->reldesc;
+		ecxt->ecxt_scantuple = failed_slot;
+		FormPartitionKeyDatum(failed_at, failed_slot, estate,
+							  key_values, key_isnull);
+		val_desc = ExecBuildSlotPartitionKeyDescription(failed_rel,
+														key_values,
+														key_isnull,
+														64);
+		Assert(OidIsValid(RelationGetRelid(failed_rel)));
 		ereport(ERROR,
 				(errcode(ERRCODE_CHECK_VIOLATION),
 				 errmsg("no partition of relation \"%s\" found for row",
-						get_rel_name(failed_at)),
-		  val_desc ? errdetail("Failing row contains %s.", val_desc) : 0));
+						RelationGetRelationName(failed_rel)),
+			val_desc ? errdetail("Partition key of the failing row contains %s.", val_desc) : 0));
 	}
 
 	return result;
+}
+
+/*
+ * BuildSlotPartitionKeyDescription
+ *
+ * This works very much like BuildIndexValueDescription() and is currently
+ * used for building error messages when ExecFindPartition() fails to find
+ * partition for a row.
+ */
+static char *
+ExecBuildSlotPartitionKeyDescription(Relation rel,
+									 Datum *values,
+									 bool *isnull,
+									 int maxfieldlen)
+{
+	StringInfoData	buf;
+	PartitionKey	key = RelationGetPartitionKey(rel);
+	int			partnatts = get_partition_natts(key);
+	int			i;
+	Oid			relid = RelationGetRelid(rel);
+	AclResult	aclresult;
+
+	if (check_enable_rls(relid, InvalidOid, true) == RLS_ENABLED)
+		return NULL;
+
+	/* If the user has table-level access, just go build the description. */
+	aclresult = pg_class_aclcheck(relid, GetUserId(), ACL_SELECT);
+	if (aclresult != ACLCHECK_OK)
+	{
+		/*
+		 * Step through the columns of the partition key and make sure the
+		 * user has SELECT rights on all of them.
+		 */
+		for (i = 0; i < partnatts; i++)
+		{
+			AttrNumber	attnum = get_partition_col_attnum(key, i);
+
+			/*
+			 * If this partition key column is an expression, we return no
+			 * detail rather than try to figure out what column(s) the
+			 * expression includes and if the user has SELECT rights on them.
+			 */
+			if (attnum == InvalidAttrNumber ||
+				pg_attribute_aclcheck(relid, attnum, GetUserId(),
+									  ACL_SELECT) != ACLCHECK_OK)
+				return NULL;
+		}
+	}
+
+	initStringInfo(&buf);
+	appendStringInfo(&buf, "(%s) = (",
+					 pg_get_partkeydef_columns(relid, true));
+
+	for (i = 0; i < partnatts; i++)
+	{
+		char	   *val;
+		int			vallen;
+
+		if (isnull[i])
+			val = "null";
+		else
+		{
+			Oid			foutoid;
+			bool		typisvarlena;
+
+			getTypeOutputInfo(get_partition_col_typid(key, i),
+							  &foutoid, &typisvarlena);
+			val = OidOutputFunctionCall(foutoid, values[i]);
+		}
+
+		if (i > 0)
+			appendStringInfoString(&buf, ", ");
+
+		/* truncate if needed */
+		vallen = strlen(val);
+		if (vallen <= maxfieldlen)
+			appendStringInfoString(&buf, val);
+		else
+		{
+			vallen = pg_mbcliplen(val, vallen, maxfieldlen);
+			appendBinaryStringInfo(&buf, val, vallen);
+			appendStringInfoString(&buf, "...");
+		}
+	}
+
+	appendStringInfoChar(&buf, ')');
+
+	return buf.data;
 }

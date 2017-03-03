@@ -164,8 +164,6 @@
  */
 #define atoui(x)  ((unsigned int) strtoul((x), NULL, 10))
 
-#define atooid(x)  ((Oid) strtoul((x), NULL, 10))
-
 #define strtobool(x)  ((*(x) == 't') ? true : false)
 
 #define nullable_string(token,length)  \
@@ -262,6 +260,9 @@ _readQuery(void)
 	READ_NODE_FIELD(rowMarks);
 	READ_NODE_FIELD(setOperations);
 	READ_NODE_FIELD(constraintDeps);
+	/* withCheckOptions intentionally omitted, see comment in parsenodes.h */
+	READ_LOCATION_FIELD(stmt_location);
+	READ_LOCATION_FIELD(stmt_len);
 
 	READ_DONE();
 }
@@ -1415,13 +1416,15 @@ _readPlannedStmt(void)
 	READ_NODE_FIELD(planTree);
 	READ_NODE_FIELD(rtable);
 	READ_NODE_FIELD(resultRelations);
-	READ_NODE_FIELD(utilityStmt);
 	READ_NODE_FIELD(subplans);
 	READ_BITMAPSET_FIELD(rewindPlanIDs);
 	READ_NODE_FIELD(rowMarks);
 	READ_NODE_FIELD(relationOids);
 	READ_NODE_FIELD(invalItems);
 	READ_INT_FIELD(nParamExec);
+	READ_NODE_FIELD(utilityStmt);
+	READ_LOCATION_FIELD(stmt_location);
+	READ_LOCATION_FIELD(stmt_len);
 
 	READ_DONE();
 }
@@ -1474,6 +1477,19 @@ _readResult(void)
 	ReadCommonPlan(&local_node->plan);
 
 	READ_NODE_FIELD(resconstantqual);
+
+	READ_DONE();
+}
+
+/*
+ * _readProjectSet
+ */
+static ProjectSet *
+_readProjectSet(void)
+{
+	READ_LOCALS_NO_FIELDS(ProjectSet);
+
+	ReadCommonPlan(&local_node->plan);
 
 	READ_DONE();
 }
@@ -2215,6 +2231,7 @@ _readSubPlan(void)
 	READ_OID_FIELD(firstColCollation);
 	READ_BOOL_FIELD(useHashTable);
 	READ_BOOL_FIELD(unknownEqFalse);
+	READ_BOOL_FIELD(parallel_safe);
 	READ_NODE_FIELD(setParam);
 	READ_NODE_FIELD(parParam);
 	READ_NODE_FIELD(args);
@@ -2445,6 +2462,8 @@ parseNodeString(void)
 		return_value = _readPlan();
 	else if (MATCH("RESULT", 6))
 		return_value = _readResult();
+	else if (MATCH("PROJECTSET", 10))
+		return_value = _readProjectSet();
 	else if (MATCH("MODIFYTABLE", 11))
 		return_value = _readModifyTable();
 	else if (MATCH("APPEND", 6))

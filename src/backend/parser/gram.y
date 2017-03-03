@@ -80,7 +80,8 @@
 
 /*
  * The above macro assigns -1 (unknown) as the parse location of any
- * nonterminal that was reduced from an empty rule.  This is problematic
+ * nonterminal that was reduced from an empty rule, or whose leftmost
+ * component was reduced from an empty rule.  This is problematic
  * for nonterminals defined like
  *		OptFooList: / * EMPTY * / { ... } | OptFooList Foo { ... } ;
  * because we'll set -1 as the location during the first reduction and then
@@ -91,6 +92,12 @@
  * (Although we have many nonterminals that follow this pattern, we only
  * bother with fixing @$ like this when the nonterminal's parse location
  * is actually referenced in some rule.)
+ *
+ * A cleaner answer would be to make YYLLOC_DEFAULT scan all the Rhs
+ * locations until it's found one that's not -1.  Then we'd get a correct
+ * location for any nonterminal that isn't entirely empty.  But this way
+ * would add overhead to every rule reduction, and so far there's not been
+ * a compelling reason to pay that overhead.
  */
 
 /*
@@ -133,6 +140,8 @@ typedef struct ImportQual
 
 static void base_yyerror(YYLTYPE *yylloc, core_yyscan_t yyscanner,
 						 const char *msg);
+static RawStmt *makeRawStmt(Node *stmt, int stmt_location);
+static void updateRawStmtEnd(RawStmt *rs, int end_location);
 static Node *makeColumnRef(char *colname, List *indirection,
 						   int location, core_yyscan_t yyscanner);
 static Node *makeTypeCast(Node *arg, TypeName *typename, int location);
@@ -273,6 +282,8 @@ static VacuumOptions *makeVacOpt(VacuumOption opt, int nworkers);
 		DropOwnedStmt ReassignOwnedStmt
 		AlterTSConfigurationStmt AlterTSDictionaryStmt
 		CreateMatViewStmt RefreshMatViewStmt CreateAmStmt
+		CreatePublicationStmt AlterPublicationStmt
+		CreateSubscriptionStmt AlterSubscriptionStmt DropSubscriptionStmt
 
 %type <node>	select_no_parens select_with_parens select_clause
 				simple_select values_clause
@@ -327,6 +338,7 @@ static VacuumOptions *makeVacOpt(VacuumOption opt, int nworkers);
 				database_name access_method_clause access_method attr_name
 				name cursor_name file_name
 				index_name opt_index_name cluster_index_specification
+				def_key
 
 %type <list>	func_name handler_name qual_Op qual_all_Op subquery_Op
 				opt_class opt_inline_handler opt_validator validator_clause
@@ -384,10 +396,13 @@ static VacuumOptions *makeVacOpt(VacuumOption opt, int nworkers);
 				relation_expr_list dostmt_opt_list
 				transform_element_list transform_type_list
 				TriggerTransitions TriggerReferencing
+				publication_name_list
 
 %type <list>	group_by_list
 %type <node>	group_by_item empty_grouping_set rollup_clause cube_clause
 %type <node>	grouping_sets_clause
+%type <node>	opt_publication_for_tables publication_for_tables
+%type <value>	publication_name_item
 
 %type <list>	opt_fdw_options fdw_options
 %type <defelt>	fdw_option
@@ -400,7 +415,7 @@ static VacuumOptions *makeVacOpt(VacuumOption opt, int nworkers);
 %type <fun_param_mode> arg_class
 %type <typnam>	func_return func_type
 
-%type <boolean>  opt_trusted opt_restart_seqs
+%type <boolean>  opt_trusted opt_restart_seqs opt_drop_slot
 %type <ival>	 OptTemp
 %type <ival>	 OptNoLog
 %type <oncommit> OnCommitOption
@@ -640,7 +655,7 @@ static VacuumOptions *makeVacOpt(VacuumOption opt, int nworkers);
 
 	PARALLEL PARSER PARTIAL PARTITION PASSING PASSWORD PLACING PLANS POLICY
 	POSITION PRECEDING PRECISION PRESERVE PREPARE PREPARED PRIMARY
-	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROGRAM
+	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROGRAM PUBLICATION
 
 	QUOTE
 
@@ -651,9 +666,9 @@ static VacuumOptions *makeVacOpt(VacuumOption opt, int nworkers);
 
 	SAVEPOINT SCHEMA SCROLL SEARCH SECOND_P SECURITY SELECT SEQUENCE SEQUENCES
 	SERIALIZABLE SERVER SESSION SESSION_USER SET SETS SETOF SHARE SHOW
-	SIMILAR SIMPLE SKIP SMALLINT SNAPSHOT SOME SQL_P STABLE STANDALONE_P START
-	STATEMENT STATISTICS STDIN STDOUT STORAGE STRICT_P STRIP_P SUBSTRING
-	SYMMETRIC SYSID SYSTEM_P
+	SIMILAR SIMPLE SKIP SLOT SMALLINT SNAPSHOT SOME SQL_P STABLE STANDALONE_P
+	START STATEMENT STATISTICS STDIN STDOUT STORAGE STRICT_P STRIP_P
+	SUBSCRIPTION SUBSTRING SYMMETRIC SYSID SYSTEM_P
 
 	TABLE TABLES TABLESAMPLE TABLESPACE TEMP TEMPLATE TEMPORARY TEXT_P THEN
 	TIME TIMESTAMP TO TRAILING TRANSACTION TRANSFORM TREAT TRIGGER TRIM TRUE_P
@@ -760,18 +775,32 @@ stmtblock:	stmtmulti
 			}
 		;
 
-/* the thrashing around here is to discard "empty" statements... */
+/*
+ * At top level, we wrap each stmt with a RawStmt node carrying start location
+ * and length of the stmt's text.  Notice that the start loc/len are driven
+ * entirely from semicolon locations (@2).  It would seem natural to use
+ * @1 or @3 to get the true start location of a stmt, but that doesn't work
+ * for statements that can start with empty nonterminals (opt_with_clause is
+ * the main offender here); as noted in the comments for YYLLOC_DEFAULT,
+ * we'd get -1 for the location in such cases.
+ * We also take care to discard empty statements entirely.
+ */
 stmtmulti:	stmtmulti ';' stmt
 				{
+					if ($1 != NIL)
+					{
+						/* update length of previous stmt */
+						updateRawStmtEnd(castNode(RawStmt, llast($1)), @2);
+					}
 					if ($3 != NULL)
-						$$ = lappend($1, $3);
+						$$ = lappend($1, makeRawStmt($3, @2 + 1));
 					else
 						$$ = $1;
 				}
 			| stmt
 				{
 					if ($1 != NULL)
-						$$ = list_make1($1);
+						$$ = list_make1(makeRawStmt($1, 0));
 					else
 						$$ = NIL;
 				}
@@ -801,8 +830,10 @@ stmt :
 			| AlterTableStmt
 			| AlterTblSpcStmt
 			| AlterCompositeTypeStmt
+			| AlterPublicationStmt
 			| AlterRoleSetStmt
 			| AlterRoleStmt
+			| AlterSubscriptionStmt
 			| AlterTSConfigurationStmt
 			| AlterTSDictionaryStmt
 			| AlterUserMappingStmt
@@ -830,12 +861,14 @@ stmt :
 			| CreateMatViewStmt
 			| CreateOpClassStmt
 			| CreateOpFamilyStmt
+			| CreatePublicationStmt
 			| AlterOpFamilyStmt
 			| CreatePolicyStmt
 			| CreatePLangStmt
 			| CreateSchemaStmt
 			| CreateSeqStmt
 			| CreateStmt
+			| CreateSubscriptionStmt
 			| CreateTableSpaceStmt
 			| CreateTransformStmt
 			| CreateTrigStmt
@@ -862,6 +895,7 @@ stmt :
 			| DropPLangStmt
 			| DropRuleStmt
 			| DropStmt
+			| DropSubscriptionStmt
 			| DropTableSpaceStmt
 			| DropTransformStmt
 			| DropTrigStmt
@@ -3217,8 +3251,7 @@ ColQualList:
 ColConstraint:
 			CONSTRAINT name ColConstraintElem
 				{
-					Constraint *n = (Constraint *) $3;
-					Assert(IsA(n, Constraint));
+					Constraint *n = castNode(Constraint, $3);
 					n->conname = $2;
 					n->location = @1;
 					$$ = (Node *) n;
@@ -3410,8 +3443,7 @@ TableLikeOption:
 TableConstraint:
 			CONSTRAINT name ConstraintElem
 				{
-					Constraint *n = (Constraint *) $3;
-					Assert(IsA(n, Constraint));
+					Constraint *n = castNode(Constraint, $3);
 					n->conname = $2;
 					n->location = @1;
 					$$ = (Node *) n;
@@ -3909,7 +3941,11 @@ SeqOptList: SeqOptElem								{ $$ = list_make1($1); }
 			| SeqOptList SeqOptElem					{ $$ = lappend($1, $2); }
 		;
 
-SeqOptElem: CACHE NumericOnly
+SeqOptElem: AS SimpleTypename
+				{
+					$$ = makeDefElem("as", (Node *)$2, @1);
+				}
+			| CACHE NumericOnly
 				{
 					$$ = makeDefElem("cache", (Node *)$2, @1);
 				}
@@ -5574,6 +5610,16 @@ DefineStmt:
 					n->definition = $4;
 					$$ = (Node *)n;
 				}
+			| CREATE COLLATION IF_P NOT EXISTS any_name definition
+				{
+					DefineStmt *n = makeNode(DefineStmt);
+					n->kind = OBJECT_COLLATION;
+					n->args = NIL;
+					n->defnames = $6;
+					n->definition = $7;
+					n->if_not_exists = true;
+					$$ = (Node *)n;
+				}
 			| CREATE COLLATION any_name FROM any_name
 				{
 					DefineStmt *n = makeNode(DefineStmt);
@@ -5581,6 +5627,16 @@ DefineStmt:
 					n->args = NIL;
 					n->defnames = $3;
 					n->definition = list_make1(makeDefElem("from", (Node *) $5, @5));
+					$$ = (Node *)n;
+				}
+			| CREATE COLLATION IF_P NOT EXISTS any_name FROM any_name
+				{
+					DefineStmt *n = makeNode(DefineStmt);
+					n->kind = OBJECT_COLLATION;
+					n->args = NIL;
+					n->defnames = $6;
+					n->definition = list_make1(makeDefElem("from", (Node *) $8, @8));
+					n->if_not_exists = true;
 					$$ = (Node *)n;
 				}
 		;
@@ -5592,14 +5648,19 @@ def_list:	def_elem								{ $$ = list_make1($1); }
 			| def_list ',' def_elem					{ $$ = lappend($1, $3); }
 		;
 
-def_elem:	ColLabel '=' def_arg
+def_elem:	def_key '=' def_arg
 				{
 					$$ = makeDefElem($1, (Node *) $3, @1);
 				}
-			| ColLabel
+			| def_key
 				{
 					$$ = makeDefElem($1, NULL, @1);
 				}
+		;
+
+def_key:
+			ColLabel						{ $$ = $1; }
+			| ColLabel ColLabel				{ $$ = psprintf("%s %s", $1, $2); }
 		;
 
 /* Note: any simple identifier will be returned as a type name! */
@@ -6052,6 +6113,7 @@ drop_type:	TABLE									{ $$ = OBJECT_TABLE; }
 			| TEXT_P SEARCH DICTIONARY				{ $$ = OBJECT_TSDICTIONARY; }
 			| TEXT_P SEARCH TEMPLATE				{ $$ = OBJECT_TSTEMPLATE; }
 			| TEXT_P SEARCH CONFIGURATION			{ $$ = OBJECT_TSCONFIGURATION; }
+			| PUBLICATION							{ $$ = OBJECT_PUBLICATION; }
 		;
 
 any_name_list:
@@ -6221,16 +6283,6 @@ CommentStmt:
 					n->objname = lappend($6, makeString($4));
 					n->objargs = NIL;
 					n->comment = $8;
-					$$ = (Node *) n;
-				}
-			| COMMENT ON RULE name IS comment_text
-				{
-					/* Obsolete syntax supported for awhile for compatibility */
-					CommentStmt *n = makeNode(CommentStmt);
-					n->objtype = OBJECT_RULE;
-					n->objname = list_make1(makeString($4));
-					n->objargs = NIL;
-					n->comment = $6;
 					$$ = (Node *) n;
 				}
 			| COMMENT ON TRANSFORM FOR Typename LANGUAGE name IS comment_text
@@ -8912,8 +8964,236 @@ AlterOwnerStmt: ALTER AGGREGATE aggregate_with_argtypes OWNER TO RoleSpec
 					n->newowner = $7;
 					$$ = (Node *)n;
 				}
+			| ALTER PUBLICATION name OWNER TO RoleSpec
+				{
+					AlterOwnerStmt *n = makeNode(AlterOwnerStmt);
+					n->objectType = OBJECT_PUBLICATION;
+					n->object = list_make1(makeString($3));
+					n->newowner = $6;
+					$$ = (Node *)n;
+				}
+			| ALTER SUBSCRIPTION name OWNER TO RoleSpec
+				{
+					AlterOwnerStmt *n = makeNode(AlterOwnerStmt);
+					n->objectType = OBJECT_SUBSCRIPTION;
+					n->object = list_make1(makeString($3));
+					n->newowner = $6;
+					$$ = (Node *)n;
+				}
 		;
 
+
+/*****************************************************************************
+ *
+ * CREATE PUBLICATION name [ FOR TABLE ] [ WITH options ]
+ *
+ *****************************************************************************/
+
+CreatePublicationStmt:
+			CREATE PUBLICATION name opt_publication_for_tables opt_definition
+				{
+					CreatePublicationStmt *n = makeNode(CreatePublicationStmt);
+					n->pubname = $3;
+					n->options = $5;
+					if ($4 != NULL)
+					{
+						/* FOR TABLE */
+						if (IsA($4, List))
+							n->tables = (List *)$4;
+						/* FOR ALL TABLES */
+						else
+							n->for_all_tables = TRUE;
+					}
+					$$ = (Node *)n;
+				}
+		;
+
+opt_publication_for_tables:
+			publication_for_tables					{ $$ = $1; }
+			| /* EMPTY */							{ $$ = NULL; }
+		;
+
+publication_for_tables:
+			FOR TABLE relation_expr_list
+				{
+					$$ = (Node *) $3;
+				}
+			| FOR ALL TABLES
+				{
+					$$ = (Node *) makeInteger(TRUE);
+				}
+		;
+
+/*****************************************************************************
+ *
+ * ALTER PUBLICATION name [ WITH ] options
+ *
+ * ALTER PUBLICATION name ADD TABLE table [, table2]
+ *
+ * ALTER PUBLICATION name DROP TABLE table [, table2]
+ *
+ * ALTER PUBLICATION name SET TABLE table [, table2]
+ *
+ *****************************************************************************/
+
+AlterPublicationStmt:
+			ALTER PUBLICATION name WITH definition
+				{
+					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
+					n->pubname = $3;
+					n->options = $5;
+					$$ = (Node *)n;
+				}
+			| ALTER PUBLICATION name ADD_P TABLE relation_expr_list
+				{
+					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
+					n->pubname = $3;
+					n->tables = $6;
+					n->tableAction = DEFELEM_ADD;
+					$$ = (Node *)n;
+				}
+			| ALTER PUBLICATION name SET TABLE relation_expr_list
+				{
+					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
+					n->pubname = $3;
+					n->tables = $6;
+					n->tableAction = DEFELEM_SET;
+					$$ = (Node *)n;
+				}
+			| ALTER PUBLICATION name DROP TABLE relation_expr_list
+				{
+					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
+					n->pubname = $3;
+					n->tables = $6;
+					n->tableAction = DEFELEM_DROP;
+					$$ = (Node *)n;
+				}
+		;
+
+/*****************************************************************************
+ *
+ * CREATE SUBSCRIPTION name ...
+ *
+ *****************************************************************************/
+
+CreateSubscriptionStmt:
+			CREATE SUBSCRIPTION name CONNECTION Sconst PUBLICATION publication_name_list opt_definition
+				{
+					CreateSubscriptionStmt *n =
+						makeNode(CreateSubscriptionStmt);
+					n->subname = $3;
+					n->conninfo = $5;
+					n->publication = $7;
+					n->options = $8;
+					$$ = (Node *)n;
+				}
+		;
+
+publication_name_list:
+			publication_name_item
+				{
+					$$ = list_make1($1);
+				}
+			| publication_name_list ',' publication_name_item
+				{
+					$$ = lappend($1, $3);
+				}
+		;
+
+publication_name_item:
+			ColLabel			{ $$ = makeString($1); };
+
+/*****************************************************************************
+ *
+ * ALTER SUBSCRIPTION name [ WITH ] options
+ *
+ *****************************************************************************/
+
+AlterSubscriptionStmt:
+			ALTER SUBSCRIPTION name WITH definition
+				{
+					AlterSubscriptionStmt *n =
+						makeNode(AlterSubscriptionStmt);
+					n->subname = $3;
+					n->options = $5;
+					$$ = (Node *)n;
+				}
+			| ALTER SUBSCRIPTION name CONNECTION Sconst
+				{
+					AlterSubscriptionStmt *n =
+						makeNode(AlterSubscriptionStmt);
+					n->subname = $3;
+					n->options = list_make1(makeDefElem("conninfo",
+											(Node *)makeString($5), @1));
+					$$ = (Node *)n;
+				}
+			| ALTER SUBSCRIPTION name SET PUBLICATION publication_name_list
+				{
+					AlterSubscriptionStmt *n =
+						makeNode(AlterSubscriptionStmt);
+					n->subname = $3;
+					n->options = list_make1(makeDefElem("publication",
+											(Node *)$6, @1));
+					$$ = (Node *)n;
+				}
+			| ALTER SUBSCRIPTION name ENABLE_P
+				{
+					AlterSubscriptionStmt *n =
+						makeNode(AlterSubscriptionStmt);
+					n->subname = $3;
+					n->options = list_make1(makeDefElem("enabled",
+											(Node *)makeInteger(TRUE), @1));
+					$$ = (Node *)n;
+				}
+			| ALTER SUBSCRIPTION name DISABLE_P
+				{
+					AlterSubscriptionStmt *n =
+						makeNode(AlterSubscriptionStmt);
+					n->subname = $3;
+					n->options = list_make1(makeDefElem("enabled",
+											(Node *)makeInteger(FALSE), @1));
+					$$ = (Node *)n;
+				}		;
+
+/*****************************************************************************
+ *
+ * DROP SUBSCRIPTION [ IF EXISTS ] name
+ *
+ *****************************************************************************/
+
+DropSubscriptionStmt: DROP SUBSCRIPTION name opt_drop_slot
+				{
+					DropSubscriptionStmt *n = makeNode(DropSubscriptionStmt);
+					n->subname = $3;
+					n->drop_slot = $4;
+					n->missing_ok = false;
+					$$ = (Node *) n;
+				}
+				|  DROP SUBSCRIPTION IF_P EXISTS name opt_drop_slot
+				{
+					DropSubscriptionStmt *n = makeNode(DropSubscriptionStmt);
+					n->subname = $5;
+					n->drop_slot = $6;
+					n->missing_ok = true;
+					$$ = (Node *) n;
+				}
+		;
+
+opt_drop_slot:
+			IDENT SLOT
+				{
+					if (strcmp($1, "drop") == 0)
+						$$ = TRUE;
+					else if (strcmp($1, "nodrop") == 0)
+						$$ = FALSE;
+					else
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("unrecognized option \"%s\"", $1),
+										parser_errposition(@1)));
+				}
+			| /*EMPTY*/								{ $$ = TRUE; }
+		;
 
 /*****************************************************************************
  *
@@ -11090,7 +11370,7 @@ table_ref:	relation_expr opt_alias_clause
 					n->lateral = true;
 					n->subquery = $2;
 					n->alias = $3;
-					/* same coment as above */
+					/* same comment as above */
 					if ($3 == NULL)
 					{
 						if (IsA($2, SelectStmt) &&
@@ -12518,7 +12798,10 @@ c_expr:		columnref								{ $$ = $1; }
 						 * AEXPR_PAREN nodes wrapping all explicitly
 						 * parenthesized subexpressions; this prevents bogus
 						 * warnings from being issued when the ordering has
-						 * been forced by parentheses.
+						 * been forced by parentheses.  Take care that an
+						 * AEXPR_PAREN node has the same exprLocation as its
+						 * child, so as not to cause surprising changes in
+						 * error cursor positioning.
 						 *
 						 * In principle we should not be relying on a GUC to
 						 * decide whether to insert AEXPR_PAREN nodes.
@@ -12527,7 +12810,8 @@ c_expr:		columnref								{ $$ = $1; }
 						 * we'd just as soon not waste cycles on dummy parse
 						 * nodes if we don't have to.
 						 */
-						$$ = (Node *) makeA_Expr(AEXPR_PAREN, NIL, $2, NULL, @1);
+						$$ = (Node *) makeA_Expr(AEXPR_PAREN, NIL, $2, NULL,
+												 exprLocation($2));
 					}
 					else
 						$$ = $2;
@@ -12595,8 +12879,7 @@ c_expr:		columnref								{ $$ = $1; }
 				}
 			| ARRAY array_expr
 				{
-					A_ArrayExpr *n = (A_ArrayExpr *) $2;
-					Assert(IsA(n, A_ArrayExpr));
+					A_ArrayExpr *n = castNode(A_ArrayExpr, $2);
 					/* point outermost A_ArrayExpr to the ARRAY keyword */
 					n->location = @1;
 					$$ = (Node *)n;
@@ -14224,6 +14507,7 @@ unreserved_keyword:
 			| PROCEDURAL
 			| PROCEDURE
 			| PROGRAM
+			| PUBLICATION
 			| QUOTE
 			| RANGE
 			| READ
@@ -14267,6 +14551,7 @@ unreserved_keyword:
 			| SHOW
 			| SIMPLE
 			| SKIP
+			| SLOT
 			| SNAPSHOT
 			| SQL_P
 			| STABLE
@@ -14279,6 +14564,7 @@ unreserved_keyword:
 			| STORAGE
 			| STRICT_P
 			| STRIP_P
+			| SUBSCRIPTION
 			| SYSID
 			| SYSTEM_P
 			| TABLES
@@ -14518,6 +14804,33 @@ static void
 base_yyerror(YYLTYPE *yylloc, core_yyscan_t yyscanner, const char *msg)
 {
 	parser_yyerror(msg);
+}
+
+static RawStmt *
+makeRawStmt(Node *stmt, int stmt_location)
+{
+	RawStmt    *rs = makeNode(RawStmt);
+
+	rs->stmt = stmt;
+	rs->stmt_location = stmt_location;
+	rs->stmt_len = 0;			/* might get changed later */
+	return rs;
+}
+
+/* Adjust a RawStmt to reflect that it doesn't run to the end of the string */
+static void
+updateRawStmtEnd(RawStmt *rs, int end_location)
+{
+	/*
+	 * If we already set the length, don't change it.  This is for situations
+	 * like "select foo ;; select bar" where the same statement will be last
+	 * in the string for more than one semicolon.
+	 */
+	if (rs->stmt_len > 0)
+		return;
+
+	/* OK, update length of RawStmt */
+	rs->stmt_len = end_location - rs->stmt_location;
 }
 
 static Node *

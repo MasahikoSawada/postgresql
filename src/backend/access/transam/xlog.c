@@ -15,6 +15,7 @@
 #include "postgres.h"
 
 #include <ctype.h>
+#include <math.h>
 #include <time.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -95,6 +96,8 @@ bool		EnableHotStandby = false;
 bool		fullPageWrites = true;
 bool		wal_log_hints = false;
 bool		wal_compression = false;
+char	   *wal_consistency_checking_string = NULL;
+bool	   *wal_consistency_checking = NULL;
 bool		log_checkpoints = false;
 int			sync_method = DEFAULT_SYNC_METHOD;
 int			wal_level = WAL_LEVEL_MINIMAL;
@@ -244,6 +247,10 @@ bool		InArchiveRecovery = false;
 
 /* Was the last xlog file restored from archive, or local? */
 static bool restoredFromArchive = false;
+
+/* Buffers dedicated to consistency checks of size BLCKSZ */
+static char *replay_image_masked = NULL;
+static char *master_image_masked = NULL;
 
 /* options taken from recovery.conf for archive recovery */
 char	   *recoveryRestoreCommand = NULL;
@@ -473,6 +480,29 @@ typedef union WALInsertLockPadded
 } WALInsertLockPadded;
 
 /*
+ * State of an exclusive backup, necessary to control concurrent activities
+ * across sessions when working on exclusive backups.
+ *
+ * EXCLUSIVE_BACKUP_NONE means that there is no exclusive backup actually
+ * running, to be more precise pg_start_backup() is not being executed for
+ * an exclusive backup and there is no exclusive backup in progress.
+ * EXCLUSIVE_BACKUP_STARTING means that pg_start_backup() is starting an
+ * exclusive backup.
+ * EXCLUSIVE_BACKUP_IN_PROGRESS means that pg_start_backup() has finished
+ * running and an exclusive backup is in progress. pg_stop_backup() is
+ * needed to finish it.
+ * EXCLUSIVE_BACKUP_STOPPING means that pg_stop_backup() is stopping an
+ * exclusive backup.
+ */
+typedef enum ExclusiveBackupState
+{
+	EXCLUSIVE_BACKUP_NONE = 0,
+	EXCLUSIVE_BACKUP_STARTING,
+	EXCLUSIVE_BACKUP_IN_PROGRESS,
+	EXCLUSIVE_BACKUP_STOPPING
+} ExclusiveBackupState;
+
+/*
  * Shared state data for WAL insertion.
  */
 typedef struct XLogCtlInsert
@@ -513,13 +543,15 @@ typedef struct XLogCtlInsert
 	bool		fullPageWrites;
 
 	/*
-	 * exclusiveBackup is true if a backup started with pg_start_backup() is
-	 * in progress, and nonExclusiveBackups is a counter indicating the number
-	 * of streaming base backups currently in progress. forcePageWrites is set
-	 * to true when either of these is non-zero. lastBackupStart is the latest
-	 * checkpoint redo location used as a starting point for an online backup.
+	 * exclusiveBackupState indicates the state of an exclusive backup
+	 * (see comments of ExclusiveBackupState for more details).
+	 * nonExclusiveBackups is a counter indicating the number of streaming
+	 * base backups currently in progress. forcePageWrites is set to true
+	 * when either of these is non-zero. lastBackupStart is the latest
+	 * checkpoint redo location used as a starting point for an online
+	 * backup.
 	 */
-	bool		exclusiveBackup;
+	ExclusiveBackupState exclusiveBackupState;
 	int			nonExclusiveBackups;
 	XLogRecPtr	lastBackupStart;
 
@@ -858,6 +890,7 @@ static void xlog_outrec(StringInfo buf, XLogReaderState *record);
 #endif
 static void xlog_outdesc(StringInfo buf, XLogReaderState *record);
 static void pg_start_backup_callback(int code, Datum arg);
+static void pg_stop_backup_callback(int code, Datum arg);
 static bool read_backup_label(XLogRecPtr *checkPointLoc,
 				  bool *backupEndRequired, bool *backupFromStandby);
 static bool read_tablespace_map(List **tablespaces);
@@ -877,6 +910,7 @@ static char *GetXLogBuffer(XLogRecPtr ptr);
 static XLogRecPtr XLogBytePosToRecPtr(uint64 bytepos);
 static XLogRecPtr XLogBytePosToEndRecPtr(uint64 bytepos);
 static uint64 XLogRecPtrToBytePos(XLogRecPtr ptr);
+static void checkXLogConsistency(XLogReaderState *record);
 
 static void WALInsertLockAcquire(void);
 static void WALInsertLockAcquireExclusive(void);
@@ -1081,7 +1115,7 @@ XLogInsertRecord(XLogRecData *rdata,
 	 */
 	if (isLogSwitch)
 	{
-		TRACE_POSTGRESQL_XLOG_SWITCH();
+		TRACE_POSTGRESQL_WAL_SWITCH();
 		XLogFlush(EndPos);
 
 		/*
@@ -1286,6 +1320,113 @@ ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos, XLogRecPtr *PrevPtr)
 	Assert(XLogRecPtrToBytePos(*PrevPtr) == prevbytepos);
 
 	return true;
+}
+
+/*
+ * Checks whether the current buffer page and backup page stored in the
+ * WAL record are consistent or not. Before comparing the two pages, a
+ * masking can be applied to the pages to ignore certain areas like hint bits,
+ * unused space between pd_lower and pd_upper among other things. This
+ * function should be called once WAL replay has been completed for a
+ * given record.
+ */
+static void
+checkXLogConsistency(XLogReaderState *record)
+{
+	RmgrId		rmid = XLogRecGetRmid(record);
+	RelFileNode rnode;
+	ForkNumber	forknum;
+	BlockNumber blkno;
+	int			block_id;
+
+	/* Records with no backup blocks have no need for consistency checks. */
+	if (!XLogRecHasAnyBlockRefs(record))
+		return;
+
+	Assert((XLogRecGetInfo(record) & XLR_CHECK_CONSISTENCY) != 0);
+
+	for (block_id = 0; block_id <= record->max_block_id; block_id++)
+	{
+		Buffer		buf;
+		Page		page;
+
+		if (!XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blkno))
+		{
+			/*
+			 * WAL record doesn't contain a block reference with the given id.
+			 * Do nothing.
+			 */
+			continue;
+		}
+
+		Assert(XLogRecHasBlockImage(record, block_id));
+
+		if (XLogRecBlockImageApply(record, block_id))
+		{
+			/*
+			 * WAL record has already applied the page, so bypass the
+			 * consistency check as that would result in comparing the full
+			 * page stored in the record with itself.
+			 */
+			continue;
+		}
+
+		/*
+		 * Read the contents from the current buffer and store it in a
+		 * temporary page.
+		 */
+		buf = XLogReadBufferExtended(rnode, forknum, blkno,
+									 RBM_NORMAL_NO_LOG);
+		if (!BufferIsValid(buf))
+			continue;
+
+		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
+		page = BufferGetPage(buf);
+
+		/*
+		 * Take a copy of the local page where WAL has been applied to have a
+		 * comparison base before masking it...
+		 */
+		memcpy(replay_image_masked, page, BLCKSZ);
+
+		/* No need for this page anymore now that a copy is in. */
+		UnlockReleaseBuffer(buf);
+
+		/*
+		 * If the block LSN is already ahead of this WAL record, we can't
+		 * expect contents to match.  This can happen if recovery is restarted.
+		 */
+		if (PageGetLSN(replay_image_masked) > record->EndRecPtr)
+			continue;
+
+		/*
+		 * Read the contents from the backup copy, stored in WAL record and
+		 * store it in a temporary page. There is no need to allocate a new
+		 * page here, a local buffer is fine to hold its contents and a mask
+		 * can be directly applied on it.
+		 */
+		if (!RestoreBlockImage(record, block_id, master_image_masked))
+			elog(ERROR, "failed to restore block image");
+
+		/*
+		 * If masking function is defined, mask both the master and replay
+		 * images
+		 */
+		if (RmgrTable[rmid].rm_mask != NULL)
+		{
+			RmgrTable[rmid].rm_mask(replay_image_masked, blkno);
+			RmgrTable[rmid].rm_mask(master_image_masked, blkno);
+		}
+
+		/* Time to compare the master and replay images. */
+		if (memcmp(replay_image_masked, master_image_masked, BLCKSZ) != 0)
+		{
+			elog(FATAL,
+			   "inconsistent page found, rel %u/%u/%u, forknum %u, blkno %u",
+				 rnode.spcNode, rnode.dbNode, rnode.relNode,
+				 forknum, blkno);
+		}
+	}
 }
 
 /*
@@ -4239,11 +4380,6 @@ WriteControlFile(void)
 	ControlFile->toast_max_chunk_size = TOAST_MAX_CHUNK_SIZE;
 	ControlFile->loblksize = LOBLKSIZE;
 
-#ifdef HAVE_INT64_TIMESTAMP
-	ControlFile->enableIntTimes = true;
-#else
-	ControlFile->enableIntTimes = false;
-#endif
 	ControlFile->float4ByVal = FLOAT4PASSBYVAL;
 	ControlFile->float8ByVal = FLOAT8PASSBYVAL;
 
@@ -4438,22 +4574,6 @@ ReadControlFile(void)
 					" but the server was compiled with LOBLKSIZE %d.",
 					ControlFile->loblksize, (int) LOBLKSIZE),
 				 errhint("It looks like you need to recompile or initdb.")));
-
-#ifdef HAVE_INT64_TIMESTAMP
-	if (ControlFile->enableIntTimes != true)
-		ereport(FATAL,
-				(errmsg("database files are incompatible with server"),
-				 errdetail("The database cluster was initialized without HAVE_INT64_TIMESTAMP"
-				  " but the server was compiled with HAVE_INT64_TIMESTAMP."),
-				 errhint("It looks like you need to recompile or initdb.")));
-#else
-	if (ControlFile->enableIntTimes != false)
-		ereport(FATAL,
-				(errmsg("database files are incompatible with server"),
-				 errdetail("The database cluster was initialized with HAVE_INT64_TIMESTAMP"
-			   " but the server was compiled without HAVE_INT64_TIMESTAMP."),
-				 errhint("It looks like you need to recompile or initdb.")));
-#endif
 
 #ifdef USE_FLOAT4_BYVAL
 	if (ControlFile->float4ByVal != true)
@@ -5740,7 +5860,7 @@ recoveryPausesHere(void)
 
 	ereport(LOG,
 			(errmsg("recovery has paused"),
-			 errhint("Execute pg_xlog_replay_resume() to continue.")));
+			 errhint("Execute pg_wal_replay_resume() to continue.")));
 
 	while (RecoveryIsPaused())
 	{
@@ -6173,6 +6293,13 @@ StartupXLOG(void)
 				 errmsg("out of memory"),
 		   errdetail("Failed while allocating an XLog reading processor.")));
 	xlogreader->system_identifier = ControlFile->system_identifier;
+
+	/*
+	 * Allocate pages dedicated to WAL consistency checks, those had better
+	 * be aligned.
+	 */
+	replay_image_masked = (char *) palloc(BLCKSZ);
+	master_image_masked = (char *) palloc(BLCKSZ);
 
 	if (read_backup_label(&checkPointLoc, &backupEndRequired,
 						  &backupFromStandby))
@@ -6973,6 +7100,15 @@ StartupXLOG(void)
 
 				/* Now apply the WAL record itself */
 				RmgrTable[record->xl_rmid].rm_redo(xlogreader);
+
+				/*
+				 * After redo, check whether the backup pages associated with
+				 * the WAL record are consistent with the existing pages. This
+				 * check is done only if consistency check is enabled for this
+				 * record.
+				 */
+				if ((record->xl_info & XLR_CHECK_CONSISTENCY) != 0)
+					checkXLogConsistency(xlogreader);
 
 				/* Pop the error context stack */
 				error_context_stack = errcallback.previous;
@@ -9127,7 +9263,7 @@ KeepLogSeg(XLogRecPtr recptr, XLogSegNo *logSegNo)
 	/* then check whether slots limit removal further */
 	if (max_replication_slots > 0 && keep != InvalidXLogRecPtr)
 	{
-		XLogRecPtr	slotSegNo;
+		XLogSegNo	slotSegNo;
 
 		XLByteToSeg(keep, slotSegNo);
 
@@ -10016,7 +10152,12 @@ do_pg_start_backup(const char *backupidstr, bool fast, TimeLineID *starttli_p,
 	WALInsertLockAcquireExclusive();
 	if (exclusive)
 	{
-		if (XLogCtl->Insert.exclusiveBackup)
+		/*
+		 * At first, mark that we're now starting an exclusive backup,
+		 * to ensure that there are no other sessions currently running
+		 * pg_start_backup() or pg_stop_backup().
+		 */
+		if (XLogCtl->Insert.exclusiveBackupState != EXCLUSIVE_BACKUP_NONE)
 		{
 			WALInsertLockRelease();
 			ereport(ERROR,
@@ -10024,7 +10165,7 @@ do_pg_start_backup(const char *backupidstr, bool fast, TimeLineID *starttli_p,
 					 errmsg("a backup is already in progress"),
 					 errhint("Run pg_stop_backup() and try again.")));
 		}
-		XLogCtl->Insert.exclusiveBackup = true;
+		XLogCtl->Insert.exclusiveBackupState = EXCLUSIVE_BACKUP_STARTING;
 	}
 	else
 		XLogCtl->Insert.nonExclusiveBackups++;
@@ -10279,7 +10420,7 @@ do_pg_start_backup(const char *backupidstr, bool fast, TimeLineID *starttli_p,
 		{
 			/*
 			 * Check for existing backup label --- implies a backup is already
-			 * running.  (XXX given that we checked exclusiveBackup above,
+			 * running.  (XXX given that we checked exclusiveBackupState above,
 			 * maybe it would be OK to just unlink any such label file?)
 			 */
 			if (stat(BACKUP_LABEL_FILE, &stat_buf) != 0)
@@ -10361,6 +10502,16 @@ do_pg_start_backup(const char *backupidstr, bool fast, TimeLineID *starttli_p,
 	PG_END_ENSURE_ERROR_CLEANUP(pg_start_backup_callback, (Datum) BoolGetDatum(exclusive));
 
 	/*
+	 * Mark that start phase has correctly finished for an exclusive backup.
+	 */
+	if (exclusive)
+	{
+		WALInsertLockAcquireExclusive();
+		XLogCtl->Insert.exclusiveBackupState = EXCLUSIVE_BACKUP_IN_PROGRESS;
+		WALInsertLockRelease();
+	}
+
+	/*
 	 * We're done.  As a convenience, return the starting WAL location.
 	 */
 	if (starttli_p)
@@ -10378,8 +10529,8 @@ pg_start_backup_callback(int code, Datum arg)
 	WALInsertLockAcquireExclusive();
 	if (exclusive)
 	{
-		Assert(XLogCtl->Insert.exclusiveBackup);
-		XLogCtl->Insert.exclusiveBackup = false;
+		Assert(XLogCtl->Insert.exclusiveBackupState == EXCLUSIVE_BACKUP_STARTING);
+		XLogCtl->Insert.exclusiveBackupState = EXCLUSIVE_BACKUP_NONE;
 	}
 	else
 	{
@@ -10387,10 +10538,28 @@ pg_start_backup_callback(int code, Datum arg)
 		XLogCtl->Insert.nonExclusiveBackups--;
 	}
 
-	if (!XLogCtl->Insert.exclusiveBackup &&
+	if (XLogCtl->Insert.exclusiveBackupState == EXCLUSIVE_BACKUP_NONE &&
 		XLogCtl->Insert.nonExclusiveBackups == 0)
 	{
 		XLogCtl->Insert.forcePageWrites = false;
+	}
+	WALInsertLockRelease();
+}
+
+/*
+ * Error cleanup callback for pg_stop_backup
+ */
+static void
+pg_stop_backup_callback(int code, Datum arg)
+{
+	bool		exclusive = DatumGetBool(arg);
+
+	/* Update backup status on failure */
+	WALInsertLockAcquireExclusive();
+	if (exclusive)
+	{
+		Assert(XLogCtl->Insert.exclusiveBackupState == EXCLUSIVE_BACKUP_STOPPING);
+		XLogCtl->Insert.exclusiveBackupState = EXCLUSIVE_BACKUP_IN_PROGRESS;
 	}
 	WALInsertLockRelease();
 }
@@ -10457,20 +10626,91 @@ do_pg_stop_backup(char *labelfile, bool waitforarchive, TimeLineID *stoptli_p)
 			  errmsg("WAL level not sufficient for making an online backup"),
 				 errhint("wal_level must be set to \"replica\" or \"logical\" at server start.")));
 
-	/*
-	 * OK to update backup counters and forcePageWrites
-	 */
-	WALInsertLockAcquireExclusive();
 	if (exclusive)
 	{
-		if (!XLogCtl->Insert.exclusiveBackup)
+		/*
+		 * At first, mark that we're now stopping an exclusive backup,
+		 * to ensure that there are no other sessions currently running
+		 * pg_start_backup() or pg_stop_backup().
+		 */
+		WALInsertLockAcquireExclusive();
+		if (XLogCtl->Insert.exclusiveBackupState != EXCLUSIVE_BACKUP_IN_PROGRESS)
 		{
 			WALInsertLockRelease();
 			ereport(ERROR,
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 					 errmsg("exclusive backup not in progress")));
 		}
-		XLogCtl->Insert.exclusiveBackup = false;
+		XLogCtl->Insert.exclusiveBackupState = EXCLUSIVE_BACKUP_STOPPING;
+		WALInsertLockRelease();
+
+		/*
+		 * Remove backup_label. In case of failure, the state for an exclusive
+		 * backup is switched back to in-progress.
+		 */
+		PG_ENSURE_ERROR_CLEANUP(pg_stop_backup_callback, (Datum) BoolGetDatum(exclusive));
+		{
+			/*
+			 * Read the existing label file into memory.
+			 */
+			struct stat statbuf;
+			int			r;
+
+			if (stat(BACKUP_LABEL_FILE, &statbuf))
+			{
+				/* should not happen per the upper checks */
+				if (errno != ENOENT)
+					ereport(ERROR,
+							(errcode_for_file_access(),
+							 errmsg("could not stat file \"%s\": %m",
+									BACKUP_LABEL_FILE)));
+				ereport(ERROR,
+						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+						 errmsg("a backup is not in progress")));
+			}
+
+			lfp = AllocateFile(BACKUP_LABEL_FILE, "r");
+			if (!lfp)
+			{
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not read file \"%s\": %m",
+								BACKUP_LABEL_FILE)));
+			}
+			labelfile = palloc(statbuf.st_size + 1);
+			r = fread(labelfile, statbuf.st_size, 1, lfp);
+			labelfile[statbuf.st_size] = '\0';
+
+			/*
+			 * Close and remove the backup label file
+			 */
+			if (r != 1 || ferror(lfp) || FreeFile(lfp))
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not read file \"%s\": %m",
+								BACKUP_LABEL_FILE)));
+			if (unlink(BACKUP_LABEL_FILE) != 0)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not remove file \"%s\": %m",
+								BACKUP_LABEL_FILE)));
+
+			/*
+			 * Remove tablespace_map file if present, it is created only if there
+			 * are tablespaces.
+			 */
+			unlink(TABLESPACE_MAP);
+		}
+		PG_END_ENSURE_ERROR_CLEANUP(pg_stop_backup_callback, (Datum) BoolGetDatum(exclusive));
+	}
+
+	/*
+	 * OK to update backup counters and forcePageWrites
+	 */
+	WALInsertLockAcquireExclusive();
+	if (exclusive)
+	{
+		XLogCtl->Insert.exclusiveBackupState = EXCLUSIVE_BACKUP_NONE;
 	}
 	else
 	{
@@ -10484,65 +10724,12 @@ do_pg_stop_backup(char *labelfile, bool waitforarchive, TimeLineID *stoptli_p)
 		XLogCtl->Insert.nonExclusiveBackups--;
 	}
 
-	if (!XLogCtl->Insert.exclusiveBackup &&
+	if (XLogCtl->Insert.exclusiveBackupState == EXCLUSIVE_BACKUP_NONE &&
 		XLogCtl->Insert.nonExclusiveBackups == 0)
 	{
 		XLogCtl->Insert.forcePageWrites = false;
 	}
 	WALInsertLockRelease();
-
-	if (exclusive)
-	{
-		/*
-		 * Read the existing label file into memory.
-		 */
-		struct stat statbuf;
-		int			r;
-
-		if (stat(BACKUP_LABEL_FILE, &statbuf))
-		{
-			if (errno != ENOENT)
-				ereport(ERROR,
-						(errcode_for_file_access(),
-						 errmsg("could not stat file \"%s\": %m",
-								BACKUP_LABEL_FILE)));
-			ereport(ERROR,
-					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-					 errmsg("a backup is not in progress")));
-		}
-
-		lfp = AllocateFile(BACKUP_LABEL_FILE, "r");
-		if (!lfp)
-		{
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read file \"%s\": %m",
-							BACKUP_LABEL_FILE)));
-		}
-		labelfile = palloc(statbuf.st_size + 1);
-		r = fread(labelfile, statbuf.st_size, 1, lfp);
-		labelfile[statbuf.st_size] = '\0';
-
-		/*
-		 * Close and remove the backup label file
-		 */
-		if (r != 1 || ferror(lfp) || FreeFile(lfp))
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read file \"%s\": %m",
-							BACKUP_LABEL_FILE)));
-		if (unlink(BACKUP_LABEL_FILE) != 0)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not remove file \"%s\": %m",
-							BACKUP_LABEL_FILE)));
-
-		/*
-		 * Remove tablespace_map file if present, it is created only if there
-		 * are tablespaces.
-		 */
-		unlink(TABLESPACE_MAP);
-	}
 
 	/*
 	 * Read and parse the START WAL LOCATION line (this code is pretty crude,
@@ -10780,7 +10967,7 @@ do_pg_abort_backup(void)
 	Assert(XLogCtl->Insert.nonExclusiveBackups > 0);
 	XLogCtl->Insert.nonExclusiveBackups--;
 
-	if (!XLogCtl->Insert.exclusiveBackup &&
+	if (XLogCtl->Insert.exclusiveBackupState == EXCLUSIVE_BACKUP_NONE &&
 		XLogCtl->Insert.nonExclusiveBackups == 0)
 	{
 		XLogCtl->Insert.forcePageWrites = false;

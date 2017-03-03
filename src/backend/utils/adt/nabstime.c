@@ -19,6 +19,7 @@
 #include <ctype.h>
 #include <float.h>
 #include <limits.h>
+#include <math.h>
 #include <time.h>
 #include <sys/time.h>
 
@@ -818,14 +819,10 @@ interval_reltime(PG_FUNCTION_ARGS)
 	month = interval->month % MONTHS_PER_YEAR;
 	day = interval->day;
 
-#ifdef HAVE_INT64_TIMESTAMP
 	span = ((INT64CONST(365250000) * year + INT64CONST(30000000) * month +
 			 INT64CONST(1000000) * day) * INT64CONST(86400)) +
 		interval->time;
 	span /= USECS_PER_SEC;
-#else
-	span = (DAYS_PER_YEAR * year + (double) DAYS_PER_MONTH * month + day) * SECS_PER_DAY + interval->time;
-#endif
 
 	if (span < INT_MIN || span > INT_MAX)
 		time = INVALID_RELTIME;
@@ -859,7 +856,6 @@ reltime_interval(PG_FUNCTION_ARGS)
 			break;
 
 		default:
-#ifdef HAVE_INT64_TIMESTAMP
 			year = reltime / SECS_PER_YEAR;
 			reltime -= year * SECS_PER_YEAR;
 			month = reltime / (DAYS_PER_MONTH * SECS_PER_DAY);
@@ -868,13 +864,6 @@ reltime_interval(PG_FUNCTION_ARGS)
 			reltime -= day * SECS_PER_DAY;
 
 			result->time = (reltime * USECS_PER_SEC);
-#else
-			TMODULO(reltime, year, SECS_PER_YEAR);
-			TMODULO(reltime, month, DAYS_PER_MONTH * SECS_PER_DAY);
-			TMODULO(reltime, day, SECS_PER_DAY);
-
-			result->time = reltime;
-#endif
 			result->month = MONTHS_PER_YEAR * year + month;
 			result->day = day;
 			break;
@@ -1547,8 +1536,8 @@ parsetinterval(char *i_string,
 bogus:
 	ereport(ERROR,
 			(errcode(ERRCODE_INVALID_DATETIME_FORMAT),
-			 errmsg("invalid input syntax for type tinterval: \"%s\"",
-					i_string)));
+			 errmsg("invalid input syntax for type %s: \"%s\"",
+					"tinterval", i_string)));
 	*i_start = *i_end = INVALID_ABSTIME;		/* keep compiler quiet */
 }
 

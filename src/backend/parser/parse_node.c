@@ -51,6 +51,7 @@ make_parsestate(ParseState *parentParseState)
 
 	/* Fill in fields that don't start at null/false/zero */
 	pstate->p_next_resno = 1;
+	pstate->p_resolve_unknowns = true;
 
 	if (parentParseState)
 	{
@@ -334,10 +335,9 @@ transformArraySubscripts(ParseState *pstate,
 	 */
 	foreach(idx, indirection)
 	{
-		A_Indices  *ai = (A_Indices *) lfirst(idx);
+		A_Indices  *ai = castNode(A_Indices, lfirst(idx));
 		Node	   *subexpr;
 
-		Assert(IsA(ai, A_Indices));
 		if (isSlice)
 		{
 			if (ai->lidx)

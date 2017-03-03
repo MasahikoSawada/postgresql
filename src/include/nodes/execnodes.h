@@ -52,6 +52,8 @@
  *		ReadyForInserts		is it valid for inserts?
  *		Concurrent			are we doing a concurrent index build?
  *		BrokenHotChain		did we detect any broken HOT chains?
+ *		AmCache				private cache area for index AM
+ *		Context				memory context holding this IndexInfo
  *
  * ii_Concurrent and ii_BrokenHotChain are used only during index build;
  * they're conventionally set to false otherwise.
@@ -76,6 +78,8 @@ typedef struct IndexInfo
 	bool		ii_ReadyForInserts;
 	bool		ii_Concurrent;
 	bool		ii_BrokenHotChain;
+	void	   *ii_AmCache;
+	MemoryContext ii_Context;
 } IndexInfo;
 
 /* ----------------
@@ -156,7 +160,8 @@ typedef struct ExprContext
 } ExprContext;
 
 /*
- * Set-result status returned by ExecEvalExpr()
+ * Set-result status used when evaluating functions potentially returning a
+ * set.
  */
 typedef enum
 {
@@ -228,7 +233,6 @@ typedef struct ReturnSetInfo
  *		targetlist		target list for projection (non-Var expressions only)
  *		exprContext		expression context in which to evaluate targetlist
  *		slot			slot to place projection result in
- *		itemIsDone		workspace array for ExecProject
  *		directMap		true if varOutputCols[] is an identity map
  *		numSimpleVars	number of simple Vars found in original tlist
  *		varSlotOffsets	array indicating which slot each simple Var is from
@@ -245,7 +249,6 @@ typedef struct ProjectionInfo
 	List	   *pi_targetlist;
 	ExprContext *pi_exprContext;
 	TupleTableSlot *pi_slot;
-	ExprDoneCond *pi_itemIsDone;
 	bool		pi_directMap;
 	int			pi_numSimpleVars;
 	int		   *pi_varSlotOffsets;
@@ -368,6 +371,7 @@ typedef struct EState
 	Snapshot	es_crosscheck_snapshot; /* crosscheck time qual for RI */
 	List	   *es_range_table; /* List of RangeTblEntry */
 	PlannedStmt *es_plannedstmt;	/* link to top of plan tree */
+	const char *es_sourceText;	/* Source text from QueryDesc */
 
 	JunkFilter *es_junkFilter;	/* top-level junk filter, if any */
 
@@ -586,8 +590,7 @@ typedef struct ExprState ExprState;
 
 typedef Datum (*ExprStateEvalFunc) (ExprState *expression,
 												ExprContext *econtext,
-												bool *isNull,
-												ExprDoneCond *isDone);
+												bool *isNull);
 
 struct ExprState
 {
@@ -696,7 +699,7 @@ typedef struct FuncExprState
 	/*
 	 * Function manager's lookup info for the target function.  If func.fn_oid
 	 * is InvalidOid, we haven't initialized it yet (nor any of the following
-	 * fields).
+	 * fields, except funcReturnsSet).
 	 */
 	FmgrInfo	func;
 
@@ -717,6 +720,12 @@ typedef struct FuncExprState
 										 * NULL */
 
 	/*
+	 * Remember whether the function is declared to return a set.  This is set
+	 * by ExecInitExpr, and is valid even before the FmgrInfo is set up.
+	 */
+	bool		funcReturnsSet;
+
+	/*
 	 * setArgsValid is true when we are evaluating a set-returning function
 	 * that uses value-per-call mode and we are in the middle of a call
 	 * series; we want to pass the same argument values to the function again
@@ -724,13 +733,6 @@ typedef struct FuncExprState
 	 * fcinfo_data already contains valid argument data.
 	 */
 	bool		setArgsValid;
-
-	/*
-	 * Flag to remember whether we found a set-valued argument to the
-	 * function. This causes the function result to be a set as well. Valid
-	 * only when setArgsValid is true or funcResultStore isn't NULL.
-	 */
-	bool		setHasSetArg;	/* some argument returns a set */
 
 	/*
 	 * Flag to remember whether we have registered a shutdown callback for
@@ -1075,8 +1077,6 @@ typedef struct PlanState
 	TupleTableSlot *ps_ResultTupleSlot; /* slot for my result tuples */
 	ExprContext *ps_ExprContext;	/* node's expression-evaluation context */
 	ProjectionInfo *ps_ProjInfo;	/* info for doing tuple projection */
-	bool		ps_TupFromTlist;/* state flag for processing set-valued
-								 * functions in targetlist */
 } PlanState;
 
 /* ----------------
@@ -1128,6 +1128,18 @@ typedef struct ResultState
 	bool		rs_done;		/* are we done? */
 	bool		rs_checkqual;	/* do we need to check the qual? */
 } ResultState;
+
+/* ----------------
+ *	 ProjectSetState information
+ * ----------------
+ */
+typedef struct ProjectSetState
+{
+	PlanState	ps;				/* its first field is NodeTag */
+	ExprDoneCond *elemdone;		/* array of per-SRF is-done states */
+	int			nelems;			/* length of elemdone[] array */
+	bool		pending_srf_tuples;		/* still evaluating srfs in tlist? */
+} ProjectSetState;
 
 /* ----------------
  *	 ModifyTableState information
@@ -1352,6 +1364,7 @@ typedef struct
  *		SortSupport		   for reordering ORDER BY exprs
  *		OrderByTypByVals   is the datatype of order by expression pass-by-value?
  *		OrderByTypLens	   typlens of the datatypes of order by expressions
+ *		pscan_len		   size of parallel index scan descriptor
  * ----------------
  */
 typedef struct IndexScanState
@@ -1378,6 +1391,7 @@ typedef struct IndexScanState
 	SortSupport iss_SortSupport;
 	bool	   *iss_OrderByTypByVals;
 	int16	   *iss_OrderByTypLens;
+	Size		iss_PscanLen;
 } IndexScanState;
 
 /* ----------------
@@ -1396,6 +1410,7 @@ typedef struct IndexScanState
  *		ScanDesc		   index scan descriptor
  *		VMBuffer		   buffer in use for visibility map testing, if any
  *		HeapFetches		   number of tuples we were forced to fetch from heap
+ *		ioss_PscanLen	   Size of parallel index-only scan descriptor
  * ----------------
  */
 typedef struct IndexOnlyScanState
@@ -1414,6 +1429,7 @@ typedef struct IndexOnlyScanState
 	IndexScanDesc ioss_ScanDesc;
 	Buffer		ioss_VMBuffer;
 	long		ioss_HeapFetches;
+	Size		ioss_PscanLen;
 } IndexOnlyScanState;
 
 /* ----------------

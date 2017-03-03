@@ -2,7 +2,7 @@
 
 /*
  * The aim is to get a simpler interface to the database routines.
- * All the tidieous messing around with tuples is supposed to be hidden
+ * All the tedious messing around with tuples is supposed to be hidden
  * by this function.
  */
 /* Author: Linus Tolke
@@ -16,7 +16,6 @@
 #define POSTGRES_ECPG_INTERNAL
 #include "postgres_fe.h"
 
-#include <locale.h>
 #include <float.h>
 #include <math.h>
 

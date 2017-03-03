@@ -58,10 +58,24 @@ typedef uint32 Bucket;
 #define LH_BUCKET_BEING_SPLIT	(1 << 5)
 #define LH_BUCKET_NEEDS_SPLIT_CLEANUP	(1 << 6)
 
+#define LH_PAGE_TYPE \
+	(LH_OVERFLOW_PAGE|LH_BUCKET_PAGE|LH_BITMAP_PAGE|LH_META_PAGE)
+
+/*
+ * In an overflow page, hasho_prevblkno stores the block number of the previous
+ * page in the bucket chain; in a bucket page, hasho_prevblkno stores the
+ * hashm_maxbucket value as of the last time the bucket was last split, or
+ * else as of the time the bucket was created.  The latter convention is used
+ * to determine whether a cached copy of the metapage is too stale to be used
+ * without needing to lock or pin the metapage.
+ *
+ * hasho_nextblkno is always the block number of the next page in the
+ * bucket chain, or InvalidBlockNumber if there are no more such pages.
+ */
 typedef struct HashPageOpaqueData
 {
-	BlockNumber hasho_prevblkno;	/* previous ovfl (or bucket) blkno */
-	BlockNumber hasho_nextblkno;	/* next ovfl blkno */
+	BlockNumber hasho_prevblkno;	/* see above */
+	BlockNumber hasho_nextblkno;	/* see above */
 	Bucket		hasho_bucket;	/* bucket number this pg belongs to */
 	uint16		hasho_flag;		/* page type code, see above */
 	uint16		hasho_page_id;	/* for identification of hash indexes */
@@ -258,13 +272,13 @@ typedef HashMetaPageData *HashMetaPage;
 
 /* public routines */
 
-extern Datum hashhandler(PG_FUNCTION_ARGS);
 extern IndexBuildResult *hashbuild(Relation heap, Relation index,
 		  struct IndexInfo *indexInfo);
 extern void hashbuildempty(Relation index);
 extern bool hashinsert(Relation rel, Datum *values, bool *isnull,
 		   ItemPointer ht_ctid, Relation heapRel,
-		   IndexUniqueCheck checkUnique);
+		   IndexUniqueCheck checkUnique,
+		   struct IndexInfo *indexInfo);
 extern bool hashgettuple(IndexScanDesc scan, ScanDirection dir);
 extern int64 hashgetbitmap(IndexScanDesc scan, TIDBitmap *tbm);
 extern IndexScanDesc hashbeginscan(Relation rel, int nkeys, int norderbys);
@@ -280,27 +294,6 @@ extern IndexBulkDeleteResult *hashvacuumcleanup(IndexVacuumInfo *info,
 extern bytea *hashoptions(Datum reloptions, bool validate);
 extern bool hashvalidate(Oid opclassoid);
 
-/*
- * Datatype-specific hash functions in hashfunc.c.
- *
- * These support both hash indexes and hash joins.
- *
- * NOTE: some of these are also used by catcache operations, without
- * any direct connection to hash indexes.  Also, the common hash_any
- * routine is also used by dynahash tables.
- */
-extern Datum hashchar(PG_FUNCTION_ARGS);
-extern Datum hashint2(PG_FUNCTION_ARGS);
-extern Datum hashint4(PG_FUNCTION_ARGS);
-extern Datum hashint8(PG_FUNCTION_ARGS);
-extern Datum hashoid(PG_FUNCTION_ARGS);
-extern Datum hashenum(PG_FUNCTION_ARGS);
-extern Datum hashfloat4(PG_FUNCTION_ARGS);
-extern Datum hashfloat8(PG_FUNCTION_ARGS);
-extern Datum hashoidvector(PG_FUNCTION_ARGS);
-extern Datum hashname(PG_FUNCTION_ARGS);
-extern Datum hashtext(PG_FUNCTION_ARGS);
-extern Datum hashvarlena(PG_FUNCTION_ARGS);
 extern Datum hash_any(register const unsigned char *k, register int keylen);
 extern Datum hash_uint32(uint32 k);
 
@@ -310,23 +303,33 @@ extern Datum hash_uint32(uint32 k);
 extern void _hash_doinsert(Relation rel, IndexTuple itup);
 extern OffsetNumber _hash_pgaddtup(Relation rel, Buffer buf,
 			   Size itemsize, IndexTuple itup);
+extern void _hash_pgaddmultitup(Relation rel, Buffer buf, IndexTuple *itups,
+					OffsetNumber *itup_offsets, uint16 nitups);
 
 /* hashovfl.c */
 extern Buffer _hash_addovflpage(Relation rel, Buffer metabuf, Buffer buf, bool retain_pin);
-extern BlockNumber _hash_freeovflpage(Relation rel, Buffer ovflbuf, Buffer wbuf,
-				   BufferAccessStrategy bstrategy);
+extern BlockNumber _hash_freeovflpage(Relation rel, Buffer bucketbuf, Buffer ovflbuf,
+				   Buffer wbuf, IndexTuple *itups, OffsetNumber *itup_offsets,
+			 Size *tups_size, uint16 nitups, BufferAccessStrategy bstrategy);
 extern void _hash_initbitmap(Relation rel, HashMetaPage metap,
 				 BlockNumber blkno, ForkNumber forkNum);
+extern void _hash_initbitmapbuffer(Buffer buf, uint16 bmsize, bool initpage);
 extern void _hash_squeezebucket(Relation rel,
 					Bucket bucket, BlockNumber bucket_blkno,
 					Buffer bucket_buf,
 					BufferAccessStrategy bstrategy);
+extern uint32 _hash_ovflblkno_to_bitno(HashMetaPage metap, BlockNumber ovflblkno);
 
 /* hashpage.c */
 extern Buffer _hash_getbuf(Relation rel, BlockNumber blkno,
 			 int access, int flags);
 extern Buffer _hash_getbuf_with_condlock_cleanup(Relation rel,
 								   BlockNumber blkno, int flags);
+extern HashMetaPage _hash_getcachedmetap(Relation rel, Buffer *metabuf,
+					 bool force_refresh);
+extern Buffer _hash_getbucketbuf_from_hashkey(Relation rel, uint32 hashkey,
+								int access,
+								HashMetaPage *cachedmetap);
 extern Buffer _hash_getinitbuf(Relation rel, BlockNumber blkno);
 extern Buffer _hash_getnewbuf(Relation rel, BlockNumber blkno,
 				ForkNumber forkNum);

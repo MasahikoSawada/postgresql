@@ -938,7 +938,7 @@ CREATE TABLE shoe_data (
 	shoename   char(10),      -- primary key
 	sh_avail   integer,       -- available # of pairs
 	slcolor    char(10),      -- preferred shoelace color
-	slminlen   float,         -- miminum shoelace length
+	slminlen   float,         -- minimum shoelace length
 	slmaxlen   float,         -- maximum shoelace length
 	slunit     char(8)        -- length unit
 );
@@ -1338,6 +1338,16 @@ pg_group| SELECT pg_authid.rolname AS groname,
           WHERE (pg_auth_members.roleid = pg_authid.oid)) AS grolist
    FROM pg_authid
   WHERE (NOT pg_authid.rolcanlogin);
+pg_hba_file_rules| SELECT a.line_number,
+    a.type,
+    a.database,
+    a.user_name,
+    a.address,
+    a.netmask,
+    a.auth_method,
+    a.options,
+    a.error
+   FROM pg_hba_file_rules() a(line_number, type, database, user_name, address, netmask, auth_method, options, error);
 pg_indexes| SELECT n.nspname AS schemaname,
     c.relname AS tablename,
     i.relname AS indexname,
@@ -1417,6 +1427,14 @@ pg_prepared_xacts| SELECT p.transaction,
    FROM ((pg_prepared_xact() p(transaction, gid, prepared, ownerid, dbid)
      LEFT JOIN pg_authid u ON ((p.ownerid = u.oid)))
      LEFT JOIN pg_database d ON ((p.dbid = d.oid)));
+pg_publication_tables| SELECT p.pubname,
+    n.nspname AS schemaname,
+    c.relname AS tablename
+   FROM pg_publication p,
+    (pg_class c
+     JOIN pg_namespace n ON ((n.oid = c.relnamespace)))
+  WHERE (c.oid IN ( SELECT pg_get_publication_tables.relid
+           FROM pg_get_publication_tables((p.pubname)::text) pg_get_publication_tables(relid)));
 pg_replication_origin_status| SELECT pg_show_replication_origin_status.local_id,
     pg_show_replication_origin_status.external_id,
     pg_show_replication_origin_status.remote_lsn,
@@ -1463,7 +1481,7 @@ pg_seclabels| SELECT l.objoid,
     l.classoid,
     l.objsubid,
         CASE
-            WHEN (rel.relkind = 'r'::"char") THEN 'table'::text
+            WHEN (rel.relkind = ANY (ARRAY['r'::"char", 'P'::"char"])) THEN 'table'::text
             WHEN (rel.relkind = 'v'::"char") THEN 'view'::text
             WHEN (rel.relkind = 'm'::"char") THEN 'materialized view'::text
             WHEN (rel.relkind = 'S'::"char") THEN 'sequence'::text
@@ -1623,13 +1641,17 @@ UNION ALL
 pg_sequences| SELECT n.nspname AS schemaname,
     c.relname AS sequencename,
     pg_get_userbyid(c.relowner) AS sequenceowner,
+    (s.seqtypid)::regtype AS data_type,
     s.seqstart AS start_value,
     s.seqmin AS min_value,
     s.seqmax AS max_value,
     s.seqincrement AS increment_by,
     s.seqcycle AS cycle,
     s.seqcache AS cache_size,
-    pg_sequence_last_value((c.oid)::regclass) AS last_value
+        CASE
+            WHEN has_sequence_privilege(c.oid, 'SELECT,USAGE'::text) THEN pg_sequence_last_value((c.oid)::regclass)
+            ELSE NULL::bigint
+        END AS last_value
    FROM ((pg_sequence s
      JOIN pg_class c ON ((c.oid = s.seqrelid)))
      LEFT JOIN pg_namespace n ON ((n.oid = c.relnamespace)))
@@ -1822,6 +1844,16 @@ pg_stat_ssl| SELECT s.pid,
     s.sslcompression AS compression,
     s.sslclientdn AS clientdn
    FROM pg_stat_get_activity(NULL::integer) s(datid, pid, usesysid, application_name, state, query, wait_event_type, wait_event, xact_start, query_start, backend_start, state_change, client_addr, client_hostname, client_port, backend_xid, backend_xmin, ssl, sslversion, sslcipher, sslbits, sslcompression, sslclientdn);
+pg_stat_subscription| SELECT su.oid AS subid,
+    su.subname,
+    st.pid,
+    st.received_lsn,
+    st.last_msg_send_time,
+    st.last_msg_receipt_time,
+    st.latest_end_lsn,
+    st.latest_end_time
+   FROM (pg_subscription su
+     LEFT JOIN pg_stat_get_subscription(NULL::oid) st(subid, pid, received_lsn, last_msg_send_time, last_msg_receipt_time, latest_end_lsn, latest_end_time) ON ((st.subid = su.oid)));
 pg_stat_sys_indexes| SELECT pg_stat_all_indexes.relid,
     pg_stat_all_indexes.indexrelid,
     pg_stat_all_indexes.schemaname,
@@ -2139,7 +2171,7 @@ pg_tables| SELECT n.nspname AS schemaname,
    FROM ((pg_class c
      LEFT JOIN pg_namespace n ON ((n.oid = c.relnamespace)))
      LEFT JOIN pg_tablespace t ON ((t.oid = c.reltablespace)))
-  WHERE (c.relkind = 'r'::"char");
+  WHERE (c.relkind = ANY (ARRAY['r'::"char", 'P'::"char"]));
 pg_timezone_abbrevs| SELECT pg_timezone_abbrevs.abbrev,
     pg_timezone_abbrevs.utc_offset,
     pg_timezone_abbrevs.is_dst

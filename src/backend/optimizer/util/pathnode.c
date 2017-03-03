@@ -744,10 +744,9 @@ add_path_precheck(RelOptInfo *parent_rel,
  *	  As with add_path, we pfree paths that are found to be dominated by
  *	  another partial path; this requires that there be no other references to
  *	  such paths yet.  Hence, GatherPaths must not be created for a rel until
- *	  we're done creating all partial paths for it.  We do not currently build
- *	  partial indexscan paths, so there is no need for an exception for
- *	  IndexPaths here; for safety, we instead Assert that a path to be freed
- *	  isn't an IndexPath.
+ *	  we're done creating all partial paths for it.  Unlike add_path, we don't
+ *	  take an exception for IndexPaths as partial index paths won't be
+ *	  referenced by partial BitmapHeapPaths.
  */
 void
 add_partial_path(RelOptInfo *parent_rel, Path *new_path)
@@ -826,8 +825,6 @@ add_partial_path(RelOptInfo *parent_rel, Path *new_path)
 		{
 			parent_rel->partial_pathlist =
 				list_delete_cell(parent_rel->partial_pathlist, p1, p1_prev);
-			/* we should not see IndexPaths here, so always safe to delete */
-			Assert(!IsA(old_path, IndexPath));
 			pfree(old_path);
 			/* p1_prev does not advance */
 		}
@@ -860,8 +857,6 @@ add_partial_path(RelOptInfo *parent_rel, Path *new_path)
 	}
 	else
 	{
-		/* we should not see IndexPaths here, so always safe to delete */
-		Assert(!IsA(new_path, IndexPath));
 		/* Reject and recycle the new path */
 		pfree(new_path);
 	}
@@ -1005,6 +1000,7 @@ create_samplescan_path(PlannerInfo *root, RelOptInfo *rel, Relids required_outer
  * 'required_outer' is the set of outer relids for a parameterized path.
  * 'loop_count' is the number of repetitions of the indexscan to factor into
  *		estimates of caching behavior.
+ * 'partial_path' is true if constructing a parallel index scan path.
  *
  * Returns the new path node.
  */
@@ -1019,7 +1015,8 @@ create_index_path(PlannerInfo *root,
 				  ScanDirection indexscandir,
 				  bool indexonly,
 				  Relids required_outer,
-				  double loop_count)
+				  double loop_count,
+				  bool partial_path)
 {
 	IndexPath  *pathnode = makeNode(IndexPath);
 	RelOptInfo *rel = index->rel;
@@ -1049,7 +1046,7 @@ create_index_path(PlannerInfo *root,
 	pathnode->indexorderbycols = indexorderbycols;
 	pathnode->indexscandir = indexscandir;
 
-	cost_index(pathnode, root, loop_count);
+	cost_index(pathnode, root, loop_count, partial_path);
 
 	return pathnode;
 }
@@ -2320,6 +2317,72 @@ apply_projection_to_path(PlannerInfo *root,
 }
 
 /*
+ * create_set_projection_path
+ *	  Creates a pathnode that represents performing a projection that
+ *	  includes set-returning functions.
+ *
+ * 'rel' is the parent relation associated with the result
+ * 'subpath' is the path representing the source of data
+ * 'target' is the PathTarget to be computed
+ */
+ProjectSetPath *
+create_set_projection_path(PlannerInfo *root,
+						   RelOptInfo *rel,
+						   Path *subpath,
+						   PathTarget *target)
+{
+	ProjectSetPath *pathnode = makeNode(ProjectSetPath);
+	double		tlist_rows;
+	ListCell   *lc;
+
+	pathnode->path.pathtype = T_ProjectSet;
+	pathnode->path.parent = rel;
+	pathnode->path.pathtarget = target;
+	/* For now, assume we are above any joins, so no parameterization */
+	pathnode->path.param_info = NULL;
+	pathnode->path.parallel_aware = false;
+	pathnode->path.parallel_safe = rel->consider_parallel &&
+		subpath->parallel_safe &&
+		is_parallel_safe(root, (Node *) target->exprs);
+	pathnode->path.parallel_workers = subpath->parallel_workers;
+	/* Projection does not change the sort order XXX? */
+	pathnode->path.pathkeys = subpath->pathkeys;
+
+	pathnode->subpath = subpath;
+
+	/*
+	 * Estimate number of rows produced by SRFs for each row of input; if
+	 * there's more than one in this node, use the maximum.
+	 */
+	tlist_rows = 1;
+	foreach(lc, target->exprs)
+	{
+		Node	   *node = (Node *) lfirst(lc);
+		double		itemrows;
+
+		itemrows = expression_returns_set_rows(node);
+		if (tlist_rows < itemrows)
+			tlist_rows = itemrows;
+	}
+
+	/*
+	 * In addition to the cost of evaluating the tlist, charge cpu_tuple_cost
+	 * per input row, and half of cpu_tuple_cost for each added output row.
+	 * This is slightly bizarre maybe, but it's what 9.6 did; we may revisit
+	 * this estimate later.
+	 */
+	pathnode->path.rows = subpath->rows * tlist_rows;
+	pathnode->path.startup_cost = subpath->startup_cost +
+		target->cost.startup;
+	pathnode->path.total_cost = subpath->total_cost +
+		target->cost.startup +
+		(cpu_tuple_cost + target->cost.per_tuple) * subpath->rows +
+		(pathnode->path.rows - subpath->rows) * cpu_tuple_cost / 2;
+
+	return pathnode;
+}
+
+/*
  * create_sort_path
  *	  Creates a pathnode that represents performing an explicit sort.
  *
@@ -3181,7 +3244,7 @@ reparameterize_path(PlannerInfo *root, Path *path,
 				memcpy(newpath, ipath, sizeof(IndexPath));
 				newpath->path.param_info =
 					get_baserel_parampathinfo(root, rel, required_outer);
-				cost_index(newpath, root, loop_count);
+				cost_index(newpath, root, loop_count, false);
 				return (Path *) newpath;
 			}
 		case T_BitmapHeapScan:

@@ -19,6 +19,7 @@
 #include "postgres.h"
 
 #include "access/gin_private.h"
+#include "access/ginxlog.h"
 #include "access/xloginsert.h"
 #include "access/xlog.h"
 #include "commands/vacuum.h"
@@ -30,6 +31,7 @@
 #include "postmaster/autovacuum.h"
 #include "storage/indexfsm.h"
 #include "storage/lmgr.h"
+#include "utils/builtins.h"
 
 /* GUC parameter */
 int			gin_pending_list_limit = 0;

@@ -463,6 +463,21 @@ static const SchemaQuery Query_for_list_of_tables = {
 	NULL
 };
 
+static const SchemaQuery Query_for_list_of_partitioned_tables = {
+	/* catname */
+	"pg_catalog.pg_class c",
+	/* selcondition */
+	"c.relkind IN ('P')",
+	/* viscondition */
+	"pg_catalog.pg_table_is_visible(c.oid)",
+	/* namespace */
+	"c.relnamespace",
+	/* result */
+	"pg_catalog.quote_ident(c.relname)",
+	/* qualresult */
+	NULL
+};
+
 static const SchemaQuery Query_for_list_of_constraints_with_schema = {
 	/* catname */
 	"pg_catalog.pg_constraint c",
@@ -675,9 +690,9 @@ static const SchemaQuery Query_for_list_of_matviews = {
 #define Query_for_list_of_alter_system_set_vars \
 "SELECT name FROM "\
 " (SELECT pg_catalog.lower(name) AS name FROM pg_catalog.pg_settings "\
-"  WHERE context != 'internal') ss "\
-" WHERE substring(name,1,%d)='%s'"\
-" UNION ALL SELECT 'all' ss"
+"  WHERE context != 'internal' "\
+"  UNION ALL SELECT 'all') ss "\
+" WHERE substring(name,1,%d)='%s'"
 
 #define Query_for_list_of_set_vars \
 "SELECT name FROM "\
@@ -913,6 +928,16 @@ static const SchemaQuery Query_for_list_of_matviews = {
 "   SELECT 'DEFAULT' ) ss "\
 "  WHERE pg_catalog.substring(name,1,%%d)='%%s'"
 
+/* the silly-looking length condition is just to eat up the current word */
+#define Query_for_partition_of_table \
+"SELECT pg_catalog.quote_ident(c2.relname) "\
+"  FROM pg_catalog.pg_class c1, pg_catalog.pg_class c2, pg_catalog.pg_inherits i"\
+" WHERE c1.oid=i.inhparent and i.inhrelid=c2.oid"\
+"       and (%d = pg_catalog.length('%s'))"\
+"       and pg_catalog.quote_ident(c1.relname)='%s'"\
+"       and pg_catalog.pg_table_is_visible(c2.oid)"\
+"       and c2.relispartition = 'true'"
+
 /*
  * This is a list of all "things" in Pgsql, which can show up after CREATE or
  * DROP; and there is also a query to get a list of them.
@@ -960,11 +985,13 @@ static const pgsql_thing_t words_after_create[] = {
 	{"OWNED", NULL, NULL, THING_NO_CREATE},		/* for DROP OWNED BY ... */
 	{"PARSER", Query_for_list_of_ts_parsers, NULL, THING_NO_SHOW},
 	{"POLICY", NULL, NULL},
+	{"PUBLICATION", NULL, NULL},
 	{"ROLE", Query_for_list_of_roles},
 	{"RULE", "SELECT pg_catalog.quote_ident(rulename) FROM pg_catalog.pg_rules WHERE substring(pg_catalog.quote_ident(rulename),1,%d)='%s'"},
 	{"SCHEMA", Query_for_list_of_schemas},
 	{"SEQUENCE", NULL, &Query_for_list_of_sequences},
 	{"SERVER", Query_for_list_of_servers},
+	{"SUBSCRIPTION", NULL, NULL},
 	{"TABLE", NULL, &Query_for_list_of_tables},
 	{"TABLESPACE", Query_for_list_of_tablespaces},
 	{"TEMP", NULL, NULL, THING_NO_DROP},		/* for CREATE TEMP TABLE ... */
@@ -1407,8 +1434,8 @@ psql_completion(const char *text, int start, int end)
 		{"AGGREGATE", "COLLATION", "CONVERSION", "DATABASE", "DEFAULT PRIVILEGES", "DOMAIN",
 			"EVENT TRIGGER", "EXTENSION", "FOREIGN DATA WRAPPER", "FOREIGN TABLE", "FUNCTION",
 			"GROUP", "INDEX", "LANGUAGE", "LARGE OBJECT", "MATERIALIZED VIEW", "OPERATOR",
-			"POLICY", "ROLE", "RULE", "SCHEMA", "SERVER", "SEQUENCE", "SYSTEM", "TABLE",
-			"TABLESPACE", "TEXT SEARCH", "TRIGGER", "TYPE",
+			"POLICY", "PUBLICATION", "ROLE", "RULE", "SCHEMA", "SERVER", "SEQUENCE",
+			"SUBSCRIPTION", "SYSTEM", "TABLE", "TABLESPACE", "TEXT SEARCH", "TRIGGER", "TYPE",
 		"USER", "USER MAPPING FOR", "VIEW", NULL};
 
 		COMPLETE_WITH_LIST(list_ALTER);
@@ -1433,7 +1460,26 @@ psql_completion(const char *text, int start, int end)
 		else
 			COMPLETE_WITH_FUNCTION_ARG(prev2_wd);
 	}
-
+	/* ALTER PUBLICATION <name> ...*/
+	else if (Matches3("ALTER","PUBLICATION",MatchAny))
+	{
+		COMPLETE_WITH_LIST5("WITH", "ADD TABLE", "SET TABLE", "DROP TABLE", "OWNER TO");
+	}
+	/* ALTER PUBLICATION <name> .. WITH ( ... */
+	else if (HeadMatches3("ALTER", "PUBLICATION",MatchAny) && TailMatches2("WITH", "("))
+	{
+		COMPLETE_WITH_LIST6("PUBLISH INSERT", "NOPUBLISH INSERT", "PUBLISH UPDATE",
+							"NOPUBLISH UPDATE", "PUBLISH DELETE", "NOPUBLISH DELETE");
+	}
+	/* ALTER SUBSCRIPTION <name> ... */
+	else if (Matches3("ALTER","SUBSCRIPTION",MatchAny))
+	{
+		COMPLETE_WITH_LIST6("WITH", "CONNECTION", "SET PUBLICATION", "ENABLE", "DISABLE", "OWNER TO");
+	}
+	else if (HeadMatches3("ALTER", "SUBSCRIPTION", MatchAny) && TailMatches2("WITH", "("))
+	{
+		COMPLETE_WITH_CONST("SLOT NAME");
+	}
 	/* ALTER SCHEMA <name> */
 	else if (Matches3("ALTER", "SCHEMA", MatchAny))
 		COMPLETE_WITH_LIST2("OWNER TO", "RENAME TO");
@@ -1640,9 +1686,10 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER SYSTEM SET, RESET, RESET ALL */
 	else if (Matches2("ALTER", "SYSTEM"))
 		COMPLETE_WITH_LIST2("SET", "RESET");
-	/* ALTER SYSTEM SET|RESET <name> */
 	else if (Matches3("ALTER", "SYSTEM", "SET|RESET"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_alter_system_set_vars);
+	else if (Matches4("ALTER", "SYSTEM", "SET", MatchAny))
+		COMPLETE_WITH_CONST("TO");
 	/* ALTER VIEW <name> */
 	else if (Matches3("ALTER", "VIEW", MatchAny))
 		COMPLETE_WITH_LIST4("ALTER COLUMN", "OWNER TO", "RENAME TO",
@@ -1720,7 +1767,8 @@ psql_completion(const char *text, int start, int end)
 		static const char *const list_ALTER2[] =
 		{"ADD", "ALTER", "CLUSTER ON", "DISABLE", "DROP", "ENABLE", "INHERIT",
 			"NO INHERIT", "RENAME", "RESET", "OWNER TO", "SET",
-		"VALIDATE CONSTRAINT", "REPLICA IDENTITY", NULL};
+		"VALIDATE CONSTRAINT", "REPLICA IDENTITY", "ATTACH PARTITION",
+		"DETACH PARTITION", NULL};
 
 		COMPLETE_WITH_LIST(list_ALTER2);
 	}
@@ -1901,6 +1949,26 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH_LIST4("FULL", "NOTHING", "DEFAULT", "USING");
 	else if (Matches4("ALTER", "TABLE", MatchAny, "REPLICA"))
 		COMPLETE_WITH_CONST("IDENTITY");
+	/*
+	 * If we have ALTER TABLE <foo> ATTACH PARTITION, provide a list of
+	 * tables.
+	 */
+	else if (Matches5("ALTER", "TABLE", MatchAny, "ATTACH", "PARTITION"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tables, "");
+	/* Limited completion support for partition bound specification */
+	else if (TailMatches3("ATTACH", "PARTITION", MatchAny))
+		COMPLETE_WITH_CONST("FOR VALUES");
+	else if (TailMatches2("FOR", "VALUES"))
+		COMPLETE_WITH_LIST2("FROM (", "IN (");
+	/*
+	 * If we have ALTER TABLE <foo> DETACH PARTITION, provide a list of
+	 * partitions of <foo>.
+	 */
+	else if (Matches5("ALTER", "TABLE", MatchAny, "DETACH", "PARTITION"))
+	{
+		completion_info_charp = prev3_wd;
+		COMPLETE_WITH_QUERY(Query_for_partition_of_table);
+	}
 
 	/* ALTER TABLESPACE <foo> with RENAME TO, OWNER TO, SET, RESET */
 	else if (Matches3("ALTER", "TABLESPACE", MatchAny))
@@ -2227,6 +2295,20 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH_CONST("(");
 
 
+/* CREATE PUBLICATION */
+	else if (Matches3("CREATE", "PUBLICATION", MatchAny))
+		COMPLETE_WITH_LIST3("FOR TABLE", "FOR ALL TABLES", "WITH (");
+	else if (Matches4("CREATE", "PUBLICATION", MatchAny, "FOR"))
+		COMPLETE_WITH_LIST2("TABLE", "ALL TABLES");
+	/* Complete "CREATE PUBLICATION <name> FOR TABLE <table>" */
+	else if (Matches4("CREATE", "PUBLICATION", MatchAny, "FOR TABLE"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tables, NULL);
+	/* Complete "CREATE PUBLICATION <name> [...] WITH" */
+	else if (HeadMatches2("CREATE", "PUBLICATION") && TailMatches2("WITH", "("))
+		COMPLETE_WITH_LIST2("PUBLISH", "NOPUBLISH");
+	else if (HeadMatches2("CREATE", "PUBLICATION") && TailMatches3("WITH", "(", MatchAny))
+		COMPLETE_WITH_LIST3("INSERT", "UPDATE", "DELETE");
+
 /* CREATE RULE */
 	/* Complete "CREATE RULE <sth>" with "AS ON" */
 	else if (Matches3("CREATE", "RULE", MatchAny))
@@ -2264,6 +2346,15 @@ psql_completion(const char *text, int start, int end)
 	/* Complete "CREATE UNLOGGED" with TABLE or MATVIEW */
 	else if (TailMatches2("CREATE", "UNLOGGED"))
 		COMPLETE_WITH_LIST2("TABLE", "MATERIALIZED VIEW");
+	/* Complete PARTITION BY with RANGE ( or LIST ( or ... */
+	else if (TailMatches2("PARTITION", "BY"))
+		COMPLETE_WITH_LIST2("RANGE (", "LIST (");
+	/* If we have xxx PARTITION OF, provide a list of partitioned tables */
+	else if (TailMatches2("PARTITION", "OF"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_partitioned_tables, "");
+	/* Limited completion support for partition bound specification */
+	else if (TailMatches3("PARTITION", "OF", MatchAny))
+		COMPLETE_WITH_CONST("FOR VALUES");
 
 /* CREATE TABLESPACE */
 	else if (Matches3("CREATE", "TABLESPACE", MatchAny))
@@ -2277,6 +2368,16 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH_LIST4("CONFIGURATION", "DICTIONARY", "PARSER", "TEMPLATE");
 	else if (Matches5("CREATE", "TEXT", "SEARCH", "CONFIGURATION", MatchAny))
 		COMPLETE_WITH_CONST("(");
+
+/* CREATE SUBSCRIPTION */
+	else if (Matches3("CREATE", "SUBSCRIPTION", MatchAny))
+		COMPLETE_WITH_CONST("CONNECTION");
+	else if (Matches5("CREATE", "SUBSCRIPTION", MatchAny, "CONNECTION",MatchAny))
+		COMPLETE_WITH_CONST("PUBLICATION");
+	/* Complete "CREATE SUBSCRIPTION <name> ...  WITH ( <opt>" */
+	else if (HeadMatches2("CREATE", "SUBSCRIPTION") && TailMatches2("WITH", "("))
+		COMPLETE_WITH_LIST5("ENABLED", "DISABLED", "CREATE SLOT",
+							"NOCREATE SLOT", "SLOT NAME");
 
 /* CREATE TRIGGER --- is allowed inside CREATE SCHEMA, so use TailMatches */
 	/* complete CREATE TRIGGER <name> with BEFORE,AFTER,INSTEAD OF */
@@ -2408,6 +2509,10 @@ psql_completion(const char *text, int start, int end)
 	else if (Matches5("CREATE", "EVENT", "TRIGGER", MatchAny, "ON"))
 		COMPLETE_WITH_LIST3("ddl_command_start", "ddl_command_end", "sql_drop");
 
+/* DEALLOCATE */
+	else if (Matches1("DEALLOCATE"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_prepared_statements);
+
 /* DECLARE */
 	else if (Matches2("DECLARE", MatchAny))
 		COMPLETE_WITH_LIST5("BINARY", "INSENSITIVE", "SCROLL", "NO SCROLL",
@@ -2438,7 +2543,7 @@ psql_completion(const char *text, int start, int end)
 /* DROP */
 	/* Complete DROP object with CASCADE / RESTRICT */
 	else if (Matches3("DROP",
-					  "COLLATION|CONVERSION|DOMAIN|EXTENSION|LANGUAGE|SCHEMA|SEQUENCE|SERVER|TABLE|TYPE|VIEW",
+					  "COLLATION|CONVERSION|DOMAIN|EXTENSION|LANGUAGE|PUBLICATION|SCHEMA|SEQUENCE|SERVER|TABLE|TYPE|VIEW",
 					  MatchAny) ||
 			 Matches4("DROP", "ACCESS", "METHOD", MatchAny) ||
 			 (Matches4("DROP", "AGGREGATE|FUNCTION", MatchAny, MatchAny) &&
@@ -3730,8 +3835,9 @@ append_variable_names(char ***varnames, int *nvars,
 /*
  * This function supports completion with the name of a psql variable.
  * The variable names can be prefixed and suffixed with additional text
- * to support quoting usages. If need_value is true, only the variables
- * that have the set values are picked up.
+ * to support quoting usages. If need_value is true, only variables
+ * that are currently set are included; otherwise, special variables
+ * (those that have hooks) are included even if currently unset.
  */
 static char **
 complete_from_variables(const char *text, const char *prefix, const char *suffix,
@@ -3744,33 +3850,12 @@ complete_from_variables(const char *text, const char *prefix, const char *suffix
 	int			i;
 	struct _variable *ptr;
 
-	static const char *const known_varnames[] = {
-		"AUTOCOMMIT", "COMP_KEYWORD_CASE", "DBNAME", "ECHO", "ECHO_HIDDEN",
-		"ENCODING", "FETCH_COUNT", "HISTCONTROL", "HISTFILE", "HISTSIZE",
-		"HOST", "IGNOREEOF", "LASTOID", "ON_ERROR_ROLLBACK", "ON_ERROR_STOP",
-		"PORT", "PROMPT1", "PROMPT2", "PROMPT3", "QUIET",
-		"SHOW_CONTEXT", "SINGLELINE", "SINGLESTEP",
-		"USER", "VERBOSITY", NULL
-	};
-
 	varnames = (char **) pg_malloc((maxvars + 1) * sizeof(char *));
-
-	if (!need_value)
-	{
-		for (i = 0; known_varnames[i] && nvars < maxvars; i++)
-			append_variable_names(&varnames, &nvars, &maxvars,
-								  known_varnames[i], prefix, suffix);
-	}
 
 	for (ptr = pset.vars->next; ptr; ptr = ptr->next)
 	{
 		if (need_value && !(ptr->value))
 			continue;
-		for (i = 0; known_varnames[i]; i++)		/* remove duplicate entry */
-		{
-			if (strcmp(ptr->name, known_varnames[i]) == 0)
-				continue;
-		}
 		append_variable_names(&varnames, &nvars, &maxvars, ptr->name,
 							  prefix, suffix);
 	}

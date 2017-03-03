@@ -28,9 +28,6 @@ sub _new
 	$self->DeterminePlatform();
 	my $bits = $self->{platform} eq 'Win32' ? 32 : 64;
 
-	# integer_datetimes is now the default
-	$options->{integer_datetimes} = 1
-	  unless exists $options->{integer_datetimes};
 	$options->{float4byval} = 1
 	  unless exists $options->{float4byval};
 	$options->{float8byval} = ($bits == 64)
@@ -169,8 +166,6 @@ s{PG_VERSION_STR "[^"]+"}{__STRINGIFY(x) #x\n#define __STRINGIFY2(z) __STRINGIFY
 		print O "#ifndef IGNORE_CONFIGURED_SETTINGS\n";
 		print O "#define USE_ASSERT_CHECKING 1\n"
 		  if ($self->{options}->{asserts});
-		print O "#define USE_INTEGER_DATETIMES 1\n"
-		  if ($self->{options}->{integer_datetimes});
 		print O "#define USE_LDAP 1\n"    if ($self->{options}->{ldap});
 		print O "#define HAVE_LIBZ 1\n"   if ($self->{options}->{zlib});
 		print O "#define USE_OPENSSL 1\n" if ($self->{options}->{openssl});
@@ -268,7 +263,7 @@ s{PG_VERSION_STR "[^"]+"}{__STRINGIFY(x) #x\n#define __STRINGIFY2(z) __STRINGIFY
 	if (IsNewer(
 			'src/backend/utils/fmgrtab.c', 'src/include/catalog/pg_proc.h'))
 	{
-		print "Generating fmgrtab.c and fmgroids.h...\n";
+		print "Generating fmgrtab.c, fmgroids.h, fmgrprotos.h...\n";
 		chdir('src/backend/utils');
 		system(
 "perl -I ../catalog Gen_fmgrtab.pl ../../../src/include/catalog/pg_proc.h");
@@ -280,6 +275,14 @@ s{PG_VERSION_STR "[^"]+"}{__STRINGIFY(x) #x\n#define __STRINGIFY2(z) __STRINGIFY
 	{
 		copyFile('src/backend/utils/fmgroids.h',
 			'src/include/utils/fmgroids.h');
+	}
+
+	if (IsNewer(
+			'src/include/utils/fmgrprotos.h',
+			'src/backend/utils/fmgrprotos.h'))
+	{
+		copyFile('src/backend/utils/fmgrprotos.h',
+			'src/include/utils/fmgrprotos.h');
 	}
 
 	if (IsNewer(
@@ -419,8 +422,6 @@ s{PG_VERSION_STR "[^"]+"}{__STRINGIFY(x) #x\n#define __STRINGIFY2(z) __STRINGIFY
 #define HAVE_LONG_LONG_INT_64
 #define ENABLE_THREAD_SAFETY 1
 EOF
-		print O "#define USE_INTEGER_DATETIMES 1\n"
-		  if ($self->{options}->{integer_datetimes});
 		print O "#endif\n";
 		close(O);
 	}
@@ -653,8 +654,6 @@ sub GetFakeConfigure
 
 	my $cfg = '--enable-thread-safety';
 	$cfg .= ' --enable-cassert' if ($self->{options}->{asserts});
-	$cfg .= ' --enable-integer-datetimes'
-	  if ($self->{options}->{integer_datetimes});
 	$cfg .= ' --enable-nls'       if ($self->{options}->{nls});
 	$cfg .= ' --enable-tap-tests' if ($self->{options}->{tap_tests});
 	$cfg .= ' --with-ldap'        if ($self->{options}->{ldap});

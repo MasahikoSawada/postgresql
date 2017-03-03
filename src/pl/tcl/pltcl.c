@@ -202,6 +202,9 @@ typedef struct pltcl_call_state
 	/* Call info struct, or NULL in a trigger */
 	FunctionCallInfo fcinfo;
 
+	/* Trigger data, if we're in a normal (not event) trigger; else NULL */
+	TriggerData *trigdata;
+
 	/* Function we're executing (NULL if not yet identified) */
 	pltcl_proc_desc *prodesc;
 
@@ -252,7 +255,6 @@ void		_PG_init(void);
 
 static void pltcl_init_interp(pltcl_interp_desc *interp_desc, bool pltrusted);
 static pltcl_interp_desc *pltcl_fetch_interp(bool pltrusted);
-static void pltcl_init_load_unknown(Tcl_Interp *interp);
 
 static Datum pltcl_handler(PG_FUNCTION_ARGS, bool pltrusted);
 
@@ -295,6 +297,14 @@ static int pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 					   int objc, Tcl_Obj *const objv[]);
 static int pltcl_SPI_lastoid(ClientData cdata, Tcl_Interp *interp,
 				  int objc, Tcl_Obj *const objv[]);
+
+static void pltcl_subtrans_begin(MemoryContext oldcontext,
+					 ResourceOwner oldowner);
+static void pltcl_subtrans_commit(MemoryContext oldcontext,
+					  ResourceOwner oldowner);
+static void pltcl_subtrans_abort(Tcl_Interp *interp,
+					 MemoryContext oldcontext,
+					 ResourceOwner oldowner);
 
 static void pltcl_set_tuple_values(Tcl_Interp *interp, const char *arrayname,
 					   uint64 tupno, HeapTuple tuple, TupleDesc tupdesc);
@@ -480,11 +490,6 @@ pltcl_init_interp(pltcl_interp_desc *interp_desc, bool pltrusted)
 						 pltcl_SPI_execute_plan, NULL, NULL);
 	Tcl_CreateObjCommand(interp, "spi_lastoid",
 						 pltcl_SPI_lastoid, NULL, NULL);
-
-	/************************************************************
-	 * Try to load the unknown procedure from pltcl_modules
-	 ************************************************************/
-	pltcl_init_load_unknown(interp);
 }
 
 /**********************************************************************
@@ -513,126 +518,6 @@ pltcl_fetch_interp(bool pltrusted)
 		pltcl_init_interp(interp_desc, pltrusted);
 
 	return interp_desc;
-}
-
-/**********************************************************************
- * pltcl_init_load_unknown()	- Load the unknown procedure from
- *				  table pltcl_modules (if it exists)
- **********************************************************************/
-static void
-pltcl_init_load_unknown(Tcl_Interp *interp)
-{
-	Relation	pmrel;
-	char	   *pmrelname,
-			   *nspname;
-	char	   *buf;
-	int			buflen;
-	int			spi_rc;
-	int			tcl_rc;
-	Tcl_DString unknown_src;
-	char	   *part;
-	uint64		i;
-	int			fno;
-
-	/************************************************************
-	 * Check if table pltcl_modules exists
-	 *
-	 * We allow the table to be found anywhere in the search_path.
-	 * This is for backwards compatibility.  To ensure that the table
-	 * is trustworthy, we require it to be owned by a superuser.
-	 ************************************************************/
-	pmrel = relation_openrv_extended(makeRangeVar(NULL, "pltcl_modules", -1),
-									 AccessShareLock, true);
-	if (pmrel == NULL)
-		return;
-	/* sanity-check the relation kind */
-	if (!(pmrel->rd_rel->relkind == RELKIND_RELATION ||
-		  pmrel->rd_rel->relkind == RELKIND_MATVIEW ||
-		  pmrel->rd_rel->relkind == RELKIND_VIEW))
-	{
-		relation_close(pmrel, AccessShareLock);
-		return;
-	}
-	/* must be owned by superuser, else ignore */
-	if (!superuser_arg(pmrel->rd_rel->relowner))
-	{
-		relation_close(pmrel, AccessShareLock);
-		return;
-	}
-	/* get fully qualified table name for use in select command */
-	nspname = get_namespace_name(RelationGetNamespace(pmrel));
-	if (!nspname)
-		elog(ERROR, "cache lookup failed for namespace %u",
-			 RelationGetNamespace(pmrel));
-	pmrelname = quote_qualified_identifier(nspname,
-										   RelationGetRelationName(pmrel));
-
-	/************************************************************
-	 * Read all the rows from it where modname = 'unknown',
-	 * in the order of modseq
-	 ************************************************************/
-	buflen = strlen(pmrelname) + 100;
-	buf = (char *) palloc(buflen);
-	snprintf(buf, buflen,
-		   "select modsrc from %s where modname = 'unknown' order by modseq",
-			 pmrelname);
-
-	spi_rc = SPI_execute(buf, false, 0);
-	if (spi_rc != SPI_OK_SELECT)
-		elog(ERROR, "select from pltcl_modules failed");
-
-	pfree(buf);
-
-	/************************************************************
-	 * If there's nothing, module unknown doesn't exist
-	 ************************************************************/
-	if (SPI_processed == 0)
-	{
-		SPI_freetuptable(SPI_tuptable);
-		ereport(WARNING,
-				(errmsg("module \"unknown\" not found in pltcl_modules")));
-		relation_close(pmrel, AccessShareLock);
-		return;
-	}
-
-	/************************************************************
-	 * There is a module named unknown. Reassemble the
-	 * source from the modsrc attributes and evaluate
-	 * it in the Tcl interpreter
-	 *
-	 * leave this code as DString - it's only executed once per session
-	 ************************************************************/
-	fno = SPI_fnumber(SPI_tuptable->tupdesc, "modsrc");
-	Assert(fno > 0);
-
-	Tcl_DStringInit(&unknown_src);
-
-	for (i = 0; i < SPI_processed; i++)
-	{
-		part = SPI_getvalue(SPI_tuptable->vals[i],
-							SPI_tuptable->tupdesc, fno);
-		if (part != NULL)
-		{
-			UTF_BEGIN;
-			Tcl_DStringAppend(&unknown_src, UTF_E2U(part), -1);
-			UTF_END;
-			pfree(part);
-		}
-	}
-	tcl_rc = Tcl_EvalEx(interp, Tcl_DStringValue(&unknown_src),
-						Tcl_DStringLength(&unknown_src),
-						TCL_EVAL_GLOBAL);
-
-	Tcl_DStringFree(&unknown_src);
-	SPI_freetuptable(SPI_tuptable);
-
-	if (tcl_rc != TCL_OK)
-		ereport(ERROR,
-				(errcode(ERRCODE_EXTERNAL_ROUTINE_EXCEPTION),
-				 errmsg("could not load module \"unknown\": %s",
-						utf_u2e(Tcl_GetStringResult(interp)))));
-
-	relation_close(pmrel, AccessShareLock);
 }
 
 
@@ -1000,8 +885,8 @@ pltcl_trigger_handler(PG_FUNCTION_ARGS, pltcl_call_state *call_state,
 	const char *result;
 	int			result_Objc;
 	Tcl_Obj   **result_Objv;
-	Datum	   *values;
-	bool	   *nulls;
+
+	call_state->trigdata = trigdata;
 
 	/* Connect to SPI manager */
 	if (SPI_connect() != SPI_OK_CONNECT)
@@ -1018,7 +903,7 @@ pltcl_trigger_handler(PG_FUNCTION_ARGS, pltcl_call_state *call_state,
 
 	interp = prodesc->interp_desc->interp;
 
-	tupdesc = trigdata->tg_relation->rd_att;
+	tupdesc = RelationGetDescr(trigdata->tg_relation);
 
 	/************************************************************
 	 * Create the tcl command to call the internal
@@ -1219,69 +1104,9 @@ pltcl_trigger_handler(PG_FUNCTION_ARGS, pltcl_call_state *call_state,
 				 errmsg("could not split return value from trigger: %s",
 						utf_u2e(Tcl_GetStringResult(interp)))));
 
-	if (result_Objc % 2 != 0)
-		ereport(ERROR,
-				(errcode(ERRCODE_E_R_I_E_TRIGGER_PROTOCOL_VIOLATED),
-		 errmsg("trigger's return list must have even number of elements")));
-
-	values = (Datum *) palloc0(tupdesc->natts * sizeof(Datum));
-	nulls = (bool *) palloc(tupdesc->natts * sizeof(bool));
-	memset(nulls, true, tupdesc->natts * sizeof(bool));
-
-	for (i = 0; i < result_Objc; i += 2)
-	{
-		char	   *ret_name = utf_u2e(Tcl_GetString(result_Objv[i]));
-		char	   *ret_value = utf_u2e(Tcl_GetString(result_Objv[i + 1]));
-		int			attnum;
-		Oid			typinput;
-		Oid			typioparam;
-		FmgrInfo	finfo;
-
-		/************************************************************
-		 * Get the attribute number
-		 *
-		 * We silently ignore ".tupno", if it's present but doesn't match
-		 * any actual output column.  This allows direct use of a row
-		 * returned by pltcl_set_tuple_values().
-		 ************************************************************/
-		attnum = SPI_fnumber(tupdesc, ret_name);
-		if (attnum == SPI_ERROR_NOATTRIBUTE)
-		{
-			if (strcmp(ret_name, ".tupno") == 0)
-				continue;
-			ereport(ERROR,
-					(errcode(ERRCODE_UNDEFINED_COLUMN),
-					 errmsg("unrecognized attribute \"%s\"",
-							ret_name)));
-		}
-		if (attnum <= 0)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("cannot set system attribute \"%s\"",
-							ret_name)));
-
-		/************************************************************
-		 * Lookup the attribute type's input function
-		 ************************************************************/
-		getTypeInputInfo(tupdesc->attrs[attnum - 1]->atttypid,
-						 &typinput, &typioparam);
-		fmgr_info(typinput, &finfo);
-
-		/************************************************************
-		 * Set the attribute to NOT NULL and convert the contents
-		 ************************************************************/
-		values[attnum - 1] = InputFunctionCall(&finfo,
-											   ret_value,
-											   typioparam,
-									  tupdesc->attrs[attnum - 1]->atttypmod);
-		nulls[attnum - 1] = false;
-	}
-
-	/* Build the modified tuple to return */
-	rettup = heap_form_tuple(tupdesc, values, nulls);
-
-	pfree(values);
-	pfree(nulls);
+	/* Convert function result to tuple */
+	rettup = pltcl_build_tuple_result(interp, result_Objv, result_Objc,
+									  call_state);
 
 	return rettup;
 }
@@ -2130,9 +1955,9 @@ pltcl_returnnext(ClientData cdata, Tcl_Interp *interp,
 	pltcl_call_state *call_state = pltcl_current_call_state;
 	FunctionCallInfo fcinfo = call_state->fcinfo;
 	pltcl_proc_desc *prodesc = call_state->prodesc;
-	int			result = TCL_OK;
-	MemoryContext tmpcxt;
-	MemoryContext oldcxt;
+	MemoryContext oldcontext = CurrentMemoryContext;
+	ResourceOwner oldowner = CurrentResourceOwner;
+	volatile int result = TCL_OK;
 
 	/*
 	 * Check that we're called as a set-returning function
@@ -2160,52 +1985,63 @@ pltcl_returnnext(ClientData cdata, Tcl_Interp *interp,
 		return TCL_ERROR;
 	}
 
-	/* Set up tuple store if first output row */
-	if (call_state->tuple_store == NULL)
-		pltcl_init_tuple_store(call_state);
-
-	/* Make short-lived context to run input functions in */
-	tmpcxt = AllocSetContextCreate(CurrentMemoryContext,
-								   "pltcl_returnnext",
-								   ALLOCSET_SMALL_SIZES);
-	oldcxt = MemoryContextSwitchTo(tmpcxt);
-
-	if (prodesc->fn_retistuple)
+	/*
+	 * The rest might throw elog(ERROR), so must run in a subtransaction.
+	 *
+	 * A small advantage of using a subtransaction is that it provides a
+	 * short-lived memory context for free, so we needn't worry about leaking
+	 * memory here.  To use that context, call BeginInternalSubTransaction
+	 * directly instead of going through pltcl_subtrans_begin.
+	 */
+	BeginInternalSubTransaction(NULL);
+	PG_TRY();
 	{
-		Tcl_Obj   **rowObjv;
-		int			rowObjc;
+		/* Set up tuple store if first output row */
+		if (call_state->tuple_store == NULL)
+			pltcl_init_tuple_store(call_state);
 
-		/* result should be a list, so break it down */
-		if (Tcl_ListObjGetElements(interp, objv[1], &rowObjc, &rowObjv) == TCL_ERROR)
-			result = TCL_ERROR;
+		if (prodesc->fn_retistuple)
+		{
+			Tcl_Obj   **rowObjv;
+			int			rowObjc;
+
+			/* result should be a list, so break it down */
+			if (Tcl_ListObjGetElements(interp, objv[1], &rowObjc, &rowObjv) == TCL_ERROR)
+				result = TCL_ERROR;
+			else
+			{
+				HeapTuple	tuple;
+
+				tuple = pltcl_build_tuple_result(interp, rowObjv, rowObjc,
+												 call_state);
+				tuplestore_puttuple(call_state->tuple_store, tuple);
+			}
+		}
 		else
 		{
-			HeapTuple	tuple;
+			Datum		retval;
+			bool		isNull = false;
 
-			tuple = pltcl_build_tuple_result(interp, rowObjv, rowObjc,
-											 call_state);
-			tuplestore_puttuple(call_state->tuple_store, tuple);
+			/* for paranoia's sake, check that tupdesc has exactly one column */
+			if (call_state->ret_tupdesc->natts != 1)
+				elog(ERROR, "wrong result type supplied in return_next");
+
+			retval = InputFunctionCall(&prodesc->result_in_func,
+									utf_u2e((char *) Tcl_GetString(objv[1])),
+									   prodesc->result_typioparam,
+									   -1);
+			tuplestore_putvalues(call_state->tuple_store, call_state->ret_tupdesc,
+								 &retval, &isNull);
 		}
+
+		pltcl_subtrans_commit(oldcontext, oldowner);
 	}
-	else
+	PG_CATCH();
 	{
-		Datum		retval;
-		bool		isNull = false;
-
-		/* for paranoia's sake, check that tupdesc has exactly one column */
-		if (call_state->ret_tupdesc->natts != 1)
-			elog(ERROR, "wrong result type supplied in return_next");
-
-		retval = InputFunctionCall(&prodesc->result_in_func,
-								   utf_u2e((char *) Tcl_GetString(objv[1])),
-								   prodesc->result_typioparam,
-								   -1);
-		tuplestore_putvalues(call_state->tuple_store, call_state->ret_tupdesc,
-							 &retval, &isNull);
+		pltcl_subtrans_abort(interp, oldcontext, oldowner);
+		return TCL_ERROR;
 	}
-
-	MemoryContextSwitchTo(oldcxt);
-	MemoryContextDelete(tmpcxt);
+	PG_END_TRY();
 
 	return result;
 }
@@ -3014,6 +2850,8 @@ pltcl_build_tuple_argument(HeapTuple tuple, TupleDesc tupdesc)
  * pltcl_build_tuple_result() - Build a tuple of function's result rowtype
  *				  from a Tcl list of column names and values
  *
+ * In a trigger function, we build a tuple of the trigger table's rowtype.
+ *
  * Note: this function leaks memory.  Even if we made it clean up its own
  * mess, there's no way to prevent the datatype input functions it calls
  * from leaking.  Run it in a short-lived context, unless we're about to
@@ -3023,24 +2861,44 @@ static HeapTuple
 pltcl_build_tuple_result(Tcl_Interp *interp, Tcl_Obj **kvObjv, int kvObjc,
 						 pltcl_call_state *call_state)
 {
+	TupleDesc	tupdesc;
+	AttInMetadata *attinmeta;
 	char	  **values;
 	int			i;
+
+	if (call_state->ret_tupdesc)
+	{
+		tupdesc = call_state->ret_tupdesc;
+		attinmeta = call_state->attinmeta;
+	}
+	else if (call_state->trigdata)
+	{
+		tupdesc = RelationGetDescr(call_state->trigdata->tg_relation);
+		attinmeta = TupleDescGetAttInMetadata(tupdesc);
+	}
+	else
+	{
+		elog(ERROR, "PL/Tcl function does not return a tuple");
+		tupdesc = NULL;			/* keep compiler quiet */
+		attinmeta = NULL;
+	}
+
+	values = (char **) palloc0(tupdesc->natts * sizeof(char *));
 
 	if (kvObjc % 2 != 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 		errmsg("column name/value list must have even number of elements")));
 
-	values = (char **) palloc0(call_state->ret_tupdesc->natts * sizeof(char *));
-
 	for (i = 0; i < kvObjc; i += 2)
 	{
-		char	   *fieldName = utf_e2u(Tcl_GetString(kvObjv[i]));
-		int			attn = SPI_fnumber(call_state->ret_tupdesc, fieldName);
+		char	   *fieldName = utf_u2e(Tcl_GetString(kvObjv[i]));
+		int			attn = SPI_fnumber(tupdesc, fieldName);
 
 		/*
-		 * As in pltcl_trigger_handler, silently ignore ".tupno" if it's in
-		 * the list but doesn't match any column name.
+		 * We silently ignore ".tupno", if it's present but doesn't match any
+		 * actual output column.  This allows direct use of a row returned by
+		 * pltcl_set_tuple_values().
 		 */
 		if (attn == SPI_ERROR_NOATTRIBUTE)
 		{
@@ -3058,10 +2916,10 @@ pltcl_build_tuple_result(Tcl_Interp *interp, Tcl_Obj **kvObjv, int kvObjc,
 					 errmsg("cannot set system attribute \"%s\"",
 							fieldName)));
 
-		values[attn - 1] = utf_e2u(Tcl_GetString(kvObjv[i + 1]));
+		values[attn - 1] = utf_u2e(Tcl_GetString(kvObjv[i + 1]));
 	}
 
-	return BuildTupleFromCStrings(call_state->attinmeta, values);
+	return BuildTupleFromCStrings(attinmeta, values);
 }
 
 /**********************************************************************

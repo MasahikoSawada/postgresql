@@ -241,6 +241,16 @@
      </row>
 
      <row>
+      <entry><link linkend="catalog-pg-publication"><structname>pg_publication</structname></link></entry>
+      <entry>publications for logical replication</entry>
+     </row>
+
+     <row>
+      <entry><link linkend="catalog-pg-publication-rel"><structname>pg_publication_rel</structname></link></entry>
+      <entry>relation to publication mapping</entry>
+     </row>
+
+     <row>
       <entry><link linkend="catalog-pg-range"><structname>pg_range</structname></link></entry>
       <entry>information about range types</entry>
      </row>
@@ -283,6 +293,11 @@
      <row>
       <entry><link linkend="catalog-pg-statistic"><structname>pg_statistic</structname></link></entry>
       <entry>planner statistics</entry>
+     </row>
+
+     <row>
+      <entry><link linkend="catalog-pg-subscription"><structname>pg_subscription</structname></link></entry>
+      <entry>logical replication subscriptions</entry>
      </row>
 
      <row>
@@ -5271,6 +5286,137 @@
 
  </sect1>
 
+ <sect1 id="catalog-pg-publication">
+  <title><structname>pg_publication</structname></title>
+
+  <indexterm zone="catalog-pg-publication">
+   <primary>pg_publication</primary>
+  </indexterm>
+
+  <para>
+   The catalog <structname>pg_publication</structname> contains all
+   publications created in the database.  For more on publications see
+   <xref linkend="logical-replication-publication">.
+  </para>
+
+  <table>
+   <title><structname>pg_publication</structname> Columns</title>
+
+   <tgroup cols="4">
+    <thead>
+     <row>
+      <entry>Name</entry>
+      <entry>Type</entry>
+      <entry>References</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry><structfield>oid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry></entry>
+      <entry>Row identifier (hidden attribute; must be explicitly selected)</entry>
+     </row>
+
+     <row>
+      <entry><structfield>pubname</structfield></entry>
+      <entry><type>Name</type></entry>
+      <entry></entry>
+      <entry>Name of the publication</entry>
+     </row>
+
+     <row>
+      <entry><structfield>pubowner</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry><literal><link linkend="catalog-pg-authid"><structname>pg_authid</structname></link>.oid</literal></entry>
+      <entry>Owner of the publication</entry>
+     </row>
+
+     <row>
+      <entry><structfield>puballtables</structfield></entry>
+      <entry><type>bool</type></entry>
+      <entry></entry>
+      <entry>If true, this publication automatically includes all tables
+       in the database, including any that will be created in the future.
+      </entry>
+     </row>
+
+     <row>
+      <entry><structfield>pubinsert</structfield></entry>
+      <entry><type>bool</type></entry>
+      <entry></entry>
+      <entry>If true, <command>INSERT</command> operations are replicated for
+       tables in the publication.</entry>
+     </row>
+
+     <row>
+      <entry><structfield>pubupdate</structfield></entry>
+      <entry><type>bool</type></entry>
+      <entry></entry>
+      <entry>If true, <command>UPDATE</command> operations are replicated for
+       tables in the publication.</entry>
+     </row>
+
+     <row>
+      <entry><structfield>pubdelete</structfield></entry>
+      <entry><type>bool</type></entry>
+      <entry></entry>
+      <entry>If true, <command>DELETE</command> operations are replicated for
+       tables in the publication.</entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+ </sect1>
+
+ <sect1 id="catalog-pg-publication-rel">
+  <title><structname>pg_publication_rel</structname></title>
+
+  <indexterm zone="catalog-pg-publication-rel">
+   <primary>pg_publication_rel</primary>
+  </indexterm>
+
+  <para>
+   The catalog <structname>pg_publication_rel</structname> contains the
+   mapping between relations and publications in the database.  This is a
+   many-to-many mapping.  See also <xref linkend="view-pg-publication-tables">
+   for a more user-friendly view of this information.
+  </para>
+
+  <table>
+   <title><structname>pg_publication_rel</structname> Columns</title>
+
+   <tgroup cols="4">
+    <thead>
+     <row>
+      <entry>Name</entry>
+      <entry>Type</entry>
+      <entry>References</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry><structfield>prpubid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry><literal><link linkend="catalog-pg-publication"><structname>pg_publication</structname></link>.oid</literal></entry>
+      <entry>Reference to publication</entry>
+     </row>
+
+     <row>
+      <entry><structfield>prrelid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry><literal><link linkend="catalog-pg-class"><structname>pg_class</structname></link>.oid</literal></entry>
+      <entry>Reference to relation</entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+ </sect1>
+
  <sect1 id="catalog-pg-range">
   <title><structname>pg_range</structname></title>
 
@@ -5628,10 +5774,10 @@
      </row>
 
      <row>
-      <entry><structfield>seqcycle</structfield></entry>
-      <entry><type>bool</type></entry>
-      <entry></entry>
-      <entry>Whether the sequence cycles</entry>
+      <entry><structfield>seqtypid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry><literal><link linkend="catalog-pg-type"><structname>pg_type</structname></link>.oid</literal></entry>
+      <entry>Data type of the sequence</entry>
      </row>
 
      <row>
@@ -5667,6 +5813,13 @@
       <entry><type>int8</type></entry>
       <entry></entry>
       <entry>Cache size of the sequence</entry>
+     </row>
+
+     <row>
+      <entry><structfield>seqcycle</structfield></entry>
+      <entry><type>bool</type></entry>
+      <entry></entry>
+      <entry>Whether the sequence cycles</entry>
      </row>
     </tbody>
    </tgroup>
@@ -6150,6 +6303,109 @@
 
  </sect1>
 
+ <sect1 id="catalog-pg-subscription">
+  <title><structname>pg_subscription</structname></title>
+
+  <indexterm zone="catalog-pg-subscription">
+   <primary>pg_subscription</primary>
+  </indexterm>
+
+  <para>
+   The catalog <structname>pg_subscription</structname> contains all existing
+   logical replication subscriptions.  For more information about logical
+   replication see <xref linkend="logical-replication">.
+  </para>
+
+  <para>
+   Unlike most system catalogs, <structname>pg_subscription</structname> is
+   shared across all databases of a cluster: There is only one copy
+   of <structname>pg_subscription</structname> per cluster, not one per
+   database.
+  </para>
+
+  <para>
+   Access to this catalog is restricted from normal users.  Normal users can
+   use the view <xref linkend="pg-stat-subscription"> to get some information
+   about subscriptions.
+  </para>
+
+  <table>
+   <title><structname>pg_subscription</structname> Columns</title>
+
+   <tgroup cols="4">
+    <thead>
+     <row>
+      <entry>Name</entry>
+      <entry>Type</entry>
+      <entry>References</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry><structfield>oid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry></entry>
+      <entry>Row identifier (hidden attribute; must be explicitly selected)</entry>
+     </row>
+
+     <row>
+      <entry><structfield>subdbid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry><literal><link linkend="catalog-pg-database"><structname>pg_database</structname></link>.oid</literal></entry>
+      <entry>OID of the database which the subscription resides in</entry>
+     </row>
+
+     <row>
+      <entry><structfield>subname</structfield></entry>
+      <entry><type>name</type></entry>
+      <entry></entry>
+      <entry>Name of the subscription</entry>
+     </row>
+
+     <row>
+      <entry><structfield>subowner</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry><literal><link linkend="catalog-pg-authid"><structname>pg_authid</structname></link>.oid</literal></entry>
+      <entry>Owner of the subscription</entry>
+     </row>
+
+     <row>
+      <entry><structfield>subenabled</structfield></entry>
+      <entry><type>bool</type></entry>
+      <entry></entry>
+      <entry>If true, the subscription is enabled and should be replicating.</entry>
+     </row>
+
+     <row>
+      <entry><structfield>subconninfo</structfield></entry>
+      <entry><type>text</type></entry>
+      <entry></entry>
+      <entry>Connection string to the upstream database</entry>
+     </row>
+
+     <row>
+      <entry><structfield>subslotname</structfield></entry>
+      <entry><type>name</type></entry>
+      <entry></entry>
+      <entry>Name of the replication slot in the upstream database. Also used
+       for local replication origin name.</entry>
+     </row>
+
+     <row>
+      <entry><structfield>subpublications</structfield></entry>
+      <entry><type>text[]</type></entry>
+      <entry></entry>
+      <entry>Array of subscribed publication names. These reference the
+       publications on the publisher server. For more on publications
+       see <xref linkend="logical-replication-publication">.
+      </entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+ </sect1>
 
  <sect1 id="catalog-pg-tablespace">
   <title><structname>pg_tablespace</structname></title>
@@ -7560,6 +7816,11 @@
      </row>
 
      <row>
+      <entry><link linkend="view-pg-hba-file-rules"><structname>pg_hba_file_rules</structname></link></entry>
+      <entry>summary of client authentication configuration file contents</entry>
+     </row>
+
+     <row>
       <entry><link linkend="view-pg-indexes"><structname>pg_indexes</structname></link></entry>
       <entry>indexes</entry>
      </row>
@@ -7587,6 +7848,11 @@
      <row>
       <entry><link linkend="view-pg-prepared-xacts"><structname>pg_prepared_xacts</structname></link></entry>
       <entry>prepared transactions</entry>
+     </row>
+
+     <row>
+      <entry><link linkend="view-pg-publication-tables"><structname>pg_publication_tables</structname></link></entry>
+      <entry>publications and their associated tables</entry>
      </row>
 
      <row>
@@ -8152,6 +8418,114 @@
    </tgroup>
   </table>
 
+ </sect1>
+
+ <sect1 id="view-pg-hba-file-rules">
+  <title><structname>pg_hba_file_rules</structname></title>
+
+  <indexterm zone="view-pg-hba-file-rules">
+   <primary>pg_hba_file_rules</primary>
+  </indexterm>
+
+  <para>
+   The view <structname>pg_hba_file_rules</structname> provides a summary of
+   the contents of the client authentication configuration
+   file, <filename>pg_hba.conf</>.  A row appears in this view for each
+   non-empty, non-comment line in the file, with annotations indicating
+   whether the rule could be applied successfully.
+  </para>
+
+  <para>
+   This view can be helpful for checking whether planned changes in the
+   authentication configuration file will work, or for diagnosing a previous
+   failure.  Note that this view reports on the <emphasis>current</> contents
+   of the file, not on what was last loaded by the server.
+  </para>
+
+  <para>
+   By default, the <structname>pg_hba_file_rules</structname> view can be read
+   only by superusers.
+  </para>
+
+  <table>
+   <title><structname>pg_hba_file_rules</> Columns</title>
+
+  <tgroup cols="3">
+   <thead>
+    <row>
+     <entry>Name</entry>
+     <entry>Type</entry>
+     <entry>Description</entry>
+    </row>
+   </thead>
+   <tbody>
+    <row>
+     <entry><structfield>line_number</structfield></entry>
+     <entry><structfield>integer</structfield></entry>
+     <entry>
+      Line number of this rule in <filename>pg_hba.conf</>
+     </entry>
+    </row>
+    <row>
+     <entry><structfield>type</structfield></entry>
+     <entry><structfield>text</structfield></entry>
+     <entry>Type of connection</entry>
+    </row>
+    <row>
+     <entry><structfield>database</structfield></entry>
+     <entry><structfield>text[]</structfield></entry>
+     <entry>List of database name(s) to which this rule applies</entry>
+    </row>
+    <row>
+     <entry><structfield>user_name</structfield></entry>
+     <entry><structfield>text[]</structfield></entry>
+     <entry>List of user and group name(s) to which this rule applies</entry>
+    </row>
+    <row>
+     <entry><structfield>address</structfield></entry>
+     <entry><structfield>text</structfield></entry>
+     <entry>
+      Host name or IP address, or one
+      of <literal>all</literal>, <literal>samehost</literal>,
+      or <literal>samenet</literal>, or null for local connections
+     </entry>
+    </row>
+    <row>
+     <entry><structfield>netmask</structfield></entry>
+     <entry><structfield>text</structfield></entry>
+     <entry>IP address mask, or null if not applicable</entry>
+    </row>
+    <row>
+     <entry><structfield>auth_method</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>Authentication method</entry>
+    </row>
+    <row>
+     <entry><structfield>options</structfield></entry>
+     <entry><type>text[]</type></entry>
+     <entry>Options specified for authentication method, if any</entry>
+    </row>
+    <row>
+     <entry><structfield>error</structfield></entry>
+     <entry><structfield>text</structfield></entry>
+     <entry>
+      If not null, an error message indicating why this
+      line could not be processed
+     </entry>
+    </row>
+   </tbody>
+  </tgroup>
+  </table>
+
+  <para>
+   Usually, a row reflecting an incorrect entry will have values for only
+   the <structfield>line_number</> and <structfield>error</> fields.
+  </para>
+
+  <para>
+   See <xref linkend="client-authentication"> for more information about
+   client authentication configuration.
+  </para>
  </sect1>
 
  <sect1 id="view-pg-indexes">
@@ -8871,6 +9245,61 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
 
  </sect1>
 
+ <sect1 id="view-pg-publication-tables">
+  <title><structname>pg_publication_tables</structname></title>
+
+  <indexterm zone="view-pg-publication-tables">
+   <primary>pg_publication_tables</primary>
+  </indexterm>
+
+  <para>
+   The view <structname>pg_publication_tables</structname> provides
+   information about the mapping between publications and the tables they
+   contain.  Unlike the underlying
+   catalog <structname>pg_publication_rel</structname>, this view expands
+   publications defined as <literal>FOR ALL TABLES</literal>, so for such
+   publications there will be a row for each eligible table.
+  </para>
+
+  <table>
+   <title><structname>pg_publication_tables</structname> Columns</title>
+
+   <tgroup cols="4">
+    <thead>
+     <row>
+      <entry>Name</entry>
+      <entry>Type</entry>
+      <entry>References</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry><structfield>pubname</structfield></entry>
+      <entry><type>name</type></entry>
+      <entry><literal><link linkend="catalog-pg-publication"><structname>pg_publication</structname></link>.pubname</literal></entry>
+      <entry>Name of publication</entry>
+     </row>
+
+     <row>
+      <entry><structfield>schemaname</structfield></entry>
+      <entry><type>name</type></entry>
+      <entry><literal><link linkend="catalog-pg-namespace"><structname>pg_namespace</structname></link>.nspname</literal></entry>
+      <entry>Name of schema containing table</entry>
+     </row>
+
+     <row>
+      <entry><structfield>tablename</structfield></entry>
+      <entry><type>name</type></entry>
+      <entry><literal><link linkend="catalog-pg-class"><structname>pg_class</structname></link>.relname</literal></entry>
+      <entry>Name of table</entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+ </sect1>
+
   <sect1 id="view-pg-replication-origin-status">
   <title><structname>pg_replication_origin_status</structname></title>
 
@@ -9004,6 +9433,15 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
       <entry><literal><link linkend="catalog-pg-database"><structname>pg_database</structname></link>.datname</literal></entry>
       <entry>The name of the database this slot is associated with, or
       null. Only logical slots have an associated database.</entry>
+     </row>
+
+     <row>
+      <entry><structfield>temporary</structfield></entry>
+      <entry><type>boolean</type></entry>
+      <entry></entry>
+      <entry>True if this is a temporary replication slot. Temporary slots are
+      not saved to disk and are automatically dropped on error or when
+      the session has finished.</entry>
      </row>
 
      <row>
@@ -9410,6 +9848,12 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
       <entry>Name of sequence's owner</entry>
      </row>
      <row>
+      <entry><structfield>data_type</structfield></entry>
+      <entry><type>regtype</type></entry>
+      <entry><literal><link linkend="catalog-pg-authid"><structname>pg_type</structname></link>.oid</literal></entry>
+      <entry>Data type of the sequence</entry>
+     </row>
+     <row>
       <entry><structfield>start_value</structfield></entry>
       <entry><type>bigint</type></entry>
       <entry></entry>
@@ -9451,7 +9895,10 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
       <entry></entry>
       <entry>The last sequence value written to disk.  If caching is used,
        this value can be greater than the last value handed out from the
-       sequence.  Null if the sequence has not been read from yet.</entry>
+       sequence.  Null if the sequence has not been read from yet.  Also, if
+       the current user does not have <literal>USAGE</literal>
+       or <literal>SELECT</literal> privilege on the sequence, the value is
+       null.</entry>
      </row>
     </tbody>
    </tgroup>

@@ -21,7 +21,6 @@
 #include <limits.h>
 #include <ctype.h>
 #include <math.h>
-#include <locale.h>
 
 #include "libpq/pqformat.h"
 #include "utils/builtins.h"
@@ -209,8 +208,8 @@ cash_in(PG_FUNCTION_ARGS)
 			if (newvalue / 10 != value)
 				ereport(ERROR,
 						(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-						 errmsg("value \"%s\" is out of range for type money",
-								str)));
+						 errmsg("value \"%s\" is out of range for type %s",
+								str, "money")));
 
 			value = newvalue;
 
@@ -236,8 +235,8 @@ cash_in(PG_FUNCTION_ARGS)
 	if (value > 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("value \"%s\" is out of range for type money",
-						str)));
+				 errmsg("value \"%s\" is out of range for type %s",
+						str, "money")));
 
 	/* adjust for less than required decimal places */
 	for (; dec < fpoint; dec++)
@@ -247,8 +246,8 @@ cash_in(PG_FUNCTION_ARGS)
 		if (newvalue / 10 != value)
 			ereport(ERROR,
 					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-					 errmsg("value \"%s\" is out of range for type money",
-							str)));
+					 errmsg("value \"%s\" is out of range for type %s",
+							str, "money")));
 
 		value = newvalue;
 	}
@@ -276,8 +275,8 @@ cash_in(PG_FUNCTION_ARGS)
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-					 errmsg("invalid input syntax for type money: \"%s\"",
-							str)));
+					 errmsg("invalid input syntax for type %s: \"%s\"",
+							"money", str)));
 	}
 
 	/* If the value is supposed to be positive, flip the sign, but check for
@@ -288,8 +287,8 @@ cash_in(PG_FUNCTION_ARGS)
 		if (result < 0)
 			ereport(ERROR,
 					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-					 errmsg("value \"%s\" is out of range for type money",
-							str)));
+					 errmsg("value \"%s\" is out of range for type %s",
+							str, "money")));
 	}
 	else
 		result = value;

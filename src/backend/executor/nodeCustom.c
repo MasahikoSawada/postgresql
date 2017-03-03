@@ -35,8 +35,8 @@ ExecInitCustomScan(CustomScan *cscan, EState *estate, int eflags)
 	 * methods field correctly at this time.  Other standard fields should be
 	 * set to zero.
 	 */
-	css = (CustomScanState *) cscan->methods->CreateCustomScanState(cscan);
-	Assert(IsA(css, CustomScanState));
+	css = castNode(CustomScanState,
+				   cscan->methods->CreateCustomScanState(cscan));
 
 	/* ensure flags is filled correctly */
 	css->flags = cscan->flags;
@@ -47,8 +47,6 @@ ExecInitCustomScan(CustomScan *cscan, EState *estate, int eflags)
 
 	/* create expression context for node */
 	ExecAssignExprContext(estate, &css->ss.ps);
-
-	css->ss.ps.ps_TupFromTlist = false;
 
 	/* initialize child expressions */
 	css->ss.ps.targetlist = (List *)
@@ -203,4 +201,13 @@ ExecCustomScanInitializeWorker(CustomScanState *node, shm_toc *toc)
 		coordinate = shm_toc_lookup(toc, plan_node_id);
 		methods->InitializeWorkerCustomScan(node, toc, coordinate);
 	}
+}
+
+void
+ExecShutdownCustomScan(CustomScanState *node)
+{
+	const CustomExecMethods *methods = node->methods;
+
+	if (methods->ShutdownCustomScan)
+		methods->ShutdownCustomScan(node);
 }

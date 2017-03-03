@@ -8,7 +8,6 @@
 #include "postgres_fe.h"
 
 #ifndef WIN32
-#include <sys/types.h>			/* (ditto) */
 #include <unistd.h>				/* for geteuid() */
 #else
 #include <win32.h>
@@ -241,6 +240,8 @@ slashUsage(unsigned short int pager)
 	fprintf(output, _("  \\dO[S+] [PATTERN]      list collations\n"));
 	fprintf(output, _("  \\dp     [PATTERN]      list table, view, and sequence access privileges\n"));
 	fprintf(output, _("  \\drds [PATRN1 [PATRN2]] list per-database role settings\n"));
+	fprintf(output, _("  \\dRp[+] [PATTERN]      list replication publications\n"));
+	fprintf(output, _("  \\dRs[+] [PATTERN]      list replication subscriptions\n"));
 	fprintf(output, _("  \\ds[S+] [PATTERN]      list sequences\n"));
 	fprintf(output, _("  \\dt[S+] [PATTERN]      list tables\n"));
 	fprintf(output, _("  \\dT[S+] [PATTERN]      list data types\n"));
@@ -346,9 +347,9 @@ helpVariables(unsigned short int pager)
 					  "                     (default: 0=unlimited)\n"));
 	fprintf(output, _("  HISTCONTROL        controls command history [ignorespace, ignoredups, ignoreboth]\n"));
 	fprintf(output, _("  HISTFILE           file name used to store the command history\n"));
-	fprintf(output, _("  HISTSIZE           the number of commands to store in the command history\n"));
+	fprintf(output, _("  HISTSIZE           max number of commands to store in the command history\n"));
 	fprintf(output, _("  HOST               the currently connected database server host\n"));
-	fprintf(output, _("  IGNOREEOF          if unset, sending an EOF to interactive session terminates application\n"));
+	fprintf(output, _("  IGNOREEOF          number of EOFs needed to terminate an interactive session\n"));
 	fprintf(output, _("  LASTOID            value of the last affected OID\n"));
 	fprintf(output, _("  ON_ERROR_ROLLBACK  if set, an error doesn't stop a transaction (uses implicit savepoints)\n"));
 	fprintf(output, _("  ON_ERROR_STOP      stop batch execution after error\n"));

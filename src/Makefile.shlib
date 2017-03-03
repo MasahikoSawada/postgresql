@@ -193,7 +193,7 @@ ifeq ($(PORTNAME), hpux)
     # can't use the CC-syntax rpath pattern here, so instead:
     rpath =
     ifeq ($(enable_rpath), yes)
-      LINK.shared	+= +b '$(rpathdir)'
+      LINK.shared	+= +s +b '$(rpathdir)'
     endif
     # On HPUX platforms, gcc is usually configured to search for libraries
     # in /usr/local/lib, but ld won't do so.  Add an explicit -L switch so
@@ -377,7 +377,7 @@ $(shlib): $(OBJS) $(DLL_DEFFILE) | $(SHLIB_PREREQS)
 	$(CC) $(CFLAGS)  -shared -static-libgcc -o $@  $(OBJS) $(DLL_DEFFILE) $(LDFLAGS) $(LDFLAGS_SL) $(SHLIB_LINK) $(LIBS) -Wl,--out-implib=$(stlib)
 endif
 
-endif # PORTNAME == cgywin
+endif # PORTNAME == cygwin
 endif # PORTNAME == cygwin || PORTNAME == win32
 
 

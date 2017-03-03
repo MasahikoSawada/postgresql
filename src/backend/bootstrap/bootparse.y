@@ -51,8 +51,6 @@
 #include "tcop/dest.h"
 #include "utils/rel.h"
 
-#define atooid(x)	((Oid) strtoul((x), NULL, 10))
-
 
 /*
  * Bison doesn't allocate anything that needs to live across parser calls,
@@ -105,11 +103,11 @@ static int num_columns_read = 0;
 
 %type <list>  boot_index_params
 %type <ielem> boot_index_param
-%type <str>   boot_const boot_ident
+%type <str>   boot_ident
 %type <ival>  optbootstrap optsharedrelation optwithoutoids boot_column_nullness
 %type <oidval> oidspec optoideq optrowtypeoid
 
-%token <str> CONST_P ID
+%token <str> ID
 %token OPEN XCLOSE XCREATE INSERT_TUPLE
 %token XDECLARE INDEX ON USING XBUILD INDICES UNIQUE XTOAST
 %token COMMA EQUALS LPAREN RPAREN
@@ -464,14 +462,8 @@ boot_column_val_list:
 boot_column_val:
 		  boot_ident
 			{ InsertOneValue($1, num_columns_read++); }
-		| boot_const
-			{ InsertOneValue($1, num_columns_read++); }
 		| NULLVAL
 			{ InsertOneNull(num_columns_read++); }
-		;
-
-boot_const :
-		  CONST_P { $$ = yylval.str; }
 		;
 
 boot_ident :

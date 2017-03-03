@@ -590,8 +590,8 @@ numeric_in(PG_FUNCTION_ARGS)
 			if (!isspace((unsigned char) *cp))
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-					  errmsg("invalid input syntax for type numeric: \"%s\"",
-							 str)));
+						 errmsg("invalid input syntax for type %s: \"%s\"",
+								"numeric", str)));
 			cp++;
 		}
 	}
@@ -617,8 +617,8 @@ numeric_in(PG_FUNCTION_ARGS)
 			if (!isspace((unsigned char) *cp))
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-					  errmsg("invalid input syntax for type numeric: \"%s\"",
-							 str)));
+						 errmsg("invalid input syntax for type %s: \"%s\"",
+								"numeric", str)));
 			cp++;
 		}
 
@@ -889,11 +889,10 @@ numeric_send(PG_FUNCTION_ARGS)
 Datum
 numeric_transform(PG_FUNCTION_ARGS)
 {
-	FuncExpr   *expr = (FuncExpr *) PG_GETARG_POINTER(0);
+	FuncExpr   *expr = castNode(FuncExpr, PG_GETARG_POINTER(0));
 	Node	   *ret = NULL;
 	Node	   *typmod;
 
-	Assert(IsA(expr, FuncExpr));
 	Assert(list_length(expr->args) >= 2);
 
 	typmod = (Node *) lsecond(expr->args);
@@ -3110,7 +3109,11 @@ numeric_float8(PG_FUNCTION_ARGS)
 }
 
 
-/* Convert numeric to float8; if out of range, return +/- HUGE_VAL */
+/*
+ * Convert numeric to float8; if out of range, return +/- HUGE_VAL
+ *
+ * (internal helper function, not directly callable from SQL)
+ */
 Datum
 numeric_float8_no_overflow(PG_FUNCTION_ARGS)
 {
@@ -5478,7 +5481,8 @@ set_var_from_str(const char *str, const char *cp, NumericVar *dest)
 	if (!isdigit((unsigned char) *cp))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-			  errmsg("invalid input syntax for type numeric: \"%s\"", str)));
+				 errmsg("invalid input syntax for type %s: \"%s\"",
+						"numeric", str)));
 
 	decdigits = (unsigned char *) palloc(strlen(cp) + DEC_DIGITS * 2);
 
@@ -5501,8 +5505,8 @@ set_var_from_str(const char *str, const char *cp, NumericVar *dest)
 			if (have_dp)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-					  errmsg("invalid input syntax for type numeric: \"%s\"",
-							 str)));
+						 errmsg("invalid input syntax for type %s: \"%s\"",
+								"numeric", str)));
 			have_dp = TRUE;
 			cp++;
 		}
@@ -5525,8 +5529,8 @@ set_var_from_str(const char *str, const char *cp, NumericVar *dest)
 		if (endptr == cp)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-					 errmsg("invalid input syntax for type numeric: \"%s\"",
-							str)));
+					 errmsg("invalid input syntax for type %s: \"%s\"",
+							"numeric", str)));
 		cp = endptr;
 
 		/*
@@ -6327,8 +6331,8 @@ numeric_to_double_no_overflow(Numeric num)
 		/* shouldn't happen ... */
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-			 errmsg("invalid input syntax for type double precision: \"%s\"",
-					tmp)));
+				 errmsg("invalid input syntax for type %s: \"%s\"",
+						"double precision", tmp)));
 	}
 
 	pfree(tmp);
@@ -6353,8 +6357,8 @@ numericvar_to_double_no_overflow(NumericVar *var)
 		/* shouldn't happen ... */
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-			 errmsg("invalid input syntax for type double precision: \"%s\"",
-					tmp)));
+				 errmsg("invalid input syntax for type %s: \"%s\"",
+						"double precision", tmp)));
 	}
 
 	pfree(tmp);

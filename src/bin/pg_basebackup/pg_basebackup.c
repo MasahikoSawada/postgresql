@@ -16,7 +16,6 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <sys/stat.h>
-#include <sys/types.h>
 #include <sys/wait.h>
 #include <signal.h>
 #include <time.h>
@@ -40,8 +39,6 @@
 #include "streamutil.h"
 
 
-#define atooid(x)  ((Oid) strtoul((x), NULL, 10))
-
 typedef struct TablespaceListCell
 {
 	struct TablespaceListCell *next;
@@ -61,6 +58,21 @@ typedef struct TablespaceList
  */
 #define MINIMUM_VERSION_FOR_PG_WAL	100000
 
+/*
+ * Temporary replication slots are supported from version 10.
+ */
+#define MINIMUM_VERSION_FOR_TEMP_SLOTS 100000
+
+/*
+ * Different ways to include WAL
+ */
+typedef enum
+{
+	NO_WAL,
+	FETCH_WAL,
+	STREAM_WAL
+} IncludeWal;
+
 /* Global options */
 static char *basedir = NULL;
 static TablespaceList tablespace_dirs = {NULL, NULL};
@@ -71,14 +83,15 @@ static bool noclean = false;
 static bool showprogress = false;
 static int	verbose = 0;
 static int	compresslevel = 0;
-static bool includewal = true;
-static bool streamwal = true;
+static IncludeWal includewal = STREAM_WAL;
 static bool fastcheckpoint = false;
 static bool writerecoveryconf = false;
 static bool do_sync = true;
 static int	standby_message_timeout = 10 * 1000;		/* 10 sec = default */
 static pg_time_t last_progress_report = 0;
 static int32 maxrate = 0;		/* no limit by default */
+static char *replication_slot = NULL;
+static bool temp_replication_slot = true;
 
 static bool success = false;
 static bool made_new_pgdata = false;
@@ -321,13 +334,14 @@ usage(void)
 	printf(_("  -r, --max-rate=RATE    maximum transfer rate to transfer data directory\n"
 	  "                         (in kB/s, or use suffix \"k\" or \"M\")\n"));
 	printf(_("  -R, --write-recovery-conf\n"
-			 "                         write recovery.conf after backup\n"));
+			 "                         write recovery.conf for replication\n"));
 	printf(_("  -S, --slot=SLOTNAME    replication slot to use\n"));
+	printf(_("      --no-slot          prevent creation of temporary replication slot\n"));
 	printf(_("  -T, --tablespace-mapping=OLDDIR=NEWDIR\n"
 	  "                         relocate tablespace in OLDDIR to NEWDIR\n"));
-	printf(_("  -X, --xlog-method=none|fetch|stream\n"
+	printf(_("  -X, --wal-method=none|fetch|stream\n"
 			 "                         include required WAL files with specified method\n"));
-	printf(_("      --xlogdir=XLOGDIR  location for the transaction log directory\n"));
+	printf(_("      --waldir=WALDIR    location for the transaction log directory\n"));
 	printf(_("  -z, --gzip             compress tar output\n"));
 	printf(_("  -Z, --compress=0-9     compress tar output with given compression level\n"));
 	printf(_("\nGeneral options:\n"));
@@ -451,6 +465,7 @@ typedef struct
 	char		xlog[MAXPGPATH];	/* directory or tarfile depending on mode */
 	char	   *sysidentifier;
 	int			timeline;
+	bool		temp_slot;
 } logstreamer_param;
 
 static int
@@ -470,9 +485,13 @@ LogStreamerMain(logstreamer_param *param)
 	stream.do_sync = do_sync;
 	stream.mark_done = true;
 	stream.partial_suffix = NULL;
+	stream.replication_slot = replication_slot;
+	stream.temp_slot = param->temp_slot;
+	if (stream.temp_slot && !stream.replication_slot)
+		stream.replication_slot = psprintf("pg_basebackup_%d", (int) getpid());
 
 	if (format == 'p')
-		stream.walmethod = CreateWalDirectoryMethod(param->xlog, do_sync);
+		stream.walmethod = CreateWalDirectoryMethod(param->xlog, 0, do_sync);
 	else
 		stream.walmethod = CreateWalTarMethod(param->xlog, compresslevel, do_sync);
 
@@ -556,6 +575,11 @@ StartLogStreamer(char *startpos, uint32 timeline, char *sysidentifier)
 			 PQserverVersion(conn) < MINIMUM_VERSION_FOR_PG_WAL ?
 				"pg_xlog" : "pg_wal");
 
+	/* Temporary replication slots are only supported in 10 and newer */
+	if (PQserverVersion(conn) < MINIMUM_VERSION_FOR_TEMP_SLOTS)
+		param->temp_slot = false;
+	else
+		param->temp_slot = temp_replication_slot;
 
 	if (format == 'p')
 	{
@@ -1697,7 +1721,7 @@ BaseBackup(void)
 	 * If WAL streaming was requested, also check that the server is new
 	 * enough for that.
 	 */
-	if (streamwal && !CheckServerVersionForStreaming(conn))
+	if (includewal == STREAM_WAL && !CheckServerVersionForStreaming(conn))
 	{
 		/*
 		 * Error message already written in CheckServerVersionForStreaming(),
@@ -1727,13 +1751,21 @@ BaseBackup(void)
 	if (maxrate > 0)
 		maxrate_clause = psprintf("MAX_RATE %u", maxrate);
 
+	if (verbose)
+		fprintf(stderr,
+				_("%s: initiating base backup, waiting for checkpoint to complete\n"),
+				progname);
+
+	if (showprogress && !verbose)
+		fprintf(stderr, "waiting for checkpoint\n");
+
 	basebkp =
 		psprintf("BASE_BACKUP LABEL '%s' %s %s %s %s %s %s",
 				 escaped_label,
 				 showprogress ? "PROGRESS" : "",
-				 includewal && !streamwal ? "WAL" : "",
+				 includewal == FETCH_WAL ? "WAL" : "",
 				 fastcheckpoint ? "FAST" : "",
-				 includewal ? "NOWAIT" : "",
+				 includewal == NO_WAL ? "" : "NOWAIT",
 				 maxrate_clause ? maxrate_clause : "",
 				 format == 't' ? "TABLESPACE_MAP" : "");
 
@@ -1764,6 +1796,9 @@ BaseBackup(void)
 
 	strlcpy(xlogstart, PQgetvalue(res, 0, 0), sizeof(xlogstart));
 
+	if (verbose)
+		fprintf(stderr, _("%s: checkpoint completed\n"), progname);
+
 	/*
 	 * 9.3 and later sends the TLI of the starting point. With older servers,
 	 * assume it's the same as the latest timeline reported by
@@ -1776,9 +1811,9 @@ BaseBackup(void)
 	PQclear(res);
 	MemSet(xlogend, 0, sizeof(xlogend));
 
-	if (verbose && includewal)
-		fprintf(stderr, _("transaction log start point: %s on timeline %u\n"),
-				xlogstart, starttli);
+	if (verbose && includewal != NO_WAL)
+		fprintf(stderr, _("%s: transaction log start point: %s on timeline %u\n"),
+				progname, xlogstart, starttli);
 
 	/*
 	 * Get the header
@@ -1833,7 +1868,7 @@ BaseBackup(void)
 	 * If we're streaming WAL, start the streaming session before we start
 	 * receiving the actual data chunks.
 	 */
-	if (streamwal)
+	if (includewal == STREAM_WAL)
 	{
 		if (verbose)
 			fprintf(stderr, _("%s: starting background WAL receiver\n"),
@@ -1879,8 +1914,8 @@ BaseBackup(void)
 		disconnect_and_exit(1);
 	}
 	strlcpy(xlogend, PQgetvalue(res, 0, 0), sizeof(xlogend));
-	if (verbose && includewal)
-		fprintf(stderr, "transaction log end point: %s\n", xlogend);
+	if (verbose && includewal != NO_WAL)
+		fprintf(stderr, _("%s: transaction log end point: %s\n"), progname, xlogend);
 	PQclear(res);
 
 	res = PQgetResult(conn);
@@ -2021,7 +2056,7 @@ BaseBackup(void)
 	}
 
 	if (verbose)
-		fprintf(stderr, "%s: base backup completed\n", progname);
+		fprintf(stderr, _("%s: base backup completed\n"), progname);
 }
 
 
@@ -2038,7 +2073,7 @@ main(int argc, char **argv)
 		{"write-recovery-conf", no_argument, NULL, 'R'},
 		{"slot", required_argument, NULL, 'S'},
 		{"tablespace-mapping", required_argument, NULL, 'T'},
-		{"xlog-method", required_argument, NULL, 'X'},
+		{"wal-method", required_argument, NULL, 'X'},
 		{"gzip", no_argument, NULL, 'z'},
 		{"compress", required_argument, NULL, 'Z'},
 		{"label", required_argument, NULL, 'l'},
@@ -2053,12 +2088,14 @@ main(int argc, char **argv)
 		{"status-interval", required_argument, NULL, 's'},
 		{"verbose", no_argument, NULL, 'v'},
 		{"progress", no_argument, NULL, 'P'},
-		{"xlogdir", required_argument, NULL, 1},
+		{"waldir", required_argument, NULL, 1},
+		{"no-slot", no_argument, NULL, 2},
 		{NULL, 0, NULL, 0}
 	};
 	int			c;
 
 	int			option_index;
+	bool		no_slot = false;
 
 	progname = get_progname(argv[0]);
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_basebackup"));
@@ -2108,7 +2145,16 @@ main(int argc, char **argv)
 				writerecoveryconf = true;
 				break;
 			case 'S':
+
+				/*
+				 * When specifying replication slot name, use a permanent
+				 * slot.
+				 */
 				replication_slot = pg_strdup(optarg);
+				temp_replication_slot = false;
+				break;
+			case 2:
+				no_slot = true;
 				break;
 			case 'T':
 				tablespace_list_append(optarg);
@@ -2117,25 +2163,22 @@ main(int argc, char **argv)
 				if (strcmp(optarg, "n") == 0 ||
 					strcmp(optarg, "none") == 0)
 				{
-					includewal = false;
-					streamwal = false;
+					includewal = NO_WAL;
 				}
 				else if (strcmp(optarg, "f") == 0 ||
 					strcmp(optarg, "fetch") == 0)
 				{
-					includewal = true;
-					streamwal = false;
+					includewal = FETCH_WAL;
 				}
 				else if (strcmp(optarg, "s") == 0 ||
 						 strcmp(optarg, "stream") == 0)
 				{
-					includewal = true;
-					streamwal = true;
+					includewal = STREAM_WAL;
 				}
 				else
 				{
 					fprintf(stderr,
-							_("%s: invalid xlog-method option \"%s\", must be \"fetch\", \"stream\" or \"none\"\n"),
+							_("%s: invalid wal-method option \"%s\", must be \"fetch\", \"stream\" or \"none\"\n"),
 							progname, optarg);
 					exit(1);
 				}
@@ -2261,7 +2304,7 @@ main(int argc, char **argv)
 		exit(1);
 	}
 
-	if (format == 't' && streamwal && strcmp(basedir, "-") == 0)
+	if (format == 't' && includewal == STREAM_WAL && strcmp(basedir, "-") == 0)
 	{
 		fprintf(stderr,
 			_("%s: cannot stream transaction logs in tar mode to stdout\n"),
@@ -2271,7 +2314,7 @@ main(int argc, char **argv)
 		exit(1);
 	}
 
-	if (replication_slot && !streamwal)
+	if (replication_slot && includewal != STREAM_WAL)
 	{
 		fprintf(stderr,
 			_("%s: replication slots can only be used with WAL streaming\n"),
@@ -2279,6 +2322,20 @@ main(int argc, char **argv)
 		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
 				progname);
 		exit(1);
+	}
+
+	if (no_slot)
+	{
+		if (replication_slot)
+		{
+			fprintf(stderr,
+					_("%s: --no-slot cannot be used with slot name\n"),
+					progname);
+			fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
+					progname);
+			exit(1);
+		}
+		temp_replication_slot = false;
 	}
 
 	if (strcmp(xlog_dir, "") != 0)

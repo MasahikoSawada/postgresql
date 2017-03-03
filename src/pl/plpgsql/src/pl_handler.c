@@ -24,6 +24,7 @@
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
+#include "utils/varlena.h"
 
 
 static bool plpgsql_extra_checks_check_hook(char **newvalue, void **extra, GucSource source);
@@ -287,15 +288,13 @@ PG_FUNCTION_INFO_V1(plpgsql_inline_handler);
 Datum
 plpgsql_inline_handler(PG_FUNCTION_ARGS)
 {
-	InlineCodeBlock *codeblock = (InlineCodeBlock *) DatumGetPointer(PG_GETARG_DATUM(0));
+	InlineCodeBlock *codeblock = castNode(InlineCodeBlock, DatumGetPointer(PG_GETARG_DATUM(0)));
 	PLpgSQL_function *func;
 	FunctionCallInfoData fake_fcinfo;
 	FmgrInfo	flinfo;
 	EState	   *simple_eval_estate;
 	Datum		retval;
 	int			rc;
-
-	Assert(IsA(codeblock, InlineCodeBlock));
 
 	/*
 	 * Connect to SPI manager

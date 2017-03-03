@@ -39,6 +39,8 @@ ALTER DEFAULT PRIVILEGES FOR ROLE regress_addr_user REVOKE DELETE ON TABLES FROM
 CREATE TRANSFORM FOR int LANGUAGE SQL (
 	FROM SQL WITH FUNCTION varchar_transform(internal),
 	TO SQL WITH FUNCTION int4recv(internal));
+CREATE PUBLICATION addr_pub FOR TABLE addr_nsp.gentable;
+CREATE SUBSCRIPTION addr_sub CONNECTION '' PUBLICATION bar WITH (DISABLED, NOCREATE SLOT);
 
 -- test some error cases
 SELECT pg_get_object_address('stone', '{}', '{}');
@@ -78,7 +80,8 @@ BEGIN
 		('text search parser'), ('text search dictionary'),
 		('text search template'), ('text search configuration'),
 		('policy'), ('user mapping'), ('default acl'), ('transform'),
-		('operator of access method'), ('function of access method')
+		('operator of access method'), ('function of access method'),
+		('publication relation')
 	LOOP
 		FOR names IN VALUES ('{eins}'), ('{addr_nsp, zwei}'), ('{eins, zwei, drei}')
 		LOOP
@@ -119,6 +122,10 @@ SELECT pg_get_object_address('event trigger', '{one}', '{}');
 SELECT pg_get_object_address('event trigger', '{one,two}', '{}');
 SELECT pg_get_object_address('access method', '{one}', '{}');
 SELECT pg_get_object_address('access method', '{one,two}', '{}');
+SELECT pg_get_object_address('publication', '{one}', '{}');
+SELECT pg_get_object_address('publication', '{one,two}', '{}');
+SELECT pg_get_object_address('subscription', '{one}', '{}');
+SELECT pg_get_object_address('subscription', '{one,two}', '{}');
 
 -- test successful cases
 WITH objects (type, name, args) AS (VALUES
@@ -169,16 +176,19 @@ WITH objects (type, name, args) AS (VALUES
 				-- event trigger
 				('policy', '{addr_nsp, gentable, genpol}', '{}'),
 				('transform', '{int}', '{sql}'),
-				('access method', '{btree}', '{}')
+				('access method', '{btree}', '{}'),
+				('publication', '{addr_pub}', '{}'),
+				('publication relation', '{addr_nsp, gentable}', '{addr_pub}'),
+				('subscription', '{addr_sub}', '{}')
         )
-SELECT (pg_identify_object(addr1.classid, addr1.objid, addr1.subobjid)).*,
+SELECT (pg_identify_object(addr1.classid, addr1.objid, addr1.objsubid)).*,
 	-- test roundtrip through pg_identify_object_as_address
-	ROW(pg_identify_object(addr1.classid, addr1.objid, addr1.subobjid)) =
-	ROW(pg_identify_object(addr2.classid, addr2.objid, addr2.subobjid))
+	ROW(pg_identify_object(addr1.classid, addr1.objid, addr1.objsubid)) =
+	ROW(pg_identify_object(addr2.classid, addr2.objid, addr2.objsubid))
 	  FROM objects, pg_get_object_address(type, name, args) addr1,
-			pg_identify_object_as_address(classid, objid, subobjid) ioa(typ,nms,args),
+			pg_identify_object_as_address(classid, objid, objsubid) ioa(typ,nms,args),
 			pg_get_object_address(typ, nms, ioa.args) as addr2
-	ORDER BY addr1.classid, addr1.objid, addr1.subobjid;
+	ORDER BY addr1.classid, addr1.objid, addr1.objsubid;
 
 ---
 --- Cleanup resources
@@ -186,6 +196,8 @@ SELECT (pg_identify_object(addr1.classid, addr1.objid, addr1.subobjid)).*,
 SET client_min_messages TO 'warning';
 
 DROP FOREIGN DATA WRAPPER addr_fdw CASCADE;
+DROP PUBLICATION addr_pub;
+DROP SUBSCRIPTION addr_sub NODROP SLOT;
 
 DROP SCHEMA addr_nsp CASCADE;
 

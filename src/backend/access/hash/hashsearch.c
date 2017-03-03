@@ -139,6 +139,7 @@ _hash_readprev(IndexScanDesc scan,
 	BlockNumber blkno;
 	Relation	rel = scan->indexRelation;
 	HashScanOpaque so = (HashScanOpaque) scan->opaque;
+	bool		haveprevblk;
 
 	blkno = (*opaquep)->hasho_prevblkno;
 
@@ -147,15 +148,23 @@ _hash_readprev(IndexScanDesc scan,
 	 * comments in _hash_first to know the reason of retaining pin.
 	 */
 	if (*bufp == so->hashso_bucket_buf || *bufp == so->hashso_split_bucket_buf)
+	{
 		LockBuffer(*bufp, BUFFER_LOCK_UNLOCK);
+		haveprevblk = false;
+	}
 	else
+	{
 		_hash_relbuf(rel, *bufp);
+		haveprevblk = true;
+	}
 
 	*bufp = InvalidBuffer;
 	/* check for interrupts while we're not holding any buffer lock */
 	CHECK_FOR_INTERRUPTS();
-	if (BlockNumberIsValid(blkno))
+
+	if (haveprevblk)
 	{
+		Assert(BlockNumberIsValid(blkno));
 		*bufp = _hash_getbuf(rel, blkno, HASH_READ,
 							 LH_BUCKET_PAGE | LH_OVERFLOW_PAGE);
 		*pagep = BufferGetPage(*bufp);
@@ -215,14 +224,9 @@ _hash_first(IndexScanDesc scan, ScanDirection dir)
 	ScanKey		cur;
 	uint32		hashkey;
 	Bucket		bucket;
-	BlockNumber blkno;
-	BlockNumber oldblkno = InvalidBuffer;
-	bool		retry = false;
 	Buffer		buf;
-	Buffer		metabuf;
 	Page		page;
 	HashPageOpaque opaque;
-	HashMetaPage metap;
 	IndexTuple	itup;
 	ItemPointer current;
 	OffsetNumber offnum;
@@ -277,76 +281,28 @@ _hash_first(IndexScanDesc scan, ScanDirection dir)
 
 	so->hashso_sk_hash = hashkey;
 
-	/* Read the metapage */
-	metabuf = _hash_getbuf(rel, HASH_METAPAGE, HASH_READ, LH_META_PAGE);
-	page = BufferGetPage(metabuf);
-	metap = HashPageGetMeta(page);
-
-	/*
-	 * Loop until we get a lock on the correct target bucket.
-	 */
-	for (;;)
-	{
-		/*
-		 * Compute the target bucket number, and convert to block number.
-		 */
-		bucket = _hash_hashkey2bucket(hashkey,
-									  metap->hashm_maxbucket,
-									  metap->hashm_highmask,
-									  metap->hashm_lowmask);
-
-		blkno = BUCKET_TO_BLKNO(metap, bucket);
-
-		/* Release metapage lock, but keep pin. */
-		LockBuffer(metabuf, BUFFER_LOCK_UNLOCK);
-
-		/*
-		 * If the previous iteration of this loop locked what is still the
-		 * correct target bucket, we are done.  Otherwise, drop any old lock
-		 * and lock what now appears to be the correct bucket.
-		 */
-		if (retry)
-		{
-			if (oldblkno == blkno)
-				break;
-			_hash_relbuf(rel, buf);
-		}
-
-		/* Fetch the primary bucket page for the bucket */
-		buf = _hash_getbuf(rel, blkno, HASH_READ, LH_BUCKET_PAGE);
-
-		/*
-		 * Reacquire metapage lock and check that no bucket split has taken
-		 * place while we were awaiting the bucket lock.
-		 */
-		LockBuffer(metabuf, BUFFER_LOCK_SHARE);
-		oldblkno = blkno;
-		retry = true;
-	}
-
-	/* done with the metapage */
-	_hash_dropbuf(rel, metabuf);
-
+	buf = _hash_getbucketbuf_from_hashkey(rel, hashkey, HASH_READ, NULL);
 	page = BufferGetPage(buf);
 	opaque = (HashPageOpaque) PageGetSpecialPointer(page);
-	Assert(opaque->hasho_bucket == bucket);
+	bucket = opaque->hasho_bucket;
 
 	so->hashso_bucket_buf = buf;
 
 	/*
-	 * If the bucket split is in progress, then while scanning the bucket
-	 * being populated, we need to skip tuples that are moved from bucket
-	 * being split.  We need to maintain the pin on bucket being split to
+	 * If a bucket split is in progress, then while scanning the bucket being
+	 * populated, we need to skip tuples that were copied from bucket being
+	 * split.  We also need to maintain a pin on the bucket being split to
 	 * ensure that split-cleanup work done by vacuum doesn't remove tuples
-	 * from it till this scan is done.  We need to main to maintain the pin on
+	 * from it till this scan is done.  We need to maintain a pin on the
 	 * bucket being populated to ensure that vacuum doesn't squeeze that
-	 * bucket till this scan is complete, otherwise the ordering of tuples
+	 * bucket till this scan is complete; otherwise, the ordering of tuples
 	 * can't be maintained during forward and backward scans.  Here, we have
-	 * to be cautious about locking order, first acquire the lock on bucket
-	 * being split, release the lock on it, but not pin, then acquire the lock
-	 * on bucket being populated and again re-verify whether the bucket split
-	 * still is in progress.  First acquiring lock on bucket being split
-	 * ensures that the vacuum waits for this scan to finish.
+	 * to be cautious about locking order: first, acquire the lock on bucket
+	 * being split; then, release the lock on it but not the pin; then,
+	 * acquire a lock on bucket being populated and again re-verify whether
+	 * the bucket split is still in progress.  Acquiring the lock on bucket
+	 * being split first ensures that the vacuum waits for this scan to
+	 * finish.
 	 */
 	if (H_BUCKET_BEING_POPULATED(opaque))
 	{

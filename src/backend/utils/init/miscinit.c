@@ -20,7 +20,6 @@
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/time.h>
-#include <sys/types.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <grp.h>
@@ -48,6 +47,7 @@
 #include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
+#include "utils/varlena.h"
 
 
 #define DIRECTORY_LOCK_FILE		"postmaster.pid"

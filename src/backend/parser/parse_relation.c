@@ -31,6 +31,7 @@
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
+#include "utils/varlena.h"
 
 
 #define MAX_FUZZY_DISTANCE				3
@@ -909,12 +910,11 @@ markRTEForSelectPriv(ParseState *pstate, RangeTblEntry *rte,
 			JoinExpr   *j;
 
 			if (rtindex > 0 && rtindex <= list_length(pstate->p_joinexprs))
-				j = (JoinExpr *) list_nth(pstate->p_joinexprs, rtindex - 1);
+				j = castNode(JoinExpr, list_nth(pstate->p_joinexprs, rtindex - 1));
 			else
 				j = NULL;
 			if (j == NULL)
 				elog(ERROR, "could not find JoinExpr for whole-row reference");
-			Assert(IsA(j, JoinExpr));
 
 			/* Note: we can't see FromExpr here */
 			if (IsA(j->larg, RangeTblRef))

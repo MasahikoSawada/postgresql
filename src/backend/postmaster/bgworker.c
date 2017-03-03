@@ -20,6 +20,7 @@
 #include "port/atomics.h"
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/postmaster.h"
+#include "replication/logicallauncher.h"
 #include "storage/dsm.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
@@ -106,6 +107,15 @@ struct BackgroundWorkerHandle
 };
 
 static BackgroundWorkerArray *BackgroundWorkerData;
+
+/*
+ * List of workers that are allowed to be started outside of
+ * shared_preload_libraries.
+ */
+static const bgworker_main_type InternalBGWorkers[] = {
+	ApplyLauncherMain,
+	NULL
+};
 
 /*
  * Calculate shared memory needed.
@@ -414,6 +424,39 @@ ReportBackgroundWorkerPID(RegisteredBgWorker *rw)
 	Assert(rw->rw_shmem_slot < max_worker_processes);
 	slot = &BackgroundWorkerData->slot[rw->rw_shmem_slot];
 	slot->pid = rw->rw_pid;
+
+	if (rw->rw_worker.bgw_notify_pid != 0)
+		kill(rw->rw_worker.bgw_notify_pid, SIGUSR1);
+}
+
+/*
+ * Report that the PID of a background worker is now zero because a
+ * previously-running background worker has exited.
+ *
+ * This function should only be called from the postmaster.
+ */
+void
+ReportBackgroundWorkerExit(slist_mutable_iter *cur)
+{
+	RegisteredBgWorker *rw;
+	BackgroundWorkerSlot *slot;
+
+	rw = slist_container(RegisteredBgWorker, rw_lnode, cur->cur);
+
+	Assert(rw->rw_shmem_slot < max_worker_processes);
+	slot = &BackgroundWorkerData->slot[rw->rw_shmem_slot];
+	slot->pid = rw->rw_pid;
+
+	/*
+	 * If this worker is slated for deregistration, do that before notifying
+	 * the process which started it.  Otherwise, if that process tries to
+	 * reuse the slot immediately, it might not be available yet.  In theory
+	 * that could happen anyway if the process checks slot->pid at just the
+	 * wrong moment, but this makes the window narrower.
+	 */
+	if (rw->rw_terminate ||
+		rw->rw_worker.bgw_restart_time == BGW_NEVER_RESTART)
+		ForgetBackgroundWorker(cur);
 
 	if (rw->rw_worker.bgw_notify_pid != 0)
 		kill(rw->rw_worker.bgw_notify_pid, SIGUSR1);
@@ -761,12 +804,23 @@ RegisterBackgroundWorker(BackgroundWorker *worker)
 {
 	RegisteredBgWorker *rw;
 	static int	numworkers = 0;
+	bool		internal = false;
+	int			i;
 
 	if (!IsUnderPostmaster)
 		ereport(DEBUG1,
 		 (errmsg("registering background worker \"%s\"", worker->bgw_name)));
 
-	if (!process_shared_preload_libraries_in_progress)
+	for (i = 0; InternalBGWorkers[i]; i++)
+	{
+		if (worker->bgw_main == InternalBGWorkers[i])
+		{
+			internal = true;
+			break;
+		}
+	}
+
+	if (!process_shared_preload_libraries_in_progress && !internal)
 	{
 		if (!IsUnderPostmaster)
 			ereport(LOG,

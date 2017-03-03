@@ -50,6 +50,7 @@
 <!ENTITY config        SYSTEM "config.sgml">
 <!ENTITY user-manag    SYSTEM "user-manag.sgml">
 <!ENTITY wal           SYSTEM "wal.sgml">
+<!ENTITY logical-replication    SYSTEM "logical-replication.sgml">
 
 <!-- programmer's guide -->
 <!ENTITY bgworker   SYSTEM "bgworker.sgml">
@@ -150,7 +151,6 @@
 <!ENTITY test-decoding   SYSTEM "test-decoding.sgml">
 <!ENTITY test-parser     SYSTEM "test-parser.sgml">
 <!ENTITY test-shm-mq     SYSTEM "test-shm-mq.sgml">
-<!ENTITY tsearch2        SYSTEM "tsearch2.sgml">
 <!ENTITY tsm-system-rows SYSTEM "tsm-system-rows.sgml">
 <!ENTITY tsm-system-time SYSTEM "tsm-system-time.sgml">
 <!ENTITY unaccent      SYSTEM "unaccent.sgml">

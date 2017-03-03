@@ -14,7 +14,6 @@ $node_master->init(allows_streaming => 1);
 
 $node_master->append_conf('postgresql.conf', qq{
 fsync = on
-wal_level = replica
 wal_log_hints = on
 max_prepared_transactions = 5
 autovacuum = off
@@ -69,11 +68,11 @@ vacuum verbose testtab;
 
 $node_master->psql('postgres', 'checkpoint');
 my $until_lsn =
-	$node_master->safe_psql('postgres', "SELECT pg_current_xlog_location();");
+	$node_master->safe_psql('postgres', "SELECT pg_current_wal_location();");
 
 # Wait long enough for standby to receive and apply all WAL
 my $caughtup_query =
-	"SELECT '$until_lsn'::pg_lsn <= pg_last_xlog_replay_location()";
+	"SELECT '$until_lsn'::pg_lsn <= pg_last_wal_replay_location()";
 $node_standby->poll_query_until('postgres', $caughtup_query)
 	or die "Timed out while waiting for standby to catch up";
 

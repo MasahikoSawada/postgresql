@@ -97,8 +97,6 @@ extern char *output_files[];
 #define CLUSTER_NAME(cluster)	((cluster) == &old_cluster ? "old" : \
 								 (cluster) == &new_cluster ? "new" : "none")
 
-#define atooid(x)  ((Oid) strtoul((x), NULL, 10))
-
 /* OID system catalog preservation added during PG 9.0 development */
 #define TABLE_SPACE_SUBDIRS_CAT_VER 201001111
 /* postmaster/postgres -b (binary_upgrade) flag added during PG 9.1 development */
@@ -442,6 +440,7 @@ void		pg_putenv(const char *var, const char *val);
 void new_9_0_populate_pg_largeobject_metadata(ClusterInfo *cluster,
 										 bool check_mode);
 void		old_9_3_check_for_line_data_type_usage(ClusterInfo *cluster);
+void		old_9_6_check_for_unknown_data_type_usage(ClusterInfo *cluster);
 
 /* parallel.c */
 void parallel_exec_prog(const char *log_file, const char *opt_log_file,

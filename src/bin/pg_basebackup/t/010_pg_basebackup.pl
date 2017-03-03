@@ -4,7 +4,7 @@ use Cwd;
 use Config;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 71;
+use Test::More tests => 73;
 
 program_help_ok('pg_basebackup');
 program_version_ok('pg_basebackup');
@@ -56,7 +56,7 @@ close CONF;
 $node->restart;
 
 # Write some files to test that they are not copied.
-foreach my $filename (qw(backup_label tablespace_map postgresql.auto.conf.tmp))
+foreach my $filename (qw(backup_label tablespace_map postgresql.auto.conf.tmp current_logfiles.tmp))
 {
 	open FILE, ">>$pgdata/$filename";
 	print FILE "DONOTCOPY";
@@ -83,7 +83,7 @@ foreach my $dirname (qw(pg_dynshmem pg_notify pg_replslot pg_serial pg_snapshots
 }
 
 # These files should not be copied.
-foreach my $filename (qw(postgresql.auto.conf.tmp postmaster.opts postmaster.pid tablespace_map))
+foreach my $filename (qw(postgresql.auto.conf.tmp postmaster.opts postmaster.pid tablespace_map current_logfiles.tmp))
 {
 	ok(! -f "$tempdir/backup/$filename", "$filename not copied");
 }
@@ -93,7 +93,7 @@ isnt(slurp_file("$tempdir/backup/backup_label"), 'DONOTCOPY',
 	 'existing backup_label not copied');
 
 $node->command_ok(
-	[   'pg_basebackup', '-D', "$tempdir/backup2", '--xlogdir',
+	[   'pg_basebackup', '-D', "$tempdir/backup2", '--waldir',
 		"$tempdir/xlog2" ],
 	'separate xlog directory');
 ok(-f "$tempdir/backup2/PG_VERSION", 'backup was created');
@@ -244,6 +244,9 @@ $node->command_ok(
 	[ 'pg_basebackup', '-D', "$tempdir/backupxst", '-X', 'stream', '-Ft' ],
 	'pg_basebackup -X stream runs in tar mode');
 ok(-f "$tempdir/backupxst/pg_wal.tar", "tar file was created");
+$node->command_ok(
+	[ 'pg_basebackup', '-D', "$tempdir/backupnoslot", '-X', 'stream', '--no-slot' ],
+	'pg_basebackup -X stream runs with --no-slot');
 
 $node->command_fails(
 	[ 'pg_basebackup', '-D', "$tempdir/fail", '-S', 'slot1' ],

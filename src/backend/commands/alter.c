@@ -45,7 +45,9 @@
 #include "commands/extension.h"
 #include "commands/policy.h"
 #include "commands/proclang.h"
+#include "commands/publicationcmds.h"
 #include "commands/schemacmds.h"
+#include "commands/subscriptioncmds.h"
 #include "commands/tablecmds.h"
 #include "commands/tablespace.h"
 #include "commands/trigger.h"
@@ -282,8 +284,7 @@ AlterObjectRename_internal(Relation rel, Oid objectId, const char *new_name)
 							   values, nulls, replaces);
 
 	/* Perform actual update */
-	simple_heap_update(rel, &oldtup->t_self, newtup);
-	CatalogUpdateIndexes(rel, newtup);
+	CatalogTupleUpdate(rel, &oldtup->t_self, newtup);
 
 	InvokeObjectPostAlterHook(classId, objectId, 0);
 
@@ -720,8 +721,7 @@ AlterObjectNamespace_internal(Relation rel, Oid objid, Oid nspOid)
 							   values, nulls, replaces);
 
 	/* Perform actual update */
-	simple_heap_update(rel, &tup->t_self, newtup);
-	CatalogUpdateIndexes(rel, newtup);
+	CatalogTupleUpdate(rel, &tup->t_self, newtup);
 
 	/* Release memory */
 	pfree(values);
@@ -768,6 +768,14 @@ ExecAlterOwnerStmt(AlterOwnerStmt *stmt)
 
 		case OBJECT_EVENT_TRIGGER:
 			return AlterEventTriggerOwner(strVal(linitial(stmt->object)),
+										  newowner);
+
+		case OBJECT_PUBLICATION:
+			return AlterPublicationOwner(strVal(linitial(stmt->object)),
+										 newowner);
+
+		case OBJECT_SUBSCRIPTION:
+			return AlterSubscriptionOwner(strVal(linitial(stmt->object)),
 										  newowner);
 
 			/* Generic cases */
@@ -944,8 +952,7 @@ AlterObjectOwner_internal(Relation rel, Oid objectId, Oid new_ownerId)
 								   values, nulls, replaces);
 
 		/* Perform actual update */
-		simple_heap_update(rel, &newtup->t_self, newtup);
-		CatalogUpdateIndexes(rel, newtup);
+		CatalogTupleUpdate(rel, &newtup->t_self, newtup);
 
 		/* Update owner dependency reference */
 		if (classId == LargeObjectMetadataRelationId)

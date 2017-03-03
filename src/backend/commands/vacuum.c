@@ -32,6 +32,7 @@
 #include "access/xact.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_database.h"
+#include "catalog/pg_inherits_fn.h"
 #include "catalog/pg_namespace.h"
 #include "commands/cluster.h"
 #include "commands/vacuum.h"
@@ -403,6 +404,9 @@ get_rel_oids(Oid relid, const RangeVar *vacrel)
 	{
 		/* Process a specific relation */
 		Oid			relid;
+		HeapTuple	tuple;
+		Form_pg_class classForm;
+		bool		include_parts;
 
 		/*
 		 * Since we don't take a lock here, the relation might be gone, or the
@@ -415,9 +419,29 @@ get_rel_oids(Oid relid, const RangeVar *vacrel)
 		 */
 		relid = RangeVarGetRelid(vacrel, NoLock, false);
 
-		/* Make a relation list entry for this guy */
+		/*
+		 * To check whether the relation is a partitioned table, fetch its
+		 * syscache entry.
+		 */
+		tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+		if (!HeapTupleIsValid(tuple))
+			elog(ERROR, "cache lookup failed for relation %u", relid);
+		classForm = (Form_pg_class) GETSTRUCT(tuple);
+		include_parts = (classForm->relkind == RELKIND_PARTITIONED_TABLE);
+		ReleaseSysCache(tuple);
+
+		/*
+		 * Make relation list entries for this guy and its partitions, if any.
+		 * Note that the list returned by find_all_inheritors() include the
+		 * passed-in OID at its head.  Also note that we did not request a
+		 * lock to be taken to match what would be done otherwise.
+		 */
 		oldcontext = MemoryContextSwitchTo(vac_context);
-		oid_list = lappend_oid(oid_list, relid);
+		if (include_parts)
+			oid_list = list_concat(oid_list,
+								   find_all_inheritors(relid, NoLock, NULL));
+		else
+			oid_list = lappend_oid(oid_list, relid);
 		MemoryContextSwitchTo(oldcontext);
 	}
 	else
@@ -438,8 +462,14 @@ get_rel_oids(Oid relid, const RangeVar *vacrel)
 		{
 			Form_pg_class classForm = (Form_pg_class) GETSTRUCT(tuple);
 
+			/*
+			 * We include partitioned tables here; depending on which
+			 * operation is to be performed, caller will decide whether to
+			 * process or ignore them.
+			 */
 			if (classForm->relkind != RELKIND_RELATION &&
-				classForm->relkind != RELKIND_MATVIEW)
+				classForm->relkind != RELKIND_MATVIEW &&
+				classForm->relkind != RELKIND_PARTITIONED_TABLE)
 				continue;
 
 			/* Make a relation list entry for this guy */
@@ -1162,6 +1192,15 @@ vac_truncate_clog(TransactionId frozenXID,
 		return;
 
 	/*
+	 * Advance the oldest value for commit timestamps before truncating, so
+	 * that if a user requests a timestamp for a transaction we're truncating
+	 * away right after this point, they get NULL instead of an ugly "file not
+	 * found" error from slru.c.  This doesn't matter for xact/multixact
+	 * because they are not subject to arbitrary lookups from users.
+	 */
+	AdvanceOldestCommitTsXid(frozenXID);
+
+	/*
 	 * Truncate CLOG, multixact and CommitTs to the oldest computed value.
 	 */
 	TruncateCLOG(frozenXID);
@@ -1176,7 +1215,6 @@ vac_truncate_clog(TransactionId frozenXID,
 	 */
 	SetTransactionIdLimit(frozenXID, oldestxid_datoid);
 	SetMultiXactIdLimit(minMulti, minmulti_datoid);
-	AdvanceOldestCommitTsXid(frozenXID);
 }
 
 
@@ -1348,6 +1386,21 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumOptions options, VacuumParams *p
 		PopActiveSnapshot();
 		CommitTransactionCommand();
 		return false;
+	}
+
+	/*
+	 * Ignore partitioned tables as there is no work to be done.  Since we
+	 * release the lock here, it's possible that any partitions added from
+	 * this point on will not get processed, but that seems harmless.
+	 */
+	if (onerel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		relation_close(onerel, lmode);
+		PopActiveSnapshot();
+		CommitTransactionCommand();
+
+		/* It's OK for other commands to look at this table */
+		return true;
 	}
 
 	/*

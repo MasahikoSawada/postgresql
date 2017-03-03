@@ -139,6 +139,7 @@ CreateExecutorState(void)
 	estate->es_epqTuple = NULL;
 	estate->es_epqTupleSet = NULL;
 	estate->es_epqScanDone = NULL;
+	estate->es_sourceText = NULL;
 
 	/*
 	 * Return the executor state structure
@@ -585,12 +586,6 @@ ExecBuildProjectionInfo(List *targetList,
 	projInfo->pi_targetlist = exprlist;
 	projInfo->pi_numSimpleVars = numSimpleVars;
 	projInfo->pi_directMap = directMap;
-
-	if (exprlist == NIL)
-		projInfo->pi_itemIsDone = NULL; /* not needed */
-	else
-		projInfo->pi_itemIsDone = (ExprDoneCond *)
-			palloc(len * sizeof(ExprDoneCond));
 
 	return projInfo;
 }

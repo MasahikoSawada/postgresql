@@ -39,9 +39,10 @@ struct WalWriteMethod
  *	- WalDirectoryMethod - write WAL to regular files in a standard pg_xlog
  *	- TarDirectoryMethod - write WAL to a tarfile corresponding to pg_xlog
  *						   (only implements the methods required for pg_basebackup,
- *						   not all those required for pg_receivexlog)
+ *						   not all those required for pg_receivewal)
  */
-WalWriteMethod *CreateWalDirectoryMethod(const char *basedir, bool sync);
+WalWriteMethod *CreateWalDirectoryMethod(const char *basedir,
+										 int compression, bool sync);
 WalWriteMethod *CreateWalTarMethod(const char *tarbase, int compression, bool sync);
 
 /* Cleanup routines for previously-created methods */

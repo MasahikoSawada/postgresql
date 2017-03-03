@@ -22,7 +22,8 @@
  */
 extern bool enable_geqo;
 extern int	geqo_threshold;
-extern int	min_parallel_relation_size;
+extern int	min_parallel_table_scan_size;
+extern int	min_parallel_index_scan_size;
 
 /* Hook for plugins to get control in set_rel_pathlist() */
 typedef void (*set_rel_pathlist_hook_type) (PlannerInfo *root,
@@ -53,6 +54,8 @@ extern RelOptInfo *standard_join_search(PlannerInfo *root, int levels_needed,
 					 List *initial_rels);
 
 extern void generate_gather_paths(PlannerInfo *root, RelOptInfo *rel);
+extern int compute_parallel_worker(RelOptInfo *rel, BlockNumber heap_pages,
+						BlockNumber index_pages);
 
 #ifdef OPTIMIZER_DEBUG
 extern void debug_print_rel(PlannerInfo *root, RelOptInfo *rel);
@@ -66,6 +69,8 @@ extern void create_index_paths(PlannerInfo *root, RelOptInfo *rel);
 extern bool relation_has_unique_index_for(PlannerInfo *root, RelOptInfo *rel,
 							  List *restrictlist,
 							  List *exprlist, List *oprlist);
+extern bool indexcol_is_bool_constant_for_query(IndexOptInfo *index,
+									int indexcol);
 extern bool match_index_to_operand(Node *operand, int indexcol,
 					   IndexOptInfo *index);
 extern void expand_indexqual_conditions(IndexOptInfo *index,

@@ -163,10 +163,9 @@ typedef struct CopyStateData
 	List	   *range_table;
 
 	PartitionDispatch *partition_dispatch_info;
-	int			num_dispatch;		/* Number of entries in the above array */
-	int			num_partitions;		/* Number of members in the following
-									 * arrays */
-	ResultRelInfo  *partitions;		/* Per partition result relation */
+	int			num_dispatch;	/* Number of entries in the above array */
+	int			num_partitions; /* Number of members in the following arrays */
+	ResultRelInfo *partitions;	/* Per partition result relation */
 	TupleConversionMap **partition_tupconv_maps;
 	TupleTableSlot *partition_tuple_slot;
 
@@ -287,13 +286,13 @@ static const char BinarySignature[11] = "PGCOPY\n\377\r\n\0";
 
 
 /* non-export function prototypes */
-static CopyState BeginCopy(ParseState *pstate, bool is_from, Relation rel, Node *raw_query,
-		  const Oid queryRelId, List *attnamelist,
+static CopyState BeginCopy(ParseState *pstate, bool is_from, Relation rel,
+		  RawStmt *raw_query, Oid queryRelId, List *attnamelist,
 		  List *options);
 static void EndCopy(CopyState cstate);
 static void ClosePipeToProgram(CopyState cstate);
-static CopyState BeginCopyTo(ParseState *pstate, Relation rel, Node *query,
-			const Oid queryRelId, const char *filename, bool is_program,
+static CopyState BeginCopyTo(ParseState *pstate, Relation rel, RawStmt *query,
+			Oid queryRelId, const char *filename, bool is_program,
 			List *attnamelist, List *options);
 static void EndCopyTo(CopyState cstate);
 static uint64 DoCopyTo(CopyState cstate);
@@ -770,15 +769,17 @@ CopyLoadRawBuf(CopyState cstate)
  * Do not allow the copy if user doesn't have proper permission to access
  * the table or the specifically requested columns.
  */
-Oid
-DoCopy(ParseState *pstate, const CopyStmt *stmt, uint64 *processed)
+void
+DoCopy(ParseState *pstate, const CopyStmt *stmt,
+	   int stmt_location, int stmt_len,
+	   uint64 *processed)
 {
 	CopyState	cstate;
 	bool		is_from = stmt->is_from;
 	bool		pipe = (stmt->filename == NULL);
 	Relation	rel;
 	Oid			relid;
-	Node	   *query = NULL;
+	RawStmt    *query = NULL;
 	List	   *range_table = NIL;
 
 	/* Disallow COPY to/from file or program except to superusers. */
@@ -929,7 +930,10 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt, uint64 *processed)
 			select->targetList = targetList;
 			select->fromClause = list_make1(from);
 
-			query = (Node *) select;
+			query = makeNode(RawStmt);
+			query->stmt = (Node *) select;
+			query->stmt_location = stmt_location;
+			query->stmt_len = stmt_len;
 
 			/*
 			 * Close the relation for now, but keep the lock on it to prevent
@@ -945,7 +949,11 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt, uint64 *processed)
 	{
 		Assert(stmt->query);
 
-		query = stmt->query;
+		query = makeNode(RawStmt);
+		query->stmt = stmt->query;
+		query->stmt_location = stmt_location;
+		query->stmt_len = stmt_len;
+
 		relid = InvalidOid;
 		rel = NULL;
 	}
@@ -981,8 +989,6 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt, uint64 *processed)
 	 */
 	if (rel != NULL)
 		heap_close(rel, (is_from ? NoLock : AccessShareLock));
-
-	return relid;
 }
 
 /*
@@ -1020,7 +1026,7 @@ ProcessCopyOptions(ParseState *pstate,
 	/* Extract options from the statement node tree */
 	foreach(option, options)
 	{
-		DefElem    *defel = (DefElem *) lfirst(option);
+		DefElem    *defel = castNode(DefElem, lfirst(option));
 
 		if (strcmp(defel->defname, "format") == 0)
 		{
@@ -1117,7 +1123,7 @@ ProcessCopyOptions(ParseState *pstate,
 			if (defel->arg && IsA(defel->arg, A_Star))
 				cstate->force_quote_all = true;
 			else if (defel->arg && IsA(defel->arg, List))
-				cstate->force_quote = (List *) defel->arg;
+				cstate->force_quote = castNode(List, defel->arg);
 			else
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -1133,7 +1139,7 @@ ProcessCopyOptions(ParseState *pstate,
 						 errmsg("conflicting or redundant options"),
 						 parser_errposition(pstate, defel->location)));
 			if (defel->arg && IsA(defel->arg, List))
-				cstate->force_notnull = (List *) defel->arg;
+				cstate->force_notnull = castNode(List, defel->arg);
 			else
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -1148,7 +1154,7 @@ ProcessCopyOptions(ParseState *pstate,
 						(errcode(ERRCODE_SYNTAX_ERROR),
 						 errmsg("conflicting or redundant options")));
 			if (defel->arg && IsA(defel->arg, List))
-				cstate->force_null = (List *) defel->arg;
+				cstate->force_null = castNode(List, defel->arg);
 			else
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -1170,7 +1176,7 @@ ProcessCopyOptions(ParseState *pstate,
 						 parser_errposition(pstate, defel->location)));
 			cstate->convert_selectively = true;
 			if (defel->arg == NULL || IsA(defel->arg, List))
-				cstate->convert_select = (List *) defel->arg;
+				cstate->convert_select = castNode(List, defel->arg);
 			else
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -1364,8 +1370,8 @@ static CopyState
 BeginCopy(ParseState *pstate,
 		  bool is_from,
 		  Relation rel,
-		  Node *raw_query,
-		  const Oid queryRelId,
+		  RawStmt *raw_query,
+		  Oid queryRelId,
 		  List *attnamelist,
 		  List *options)
 {
@@ -1409,12 +1415,12 @@ BeginCopy(ParseState *pstate,
 		/* Initialize state for CopyFrom tuple routing. */
 		if (is_from && rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 		{
-			PartitionDispatch  *partition_dispatch_info;
-			ResultRelInfo	   *partitions;
+			PartitionDispatch *partition_dispatch_info;
+			ResultRelInfo *partitions;
 			TupleConversionMap **partition_tupconv_maps;
-			TupleTableSlot	   *partition_tuple_slot;
-			int					num_parted,
-								num_partitions;
+			TupleTableSlot *partition_tuple_slot;
+			int			num_parted,
+						num_partitions;
 
 			ExecSetupPartitionTupleRouting(rel,
 										   &partition_dispatch_info,
@@ -1456,7 +1462,7 @@ BeginCopy(ParseState *pstate,
 		 * function and is executed repeatedly.  (See also the same hack in
 		 * DECLARE CURSOR and PREPARE.)  XXX FIXME someday.
 		 */
-		rewritten = pg_analyze_and_rewrite((Node *) copyObject(raw_query),
+		rewritten = pg_analyze_and_rewrite((RawStmt *) copyObject(raw_query),
 										   pstate->p_sourcetext, NULL, 0);
 
 		/* check that we got back something we can work with */
@@ -1473,7 +1479,7 @@ BeginCopy(ParseState *pstate,
 			/* examine queries to determine which error message to issue */
 			foreach(lc, rewritten)
 			{
-				Query	   *q = (Query *) lfirst(lc);
+				Query	   *q = castNode(Query, lfirst(lc));
 
 				if (q->querySource == QSRC_QUAL_INSTEAD_RULE)
 					ereport(ERROR,
@@ -1490,7 +1496,7 @@ BeginCopy(ParseState *pstate,
 					 errmsg("multi-statement DO INSTEAD rules are not supported for COPY")));
 		}
 
-		query = (Query *) linitial(rewritten);
+		query = castNode(Query, linitial(rewritten));
 
 		/* The grammar allows SELECT INTO, but we don't support that */
 		if (query->utilityStmt != NULL &&
@@ -1747,8 +1753,8 @@ EndCopy(CopyState cstate)
 static CopyState
 BeginCopyTo(ParseState *pstate,
 			Relation rel,
-			Node *query,
-			const Oid queryRelId,
+			RawStmt *query,
+			Oid queryRelId,
 			const char *filename,
 			bool is_program,
 			List *attnamelist,
@@ -2300,6 +2306,7 @@ CopyFrom(CopyState cstate)
 	uint64		processed = 0;
 	bool		useHeapMultiInsert;
 	int			nBufferedTuples = 0;
+	int			prev_leaf_part_index = -1;
 
 #define MAX_BUFFERED_TUPLES 1000
 	HeapTuple  *bufferedTuples = NULL;	/* initialize to silence warning */
@@ -2425,7 +2432,6 @@ CopyFrom(CopyState cstate)
 	InitResultRelInfo(resultRelInfo,
 					  cstate->rel,
 					  1,		/* dummy rangetable index */
-					  true,		/* do load partition check expression */
 					  NULL,
 					  0);
 
@@ -2492,7 +2498,7 @@ CopyFrom(CopyState cstate)
 	for (;;)
 	{
 		TupleTableSlot *slot,
-					   *oldslot;
+				   *oldslot;
 		bool		skip_tuple;
 		Oid			loaded_oid = InvalidOid;
 
@@ -2554,6 +2560,17 @@ CopyFrom(CopyState cstate)
 												estate);
 			Assert(leaf_part_index >= 0 &&
 				   leaf_part_index < cstate->num_partitions);
+
+			/*
+			 * If this tuple is mapped to a partition that is not same as the
+			 * previous one, we'd better make the bulk insert mechanism gets a
+			 * new buffer.
+			 */
+			if (prev_leaf_part_index != leaf_part_index)
+			{
+				ReleaseBulkInsertStatePin(bistate);
+				prev_leaf_part_index = leaf_part_index;
+			}
 
 			/*
 			 * Save the old ResultRelInfo and switch to the one corresponding
@@ -3388,7 +3405,7 @@ NextCopyFrom(CopyState cstate, ExprContext *econtext,
 		Assert(CurrentMemoryContext == econtext->ecxt_per_tuple_memory);
 
 		values[defmap[i]] = ExecEvalExpr(defexprs[i], econtext,
-										 &nulls[defmap[i]], NULL);
+										 &nulls[defmap[i]]);
 	}
 
 	return true;

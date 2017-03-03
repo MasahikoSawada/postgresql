@@ -19,16 +19,9 @@
 
 #include "postgres_fe.h"
 
-#include "catalog/pg_control.h"
-#include "common/controldata_utils.h"
-#include "libpq-fe.h"
-#include "pqexpbuffer.h"
-
 #include <fcntl.h>
-#include <locale.h>
 #include <signal.h>
 #include <time.h>
-#include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -38,8 +31,12 @@
 #include <sys/resource.h>
 #endif
 
+#include "catalog/pg_control.h"
+#include "common/controldata_utils.h"
 #include "getopt_long.h"
+#include "libpq-fe.h"
 #include "miscadmin.h"
+#include "pqexpbuffer.h"
 
 /* PID can be negative for standalone backend */
 typedef long pgpid_t;
@@ -71,8 +68,7 @@ typedef enum
 
 #define DEFAULT_WAIT	60
 
-static bool do_wait = false;
-static bool wait_set = false;
+static bool do_wait = true;
 static int	wait_seconds = DEFAULT_WAIT;
 static bool wait_seconds_arg = false;
 static bool silent_mode = false;
@@ -1959,7 +1955,7 @@ do_help(void)
 	printf(_("  -s, --silent           only print errors, no informational messages\n"));
 	printf(_("  -t, --timeout=SECS     seconds to wait when using -w option\n"));
 	printf(_("  -V, --version          output version information, then exit\n"));
-	printf(_("  -w, --wait             wait until operation completes\n"));
+	printf(_("  -w, --wait             wait until operation completes (default)\n"));
 	printf(_("  -W, --no-wait          do not wait until operation completes\n"));
 	printf(_("  -?, --help             show this help, then exit\n"));
 	printf(_("(The default is to wait for shutdown, but not for start or restart.)\n\n"));
@@ -2323,11 +2319,9 @@ main(int argc, char **argv)
 					break;
 				case 'w':
 					do_wait = true;
-					wait_set = true;
 					break;
 				case 'W':
 					do_wait = false;
-					wait_set = true;
 					break;
 				case 'c':
 					allow_core_files = true;
@@ -2421,14 +2415,6 @@ main(int argc, char **argv)
 					 progname);
 		do_advice();
 		exit(1);
-	}
-
-	if (!wait_set)
-	{
-		if (ctl_command == STOP_COMMAND)
-			do_wait = true;
-		else
-			do_wait = false;
 	}
 
 	if (ctl_command == RELOAD_COMMAND)

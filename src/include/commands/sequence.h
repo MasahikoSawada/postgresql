@@ -52,14 +52,6 @@ typedef struct xl_seq_rec
 } xl_seq_rec;
 
 extern Datum nextval(PG_FUNCTION_ARGS);
-extern Datum nextval_oid(PG_FUNCTION_ARGS);
-extern Datum currval_oid(PG_FUNCTION_ARGS);
-extern Datum setval_oid(PG_FUNCTION_ARGS);
-extern Datum setval3_oid(PG_FUNCTION_ARGS);
-extern Datum lastval(PG_FUNCTION_ARGS);
-
-extern Datum pg_sequence_parameters(PG_FUNCTION_ARGS);
-extern Datum pg_sequence_last_value(PG_FUNCTION_ARGS);
 
 extern ObjectAddress DefineSequence(ParseState *pstate, CreateSeqStmt *stmt);
 extern ObjectAddress AlterSequence(ParseState *pstate, AlterSeqStmt *stmt);
@@ -70,5 +62,6 @@ extern void ResetSequenceCaches(void);
 extern void seq_redo(XLogReaderState *rptr);
 extern void seq_desc(StringInfo buf, XLogReaderState *rptr);
 extern const char *seq_identify(uint8 info);
+extern void seq_mask(char *pagedata, BlockNumber blkno);
 
 #endif   /* SEQUENCE_H */

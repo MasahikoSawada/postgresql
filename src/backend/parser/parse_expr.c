@@ -577,27 +577,6 @@ transformColumnRef(ParseState *pstate, ColumnRef *cref)
 					/*
 					 * Not known as a column of any range-table entry.
 					 *
-					 * Consider the possibility that it's VALUE in a domain
-					 * check expression.  (We handle VALUE as a name, not a
-					 * keyword, to avoid breaking a lot of applications that
-					 * have used VALUE as a column name in the past.)
-					 */
-					if (pstate->p_value_substitute != NULL &&
-						strcmp(colname, "value") == 0)
-					{
-						node = (Node *) copyObject(pstate->p_value_substitute);
-
-						/*
-						 * Try to propagate location knowledge.  This should
-						 * be extended if p_value_substitute can ever take on
-						 * other node types.
-						 */
-						if (IsA(node, CoerceToDomainValue))
-							((CoerceToDomainValue *) node)->location = cref->location;
-						break;
-					}
-
-					/*
 					 * Try to find the name as a relation.  Note that only
 					 * relations already entered into the rangetable will be
 					 * recognized.
@@ -938,13 +917,11 @@ transformAExprOp(ParseState *pstate, A_Expr *a)
 		/* ROW() op ROW() is handled specially */
 		lexpr = transformExprRecurse(pstate, lexpr);
 		rexpr = transformExprRecurse(pstate, rexpr);
-		Assert(IsA(lexpr, RowExpr));
-		Assert(IsA(rexpr, RowExpr));
 
 		result = make_row_comparison_op(pstate,
 										a->name,
-										((RowExpr *) lexpr)->args,
-										((RowExpr *) rexpr)->args,
+										castNode(RowExpr, lexpr)->args,
+										castNode(RowExpr, rexpr)->args,
 										a->location);
 	}
 	else
@@ -1317,8 +1294,7 @@ transformAExprBetween(ParseState *pstate, A_Expr *a)
 
 	/* Deconstruct A_Expr into three subexprs */
 	aexpr = a->lexpr;
-	Assert(IsA(a->rexpr, List));
-	args = (List *) a->rexpr;
+	args = castNode(List, a->rexpr);
 	Assert(list_length(args) == 2);
 	bexpr = (Node *) linitial(args);
 	cexpr = (Node *) lsecond(args);
@@ -1523,8 +1499,7 @@ transformMultiAssignRef(ParseState *pstate, MultiAssignRef *maref)
 			sublink = (SubLink *) transformExprRecurse(pstate,
 													   (Node *) sublink);
 
-			qtree = (Query *) sublink->subselect;
-			Assert(IsA(qtree, Query));
+			qtree = castNode(Query, sublink->subselect);
 
 			/* Check subquery returns required number of columns */
 			if (count_nonjunk_tlist_entries(qtree->targetList) != maref->ncolumns)
@@ -1599,8 +1574,7 @@ transformMultiAssignRef(ParseState *pstate, MultiAssignRef *maref)
 
 		sublink = (SubLink *) tle->expr;
 		Assert(sublink->subLinkType == MULTIEXPR_SUBLINK);
-		qtree = (Query *) sublink->subselect;
-		Assert(IsA(qtree, Query));
+		qtree = castNode(Query, sublink->subselect);
 
 		/* Build a Param representing the current subquery output column */
 		tle = (TargetEntry *) list_nth(qtree->targetList, maref->colno - 1);
@@ -1695,11 +1669,9 @@ transformCaseExpr(ParseState *pstate, CaseExpr *c)
 	resultexprs = NIL;
 	foreach(l, c->args)
 	{
-		CaseWhen   *w = (CaseWhen *) lfirst(l);
+		CaseWhen   *w = castNode(CaseWhen, lfirst(l));
 		CaseWhen   *neww = makeNode(CaseWhen);
 		Node	   *warg;
-
-		Assert(IsA(w, CaseWhen));
 
 		warg = (Node *) w->expr;
 		if (placeholder)
@@ -1818,6 +1790,7 @@ transformSubLink(ParseState *pstate, SubLink *sublink)
 		case EXPR_KIND_OFFSET:
 		case EXPR_KIND_RETURNING:
 		case EXPR_KIND_VALUES:
+		case EXPR_KIND_VALUES_SINGLE:
 			/* okay */
 			break;
 		case EXPR_KIND_CHECK_CONSTRAINT:
@@ -1866,15 +1839,14 @@ transformSubLink(ParseState *pstate, SubLink *sublink)
 	/*
 	 * OK, let's transform the sub-SELECT.
 	 */
-	qtree = parse_sub_analyze(sublink->subselect, pstate, NULL, false);
+	qtree = parse_sub_analyze(sublink->subselect, pstate, NULL, false, true);
 
 	/*
-	 * Check that we got something reasonable.  Many of these conditions are
-	 * impossible given restrictions of the grammar, but check 'em anyway.
+	 * Check that we got a SELECT.  Anything else should be impossible given
+	 * restrictions of the grammar, but check anyway.
 	 */
 	if (!IsA(qtree, Query) ||
-		qtree->commandType != CMD_SELECT ||
-		qtree->utilityStmt != NULL)
+		qtree->commandType != CMD_SELECT)
 		elog(ERROR, "unexpected non-SELECT command in SubLink");
 
 	sublink->subselect = (Node *) qtree;
@@ -2362,11 +2334,9 @@ transformXmlExpr(ParseState *pstate, XmlExpr *x)
 
 	foreach(lc, x->named_args)
 	{
-		ResTarget  *r = (ResTarget *) lfirst(lc);
+		ResTarget  *r = castNode(ResTarget, lfirst(lc));
 		Node	   *expr;
 		char	   *argname;
-
-		Assert(IsA(r, ResTarget));
 
 		expr = transformExprRecurse(pstate, r->val);
 
@@ -2823,8 +2793,7 @@ make_row_comparison_op(ParseState *pstate, List *opname,
 		Node	   *rarg = (Node *) lfirst(r);
 		OpExpr	   *cmp;
 
-		cmp = (OpExpr *) make_op(pstate, opname, larg, rarg, location);
-		Assert(IsA(cmp, OpExpr));
+		cmp = castNode(OpExpr, make_op(pstate, opname, larg, rarg, location));
 
 		/*
 		 * We don't use coerce_to_boolean here because we insist on the
@@ -3432,6 +3401,7 @@ ParseExprKindName(ParseExprKind exprKind)
 		case EXPR_KIND_RETURNING:
 			return "RETURNING";
 		case EXPR_KIND_VALUES:
+		case EXPR_KIND_VALUES_SINGLE:
 			return "VALUES";
 		case EXPR_KIND_CHECK_CONSTRAINT:
 		case EXPR_KIND_DOMAIN_CHECK:

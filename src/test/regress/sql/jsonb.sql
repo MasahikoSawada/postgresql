@@ -62,6 +62,12 @@ SELECT '    '::jsonb;			-- ERROR, no value
 -- make sure jsonb is passed through json generators without being escaped
 SELECT array_to_json(ARRAY [jsonb '{"a":1}', jsonb '{"b":[2,3]}']);
 
+-- anyarray column
+
+select to_jsonb(histogram_bounds) histogram_bounds
+from pg_stats
+where attname = 'tmplname' and tablename = 'pg_pltemplate';
+
 -- to_jsonb, timestamps
 
 select to_jsonb(timestamp '2014-05-28 12:22:35.614298');
@@ -776,6 +782,10 @@ select '["a","b","c"]'::jsonb - -1;
 select '["a","b","c"]'::jsonb - -2;
 select '["a","b","c"]'::jsonb - -3;
 select '["a","b","c"]'::jsonb - -4;
+
+select '{"a":1 , "b":2, "c":3}'::jsonb - '{b}'::text[];
+select '{"a":1 , "b":2, "c":3}'::jsonb - '{c,b}'::text[];
+select '{"a":1 , "b":2, "c":3}'::jsonb - '{}'::text[];
 
 select jsonb_set('{"n":null, "a":1, "b":[1,2], "c":{"1":2}, "d":{"1":[2,3]}}'::jsonb, '{n}', '[1,2,3]');
 select jsonb_set('{"n":null, "a":1, "b":[1,2], "c":{"1":2}, "d":{"1":[2,3]}}'::jsonb, '{b,-1}', '[1,2,3]');
