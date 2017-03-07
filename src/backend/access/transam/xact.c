@@ -191,10 +191,6 @@ typedef struct TransactionStateData
 	bool		didLogXid;		/* has xid been included in WAL record? */
 	int			parallelModeLevel;		/* Enter/ExitParallelMode counter */
 	struct TransactionStateData *parent;		/* back link to parent */
-	int			num_foreign_servers;	/* number of foreign servers participating in the transaction,
-										   Only valid for top level transaction */
-	int			can_prepare;			/* can all the foreign server involved in
-										   this transaction participate in 2PC */
 } TransactionStateData;
 
 typedef TransactionStateData *TransactionState;
@@ -1925,9 +1921,6 @@ StartTransaction(void)
 	AtStart_GUC();
 	AtStart_Cache();
 	AfterTriggerBeginXact();
-
-	/* Foreign transaction stuff */
-	s->num_foreign_servers = 0;
 
 	/*
 	 * done with start processing, set current transaction state to "in
