@@ -12,7 +12,6 @@
 #include "access/brin_xlog.h"
 #include "access/clog.h"
 #include "access/commit_ts.h"
-#include "access/fdw_xact.h"
 #include "access/generic_xlog.h"
 #include "access/ginxlog.h"
 #include "access/gistxlog.h"
