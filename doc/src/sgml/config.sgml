@@ -6586,7 +6586,7 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </term>
       <listitem>
        <para>
-        Specifies a fraction of the table pages that needs to be vacuumed
+        Specifies a fraction of the table pages that need to be vacuumed
         prior to vacuum needed to trigger a cleaning up indexes in one table.
         The default is 0.01. This parameter can be set anywhere.
        </para>
