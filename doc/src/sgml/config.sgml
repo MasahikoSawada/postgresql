@@ -3835,16 +3835,37 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
       </listitem>
      </varlistentry>
 
-     <varlistentry id="guc-min-parallel-relation-size" xreflabel="min_parallel_relation_size">
-      <term><varname>min_parallel_relation_size</varname> (<type>integer</type>)
+     <varlistentry id="guc-min-parallel-table-scan-size" xreflabel="min_parallel_table_scan_size">
+      <term><varname>min_parallel_table_scan_size</varname> (<type>integer</type>)
       <indexterm>
-       <primary><varname>min_parallel_relation_size</> configuration parameter</primary>
+       <primary><varname>min_parallel_table_scan_size</> configuration parameter</primary>
       </indexterm>
       </term>
       <listitem>
        <para>
-        Sets the minimum size of relations to be considered for parallel scan.
-        The default is 8 megabytes (<literal>8MB</>).
+        Sets the minimum amount of table data that must be scanned in order
+        for a parallel scan to be considered.  For a parallel sequential scan,
+        the amount of table data scanned is always equal to the size of the
+        table, but when indexes are used the amount of table data
+        scanned will normally be less.  The default is 8
+        megabytes (<literal>8MB</>).
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-min-parallel-index-scan-size" xreflabel="min_parallel_index_scan_size">
+      <term><varname>min_parallel_index_scan_size</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>min_parallel_index_scan_size</> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Sets the minimum amount of index data that must be scanned in order
+        for a parallel scan to be considered.  Note that a parallel index scan
+        typically won't touch the entire index; it is the number of pages
+        which the planner believes will actually be touched by the scan which
+        is relevant.  The default is 512 kilobytes (<literal>512kB</>).
        </para>
       </listitem>
      </varlistentry>
@@ -4259,6 +4280,11 @@ SELECT * FROM parent WHERE key = 2400;
       <primary>where to log</primary>
      </indexterm>
 
+     <indexterm>
+       <primary>current_logfiles</primary>
+       <secondary>and the log_destination configuration parameter</secondary>
+     </indexterm>
+
      <variablelist>
 
      <varlistentry id="guc-log-destination" xreflabel="log_destination">
@@ -4288,6 +4314,27 @@ SELECT * FROM parent WHERE key = 2400;
         See <xref linkend="runtime-config-logging-csvlog"> for details.
         <xref linkend="guc-logging-collector"> must be enabled to generate
         CSV-format log output.
+       </para>
+       <para>
+        When either <systemitem>stderr</systemitem> or
+        <systemitem>csvlog</systemitem> are included, the file
+        <filename>current_logfiles</> is created to record the location
+        of the log file(s) currently in use by the logging collector and the
+        associated logging destination. This provides a convenient way to
+        find the logs currently in use by the instance. Here is an example of
+        this file's content:
+<programlisting>
+stderr pg_log/postgresql.log
+csvlog pg_log/postgresql.csv
+</programlisting>
+
+        <filename>current_logfiles</filename> is recreated when a new log file
+        is created as an effect of rotation, and
+        when <varname>log_destination</> is reloaded.  It is removed when
+        neither <systemitem>stderr</systemitem>
+        nor <systemitem>csvlog</systemitem> are included
+        in <varname>log_destination</>, and when the logging collector is
+        disabled.
        </para>
 
        <note>
@@ -7690,11 +7737,9 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </term>
       <listitem>
        <para>
-        Reports whether <productname>PostgreSQL</> was built with
-        support for 64-bit-integer dates and times.  This can be
-        disabled by configuring with <literal>--disable-integer-datetimes</>
-        when building <productname>PostgreSQL</>.  The default value is
-        <literal>on</literal>.
+        Reports whether <productname>PostgreSQL</> was built with support for
+        64-bit-integer dates and times.  As of <productname>PostgreSQL</> 10,
+        this is always <literal>on</literal>.
        </para>
       </listitem>
      </varlistentry>
