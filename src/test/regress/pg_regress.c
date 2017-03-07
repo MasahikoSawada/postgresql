@@ -2256,9 +2256,9 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 		 * Adjust the default postgresql.conf for regression testing. The user
 		 * can specify a file to be appended; in any case we expand logging
 		 * and set max_prepared_transactions to enable testing of prepared
-		 * xacts. We also set max_fdw_transctions to enable testing of atomic
-		 * foreign transactions. (Note: to reduce the probability of unexpected
-		 * shmmax failures, don't set max_prepared_transactions or
+		 * xacts. We also set max_prepared_foreign_transctions to enable testing
+		 * of atomic foreign transactions. (Note: to reduce the probability of
+		 * unexpected shmmax failures, don't set max_prepared_transactions or
 		 * max_prepared_foreign_transactions any higher than actually needed by the
 		 * corresponding regression tests.).
 		 */
