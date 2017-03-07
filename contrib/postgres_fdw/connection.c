@@ -266,10 +266,11 @@ connect_pg_server(ForeignServer *server, UserMapping *user,
 			if (connection_error_ok)
 				return NULL;
 			else
-				ereport(ERROR,
-						(errcode(ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION),
-						errmsg("could not connect to server \"%s\"", server->servername),
-						 errdetail_internal("%s", connmessage)));
+			ereport(ERROR,
+			   (errcode(ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION),
+				errmsg("could not connect to server \"%s\"",
+					   server->servername),
+				errdetail_internal("%s", pchomp(PQerrorMessage(conn)))));
 		}
 
 		/*
@@ -600,7 +601,7 @@ pgfdw_report_error(int elevel, PGresult *res, PGconn *conn,
 		 * return NULL, not a PGresult at all.
 		 */
 		if (message_primary == NULL)
-			message_primary = PQerrorMessage(conn);
+			message_primary = pchomp(PQerrorMessage(conn));
 
 		ereport(elevel,
 				(errcode(sqlstate),
