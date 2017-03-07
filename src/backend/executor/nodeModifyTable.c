@@ -436,6 +436,9 @@ ExecInsert(ModifyTableState *mtstate,
 		if (resultRelationDesc->rd_att->constr || resultRelInfo->ri_PartitionCheck)
 			ExecConstraints(resultRelInfo, slot, oldslot, estate);
 
+		/* Remember to wrote on local node for foreign transaction */
+		RegisterTransactionLocalNode();
+
 		if (onconflict != ONCONFLICT_NONE && resultRelInfo->ri_NumIndices > 0)
 		{
 			/* Perform a speculative insertion. */
@@ -697,6 +700,9 @@ ExecDelete(ItemPointer tupleid,
 	}
 	else
 	{
+		/* Remember to wrote on local node for foreign transaction */
+		RegisterTransactionLocalNode();
+
 		/*
 		 * delete the tuple
 		 *
@@ -993,6 +999,9 @@ lreplace:;
 		 */
 		if (resultRelationDesc->rd_att->constr || resultRelInfo->ri_PartitionCheck)
 			ExecConstraints(resultRelInfo, slot, slot, estate);
+
+		/* Remember to wrote on local node for foreign transaction */
+		RegisterTransactionLocalNode();
 
 		/*
 		 * replace the heap tuple
