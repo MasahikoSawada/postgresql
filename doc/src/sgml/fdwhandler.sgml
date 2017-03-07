@@ -1784,8 +1784,8 @@ COMMIT;
     distributed transaction manager fails to commit or rollback a prepared
     transaction because of connection failure, the operation can be tried again
     through built-in <function>pg_fdw_xact</>. One may set up a background worker
-    process to retry the operation by installing extension pg_fdw_xact_resolver
-    and including $libdir/pg_fdw_xact_resolver.so in
+    process to retry the operation by installing extension fdw_transaction_resolver
+    and including $libdir/fdw_transaction_resolver.so in
     <varname>shared_preload_libraries</>.
     </para>
 
