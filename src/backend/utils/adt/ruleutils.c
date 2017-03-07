@@ -317,7 +317,8 @@ static char *pg_get_indexdef_worker(Oid indexrelid, int colno,
 					   const Oid *excludeOps,
 					   bool attrsOnly, bool showTblSpc,
 					   int prettyFlags, bool missing_ok);
-static char *pg_get_partkeydef_worker(Oid relid, int prettyFlags);
+static char *pg_get_partkeydef_worker(Oid relid, int prettyFlags,
+						 bool attrsOnly);
 static char *pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 							int prettyFlags, bool missing_ok);
 static text *pg_get_expr_worker(text *expr, Oid relid, const char *relname,
@@ -1431,14 +1432,26 @@ pg_get_partkeydef(PG_FUNCTION_ARGS)
 	Oid			relid = PG_GETARG_OID(0);
 
 	PG_RETURN_TEXT_P(string_to_text(pg_get_partkeydef_worker(relid,
-														PRETTYFLAG_INDENT)));
+														PRETTYFLAG_INDENT,
+															 false)));
+}
+
+/* Internal version that just reports the column definitions */
+char *
+pg_get_partkeydef_columns(Oid relid, bool pretty)
+{
+	int			prettyFlags;
+
+	prettyFlags = pretty ? PRETTYFLAG_PAREN | PRETTYFLAG_INDENT : PRETTYFLAG_INDENT;
+	return pg_get_partkeydef_worker(relid, prettyFlags, true);
 }
 
 /*
  * Internal workhorse to decompile a partition key definition.
  */
 static char *
-pg_get_partkeydef_worker(Oid relid, int prettyFlags)
+pg_get_partkeydef_worker(Oid relid, int prettyFlags,
+						 bool attrsOnly)
 {
 	Form_pg_partitioned_table form;
 	HeapTuple	tuple;
@@ -1508,17 +1521,20 @@ pg_get_partkeydef_worker(Oid relid, int prettyFlags)
 	switch (form->partstrat)
 	{
 		case PARTITION_STRATEGY_LIST:
-			appendStringInfo(&buf, "LIST");
+			if (!attrsOnly)
+				appendStringInfo(&buf, "LIST");
 			break;
 		case PARTITION_STRATEGY_RANGE:
-			appendStringInfo(&buf, "RANGE");
+			if (!attrsOnly)
+				appendStringInfo(&buf, "RANGE");
 			break;
 		default:
 			elog(ERROR, "unexpected partition strategy: %d",
 				 (int) form->partstrat);
 	}
 
-	appendStringInfo(&buf, " (");
+	if (!attrsOnly)
+		appendStringInfo(&buf, " (");
 	sep = "";
 	for (keyno = 0; keyno < form->partnatts; keyno++)
 	{
@@ -1561,14 +1577,17 @@ pg_get_partkeydef_worker(Oid relid, int prettyFlags)
 
 		/* Add collation, if not default for column */
 		partcoll = partcollation->values[keyno];
-		if (OidIsValid(partcoll) && partcoll != keycolcollation)
+		if (!attrsOnly && OidIsValid(partcoll) && partcoll != keycolcollation)
 			appendStringInfo(&buf, " COLLATE %s",
 							 generate_collation_name((partcoll)));
 
 		/* Add the operator class name, if not default */
-		get_opclass_name(partclass->values[keyno], keycoltype, &buf);
+		if (!attrsOnly)
+			get_opclass_name(partclass->values[keyno], keycoltype, &buf);
 	}
-	appendStringInfoChar(&buf, ')');
+
+	if (!attrsOnly)
+		appendStringInfoChar(&buf, ')');
 
 	/* Clean up */
 	ReleaseSysCache(tuple);
@@ -2569,8 +2588,7 @@ print_function_arguments(StringInfo buf, HeapTuple proctup,
 			List	   *argdefaults;
 
 			str = TextDatumGetCString(proargdefaults);
-			argdefaults = (List *) stringToNode(str);
-			Assert(IsA(argdefaults, List));
+			argdefaults = castNode(List, stringToNode(str));
 			pfree(str);
 			nextargdefault = list_head(argdefaults);
 			/* nlackdefaults counts only *input* arguments lacking defaults */
@@ -2762,8 +2780,7 @@ pg_get_function_arg_default(PG_FUNCTION_ARGS)
 	}
 
 	str = TextDatumGetCString(proargdefaults);
-	argdefaults = (List *) stringToNode(str);
-	Assert(IsA(argdefaults, List));
+	argdefaults = castNode(List, stringToNode(str));
 	pfree(str);
 
 	proc = (Form_pg_proc) GETSTRUCT(proctup);
@@ -7654,9 +7671,8 @@ get_rule_expr(Node *node, deparse_context *context,
 				appendStringInfoString(buf, "(alternatives: ");
 				foreach(lc, asplan->subplans)
 				{
-					SubPlan    *splan = (SubPlan *) lfirst(lc);
+					SubPlan    *splan = castNode(SubPlan, lfirst(lc));
 
-					Assert(IsA(splan, SubPlan));
 					if (splan->useHashTable)
 						appendStringInfo(buf, "hashed %s", splan->plan_name);
 					else
@@ -8210,8 +8226,7 @@ get_rule_expr(Node *node, deparse_context *context,
 							get_rule_expr((Node *) linitial(xexpr->args),
 										  context, true);
 
-							con = (Const *) lsecond(xexpr->args);
-							Assert(IsA(con, Const));
+							con = castNode(Const, lsecond(xexpr->args));
 							Assert(!con->constisnull);
 							if (DatumGetBool(con->constvalue))
 								appendStringInfoString(buf,
@@ -8234,8 +8249,7 @@ get_rule_expr(Node *node, deparse_context *context,
 							else
 								get_rule_expr((Node *) con, context, false);
 
-							con = (Const *) lthird(xexpr->args);
-							Assert(IsA(con, Const));
+							con = castNode(Const, lthird(xexpr->args));
 							if (con->constisnull)
 								 /* suppress STANDALONE NO VALUE */ ;
 							else
@@ -8743,10 +8757,9 @@ get_agg_expr(Aggref *aggref, deparse_context *context,
 	 */
 	if (DO_AGGSPLIT_COMBINE(aggref->aggsplit))
 	{
-		TargetEntry *tle = linitial(aggref->args);
+		TargetEntry *tle = castNode(TargetEntry, linitial(aggref->args));
 
 		Assert(list_length(aggref->args) == 1);
-		Assert(IsA(tle, TargetEntry));
 		resolve_special_varno((Node *) tle->expr, context, original_aggref,
 							  get_agg_combine_expr);
 		return;
@@ -9205,9 +9218,8 @@ get_sublink_expr(SubLink *sublink, deparse_context *context)
 			sep = "";
 			foreach(l, ((BoolExpr *) sublink->testexpr)->args)
 			{
-				OpExpr	   *opexpr = (OpExpr *) lfirst(l);
+				OpExpr	   *opexpr = castNode(OpExpr, lfirst(l));
 
-				Assert(IsA(opexpr, OpExpr));
 				appendStringInfoString(buf, sep);
 				get_rule_expr(linitial(opexpr->args), context, true);
 				if (!opname)

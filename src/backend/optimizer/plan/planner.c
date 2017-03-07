@@ -3963,9 +3963,8 @@ create_one_window_path(PlannerInfo *root,
 			window_target = copy_pathtarget(window_target);
 			foreach(lc2, wflists->windowFuncs[wc->winref])
 			{
-				WindowFunc *wfunc = (WindowFunc *) lfirst(lc2);
+				WindowFunc *wfunc = castNode(WindowFunc, lfirst(lc2));
 
-				Assert(IsA(wfunc, WindowFunc));
 				add_column_to_pathtarget(window_target, (Expr *) wfunc, 0);
 				window_target->width += get_typavgwidth(wfunc->wintype, -1);
 			}
@@ -5333,7 +5332,7 @@ plan_cluster_use_sort(Oid tableOid, Oid indexOid)
 	indexScanPath = create_index_path(root, indexInfo,
 									  NIL, NIL, NIL, NIL, NIL,
 									  ForwardScanDirection, false,
-									  NULL, 1.0);
+									  NULL, 1.0, false);
 
 	return (seqScanAndSortPath.total_cost < indexScanPath->path.total_cost);
 }
