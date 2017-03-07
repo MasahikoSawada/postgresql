@@ -4331,7 +4331,7 @@ RegisterTransactionLocalNode(void)
 void
 UnregisterTransactionLocalNode(void)
 {
-	/* Quick exits if no need to forget */
+	/* Quick exits if no need to remember */
 	if (max_fdw_xacts == 0)
 		return;
 
