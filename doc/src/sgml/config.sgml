@@ -6586,7 +6586,7 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </term>
       <listitem>
        <para>
-        Specifies a fraction of the table pages containing dead tuple
+        Specifies a fraction of the table pages that needs to be vacuumed
         prior to vacuum needed to trigger a cleaning up indexes in one table.
         The default is 0.0 (skip to clean up indexes if no update on table).
         This parameter can only be set anywhere.

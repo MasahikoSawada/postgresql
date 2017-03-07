@@ -1326,7 +1326,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 
 	elog(DEBUG3, "%s: vac: %d (threshold %0.f)",
 		 RelationGetRelationName(onerel), nblocks, cleanupidx_thresh);
-	if (vacuumed_pages >= cleanupidx_thresh)
+	if (vacrelstats->scanned_pages >= cleanupidx_thresh)
 	{
 		for (i = 0; i < nindexes; i++)
 			lazy_cleanup_index(Irel[i], indstats[i], vacrelstats);
