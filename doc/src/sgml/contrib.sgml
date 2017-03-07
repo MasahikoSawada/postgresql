@@ -115,6 +115,7 @@ CREATE EXTENSION <replaceable>module_name</> FROM unpackaged;
  &dict-int;
  &dict-xsyn;
  &earthdistance;
+ $fdw-transaction-resolver;
  &file-fdw;
  &fuzzystrmatch;
  &hstore;
@@ -127,7 +128,6 @@ CREATE EXTENSION <replaceable>module_name</> FROM unpackaged;
  &passwordcheck;
  &pgbuffercache;
  &pgcrypto;
- &pg-fdw-xact-resolver
  &pgfreespacemap;
  &pgprewarm;
  &pgrowlocks;

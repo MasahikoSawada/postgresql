@@ -1,6 +1,6 @@
 /* -------------------------------------------------------------------------
  *
- * pg_fdw_xact_resolver.c
+ * fdw_transaction_resolver.c
  *
  * Contrib module to launch foreign transaction resolver to resolve unresolved
  * transactions prepared on foreign servers.
@@ -15,7 +15,7 @@
  * Copyright (C) 2017, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
- *		contrib/pg_fdw_xact_resolver/pg_fdw_xact_resolver.c
+ *		contrib/fdw_transaction_resolver/fdw_transaction_resolver.c
  *
  * -------------------------------------------------------------------------
  */
@@ -136,8 +136,8 @@ _PG_init(void)
 	if (!process_shared_preload_libraries_in_progress)
 		return;
 
-	DefineCustomIntVariable("pg_fdw_xact_resolver.naptime",
-							"Time to sleep between pg_fdw_xact_resolver runs.",
+	DefineCustomIntVariable("fdw_transaction_resolver.naptime",
+							"Time to sleep between fdw_transaction_resolver runs.",
 							NULL,
 							&fx_resolver_naptime,
 							60,
@@ -177,7 +177,7 @@ FDWXactResolverMain(Datum main_arg)
 	TimestampTz next_launch_time = launched_time + (fx_resolver_naptime * 1000L);
 
 	ereport(LOG,
-			(errmsg("pg_fdw_xact_resolver launcher started")));
+			(errmsg("fdw_transaction_resolver launcher started")));
 
 	/* Properly accept or ignore signals the postmaster might send us */
 	pqsignal(SIGHUP, FDWXactResolver_SIGHUP);		/* set flag to read config
