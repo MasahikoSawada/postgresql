@@ -1193,9 +1193,10 @@ include_dir 'conf.d'
         password is to be encrypted. The default value is <literal>md5</>, which
         stores the password as an MD5 hash. Setting this to <literal>plain</> stores
         it in plaintext. <literal>on</> and <literal>off</> are also accepted, as
-        aliases for <literal>md5</> and <literal>plain</>, respectively.
-       </para>
-
+        aliases for <literal>md5</> and <literal>plain</>, respectively.  Setting
+        this parameter to <literal>scram</> will encrypt the password with
+        SCRAM-SHA-256.
+       </para>       
       </listitem>
      </varlistentry>
 
@@ -3492,6 +3493,20 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
        <para>
         Enables or disables the query planner's use of bitmap-scan plan
         types. The default is <literal>on</>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-enable-gathermerge" xreflabel="enable_gathermerge">
+      <term><varname>enable_gathermerge</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>enable_gathermerge</> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Enables or disables the query planner's use of gather
+        merge plan types. The default is <literal>on</>.
        </para>
       </listitem>
      </varlistentry>

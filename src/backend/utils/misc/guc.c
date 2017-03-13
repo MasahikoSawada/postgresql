@@ -409,6 +409,7 @@ static const struct config_enum_entry force_parallel_mode_options[] = {
 static const struct config_enum_entry password_encryption_options[] = {
 	{"plain", PASSWORD_TYPE_PLAINTEXT, false},
 	{"md5", PASSWORD_TYPE_MD5, false},
+	{"scram", PASSWORD_TYPE_SCRAM, false},
 	{"off", PASSWORD_TYPE_PLAINTEXT, false},
 	{"on", PASSWORD_TYPE_MD5, false},
 	{"true", PASSWORD_TYPE_MD5, true},
@@ -898,6 +899,15 @@ static struct config_bool ConfigureNamesBool[] =
 			NULL
 		},
 		&enable_hashjoin,
+		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"enable_gathermerge", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables the planner's use of gather merge plans."),
+			NULL
+		},
+		&enable_gathermerge,
 		true,
 		NULL, NULL, NULL
 	},
