@@ -4319,7 +4319,7 @@ void
 RegisterTransactionLocalNode(void)
 {
 	/* Quick exits if no need to remember */
-	if (max_fdw_xacts == 0)
+	if (max_prepared_foreign_xacts == 0)
 		return;
 
 	XactWriteLocalNode = true;
@@ -4332,7 +4332,7 @@ void
 UnregisterTransactionLocalNode(void)
 {
 	/* Quick exits if no need to remember */
-	if (max_fdw_xacts == 0)
+	if (max_prepared_foreign_xacts == 0)
 		return;
 
 	XactWriteLocalNode = false;

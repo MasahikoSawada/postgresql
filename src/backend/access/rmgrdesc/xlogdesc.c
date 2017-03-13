@@ -120,7 +120,7 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
 						 wal_level_str,
 						 xlrec.wal_log_hints ? "on" : "off",
 						 xlrec.track_commit_timestamp ? "on" : "off",
-						 xlrec.max_fdw_xacts);
+						 xlrec.max_prepared_foreign_xacts);
 	}
 	else if (info == XLOG_FPW_CHANGE)
 	{
