@@ -21,11 +21,9 @@
 #define LIBPQ_INT_H
 
 /* We assume libpq-fe.h has already been included. */
-#include "postgres_fe.h"
 #include "libpq-events.h"
 
 #include <time.h>
-#include <sys/types.h>
 #ifndef WIN32
 #include <sys/time.h>
 #endif
@@ -309,7 +307,7 @@ typedef struct pg_conn_host
 	char	   *host;			/* host name or address, or socket path */
 	pg_conn_host_type type;		/* type of host */
 	char	   *port;			/* port number for this host; if not NULL,
-								 * overrrides the PGConn's pgport */
+								 * overrides the PGConn's pgport */
 	char	   *password;		/* password for this host, read from the
 								 * password file.  only set if the PGconn's
 								 * pgpass field is NULL. */
@@ -454,7 +452,12 @@ struct pg_conn
 	PGresult   *result;			/* result being constructed */
 	PGresult   *next_result;	/* next result (used in single-row mode) */
 
-	/* Assorted state for SSL, GSS, etc */
+	/* Buffer to hold incoming authentication request data */
+	char	   *auth_req_inbuf;
+	int			auth_req_inlen;
+
+	/* Assorted state for SASL, SSL, GSS, etc */
+	void	   *sasl_state;
 
 #ifdef USE_SSL
 	bool		allow_ssl_try;	/* Allowed to try SSL negotiation */
@@ -666,7 +669,7 @@ extern void pq_reset_sigpipe(sigset_t *osigset, bool sigpipe_pending,
 #endif
 
 /*
- * The SSL implementatation provides these functions (fe-secure-openssl.c)
+ * The SSL implementation provides these functions (fe-secure-openssl.c)
  */
 extern void pgtls_init_library(bool do_ssl, int do_crypto);
 extern int	pgtls_init(PGconn *conn);

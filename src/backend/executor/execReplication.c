@@ -176,7 +176,7 @@ retry:
 
 		res = heap_lock_tuple(rel, &locktup, GetCurrentCommandId(false),
 							  lockmode,
-							  false /* wait */,
+							  LockWaitBlock,
 							  false /* don't follow updates */,
 							  &buf, &hufd);
 		/* the tuple slot already has the buffer pinned */
@@ -323,7 +323,7 @@ retry:
 
 		res = heap_lock_tuple(rel, &locktup, GetCurrentCommandId(false),
 							  lockmode,
-							  false /* wait */,
+							  LockWaitBlock,
 							  false /* don't follow updates */,
 							  &buf, &hufd);
 		/* the tuple slot already has the buffer pinned */
@@ -391,7 +391,7 @@ ExecSimpleRelationInsert(EState *estate, TupleTableSlot *slot)
 		if (rel->rd_att->constr)
 			ExecConstraints(resultRelInfo, slot, slot, estate);
 
-		/* Store the slot into tuple that we can insett. */
+		/* Store the slot into tuple that we can inspect. */
 		tuple = ExecMaterializeSlot(slot);
 
 		/* OK, store the tuple and create index entries for it */

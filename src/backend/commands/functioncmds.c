@@ -1040,7 +1040,7 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 	}
 	else
 	{
-		/* store SQL NULL instead of emtpy array */
+		/* store SQL NULL instead of empty array */
 		trftypes = NULL;
 	}
 
@@ -1131,7 +1131,7 @@ RemoveFunctionById(Oid funcOid)
 
 	isagg = ((Form_pg_proc) GETSTRUCT(tup))->proisagg;
 
-	simple_heap_delete(relation, &tup->t_self);
+	CatalogTupleDelete(relation, &tup->t_self);
 
 	ReleaseSysCache(tup);
 
@@ -1148,7 +1148,7 @@ RemoveFunctionById(Oid funcOid)
 		if (!HeapTupleIsValid(tup))		/* should not happen */
 			elog(ERROR, "cache lookup failed for pg_aggregate tuple for function %u", funcOid);
 
-		simple_heap_delete(relation, &tup->t_self);
+		CatalogTupleDelete(relation, &tup->t_self);
 
 		ReleaseSysCache(tup);
 
@@ -1181,9 +1181,7 @@ AlterFunction(ParseState *pstate, AlterFunctionStmt *stmt)
 
 	rel = heap_open(ProcedureRelationId, RowExclusiveLock);
 
-	funcOid = LookupFuncNameTypeNames(stmt->func->funcname,
-									  stmt->func->funcargs,
-									  false);
+	funcOid = LookupFuncWithArgs(stmt->func, false);
 
 	tup = SearchSysCacheCopy1(PROCOID, ObjectIdGetDatum(funcOid));
 	if (!HeapTupleIsValid(tup)) /* should not happen */
@@ -1194,13 +1192,13 @@ AlterFunction(ParseState *pstate, AlterFunctionStmt *stmt)
 	/* Permission check: must own function */
 	if (!pg_proc_ownercheck(funcOid, GetUserId()))
 		aclcheck_error(ACLCHECK_NOT_OWNER, ACL_KIND_PROC,
-					   NameListToString(stmt->func->funcname));
+					   NameListToString(stmt->func->objname));
 
 	if (procForm->proisagg)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("\"%s\" is an aggregate function",
-						NameListToString(stmt->func->funcname))));
+						NameListToString(stmt->func->objname))));
 
 	/* Examine requested actions. */
 	foreach(l, stmt->actions)
@@ -1292,8 +1290,7 @@ AlterFunction(ParseState *pstate, AlterFunctionStmt *stmt)
 		procForm->proparallel = interpret_func_parallel(parallel_item);
 
 	/* Do the update */
-	simple_heap_update(rel, &tup->t_self, tup);
-	CatalogUpdateIndexes(rel, tup);
+	CatalogTupleUpdate(rel, &tup->t_self, tup);
 
 	InvokeObjectPostAlterHook(ProcedureRelationId, funcOid, 0);
 
@@ -1333,9 +1330,7 @@ SetFunctionReturnType(Oid funcOid, Oid newRetType)
 	procForm->prorettype = newRetType;
 
 	/* update the catalog and its indexes */
-	simple_heap_update(pg_proc_rel, &tup->t_self, tup);
-
-	CatalogUpdateIndexes(pg_proc_rel, tup);
+	CatalogTupleUpdate(pg_proc_rel, &tup->t_self, tup);
 
 	heap_close(pg_proc_rel, RowExclusiveLock);
 }
@@ -1368,9 +1363,7 @@ SetFunctionArgType(Oid funcOid, int argIndex, Oid newArgType)
 	procForm->proargtypes.values[argIndex] = newArgType;
 
 	/* update the catalog and its indexes */
-	simple_heap_update(pg_proc_rel, &tup->t_self, tup);
-
-	CatalogUpdateIndexes(pg_proc_rel, tup);
+	CatalogTupleUpdate(pg_proc_rel, &tup->t_self, tup);
 
 	heap_close(pg_proc_rel, RowExclusiveLock);
 }
@@ -1446,7 +1439,7 @@ CreateCast(CreateCastStmt *stmt)
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("cast will be ignored because the target data type is a domain")));
 
-	/* Detemine the cast method */
+	/* Determine the cast method */
 	if (stmt->func != NULL)
 		castmethod = COERCION_METHOD_FUNCTION;
 	else if (stmt->inout)
@@ -1458,9 +1451,7 @@ CreateCast(CreateCastStmt *stmt)
 	{
 		Form_pg_proc procstruct;
 
-		funcid = LookupFuncNameTypeNames(stmt->func->funcname,
-										 stmt->func->funcargs,
-										 false);
+		funcid = LookupFuncWithArgs(stmt->func, false);
 
 		tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
 		if (!HeapTupleIsValid(tuple))
@@ -1656,9 +1647,7 @@ CreateCast(CreateCastStmt *stmt)
 
 	tuple = heap_form_tuple(RelationGetDescr(relation), values, nulls);
 
-	castid = simple_heap_insert(relation, tuple);
-
-	CatalogUpdateIndexes(relation, tuple);
+	castid = CatalogTupleInsert(relation, tuple);
 
 	/* make dependency entries */
 	myself.classId = CastRelationId;
@@ -1742,7 +1731,7 @@ DropCastById(Oid castOid)
 	tuple = systable_getnext(scan);
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "could not find tuple for cast %u", castOid);
-	simple_heap_delete(relation, &tuple->t_self);
+	CatalogTupleDelete(relation, &tuple->t_self);
 
 	systable_endscan(scan);
 	heap_close(relation, RowExclusiveLock);
@@ -1843,14 +1832,14 @@ CreateTransform(CreateTransformStmt *stmt)
 	 */
 	if (stmt->fromsql)
 	{
-		fromsqlfuncid = LookupFuncNameTypeNames(stmt->fromsql->funcname, stmt->fromsql->funcargs, false);
+		fromsqlfuncid = LookupFuncWithArgs(stmt->fromsql, false);
 
 		if (!pg_proc_ownercheck(fromsqlfuncid, GetUserId()))
-			aclcheck_error(ACLCHECK_NOT_OWNER, ACL_KIND_PROC, NameListToString(stmt->fromsql->funcname));
+			aclcheck_error(ACLCHECK_NOT_OWNER, ACL_KIND_PROC, NameListToString(stmt->fromsql->objname));
 
 		aclresult = pg_proc_aclcheck(fromsqlfuncid, GetUserId(), ACL_EXECUTE);
 		if (aclresult != ACLCHECK_OK)
-			aclcheck_error(aclresult, ACL_KIND_PROC, NameListToString(stmt->fromsql->funcname));
+			aclcheck_error(aclresult, ACL_KIND_PROC, NameListToString(stmt->fromsql->objname));
 
 		tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(fromsqlfuncid));
 		if (!HeapTupleIsValid(tuple))
@@ -1869,14 +1858,14 @@ CreateTransform(CreateTransformStmt *stmt)
 
 	if (stmt->tosql)
 	{
-		tosqlfuncid = LookupFuncNameTypeNames(stmt->tosql->funcname, stmt->tosql->funcargs, false);
+		tosqlfuncid = LookupFuncWithArgs(stmt->tosql, false);
 
 		if (!pg_proc_ownercheck(tosqlfuncid, GetUserId()))
-			aclcheck_error(ACLCHECK_NOT_OWNER, ACL_KIND_PROC, NameListToString(stmt->tosql->funcname));
+			aclcheck_error(ACLCHECK_NOT_OWNER, ACL_KIND_PROC, NameListToString(stmt->tosql->objname));
 
 		aclresult = pg_proc_aclcheck(tosqlfuncid, GetUserId(), ACL_EXECUTE);
 		if (aclresult != ACLCHECK_OK)
-			aclcheck_error(aclresult, ACL_KIND_PROC, NameListToString(stmt->tosql->funcname));
+			aclcheck_error(aclresult, ACL_KIND_PROC, NameListToString(stmt->tosql->objname));
 
 		tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(tosqlfuncid));
 		if (!HeapTupleIsValid(tuple))
@@ -1921,7 +1910,7 @@ CreateTransform(CreateTransformStmt *stmt)
 		replaces[Anum_pg_transform_trftosql - 1] = true;
 
 		newtuple = heap_modify_tuple(tuple, RelationGetDescr(relation), values, nulls, replaces);
-		simple_heap_update(relation, &newtuple->t_self, newtuple);
+		CatalogTupleUpdate(relation, &newtuple->t_self, newtuple);
 
 		transformid = HeapTupleGetOid(tuple);
 		ReleaseSysCache(tuple);
@@ -1930,11 +1919,9 @@ CreateTransform(CreateTransformStmt *stmt)
 	else
 	{
 		newtuple = heap_form_tuple(RelationGetDescr(relation), values, nulls);
-		transformid = simple_heap_insert(relation, newtuple);
+		transformid = CatalogTupleInsert(relation, newtuple);
 		is_replace = false;
 	}
-
-	CatalogUpdateIndexes(relation, newtuple);
 
 	if (is_replace)
 		deleteDependencyRecordsFor(TransformRelationId, transformid, true);
@@ -2030,7 +2017,7 @@ DropTransformById(Oid transformOid)
 	tuple = systable_getnext(scan);
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "could not find tuple for transform %u", transformOid);
-	simple_heap_delete(relation, &tuple->t_self);
+	CatalogTupleDelete(relation, &tuple->t_self);
 
 	systable_endscan(scan);
 	heap_close(relation, RowExclusiveLock);

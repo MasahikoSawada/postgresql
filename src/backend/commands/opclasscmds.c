@@ -278,9 +278,7 @@ CreateOpFamily(char *amname, char *opfname, Oid namespaceoid, Oid amoid)
 
 	tup = heap_form_tuple(rel->rd_att, values, nulls);
 
-	opfamilyoid = simple_heap_insert(rel, tup);
-
-	CatalogUpdateIndexes(rel, tup);
+	opfamilyoid = CatalogTupleInsert(rel, tup);
 
 	heap_freetuple(tup);
 
@@ -477,19 +475,12 @@ DefineOpClass(CreateOpClassStmt *stmt)
 							 errmsg("invalid operator number %d,"
 									" must be between 1 and %d",
 									item->number, maxOpNumber)));
-				if (item->args != NIL)
-				{
-					TypeName   *typeName1 = (TypeName *) linitial(item->args);
-					TypeName   *typeName2 = (TypeName *) lsecond(item->args);
-
-					operOid = LookupOperNameTypeNames(NULL, item->name,
-													  typeName1, typeName2,
-													  false, -1);
-				}
+				if (item->name->objargs != NIL)
+					operOid = LookupOperWithArgs(item->name, false);
 				else
 				{
 					/* Default to binary op on input datatype */
-					operOid = LookupOperName(NULL, item->name,
+					operOid = LookupOperName(NULL, item->name->objname,
 											 typeoid, typeoid,
 											 false, -1);
 				}
@@ -528,8 +519,7 @@ DefineOpClass(CreateOpClassStmt *stmt)
 							 errmsg("invalid procedure number %d,"
 									" must be between 1 and %d",
 									item->number, maxProcNumber)));
-				funcOid = LookupFuncNameTypeNames(item->name, item->args,
-												  false);
+				funcOid = LookupFuncWithArgs(item->name, false);
 #ifdef NOT_USED
 				/* XXX this is unnecessary given the superuser check above */
 				/* Caller must own function */
@@ -654,9 +644,7 @@ DefineOpClass(CreateOpClassStmt *stmt)
 
 	tup = heap_form_tuple(rel->rd_att, values, nulls);
 
-	opclassoid = simple_heap_insert(rel, tup);
-
-	CatalogUpdateIndexes(rel, tup);
+	opclassoid = CatalogTupleInsert(rel, tup);
 
 	heap_freetuple(tup);
 
@@ -861,15 +849,8 @@ AlterOpFamilyAdd(AlterOpFamilyStmt *stmt, Oid amoid, Oid opfamilyoid,
 							 errmsg("invalid operator number %d,"
 									" must be between 1 and %d",
 									item->number, maxOpNumber)));
-				if (item->args != NIL)
-				{
-					TypeName   *typeName1 = (TypeName *) linitial(item->args);
-					TypeName   *typeName2 = (TypeName *) lsecond(item->args);
-
-					operOid = LookupOperNameTypeNames(NULL, item->name,
-													  typeName1, typeName2,
-													  false, -1);
-				}
+				if (item->name->objargs != NIL)
+					operOid = LookupOperWithArgs(item->name, false);
 				else
 				{
 					ereport(ERROR,
@@ -912,8 +893,7 @@ AlterOpFamilyAdd(AlterOpFamilyStmt *stmt, Oid amoid, Oid opfamilyoid,
 							 errmsg("invalid procedure number %d,"
 									" must be between 1 and %d",
 									item->number, maxProcNumber)));
-				funcOid = LookupFuncNameTypeNames(item->name, item->args,
-												  false);
+				funcOid = LookupFuncWithArgs(item->name, false);
 #ifdef NOT_USED
 				/* XXX this is unnecessary given the superuser check above */
 				/* Caller must own function */
@@ -993,7 +973,7 @@ AlterOpFamilyDrop(AlterOpFamilyStmt *stmt, Oid amoid, Oid opfamilyoid,
 							 errmsg("invalid operator number %d,"
 									" must be between 1 and %d",
 									item->number, maxOpNumber)));
-				processTypesSpec(item->args, &lefttype, &righttype);
+				processTypesSpec(item->class_args, &lefttype, &righttype);
 				/* Save the info */
 				member = (OpFamilyMember *) palloc0(sizeof(OpFamilyMember));
 				member->number = item->number;
@@ -1008,7 +988,7 @@ AlterOpFamilyDrop(AlterOpFamilyStmt *stmt, Oid amoid, Oid opfamilyoid,
 							 errmsg("invalid procedure number %d,"
 									" must be between 1 and %d",
 									item->number, maxProcNumber)));
-				processTypesSpec(item->args, &lefttype, &righttype);
+				processTypesSpec(item->class_args, &lefttype, &righttype);
 				/* Save the info */
 				member = (OpFamilyMember *) palloc0(sizeof(OpFamilyMember));
 				member->number = item->number;
@@ -1327,9 +1307,7 @@ storeOperators(List *opfamilyname, Oid amoid,
 
 		tup = heap_form_tuple(rel->rd_att, values, nulls);
 
-		entryoid = simple_heap_insert(rel, tup);
-
-		CatalogUpdateIndexes(rel, tup);
+		entryoid = CatalogTupleInsert(rel, tup);
 
 		heap_freetuple(tup);
 
@@ -1438,9 +1416,7 @@ storeProcedures(List *opfamilyname, Oid amoid,
 
 		tup = heap_form_tuple(rel->rd_att, values, nulls);
 
-		entryoid = simple_heap_insert(rel, tup);
-
-		CatalogUpdateIndexes(rel, tup);
+		entryoid = CatalogTupleInsert(rel, tup);
 
 		heap_freetuple(tup);
 
@@ -1579,7 +1555,7 @@ RemoveOpFamilyById(Oid opfamilyOid)
 	if (!HeapTupleIsValid(tup)) /* should not happen */
 		elog(ERROR, "cache lookup failed for opfamily %u", opfamilyOid);
 
-	simple_heap_delete(rel, &tup->t_self);
+	CatalogTupleDelete(rel, &tup->t_self);
 
 	ReleaseSysCache(tup);
 
@@ -1598,7 +1574,7 @@ RemoveOpClassById(Oid opclassOid)
 	if (!HeapTupleIsValid(tup)) /* should not happen */
 		elog(ERROR, "cache lookup failed for opclass %u", opclassOid);
 
-	simple_heap_delete(rel, &tup->t_self);
+	CatalogTupleDelete(rel, &tup->t_self);
 
 	ReleaseSysCache(tup);
 
@@ -1628,7 +1604,7 @@ RemoveAmOpEntryById(Oid entryOid)
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "could not find tuple for amop entry %u", entryOid);
 
-	simple_heap_delete(rel, &tup->t_self);
+	CatalogTupleDelete(rel, &tup->t_self);
 
 	systable_endscan(scan);
 	heap_close(rel, RowExclusiveLock);
@@ -1657,7 +1633,7 @@ RemoveAmProcEntryById(Oid entryOid)
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "could not find tuple for amproc entry %u", entryOid);
 
-	simple_heap_delete(rel, &tup->t_self);
+	CatalogTupleDelete(rel, &tup->t_self);
 
 	systable_endscan(scan);
 	heap_close(rel, RowExclusiveLock);

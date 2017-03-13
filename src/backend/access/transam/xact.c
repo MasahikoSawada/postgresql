@@ -191,10 +191,6 @@ typedef struct TransactionStateData
 	bool		didLogXid;		/* has xid been included in WAL record? */
 	int			parallelModeLevel;		/* Enter/ExitParallelMode counter */
 	struct TransactionStateData *parent;		/* back link to parent */
-	int			num_foreign_servers;	/* number of foreign servers participating in the transaction,
-										   Only valid for top level transaction */
-	int			can_prepare;			/* can all the foreign server involved in
-										   this transaction participate in 2PC */
 } TransactionStateData;
 
 typedef TransactionStateData *TransactionState;
@@ -1926,9 +1922,6 @@ StartTransaction(void)
 	AtStart_Cache();
 	AfterTriggerBeginXact();
 
-	/* Foreign transaction stuff */
-	s->num_foreign_servers = 0;
-
 	/*
 	 * done with start processing, set current transaction state to "in
 	 * progress"
@@ -2776,7 +2769,7 @@ CommitTransactionCommand(void)
 			 * These shouldn't happen.  TBLOCK_DEFAULT means the previous
 			 * StartTransactionCommand didn't set the STARTED state
 			 * appropriately, while TBLOCK_PARALLEL_INPROGRESS should be ended
-			 * by EndParallelWorkerTranaction(), not this function.
+			 * by EndParallelWorkerTransaction(), not this function.
 			 */
 		case TBLOCK_DEFAULT:
 		case TBLOCK_PARALLEL_INPROGRESS:
@@ -4326,7 +4319,7 @@ void
 RegisterTransactionLocalNode(void)
 {
 	/* Quick exits if no need to remember */
-	if (max_fdw_xacts == 0)
+	if (max_prepared_foreign_xacts == 0)
 		return;
 
 	XactWriteLocalNode = true;
@@ -4338,8 +4331,8 @@ RegisterTransactionLocalNode(void)
 void
 UnregisterTransactionLocalNode(void)
 {
-	/* Quick exits if no need to forget */
-	if (max_fdw_xacts == 0)
+	/* Quick exits if no need to remember */
+	if (max_prepared_foreign_xacts == 0)
 		return;
 
 	XactWriteLocalNode = false;

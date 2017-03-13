@@ -10,6 +10,23 @@
 -- fail: invalid value for special variable
 \set AUTOCOMMIT foo
 \set FETCH_COUNT foo
+-- check handling of built-in boolean variable
+\echo :ON_ERROR_ROLLBACK
+\set ON_ERROR_ROLLBACK
+\echo :ON_ERROR_ROLLBACK
+\set ON_ERROR_ROLLBACK foo
+\echo :ON_ERROR_ROLLBACK
+\set ON_ERROR_ROLLBACK on
+\echo :ON_ERROR_ROLLBACK
+\unset ON_ERROR_ROLLBACK
+\echo :ON_ERROR_ROLLBACK
+
+-- \g and \gx
+
+SELECT 1 as one, 2 as two \g
+\gx
+SELECT 3 as three, 4 as four \gx
+\g
 
 -- \gset
 

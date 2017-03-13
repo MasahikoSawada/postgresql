@@ -1773,8 +1773,7 @@ InsertExtensionTuple(const char *extName, Oid extOwner,
 
 	tuple = heap_form_tuple(rel->rd_att, values, nulls);
 
-	extensionOid = simple_heap_insert(rel, tuple);
-	CatalogUpdateIndexes(rel, tuple);
+	extensionOid = CatalogTupleInsert(rel, tuple);
 
 	heap_freetuple(tuple);
 	heap_close(rel, RowExclusiveLock);
@@ -1855,7 +1854,7 @@ RemoveExtensionById(Oid extId)
 
 	/* We assume that there can be at most one matching tuple */
 	if (HeapTupleIsValid(tuple))
-		simple_heap_delete(rel, &tuple->t_self);
+		CatalogTupleDelete(rel, &tuple->t_self);
 
 	systable_endscan(scandesc);
 
@@ -2318,7 +2317,7 @@ Datum
 pg_extension_config_dump(PG_FUNCTION_ARGS)
 {
 	Oid			tableoid = PG_GETARG_OID(0);
-	text	   *wherecond = PG_GETARG_TEXT_P(1);
+	text	   *wherecond = PG_GETARG_TEXT_PP(1);
 	char	   *tablename;
 	Relation	extRel;
 	ScanKeyData key[1];
@@ -2485,8 +2484,7 @@ pg_extension_config_dump(PG_FUNCTION_ARGS)
 	extTup = heap_modify_tuple(extTup, RelationGetDescr(extRel),
 							   repl_val, repl_null, repl_repl);
 
-	simple_heap_update(extRel, &extTup->t_self, extTup);
-	CatalogUpdateIndexes(extRel, extTup);
+	CatalogTupleUpdate(extRel, &extTup->t_self, extTup);
 
 	systable_endscan(extScan);
 
@@ -2663,8 +2661,7 @@ extension_config_remove(Oid extensionoid, Oid tableoid)
 	extTup = heap_modify_tuple(extTup, RelationGetDescr(extRel),
 							   repl_val, repl_null, repl_repl);
 
-	simple_heap_update(extRel, &extTup->t_self, extTup);
-	CatalogUpdateIndexes(extRel, extTup);
+	CatalogTupleUpdate(extRel, &extTup->t_self, extTup);
 
 	systable_endscan(extScan);
 
@@ -2675,9 +2672,8 @@ extension_config_remove(Oid extensionoid, Oid tableoid)
  * Execute ALTER EXTENSION SET SCHEMA
  */
 ObjectAddress
-AlterExtensionNamespace(List *names, const char *newschema, Oid *oldschema)
+AlterExtensionNamespace(const char *extensionName, const char *newschema, Oid *oldschema)
 {
-	char	   *extensionName;
 	Oid			extensionOid;
 	Oid			nspOid;
 	Oid			oldNspOid = InvalidOid;
@@ -2692,12 +2688,6 @@ AlterExtensionNamespace(List *names, const char *newschema, Oid *oldschema)
 	HeapTuple	depTup;
 	ObjectAddresses *objsMoved;
 	ObjectAddress extAddr;
-
-	if (list_length(names) != 1)
-		ereport(ERROR,
-				(errcode(ERRCODE_SYNTAX_ERROR),
-				 errmsg("extension name cannot be qualified")));
-	extensionName = strVal(linitial(names));
 
 	extensionOid = get_extension_oid(extensionName, false);
 
@@ -2844,8 +2834,7 @@ AlterExtensionNamespace(List *names, const char *newschema, Oid *oldschema)
 	/* Now adjust pg_extension.extnamespace */
 	extForm->extnamespace = nspOid;
 
-	simple_heap_update(extRel, &extTup->t_self, extTup);
-	CatalogUpdateIndexes(extRel, extTup);
+	CatalogTupleUpdate(extRel, &extTup->t_self, extTup);
 
 	heap_close(extRel, RowExclusiveLock);
 
@@ -3091,8 +3080,7 @@ ApplyExtensionUpdates(Oid extensionOid,
 		extTup = heap_modify_tuple(extTup, RelationGetDescr(extRel),
 								   values, nulls, repl);
 
-		simple_heap_update(extRel, &extTup->t_self, extTup);
-		CatalogUpdateIndexes(extRel, extTup);
+		CatalogTupleUpdate(extRel, &extTup->t_self, extTup);
 
 		systable_endscan(extScan);
 
@@ -3196,7 +3184,7 @@ ExecAlterExtensionContentsStmt(AlterExtensionContentsStmt *stmt,
 	 * does not exist, and will also acquire a lock on the object to guard
 	 * against concurrent DROP and ALTER EXTENSION ADD/DROP operations.
 	 */
-	object = get_object_address(stmt->objtype, stmt->objname, stmt->objargs,
+	object = get_object_address(stmt->objtype, stmt->object,
 								&relation, ShareUpdateExclusiveLock, false);
 
 	Assert(object.objectSubId == 0);
@@ -3205,7 +3193,7 @@ ExecAlterExtensionContentsStmt(AlterExtensionContentsStmt *stmt,
 
 	/* Permission check: must own target object, too */
 	check_object_ownership(GetUserId(), stmt->objtype, object,
-						   stmt->objname, stmt->objargs, relation);
+						   stmt->object, relation);
 
 	/*
 	 * Check existing extension membership.

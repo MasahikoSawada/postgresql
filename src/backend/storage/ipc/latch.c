@@ -40,7 +40,6 @@
 #include <signal.h>
 #include <unistd.h>
 #include <sys/time.h>
-#include <sys/types.h>
 #ifdef HAVE_SYS_EPOLL_H
 #include <sys/epoll.h>
 #endif
@@ -860,7 +859,7 @@ WaitEventAdjustWin32(WaitEventSet *set, WaitEvent *event)
  * reached.  At most nevents occurred events are returned.
  *
  * If timeout = -1, block until an event occurs; if 0, check sockets for
- * readiness, but don't block; if > 0, block for at most timeout miliseconds.
+ * readiness, but don't block; if > 0, block for at most timeout milliseconds.
  *
  * Returns the number of events occurred, or 0 if the timeout was reached.
  *

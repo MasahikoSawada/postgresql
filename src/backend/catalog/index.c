@@ -649,10 +649,7 @@ UpdateIndexRelation(Oid indexoid,
 	/*
 	 * insert the tuple into the pg_index catalog
 	 */
-	simple_heap_insert(pg_index, tuple);
-
-	/* update the indexes on pg_index */
-	CatalogUpdateIndexes(pg_index, tuple);
+	CatalogTupleInsert(pg_index, tuple);
 
 	/*
 	 * close the relation and free the tuple
@@ -1324,8 +1321,7 @@ index_constraint_create(Relation heapRelation,
 
 		if (dirty)
 		{
-			simple_heap_update(pg_index, &indexTuple->t_self, indexTuple);
-			CatalogUpdateIndexes(pg_index, indexTuple);
+			CatalogTupleUpdate(pg_index, &indexTuple->t_self, indexTuple);
 
 			InvokeObjectPostAlterHookArg(IndexRelationId, indexRelationId, 0,
 										 InvalidOid, is_internal);
@@ -1577,7 +1573,7 @@ index_drop(Oid indexId, bool concurrent)
 
 	hasexprs = !heap_attisnull(tuple, Anum_pg_index_indexprs);
 
-	simple_heap_delete(indexRelation, &tuple->t_self);
+	CatalogTupleDelete(indexRelation, &tuple->t_self);
 
 	ReleaseSysCache(tuple);
 	heap_close(indexRelation, RowExclusiveLock);
@@ -1690,6 +1686,10 @@ BuildIndexInfo(Relation index)
 	/* initialize index-build state to default */
 	ii->ii_Concurrent = false;
 	ii->ii_BrokenHotChain = false;
+
+	/* set up for possible use by index AM */
+	ii->ii_AmCache = NULL;
+	ii->ii_Context = CurrentMemoryContext;
 
 	return ii;
 }
@@ -1858,8 +1858,8 @@ index_update_stats(Relation rel,
 	 * 1. In bootstrap mode, we have no choice --- UPDATE wouldn't work.
 	 *
 	 * 2. We could be reindexing pg_class itself, in which case we can't move
-	 * its pg_class row because CatalogUpdateIndexes might not know about all
-	 * the indexes yet (see reindex_relation).
+	 * its pg_class row because CatalogTupleInsert/CatalogTupleUpdate might
+	 * not know about all the indexes yet (see reindex_relation).
 	 *
 	 * 3. Because we execute CREATE INDEX with just share lock on the parent
 	 * rel (to allow concurrent index creations), an ordinary update could
@@ -2103,8 +2103,7 @@ index_build(Relation heapRelation,
 		Assert(!indexForm->indcheckxmin);
 
 		indexForm->indcheckxmin = true;
-		simple_heap_update(pg_index, &indexTuple->t_self, indexTuple);
-		CatalogUpdateIndexes(pg_index, indexTuple);
+		CatalogTupleUpdate(pg_index, &indexTuple->t_self, indexTuple);
 
 		heap_freetuple(indexTuple);
 		heap_close(pg_index, RowExclusiveLock);
@@ -3163,7 +3162,8 @@ validate_index_heapscan(Relation heapRelation,
 						 &rootTuple,
 						 heapRelation,
 						 indexInfo->ii_Unique ?
-						 UNIQUE_CHECK_YES : UNIQUE_CHECK_NO);
+						 UNIQUE_CHECK_YES : UNIQUE_CHECK_NO,
+						 indexInfo);
 
 			state->tups_inserted += 1;
 		}
@@ -3448,8 +3448,7 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
 			indexForm->indisvalid = true;
 			indexForm->indisready = true;
 			indexForm->indislive = true;
-			simple_heap_update(pg_index, &indexTuple->t_self, indexTuple);
-			CatalogUpdateIndexes(pg_index, indexTuple);
+			CatalogTupleUpdate(pg_index, &indexTuple->t_self, indexTuple);
 
 			/*
 			 * Invalidate the relcache for the table, so that after we commit
@@ -3543,9 +3542,9 @@ reindex_relation(Oid relid, int flags, int options)
 	 * that the updates do not try to insert index entries into indexes we
 	 * have not processed yet.  (When we are trying to recover from corrupted
 	 * indexes, that could easily cause a crash.) We can accomplish this
-	 * because CatalogUpdateIndexes will use the relcache's index list to know
-	 * which indexes to update. We just force the index list to be only the
-	 * stuff we've processed.
+	 * because CatalogTupleInsert/CatalogTupleUpdate will use the relcache's
+	 * index list to know which indexes to update. We just force the index
+	 * list to be only the stuff we've processed.
 	 *
 	 * It is okay to not insert entries into the indexes we have not processed
 	 * yet because all of this is transaction-safe.  If we fail partway
