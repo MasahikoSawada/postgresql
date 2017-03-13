@@ -585,7 +585,7 @@ GuessControlValues(void)
 	ControlFile.MaxConnections = 100;
 	ControlFile.max_worker_processes = 8;
 	ControlFile.max_prepared_xacts = 0;
-	ControlFile.max_fdw_xacts = 0;
+	ControlFile.max_prepared_foreign_xacts = 0;
 	ControlFile.max_locks_per_xact = 64;
 
 	ControlFile.maxAlign = MAXIMUM_ALIGNOF;
@@ -798,7 +798,7 @@ RewriteControlFile(void)
 	ControlFile.MaxConnections = 100;
 	ControlFile.max_worker_processes = 8;
 	ControlFile.max_prepared_xacts = 0;
-	ControlFile.max_fdw_xacts = 0;
+	ControlFile.max_prepared_foreign_xacts = 0;
 	ControlFile.max_locks_per_xact = 64;
 
 	/* Now we can force the recorded xlog seg size to the right thing. */

@@ -66,6 +66,7 @@
 #include "storage/reinit.h"
 #include "storage/smgr.h"
 #include "storage/spin.h"
+#include "utils/backend_random.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
@@ -4666,6 +4667,16 @@ GetSystemIdentifier(void)
 }
 
 /*
+ * Returns the random nonce from control file.
+ */
+char *
+GetMockAuthenticationNonce(void)
+{
+	Assert(ControlFile != NULL);
+	return ControlFile->mock_authentication_nonce;
+}
+
+/*
  * Are checksums enabled for data pages?
  */
 bool
@@ -4915,6 +4926,7 @@ BootStrapXLOG(void)
 	char	   *recptr;
 	bool		use_existent;
 	uint64		sysidentifier;
+	char		mock_auth_nonce[MOCK_AUTH_NONCE_LEN];
 	struct timeval tv;
 	pg_crc32c	crc;
 
@@ -4934,6 +4946,17 @@ BootStrapXLOG(void)
 	sysidentifier = ((uint64) tv.tv_sec) << 32;
 	sysidentifier |= ((uint64) tv.tv_usec) << 12;
 	sysidentifier |= getpid() & 0xFFF;
+
+	/*
+	 * Generate a random nonce. This is used for authentication requests
+	 * that will fail because the user does not exist. The nonce is used to
+	 * create a genuine-looking password challenge for the non-existent user,
+	 * in lieu of an actual stored password.
+	 */
+	if (!pg_backend_random(mock_auth_nonce, MOCK_AUTH_NONCE_LEN))
+		ereport(PANIC,
+			(errcode(ERRCODE_INTERNAL_ERROR),
+			 errmsg("could not generation secret authorization token")));
 
 	/* First timeline ID is always 1 */
 	ThisTimeLineID = 1;
@@ -5041,6 +5064,7 @@ BootStrapXLOG(void)
 	memset(ControlFile, 0, sizeof(ControlFileData));
 	/* Initialize pg_control status fields */
 	ControlFile->system_identifier = sysidentifier;
+	memcpy(ControlFile->mock_authentication_nonce, mock_auth_nonce, MOCK_AUTH_NONCE_LEN);
 	ControlFile->state = DB_SHUTDOWNED;
 	ControlFile->time = checkPoint.time;
 	ControlFile->checkPoint = checkPoint.redo;
@@ -5051,12 +5075,12 @@ BootStrapXLOG(void)
 	ControlFile->MaxConnections = MaxConnections;
 	ControlFile->max_worker_processes = max_worker_processes;
 	ControlFile->max_prepared_xacts = max_prepared_xacts;
+	ControlFile->max_prepared_foreign_xacts = max_prepared_foreign_xacts;
 	ControlFile->max_locks_per_xact = max_locks_per_xact;
 	ControlFile->wal_level = wal_level;
 	ControlFile->wal_log_hints = wal_log_hints;
 	ControlFile->track_commit_timestamp = track_commit_timestamp;
 	ControlFile->data_checksum_version = bootstrap_data_checksum_version;
-	ControlFile->max_fdw_xacts = max_fdw_xacts;
 
 	/* some additional ControlFile fields are set in WriteControlFile() */
 
@@ -6125,8 +6149,8 @@ CheckRequiredParameterValues(void)
 									 max_locks_per_xact,
 									 ControlFile->max_locks_per_xact);
 		RecoveryRequiresIntParameter("max_prepared_foreign_transactions",
-									 max_fdw_xacts,
-									 ControlFile->max_fdw_xacts);
+									 max_prepared_foreign_xacts,
+									 ControlFile->max_prepared_foreign_xacts);
 	}
 }
 
@@ -9388,7 +9412,7 @@ XLogReportParameters(void)
 		max_prepared_xacts != ControlFile->max_prepared_xacts ||
 		max_locks_per_xact != ControlFile->max_locks_per_xact ||
 		track_commit_timestamp != ControlFile->track_commit_timestamp ||
-		max_fdw_xacts != ControlFile->max_fdw_xacts)
+		max_prepared_foreign_xacts != ControlFile->max_prepared_foreign_xacts)
 	{
 		/*
 		 * The change in number of backend slots doesn't need to be WAL-logged
@@ -9405,11 +9429,11 @@ XLogReportParameters(void)
 			xlrec.MaxConnections = MaxConnections;
 			xlrec.max_worker_processes = max_worker_processes;
 			xlrec.max_prepared_xacts = max_prepared_xacts;
+			xlrec.max_prepared_foreign_xacts = max_prepared_foreign_xacts;
 			xlrec.max_locks_per_xact = max_locks_per_xact;
 			xlrec.wal_level = wal_level;
 			xlrec.wal_log_hints = wal_log_hints;
 			xlrec.track_commit_timestamp = track_commit_timestamp;
-			xlrec.max_fdw_xacts = max_fdw_xacts;
 
 			XLogBeginInsert();
 			XLogRegisterData((char *) &xlrec, sizeof(xlrec));
@@ -9421,11 +9445,11 @@ XLogReportParameters(void)
 		ControlFile->MaxConnections = MaxConnections;
 		ControlFile->max_worker_processes = max_worker_processes;
 		ControlFile->max_prepared_xacts = max_prepared_xacts;
+		ControlFile->max_prepared_foreign_xacts = max_prepared_foreign_xacts;
 		ControlFile->max_locks_per_xact = max_locks_per_xact;
 		ControlFile->wal_level = wal_level;
 		ControlFile->wal_log_hints = wal_log_hints;
 		ControlFile->track_commit_timestamp = track_commit_timestamp;
-		ControlFile->max_fdw_xacts = max_fdw_xacts;
 		UpdateControlFile();
 	}
 }
@@ -9805,10 +9829,10 @@ xlog_redo(XLogReaderState *record)
 		ControlFile->MaxConnections = xlrec.MaxConnections;
 		ControlFile->max_worker_processes = xlrec.max_worker_processes;
 		ControlFile->max_prepared_xacts = xlrec.max_prepared_xacts;
+		ControlFile->max_prepared_foreign_xacts = xlrec.max_prepared_foreign_xacts;
 		ControlFile->max_locks_per_xact = xlrec.max_locks_per_xact;
 		ControlFile->wal_level = xlrec.wal_level;
 		ControlFile->wal_log_hints = xlrec.wal_log_hints;
-		ControlFile->max_fdw_xacts = xlrec.max_fdw_xacts;
 
 		/*
 		 * Update minRecoveryPoint to ensure that if recovery is aborted, we

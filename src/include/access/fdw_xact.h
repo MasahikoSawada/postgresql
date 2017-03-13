@@ -44,7 +44,7 @@ typedef struct
 	Oid				dbid;
 } FdwRemoveXlogRec;
 
-extern int	max_fdw_xacts;
+extern int	max_prepared_foreign_xacts;
 
 /* Info types for logs related to FDW transactions */
 #define XLOG_FDW_XACT_INSERT	0x00
