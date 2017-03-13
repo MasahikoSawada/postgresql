@@ -48,7 +48,6 @@
 
 #include <unistd.h>
 #include <dirent.h>
-#include <sys/types.h>
 #include <sys/stat.h>
 
 #include "access/heapam.h"
@@ -344,9 +343,7 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 
 	tuple = heap_form_tuple(rel->rd_att, values, nulls);
 
-	tablespaceoid = simple_heap_insert(rel, tuple);
-
-	CatalogUpdateIndexes(rel, tuple);
+	tablespaceoid = CatalogTupleInsert(rel, tuple);
 
 	heap_freetuple(tuple);
 
@@ -462,7 +459,7 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 	/*
 	 * Remove the pg_tablespace tuple (this will roll back if we fail below)
 	 */
-	simple_heap_delete(rel, &tuple->t_self);
+	CatalogTupleDelete(rel, &tuple->t_self);
 
 	heap_endscan(scandesc);
 
@@ -971,8 +968,7 @@ RenameTableSpace(const char *oldname, const char *newname)
 	/* OK, update the entry */
 	namestrcpy(&(newform->spcname), newname);
 
-	simple_heap_update(rel, &newtuple->t_self, newtuple);
-	CatalogUpdateIndexes(rel, newtuple);
+	CatalogTupleUpdate(rel, &newtuple->t_self, newtuple);
 
 	InvokeObjectPostAlterHook(TableSpaceRelationId, tspId, 0);
 
@@ -1044,8 +1040,7 @@ AlterTableSpaceOptions(AlterTableSpaceOptionsStmt *stmt)
 								 repl_null, repl_repl);
 
 	/* Update system catalog. */
-	simple_heap_update(rel, &newtuple->t_self, newtuple);
-	CatalogUpdateIndexes(rel, newtuple);
+	CatalogTupleUpdate(rel, &newtuple->t_self, newtuple);
 
 	InvokeObjectPostAlterHook(TableSpaceRelationId, HeapTupleGetOid(tup), 0);
 

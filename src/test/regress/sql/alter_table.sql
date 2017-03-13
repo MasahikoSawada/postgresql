@@ -255,7 +255,7 @@ INSERT INTO tmp3 values (5,50);
 -- Try (and fail) to add constraint due to invalid source columns
 ALTER TABLE tmp3 add constraint tmpconstr foreign key(c) references tmp2 match full;
 
--- Try (and fail) to add constraint due to invalide destination columns explicitly given
+-- Try (and fail) to add constraint due to invalid destination columns explicitly given
 ALTER TABLE tmp3 add constraint tmpconstr foreign key(a) references tmp2(b) match full;
 
 -- Try (and fail) to add constraint due to invalid data
@@ -1829,7 +1829,7 @@ CREATE UNLOGGED TABLE unlogged3(f1 SERIAL PRIMARY KEY, f2 INTEGER REFERENCES unl
 ALTER TABLE unlogged3 SET LOGGED; -- skip self-referencing foreign key
 ALTER TABLE unlogged2 SET LOGGED; -- fails because a foreign key to an unlogged table exists
 ALTER TABLE unlogged1 SET LOGGED;
--- check relpersistence of an unlogged table after changing to permament
+-- check relpersistence of an unlogged table after changing to permanent
 SELECT relname, relkind, relpersistence FROM pg_class WHERE relname ~ '^unlogged1'
 UNION ALL
 SELECT 'toast table', t.relkind, t.relpersistence FROM pg_class r JOIN pg_class t ON t.oid = r.reltoastrelid WHERE r.relname ~ '^unlogged1'
@@ -1917,18 +1917,23 @@ ALTER TABLE partitioned ALTER COLUMN b TYPE char(5);
 -- cannot drop NOT NULL on columns in the range partition key
 ALTER TABLE partitioned ALTER COLUMN a DROP NOT NULL;
 
--- partitioned table cannot partiticipate in regular inheritance
-CREATE TABLE foo (
+-- it's fine however to drop one on the list partition key column
+CREATE TABLE list_partitioned (a int not null) partition by list (a);
+ALTER TABLE list_partitioned ALTER a DROP NOT NULL;
+DROP TABLE list_partitioned;
+
+-- partitioned table cannot participate in regular inheritance
+CREATE TABLE nonpartitioned (
 	a int,
 	b int
 );
-ALTER TABLE partitioned INHERIT foo;
-ALTER TABLE foo INHERIT partitioned;
+ALTER TABLE partitioned INHERIT nonpartitioned;
+ALTER TABLE nonpartitioned INHERIT partitioned;
 
 -- cannot add NO INHERIT constraint to partitioned tables
 ALTER TABLE partitioned ADD CONSTRAINT chk_a CHECK (a > 0) NO INHERIT;
 
-DROP TABLE partitioned, foo;
+DROP TABLE partitioned, nonpartitioned;
 
 --
 -- ATTACH PARTITION
@@ -2134,6 +2139,11 @@ ALTER TABLE list_parted2 ATTACH PARTITION list_parted2 FOR VALUES IN (0);
 -- DETACH PARTITION
 --
 
+-- check that the table is partitioned at all
+CREATE TABLE regular_table (a int);
+ALTER TABLE regular_table DETACH PARTITION any_name;
+DROP TABLE regular_table;
+
 -- check that the partition being detached exists at all
 ALTER TABLE list_parted2 DETACH PARTITION part_4;
 
@@ -2189,10 +2199,8 @@ ALTER TABLE part_2 INHERIT inh_test;
 ALTER TABLE list_parted2 DROP COLUMN b;
 ALTER TABLE list_parted2 ALTER COLUMN b TYPE text;
 
--- cleanup: avoid using CASCADE
-DROP TABLE list_parted, part_1;
-DROP TABLE list_parted2, part_2, part_5, part_5_a;
-DROP TABLE range_parted, part1, part2;
+-- cleanup
+DROP TABLE list_parted, list_parted2, range_parted;
 
 -- more tests for certain multi-level partitioning scenarios
 create table p (a int, b int) partition by range (a, b);
@@ -2217,5 +2225,6 @@ insert into p1 (a, b) values (2, 3);
 -- check that partition validation scan correctly detects violating rows
 alter table p attach partition p1 for values from (1, 2) to (1, 10);
 
--- cleanup: avoid using CASCADE
-drop table p, p1, p11;
+-- cleanup
+drop table p;
+drop table p1;

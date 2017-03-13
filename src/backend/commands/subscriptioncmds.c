@@ -18,6 +18,7 @@
 
 #include "access/heapam.h"
 #include "access/htup_details.h"
+#include "access/xact.h"
 
 #include "catalog/indexing.h"
 #include "catalog/objectaccess.h"
@@ -204,7 +205,7 @@ publicationListToArray(List *publist)
  * Create new subscription.
  */
 ObjectAddress
-CreateSubscription(CreateSubscriptionStmt *stmt)
+CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 {
 	Relation	rel;
 	ObjectAddress myself;
@@ -220,6 +221,23 @@ CreateSubscription(CreateSubscriptionStmt *stmt)
 	char		originname[NAMEDATALEN];
 	bool		create_slot;
 	List	   *publications;
+
+	/*
+	 * Parse and check options.
+	 * Connection and publication should not be specified here.
+	 */
+	parse_subscription_options(stmt->options, NULL, NULL,
+							   &enabled_given, &enabled,
+							   &create_slot, &slotname);
+
+	/*
+	 * Since creating a replication slot is not transactional, rolling back
+	 * the transaction leaves the created replication slot.  So we cannot run
+	 * CREATE SUBSCRIPTION inside a transaction block if creating a
+	 * replication slot.
+	 */
+	if (create_slot)
+		PreventTransactionChain(isTopLevel, "CREATE SUBSCRIPTION ... CREATE SLOT");
 
 	if (!superuser())
 		ereport(ERROR,
@@ -239,13 +257,6 @@ CreateSubscription(CreateSubscriptionStmt *stmt)
 						stmt->subname)));
 	}
 
-	/*
-	 * Parse and check options.
-	 * Connection and publication should not be specified here.
-	 */
-	parse_subscription_options(stmt->options, NULL, NULL,
-							   &enabled_given, &enabled,
-							   &create_slot, &slotname);
 	if (slotname == NULL)
 		slotname = stmt->subname;
 
@@ -277,8 +288,7 @@ CreateSubscription(CreateSubscriptionStmt *stmt)
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
 	/* Insert tuple into catalog. */
-	subid = simple_heap_insert(rel, tup);
-	CatalogUpdateIndexes(rel, tup);
+	subid = CatalogTupleInsert(rel, tup);
 	heap_freetuple(tup);
 
 	recordDependencyOnOwner(SubscriptionRelationId, subid, owner);
@@ -408,8 +418,7 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 							replaces);
 
 	/* Update the catalog. */
-	simple_heap_update(rel, &tup->t_self, tup);
-	CatalogUpdateIndexes(rel, tup);
+	CatalogTupleUpdate(rel, &tup->t_self, tup);
 
 	ObjectAddressSet(myself, SubscriptionRelationId, subid);
 
@@ -426,7 +435,7 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
  * Drop a subscription
  */
 void
-DropSubscription(DropSubscriptionStmt *stmt)
+DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 {
 	Relation	rel;
 	ObjectAddress myself;
@@ -443,7 +452,21 @@ DropSubscription(DropSubscriptionStmt *stmt)
 	WalReceiverConn	   *wrconn = NULL;
 	StringInfoData		cmd;
 
-	rel = heap_open(SubscriptionRelationId, RowExclusiveLock);
+	/*
+	 * Since dropping a replication slot is not transactional, the replication
+	 * slot stays dropped even if the transaction rolls back.  So we cannot
+	 * run DROP SUBSCRIPTION inside a transaction block if dropping the
+	 * replication slot.
+	 */
+	if (stmt->drop_slot)
+		PreventTransactionChain(isTopLevel, "DROP SUBSCRIPTION ... DROP SLOT");
+
+	/*
+	 * Lock pg_subscription with AccessExclusiveLock to ensure
+	 * that the launcher doesn't restart new worker during dropping
+	 * the subscription
+	 */
+	rel = heap_open(SubscriptionRelationId, AccessExclusiveLock);
 
 	tup = SearchSysCache2(SUBSCRIPTIONNAME, MyDatabaseId,
 						  CStringGetDatum(stmt->subname));
@@ -476,7 +499,7 @@ DropSubscription(DropSubscriptionStmt *stmt)
 	InvokeObjectDropHook(SubscriptionRelationId, subid, 0);
 
 	/*
-	 * Lock the subscription so noboby else can do anything with it
+	 * Lock the subscription so nobody else can do anything with it
 	 * (including the replication workers).
 	 */
 	LockSharedObject(SubscriptionRelationId, subid, 0, AccessExclusiveLock);
@@ -503,15 +526,12 @@ DropSubscription(DropSubscriptionStmt *stmt)
 	EventTriggerSQLDropAddObject(&myself, true, true);
 
 	/* Remove the tuple from catalog. */
-	simple_heap_delete(rel, &tup->t_self);
+	CatalogTupleDelete(rel, &tup->t_self);
 
 	ReleaseSysCache(tup);
 
 	/* Clean up dependencies */
 	deleteSharedDependencyRecordsFor(SubscriptionRelationId, subid, 0);
-
-	/* Protect against launcher restarting the worker. */
-	LWLockAcquire(LogicalRepLauncherLock, LW_EXCLUSIVE);
 
 	/* Kill the apply worker so that the slot becomes accessible. */
 	logicalrep_worker_stop(subid);
@@ -545,15 +565,25 @@ DropSubscription(DropSubscriptionStmt *stmt)
 						"drop the replication slot \"%s\"", slotname),
 				 errdetail("The error was: %s", err)));
 
-	if (!walrcv_command(wrconn, cmd.data, &err))
-		ereport(ERROR,
-				(errmsg("could not drop the replication slot \"%s\" on publisher",
-						slotname),
-				 errdetail("The error was: %s", err)));
-	else
-		ereport(NOTICE,
-				(errmsg("dropped replication slot \"%s\" on publisher",
-						slotname)));
+	PG_TRY();
+	{
+		if (!walrcv_command(wrconn, cmd.data, &err))
+			ereport(ERROR,
+					(errmsg("could not drop the replication slot \"%s\" on publisher",
+							slotname),
+					 errdetail("The error was: %s", err)));
+		else
+			ereport(NOTICE,
+					(errmsg("dropped replication slot \"%s\" on publisher",
+							slotname)));
+	}
+	PG_CATCH();
+	{
+		/* Close the connection in case of failure */
+		walrcv_disconnect(wrconn);
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
 
 	walrcv_disconnect(wrconn);
 
@@ -588,8 +618,7 @@ AlterSubscriptionOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerId)
 			 errhint("The owner of an subscription must be a superuser.")));
 
 	form->subowner = newOwnerId;
-	simple_heap_update(rel, &tup->t_self, tup);
-	CatalogUpdateIndexes(rel, tup);
+	CatalogTupleUpdate(rel, &tup->t_self, tup);
 
 	/* Update owner dependency reference */
 	changeDependencyOnOwner(SubscriptionRelationId,

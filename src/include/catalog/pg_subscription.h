@@ -23,10 +23,12 @@
 #define SubscriptionRelation_Rowtype_Id	6101
 
 /*
- * Technicaly, the subscriptions live inside the database, so a shared catalog
+ * Technically, the subscriptions live inside the database, so a shared catalog
  * seems weird, but the replication launcher process needs to access all of
  * them to be able to start the workers, so we have to put them in a shared,
  * nailed catalog.
+ *
+ * NOTE:  When adding a column, also update system_views.sql.
  */
 CATALOG(pg_subscription,6100) BKI_SHARED_RELATION BKI_ROWTYPE_OID(6101) BKI_SCHEMA_MACRO
 {
@@ -35,7 +37,7 @@ CATALOG(pg_subscription,6100) BKI_SHARED_RELATION BKI_ROWTYPE_OID(6101) BKI_SCHE
 
 	Oid			subowner;		/* Owner of the subscription */
 
-	bool		subenabled;		/* True if the subsription is enabled
+	bool		subenabled;		/* True if the subscription is enabled
 								 * (the worker should be running) */
 
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
@@ -65,7 +67,7 @@ typedef FormData_pg_subscription *Form_pg_subscription;
 typedef struct Subscription
 {
 	Oid		oid;			/* Oid of the subscription */
-	Oid		dbid;			/* Oid of the database which dubscription is in */
+	Oid		dbid;			/* Oid of the database which subscription is in */
 	char   *name;			/* Name of the subscription */
 	Oid		owner;			/* Oid of the subscription owner */
 	bool	enabled;		/* Indicates if the subscription is enabled */

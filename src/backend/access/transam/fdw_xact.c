@@ -148,7 +148,7 @@ RegisterXactForeignServer(Oid serverid, Oid userid, bool two_phase_commit)
 
 	if (two_phase_commit)
 	{
-		if (max_fdw_xacts == 0)
+		if (max_prepared_foreign_xacts == 0)
 			ereport(ERROR,
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 					 errmsg("prepread foreign transactions are disabled"),
@@ -253,7 +253,7 @@ typedef struct
 	/* Number of valid FDW transaction entries */
 	int			num_fdw_xacts;
 
-	/* Upto max_fdw_xacts entries in the array */
+	/* Upto max_prepared_foreign_xacts entries in the array */
 	FDWXact		fdw_xacts[FLEXIBLE_ARRAY_MEMBER];	/* Variable length array */
 } FDWXactGlobalData;
 
@@ -316,7 +316,7 @@ bool search_fdw_xact(TransactionId xid, Oid dbid, Oid serverid, Oid userid,
  * Maximum number of foreign prepared transaction entries at any given time
  * GUC variable, change requires restart.
  */
-int	max_fdw_xacts = 0;
+int	max_prepared_foreign_xacts = 0;
 
 /* Keep track of registering process exit call back. */
 static bool fdwXactExitRegistered = false;
@@ -339,10 +339,10 @@ FDWXactShmemSize(void)
 
 	/* Need the fixed struct, foreign transaction information array */
 	size = offsetof(FDWXactGlobalData, fdw_xacts);
-	size = add_size(size, mul_size(max_fdw_xacts,
+	size = add_size(size, mul_size(max_prepared_foreign_xacts,
 								   sizeof(FDWXact)));
 	size = MAXALIGN(size);
-	size = add_size(size, mul_size(max_fdw_xacts,
+	size = add_size(size, mul_size(max_prepared_foreign_xacts,
 								   sizeof(FDWXactData)));
 
 	return size;
@@ -375,8 +375,8 @@ FDWXactShmemInit(void)
 		fdw_xacts = (FDWXact)
 			((char *) FDWXactGlobal +
 			 MAXALIGN(offsetof(FDWXactGlobalData, fdw_xacts) +
-					  sizeof(FDWXact) * max_fdw_xacts));
-		for (cnt = 0; cnt < max_fdw_xacts; cnt++)
+					  sizeof(FDWXact) * max_prepared_foreign_xacts));
+		for (cnt = 0; cnt < max_prepared_foreign_xacts; cnt++)
 		{
 			fdw_xacts[cnt].fx_next = FDWXactGlobal->freeFDWXacts;
 			FDWXactGlobal->freeFDWXacts = &fdw_xacts[cnt];
@@ -677,14 +677,14 @@ insert_fdw_xact(Oid dboid, TransactionId xid, Oid serverid, Oid userid, Oid umid
 				(errcode(ERRCODE_OUT_OF_MEMORY),
 				 errmsg("maximum number of foreign transactions reached"),
 				 errhint("Increase max_prepared_foreign_transactions (currently %d).",
-						 max_fdw_xacts)));
+						 max_prepared_foreign_xacts)));
 	}
 
 	fdw_xact = FDWXactGlobal->freeFDWXacts;
 	FDWXactGlobal->freeFDWXacts = fdw_xact->fx_next;
 
 	/* Insert the entry to active array */
-	Assert(FDWXactGlobal->num_fdw_xacts < max_fdw_xacts);
+	Assert(FDWXactGlobal->num_fdw_xacts < max_prepared_foreign_xacts);
 	FDWXactGlobal->fdw_xacts[FDWXactGlobal->num_fdw_xacts++] = fdw_xact;
 
 	/* Stamp the entry with backend id before releasing the LWLock */
@@ -1211,7 +1211,7 @@ CheckPointFDWXact(XLogRecPtr redo_horizon)
 	int serialized_fdw_xacts = 0;
 
 	/* Quick get-away, before taking lock */
-	if (max_fdw_xacts <= 0)
+	if (max_prepared_foreign_xacts <= 0)
 		return;
 
 	TRACE_POSTGRESQL_FDWXACT_CHECKPOINT_START();

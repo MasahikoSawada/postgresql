@@ -8,7 +8,6 @@
 #include "postgres_fe.h"
 
 #ifndef WIN32
-#include <sys/types.h>			/* (ditto) */
 #include <unistd.h>				/* for geteuid() */
 #else
 #include <win32.h>
@@ -174,6 +173,7 @@ slashUsage(unsigned short int pager)
 	fprintf(output, _("  \\copyright             show PostgreSQL usage and distribution terms\n"));
 	fprintf(output, _("  \\errverbose            show most recent error message at maximum verbosity\n"));
 	fprintf(output, _("  \\g [FILE] or ;         execute query (and send results to file or |pipe)\n"));
+	fprintf(output, _("  \\gx [FILE]             as \\g, but forces expanded output mode\n"));
 	fprintf(output, _("  \\gexec                 execute query, then execute each value in its result\n"));
 	fprintf(output, _("  \\gset [PREFIX]         execute query and store results in psql variables\n"));
 	fprintf(output, _("  \\q                     quit psql\n"));
@@ -348,9 +348,9 @@ helpVariables(unsigned short int pager)
 					  "                     (default: 0=unlimited)\n"));
 	fprintf(output, _("  HISTCONTROL        controls command history [ignorespace, ignoredups, ignoreboth]\n"));
 	fprintf(output, _("  HISTFILE           file name used to store the command history\n"));
-	fprintf(output, _("  HISTSIZE           the number of commands to store in the command history\n"));
+	fprintf(output, _("  HISTSIZE           max number of commands to store in the command history\n"));
 	fprintf(output, _("  HOST               the currently connected database server host\n"));
-	fprintf(output, _("  IGNOREEOF          if unset, sending an EOF to interactive session terminates application\n"));
+	fprintf(output, _("  IGNOREEOF          number of EOFs needed to terminate an interactive session\n"));
 	fprintf(output, _("  LASTOID            value of the last affected OID\n"));
 	fprintf(output, _("  ON_ERROR_ROLLBACK  if set, an error doesn't stop a transaction (uses implicit savepoints)\n"));
 	fprintf(output, _("  ON_ERROR_STOP      stop batch execution after error\n"));

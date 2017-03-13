@@ -73,7 +73,7 @@ static void logicalrep_worker_onexit(int code, Datum arg);
 static void logicalrep_worker_detach(void);
 
 bool		got_SIGTERM = false;
-static bool	on_commit_laucher_wakeup = false;
+static bool	on_commit_launcher_wakeup = false;
 
 Datum pg_stat_get_subscription(PG_FUNCTION_ARGS);
 
@@ -170,7 +170,7 @@ WaitForReplicationWorkerAttach(LogicalRepWorker *worker,
 
 		/*
 		 * Worker started and attached to our shmem. This check is safe
-		 * because only laucher ever starts the workers, so nobody can steal
+		 * because only launcher ever starts the workers, so nobody can steal
 		 * the worker slot.
 		 */
 		if (status == BGWH_STARTED && worker->proc)
@@ -180,7 +180,7 @@ WaitForReplicationWorkerAttach(LogicalRepWorker *worker,
 			return false;
 
 		/*
-		 * We need timeout because we generaly don't get notified via latch
+		 * We need timeout because we generally don't get notified via latch
 		 * about the worker attach.
 		 */
 		rc = WaitLatch(MyLatch,
@@ -305,16 +305,11 @@ logicalrep_worker_launch(Oid dbid, Oid subid, const char *subname, Oid userid)
 /*
  * Stop the logical replication worker and wait until it detaches from the
  * slot.
- *
- * The caller must hold LogicalRepLauncherLock to ensure that new workers are
- * not being started during this function call.
  */
 void
 logicalrep_worker_stop(Oid subid)
 {
 	LogicalRepWorker *worker;
-
-	Assert(LWLockHeldByMe(LogicalRepLauncherLock));
 
 	LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
 
@@ -526,22 +521,22 @@ ApplyLauncherShmemInit(void)
 void
 AtCommit_ApplyLauncher(void)
 {
-	if (on_commit_laucher_wakeup)
+	if (on_commit_launcher_wakeup)
 		ApplyLauncherWakeup();
 }
 
 /*
  * Request wakeup of the launcher on commit of the transaction.
  *
- * This is used to send launcher signal to stop sleeping and proccess the
+ * This is used to send launcher signal to stop sleeping and process the
  * subscriptions when current transaction commits. Should be used when new
  * tuple was added to the pg_subscription catalog.
 */
 void
 ApplyLauncherWakeupAtCommit(void)
 {
-	if (!on_commit_laucher_wakeup)
-		on_commit_laucher_wakeup = true;
+	if (!on_commit_launcher_wakeup)
+		on_commit_launcher_wakeup = true;
 }
 
 void
@@ -557,7 +552,7 @@ ApplyLauncherWakeup(void)
 void
 ApplyLauncherMain(Datum main_arg)
 {
-	ereport(LOG,
+	ereport(DEBUG1,
 			(errmsg("logical replication launcher started")));
 
 	/* Establish signal handlers. */
@@ -602,9 +597,6 @@ ApplyLauncherMain(Datum main_arg)
 										   ALLOCSET_DEFAULT_MAXSIZE);
 			oldctx = MemoryContextSwitchTo(subctx);
 
-			/* Block any concurrent DROP SUBSCRIPTION. */
-			LWLockAcquire(LogicalRepLauncherLock, LW_EXCLUSIVE);
-
 			/* search for subscriptions to start or stop. */
 			sublist = get_subscription_list();
 
@@ -628,8 +620,6 @@ ApplyLauncherMain(Datum main_arg)
 				}
 			}
 
-			LWLockRelease(LogicalRepLauncherLock);
-
 			/* Switch back to original memory context. */
 			MemoryContextSwitchTo(oldctx);
 			/* Clean the temporary memory. */
@@ -638,7 +628,7 @@ ApplyLauncherMain(Datum main_arg)
 		else
 		{
 			/*
-			 * The wait in previous cycle was interruped in less than
+			 * The wait in previous cycle was interrupted in less than
 			 * wal_retrieve_retry_interval since last worker was started,
 			 * this usually means crash of the worker, so we should retry
 			 * in wal_retrieve_retry_interval again.
@@ -662,7 +652,7 @@ ApplyLauncherMain(Datum main_arg)
 	LogicalRepCtx->launcher_pid = 0;
 
 	/* ... and if it returns, we're done */
-	ereport(LOG,
+	ereport(DEBUG1,
 			(errmsg("logical replication launcher shutting down")));
 
 	proc_exit(0);
