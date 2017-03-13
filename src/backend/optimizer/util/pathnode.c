@@ -1068,7 +1068,8 @@ create_bitmap_heap_path(PlannerInfo *root,
 						RelOptInfo *rel,
 						Path *bitmapqual,
 						Relids required_outer,
-						double loop_count)
+						double loop_count,
+						int parallel_degree)
 {
 	BitmapHeapPath *pathnode = makeNode(BitmapHeapPath);
 
@@ -1077,9 +1078,9 @@ create_bitmap_heap_path(PlannerInfo *root,
 	pathnode->path.pathtarget = rel->reltarget;
 	pathnode->path.param_info = get_baserel_parampathinfo(root, rel,
 														  required_outer);
-	pathnode->path.parallel_aware = false;
+	pathnode->path.parallel_aware = parallel_degree > 0 ? true : false;
 	pathnode->path.parallel_safe = rel->consider_parallel;
-	pathnode->path.parallel_workers = 0;
+	pathnode->path.parallel_workers = parallel_degree;
 	pathnode->path.pathkeys = NIL;		/* always unordered */
 
 	pathnode->bitmapqual = bitmapqual;
@@ -1627,6 +1628,66 @@ create_unique_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 }
 
 /*
+ * create_gather_merge_path
+ *
+ *	  Creates a path corresponding to a gather merge scan, returning
+ *	  the pathnode.
+ */
+GatherMergePath *
+create_gather_merge_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
+						 PathTarget *target, List *pathkeys,
+						 Relids required_outer, double *rows)
+{
+	GatherMergePath *pathnode = makeNode(GatherMergePath);
+	Cost			 input_startup_cost = 0;
+	Cost			 input_total_cost = 0;
+
+	Assert(subpath->parallel_safe);
+	Assert(pathkeys);
+
+	pathnode->path.pathtype = T_GatherMerge;
+	pathnode->path.parent = rel;
+	pathnode->path.param_info = get_baserel_parampathinfo(root, rel,
+														  required_outer);
+	pathnode->path.parallel_aware = false;
+
+	pathnode->subpath = subpath;
+	pathnode->num_workers = subpath->parallel_workers;
+	pathnode->path.pathkeys = pathkeys;
+	pathnode->path.pathtarget = target ? target : rel->reltarget;
+	pathnode->path.rows += subpath->rows;
+
+	if (pathkeys_contained_in(pathkeys, subpath->pathkeys))
+	{
+		/* Subpath is adequately ordered, we won't need to sort it */
+		input_startup_cost += subpath->startup_cost;
+		input_total_cost += subpath->total_cost;
+	}
+	else
+	{
+		/* We'll need to insert a Sort node, so include cost for that */
+		Path		sort_path;		/* dummy for result of cost_sort */
+
+		cost_sort(&sort_path,
+				  root,
+				  pathkeys,
+				  subpath->total_cost,
+				  subpath->rows,
+				  subpath->pathtarget->width,
+				  0.0,
+				  work_mem,
+				  -1);
+		input_startup_cost += sort_path.startup_cost;
+		input_total_cost += sort_path.total_cost;
+	}
+
+	cost_gather_merge(pathnode, root, rel, pathnode->path.param_info,
+					  input_startup_cost, input_total_cost, rows);
+
+	return pathnode;
+}
+
+/*
  * translate_sub_tlist - get subquery column numbers represented by tlist
  *
  * The given targetlist usually contains only Vars referencing the given relid.
@@ -1746,6 +1807,32 @@ create_functionscan_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->pathkeys = pathkeys;
 
 	cost_functionscan(pathnode, root, rel, pathnode->param_info);
+
+	return pathnode;
+}
+
+/*
+ * create_tablefuncscan_path
+ *	  Creates a path corresponding to a sequential scan of a table function,
+ *	  returning the pathnode.
+ */
+Path *
+create_tablefuncscan_path(PlannerInfo *root, RelOptInfo *rel,
+						  Relids required_outer)
+{
+	Path	   *pathnode = makeNode(Path);
+
+	pathnode->pathtype = T_TableFuncScan;
+	pathnode->parent = rel;
+	pathnode->pathtarget = rel->reltarget;
+	pathnode->param_info = get_baserel_parampathinfo(root, rel,
+													 required_outer);
+	pathnode->parallel_aware = false;
+	pathnode->parallel_safe = rel->consider_parallel;
+	pathnode->parallel_workers = 0;
+	pathnode->pathkeys = NIL;	/* result is always unordered */
+
+	cost_tablefuncscan(pathnode, root, rel, pathnode->param_info);
 
 	return pathnode;
 }
@@ -3255,7 +3342,7 @@ reparameterize_path(PlannerInfo *root, Path *path,
 														rel,
 														bpath->bitmapqual,
 														required_outer,
-														loop_count);
+														loop_count, 0);
 			}
 		case T_SubqueryScan:
 			{

@@ -20,8 +20,10 @@
 #include "port/pg_crc32c.h"
 
 
+#define MOCK_AUTH_NONCE_LEN		32
+
 /* Version identifier for this pg_control format */
-#define PG_CONTROL_VERSION	1001
+#define PG_CONTROL_VERSION	1002
 
 /*
  * Body of CheckPoint XLOG records.  This is declared here because we keep
@@ -180,7 +182,7 @@ typedef struct ControlFileData
 	int			MaxConnections;
 	int			max_worker_processes;
 	int			max_prepared_xacts;
-	int			max_fdw_xacts;
+	int			max_prepared_foreign_xacts;
 	int			max_locks_per_xact;
 	bool		track_commit_timestamp;
 
@@ -222,6 +224,13 @@ typedef struct ControlFileData
 
 	/* Are data pages protected by checksums? Zero if no checksum version */
 	uint32		data_checksum_version;
+
+	/*
+	 * Random nonce, used in authentication requests that need to proceed
+	 * based on values that are cluster-unique, like a SASL exchange that
+	 * failed at an early stage.
+	 */
+	char		mock_authentication_nonce[MOCK_AUTH_NONCE_LEN];
 
 	/* CRC of all above ... MUST BE LAST! */
 	pg_crc32c	crc;
