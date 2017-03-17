@@ -63,7 +63,7 @@ static void FDWXactResolverMain(Datum main_arg);
 static List *get_database_list(void);
 
 /* GUC variable */
-static int fx_resolver_naptime;
+static int	fx_resolver_naptime;
 
 /*
  * Signal handler for SIGTERM
@@ -96,6 +96,7 @@ FDWXactResolver_SIGQUIT(SIGNAL_ARGS)
 
 	errno = save_errno;
 }
+
 /*
  * Signal handler for SIGHUP
  *		Set a flag to tell the main loop to reread the config file, and set
@@ -137,7 +138,7 @@ _PG_init(void)
 		return;
 
 	DefineCustomIntVariable("fdw_transaction_resolver.naptime",
-							"Time to sleep between fdw_transaction_resolver runs.",
+					  "Time to sleep between fdw_transaction_resolver runs.",
 							NULL,
 							&fx_resolver_naptime,
 							60,
@@ -148,18 +149,19 @@ _PG_init(void)
 							NULL, NULL, NULL);
 
 	/* set up common data for all our workers */
+
 	/*
 	 * For some reason unless background worker set
 	 * BGWORKER_BACKEND_DATABASE_CONNECTION, it's not added to BackendList and
-	 * hence notification to this backend is not enabled. So set that flag even
-	 * if the backend itself doesn't need database connection.
+	 * hence notification to this backend is not enabled. So set that flag
+	 * even if the backend itself doesn't need database connection.
 	 */
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_RecoveryFinished;
 	worker.bgw_restart_time = 5;
 	snprintf(worker.bgw_name, BGW_MAXLEN, "foreign transaction resolver launcher");
 	worker.bgw_main = FDWXactResolverMain;
-	worker.bgw_main_arg = (Datum) 0;/* Craft some dummy arg. */
+	worker.bgw_main_arg = (Datum) 0;	/* Craft some dummy arg. */
 	worker.bgw_notify_pid = 0;
 
 	RegisterBackgroundWorker(&worker);
@@ -172,7 +174,7 @@ FDWXactResolverMain(Datum main_arg)
 	BackgroundWorker worker;
 	BackgroundWorkerHandle *handle = NULL;
 	pid_t		pid;
-	List	*dbid_list = NIL;
+	List	   *dbid_list = NIL;
 	TimestampTz launched_time = GetCurrentTimestamp();
 	TimestampTz next_launch_time = launched_time + (fx_resolver_naptime * 1000L);
 
@@ -180,10 +182,10 @@ FDWXactResolverMain(Datum main_arg)
 			(errmsg("fdw_transaction_resolver launcher started")));
 
 	/* Properly accept or ignore signals the postmaster might send us */
-	pqsignal(SIGHUP, FDWXactResolver_SIGHUP);		/* set flag to read config
+	pqsignal(SIGHUP, FDWXactResolver_SIGHUP);	/* set flag to read config
 												 * file */
-	pqsignal(SIGTERM, FDWXactResolver_SIGTERM);	/* request shutdown */
-	pqsignal(SIGQUIT, FDWXactResolver_SIGQUIT);	/* hard crash time */
+	pqsignal(SIGTERM, FDWXactResolver_SIGTERM); /* request shutdown */
+	pqsignal(SIGQUIT, FDWXactResolver_SIGQUIT); /* hard crash time */
 	pqsignal(SIGUSR1, FDWXactResolver_SIGUSR1);
 
 	/* Unblock signals */
@@ -197,8 +199,8 @@ FDWXactResolverMain(Datum main_arg)
 	 */
 	while (!got_sigterm)
 	{
-		int		rc;
-		int naptime_msec;
+		int			rc;
+		int			naptime_msec;
 		TimestampTz current_time = GetCurrentTimestamp();
 
 		/* Determine sleep time */
@@ -226,8 +228,8 @@ FDWXactResolverMain(Datum main_arg)
 		/*
 		 * Postmaster wants to stop this process. Exit with non-zero code, so
 		 * that the postmaster starts this process again. The worker processes
-		 * will receive the signal and end themselves. This process will restart
-		 * them if necessary.
+		 * will receive the signal and end themselves. This process will
+		 * restart them if necessary.
 		 */
 		if (got_sigquit)
 			proc_exit(2);
@@ -263,9 +265,9 @@ FDWXactResolverMain(Datum main_arg)
 		if (!handle &&
 			TimestampDifferenceExceeds(next_launch_time, current_time, naptime_msec))
 		{
-			Oid dbid;
+			Oid			dbid;
 
-			/* Get the database list if empty*/
+			/* Get the database list if empty */
 			if (!dbid_list)
 				dbid_list = get_database_list();
 
@@ -298,7 +300,7 @@ FDWXactResolverMain(Datum main_arg)
 			/* Set next launch time */
 			launched_time = current_time;
 			next_launch_time = TimestampTzPlusMilliseconds(launched_time,
-														   fx_resolver_naptime * 1000L);
+												fx_resolver_naptime * 1000L);
 		}
 	}
 
@@ -322,13 +324,13 @@ FDWXactWorker_SIGTERM(SIGNAL_ARGS)
 static void
 FDWXactResolver_worker_main(Datum dbid_datum)
 {
-	char	*command = "SELECT * FROM pg_fdw_xact_resolve() WHERE status = 'resolved'";
-	Oid		dbid = DatumGetObjectId(dbid_datum);
-	int		ret;
+	char	   *command = "SELECT * FROM pg_fdw_xact_resolve() WHERE status = 'resolved'";
+	Oid			dbid = DatumGetObjectId(dbid_datum);
+	int			ret;
 
 	/*
-	 * This background worker does not loop infinitely, so we need handler only
-	 * for SIGTERM, in which case the process should just exit quickly.
+	 * This background worker does not loop infinitely, so we need handler
+	 * only for SIGTERM, in which case the process should just exit quickly.
 	 */
 	pqsignal(SIGTERM, FDWXactWorker_SIGTERM);
 	pqsignal(SIGQUIT, FDWXactWorker_SIGTERM);
@@ -343,20 +345,20 @@ FDWXactResolver_worker_main(Datum dbid_datum)
 	BackgroundWorkerInitializeConnectionByOid(dbid, InvalidOid);
 
 	/*
-	 * Start a transaction on which we can call resolver function.
-	 * Note that each StartTransactionCommand() call should be preceded by a
-	 * SetCurrentStatementStartTimestamp() call, which sets both the time
-	 * for the statement we're about the run, and also the transaction
-	 * start time.  Also, each other query sent to SPI should probably be
-	 * preceded by SetCurrentStatementStartTimestamp(), so that statement
-	 * start time is always up to date.
+	 * Start a transaction on which we can call resolver function. Note that
+	 * each StartTransactionCommand() call should be preceded by a
+	 * SetCurrentStatementStartTimestamp() call, which sets both the time for
+	 * the statement we're about the run, and also the transaction start time.
+	 * Also, each other query sent to SPI should probably be preceded by
+	 * SetCurrentStatementStartTimestamp(), so that statement start time is
+	 * always up to date.
 	 *
-	 * The SPI_connect() call lets us run queries through the SPI manager,
-	 * and the PushActiveSnapshot() call creates an "active" snapshot
-	 * which is necessary for queries to have MVCC data to work on.
+	 * The SPI_connect() call lets us run queries through the SPI manager, and
+	 * the PushActiveSnapshot() call creates an "active" snapshot which is
+	 * necessary for queries to have MVCC data to work on.
 	 *
-	 * The pgstat_report_activity() call makes our activity visible
-	 * through the pgstat views.
+	 * The pgstat_report_activity() call makes our activity visible through
+	 * the pgstat views.
 	 */
 	SetCurrentStatementStartTimestamp();
 	StartTransactionCommand();
@@ -391,13 +393,13 @@ FDWXactResolver_worker_main(Datum dbid_datum)
 static List *
 get_database_list(void)
 {
-	List *dblist = NIL;
-	ListCell *cell;
-	ListCell *next;
-	ListCell *prev = NULL;
+	List	   *dblist = NIL;
+	ListCell   *cell;
+	ListCell   *next;
+	ListCell   *prev = NULL;
 	HeapScanDesc scan;
-	HeapTuple tup;
-	Relation rel;
+	HeapTuple	tup;
+	Relation	rel;
 	MemoryContext resultcxt;
 
 	/* This is the context that we will allocate our output data in */
@@ -431,13 +433,13 @@ get_database_list(void)
 	CommitTransactionCommand();
 
 	/*
-	 * Check if database has foreign transaction entry. Delete entry
-	 * from the list if the database has.
+	 * Check if database has foreign transaction entry. Delete entry from the
+	 * list if the database has.
 	 */
 	for (cell = list_head(dblist); cell != NULL; cell = next)
 	{
-		Oid dbid = lfirst_oid(cell);
-		bool exists;
+		Oid			dbid = lfirst_oid(cell);
+		bool		exists;
 
 		next = lnext(cell);
 
