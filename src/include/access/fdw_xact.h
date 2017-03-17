@@ -21,28 +21,29 @@
  */
 typedef struct
 {
-	Oid				dboid;		/* database oid where to find foreign server and
-								 * user mapping
-								 */
-	TransactionId	local_xid;
-	Oid				serverid;			/* foreign server where transaction takes place */
-	Oid				userid;				/* user who initiated the foreign transaction */
-	Oid				umid;
-	uint32			fdw_xact_id_len;	/* Length of the value stored in the next field */
+	Oid			dboid;			/* database oid where to find foreign server
+								 * and user mapping */
+	TransactionId local_xid;
+	Oid			serverid;		/* foreign server where transaction takes
+								 * place */
+	Oid			userid;			/* user who initiated the foreign transaction */
+	Oid			umid;
+	uint32		fdw_xact_id_len;/* Length of the value stored in the next
+								 * field */
 	/* This should always be the last member */
-	char			fdw_xact_id[FLEXIBLE_ARRAY_MEMBER];	/* variable length array
-														 * to store foreign transaction
-														 * information.
-														 */
-} FDWXactOnDiskData;
+	char		fdw_xact_id[FLEXIBLE_ARRAY_MEMBER];		/* variable length array
+														 * to store foreign
+														 * transaction
+														 * information. */
+}	FDWXactOnDiskData;
 
 typedef struct
 {
-	TransactionId	xid;
-	Oid				serverid;
-	Oid				userid;
-	Oid				dbid;
-} FdwRemoveXlogRec;
+	TransactionId xid;
+	Oid			serverid;
+	Oid			userid;
+	Oid			dbid;
+}	FdwRemoveXlogRec;
 
 extern int	max_prepared_foreign_xacts;
 
@@ -63,7 +64,7 @@ extern void AtEOXact_FDWXacts(bool is_commit);
 extern void AtPrepare_FDWXacts(void);
 extern void FDWXactTwoPhaseFinish(bool isCommit, TransactionId xid);
 extern bool fdw_xact_exists(TransactionId xid, Oid dboid, Oid serverid,
-								Oid userid);
+				Oid userid);
 extern void CheckPointFDWXact(XLogRecPtr redo_horizon);
 extern void RegisterXactForeignServer(Oid serverid, Oid userid, bool can_prepare);
 extern bool FdwTwoPhaseNeeded(void);
@@ -72,4 +73,4 @@ extern void KnownFDWXactAdd(XLogReaderState *record);
 extern void KnownFDWXactRemove(TransactionId xid, Oid serverid, Oid userid);
 extern void KnownFDWXactRecreateFiles(XLogRecPtr redo_horizon);
 
-#endif /* FDW_XACT_H */
+#endif   /* FDW_XACT_H */
