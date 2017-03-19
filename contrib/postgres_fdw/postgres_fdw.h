@@ -179,13 +179,11 @@ extern void deparseSelectStmtForRel(StringInfo buf, PlannerInfo *root,
 						RelOptInfo *foreignrel, List *tlist,
 						List *remote_conds, List *pathkeys, bool is_subquery,
 						List **retrieved_attrs, List **params_list);
-extern char	*postgresGetPrepareId(Oid serveroid, Oid userid, int *prep_info_len);
 extern bool postgresPrepareForeignTransaction(Oid serverid, Oid userid,
-											  Oid umid, int prep_info_len,
-											  char *prep_info);
+											  Oid umid, char *prep_info);
 extern bool postgresResolvePreparedForeignTransaction(Oid serverid, Oid userid,
 													  Oid umid, bool is_commit,
-													  int prep_info_len, char *prep_info);
+													  char *prep_info);
 extern bool postgresEndForeignTransaction(Oid serverid, Oid userid, Oid umid, bool is_commit);
 
 /* in shippable.c */
