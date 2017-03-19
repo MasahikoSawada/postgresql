@@ -88,7 +88,6 @@ typedef struct
 										 * protocol while committing
 										 * transaction on this server,
 										 * whenever necessary. */
-	GetPrepareId_function get_prepare_id;
 	EndForeignTransaction_function end_foreign_xact;
 	PrepareForeignTransaction_function prepare_foreign_xact;
 	ResolvePreparedForeignTransaction_function resolve_prepared_foreign_xact;
@@ -156,11 +155,6 @@ RegisterXactForeignServer(Oid serverid, Oid userid, bool two_phase_commit)
 					 errmsg("prepread foreign transactions are disabled"),
 					 errhint("Set max_prepared_foreign_transactions to a nonzero value.")));
 
-		if (!fdw_routine->GetPrepareId)
-			ereport(ERROR,
-					(errmsg("no prepared transaction identifier providing function for FDW %s",
-							fdw->fdwname)));
-
 		if (!fdw_routine->PrepareForeignTransaction)
 			ereport(ERROR,
 					(errmsg("no function provided for preparing foreign transaction for FDW %s",
@@ -181,7 +175,6 @@ RegisterXactForeignServer(Oid serverid, Oid userid, bool two_phase_commit)
 	 * system caches are not available. So save it before hand.
 	 */
 	fdw_conn->servername = foreign_server->servername;
-	fdw_conn->get_prepare_id = fdw_routine->GetPrepareId;
 	fdw_conn->prepare_foreign_xact = fdw_routine->PrepareForeignTransaction;
 	fdw_conn->resolve_prepared_foreign_xact = fdw_routine->ResolvePreparedForeignTransaction;
 	fdw_conn->end_foreign_xact = fdw_routine->EndForeignTransaction;
@@ -507,17 +500,16 @@ prepare_foreign_transactions(void)
 	foreach(lcell, MyFDWConnections)
 	{
 		FDWConnection *fdw_conn = (FDWConnection *) lfirst(lcell);
-		char	   *fdw_xact_id;
-		int			fdw_xact_id_len;
+		char	    fdw_xact_id[2 + 1 + 8 + 1 + 8 + 1 + 8];
+		int			fdw_xact_id_len = 29;
 		FDWXact		fdw_xact;
 
 		if (!fdw_conn->two_phase_commit)
 			continue;
 
-		Assert(fdw_conn->get_prepare_id);
-		fdw_xact_id = fdw_conn->get_prepare_id(fdw_conn->serverid,
-											   fdw_conn->userid,
-											   &fdw_xact_id_len);
+		snprintf(fdw_xact_id, 29, "%s_%08X_%08X_%08X",
+				 "px", GetTopTransactionId(), fdw_conn->serverid,
+				 fdw_conn->userid);
 
 		/*
 		 * Register the foreign transaction with the identifier used to
