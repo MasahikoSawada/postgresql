@@ -144,8 +144,9 @@ RegisterXactForeignServer(Oid serverid, Oid userid, bool two_phase_commit)
 	user_mapping = GetUserMapping(userid, serverid);
 
 	if (!fdw_routine->EndForeignTransaction)
-		elog(ERROR, "no function to end a foreign transaction provided for FDW %s",
-			 fdw->fdwname);
+		ereport(ERROR,
+				(errmsg("no function to end a foreign transaction provided for FDW %s",
+						fdw->fdwname)));
 
 	if (two_phase_commit)
 	{
@@ -156,16 +157,19 @@ RegisterXactForeignServer(Oid serverid, Oid userid, bool two_phase_commit)
 					 errhint("Set max_prepared_foreign_transactions to a nonzero value.")));
 
 		if (!fdw_routine->GetPrepareId)
-			elog(ERROR, "no prepared transaction identifier providing function for FDW %s",
-				 fdw->fdwname);
+			ereport(ERROR,
+					(errmsg("no prepared transaction identifier providing function for FDW %s",
+							fdw->fdwname)));
 
 		if (!fdw_routine->PrepareForeignTransaction)
-			elog(ERROR, "no function provided for preparing foreign transaction for FDW %s",
-				 fdw->fdwname);
+			ereport(ERROR,
+					(errmsg("no function provided for preparing foreign transaction for FDW %s",
+							fdw->fdwname)));
 
 		if (!fdw_routine->ResolvePreparedForeignTransaction)
-			elog(ERROR, "no function provided for resolving prepared foreign transaction for FDW %s",
-				 fdw->fdwname);
+			ereport(ERROR,
+					(errmsg("no function provided for resolving prepared foreign transaction for FDW %s",
+							fdw->fdwname)));
 	}
 
 	fdw_conn->serverid = serverid;
