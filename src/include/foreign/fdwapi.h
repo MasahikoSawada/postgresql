@@ -148,19 +148,13 @@ typedef bool (*EndForeignTransaction_function) (Oid serverid, Oid userid,
 												Oid umid, bool is_commit);
 
 typedef bool (*PrepareForeignTransaction_function) (Oid serverid, Oid userid,
-													Oid umid, int prep_info_len,
-													char *prep_info);
+													Oid umid, char *prep_info);
 
 typedef bool (*ResolvePreparedForeignTransaction_function) (Oid serverid,
 															Oid userid,
 															Oid umid,
 															bool is_commit,
-															int prep_info_len,
 															char *prep_info);
-
-typedef char *(*GetPrepareId_function) (Oid serverid, Oid userid,
-														int *prep_info_len);
-
 
 typedef Size (*EstimateDSMForeignScan_function) (ForeignScanState *node,
 													  ParallelContext *pcxt);
@@ -240,7 +234,6 @@ typedef struct FdwRoutine
 	ImportForeignSchema_function ImportForeignSchema;
 
 	/* Support functions for foreign transactions */
-	GetPrepareId_function GetPrepareId;
 	EndForeignTransaction_function EndForeignTransaction;
 	PrepareForeignTransaction_function PrepareForeignTransaction;
 	ResolvePreparedForeignTransaction_function ResolvePreparedForeignTransaction;

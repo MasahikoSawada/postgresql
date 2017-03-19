@@ -38,8 +38,7 @@ fdw_xact_desc(StringInfo buf, XLogReaderState *record)
 		 * TODO: we also need to assess whether we want to add this
 		 * information
 		 */
-		appendStringInfo(buf, " foreign transaction info: ");
-		appendStringInfo(buf, "%.*s", fdw_insert_xlog->fdw_xact_id_len,
+		appendStringInfo(buf, " foreign transaction info: %s",
 						 fdw_insert_xlog->fdw_xact_id);
 	}
 	else
