@@ -187,9 +187,6 @@ RegisterXactForeignServer(Oid serverid, Oid userid, bool two_phase_commit)
 	return;
 }
 
-/* Prepared transaction identifier can be maximum 256 bytes long */
-#define MAX_FDW_XACT_ID_LEN 256
-
 /* Enum to track the status of prepared foreign transaction */
 typedef enum
 {
@@ -232,8 +229,7 @@ typedef struct FDWXactData
 								 * file? */
 	BackendId	locking_backend;	/* Backend working on this entry */
 	bool		ondisk;			/* TRUE if prepare state file is on disk */
-	int			fdw_xact_id_len;	/* Length of prepared transaction identifier */
-	char		fdw_xact_id[MAX_FDW_XACT_ID_LEN];		/* prepared transaction
+	char		fdw_xact_id[FDW_XACT_ID_LEN];		/* prepared transaction
 														 * identifier */
 }	FDWXactData;
 
@@ -247,7 +243,7 @@ typedef struct FDWXactData
 #define FDW_XACT_FILE_NAME_LEN (8 + 1 + 8 + 1 + 8)
 #define FDWXactFilePath(path, xid, serverid, userid)	\
 	snprintf(path, MAXPGPATH, FDW_XACTS_DIR "/%08X_%08X_%08X", xid, \
-							serverid, userid)
+			 serverid, userid)
 
 /* Shared memory layout for maintaining foreign prepared transaction entries. */
 typedef struct
@@ -297,13 +293,13 @@ static void AtProcExit_FDWXact(int code, Datum arg);
 static bool resolve_fdw_xact(FDWXact fdw_xact,
   ResolvePreparedForeignTransaction_function prepared_foreign_xact_resolver);
 static FDWXact insert_fdw_xact(Oid dboid, TransactionId xid, Oid serverid, Oid userid,
-				Oid umid, int fdw_xact_id_len, char *fdw_xact_id,
+				Oid umid, char *fdw_xact_id,
 				FDWXactStatus fdw_xact_status);
 static void unlock_fdw_xact(FDWXact fdw_xact);
 static void unlock_fdw_xact_entries();
 static void remove_fdw_xact(FDWXact fdw_xact);
 static FDWXact register_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
-				  Oid umid, int fdw_xact_info_len, char *fdw_xact_info);
+				  Oid umid, char *fdw_xact_info);
 static int	GetFDWXactList(FDWXact * fdw_xacts);
 static ResolvePreparedForeignTransaction_function get_prepared_foreign_xact_resolver(FDWXact fdw_xact);
 static FDWXactOnDiskData *ReadFDWXactFile(TransactionId xid, Oid serverid,
@@ -500,16 +496,15 @@ prepare_foreign_transactions(void)
 	foreach(lcell, MyFDWConnections)
 	{
 		FDWConnection *fdw_conn = (FDWConnection *) lfirst(lcell);
-		char	    fdw_xact_id[2 + 1 + 8 + 1 + 8 + 1 + 8];
-		int			fdw_xact_id_len = 29;
+		char	    fdw_xact_id[FDW_XACT_ID_LEN];
 		FDWXact		fdw_xact;
 
 		if (!fdw_conn->two_phase_commit)
 			continue;
 
-		snprintf(fdw_xact_id, 29, "%s_%08X_%08X_%08X",
-				 "px", GetTopTransactionId(), fdw_conn->serverid,
-				 fdw_conn->userid);
+		/* Generate prepare transaction id for foreign server */
+		FDWXactId(fdw_xact_id, "px", GetTopTransactionId(),
+				  fdw_conn->serverid, fdw_conn->userid);
 
 		/*
 		 * Register the foreign transaction with the identifier used to
@@ -533,8 +528,7 @@ prepare_foreign_transactions(void)
 		 */
 		fdw_xact = register_fdw_xact(MyDatabaseId, GetTopTransactionId(),
 									 fdw_conn->serverid, fdw_conn->userid,
-									 fdw_conn->umid, fdw_xact_id_len,
-									 fdw_xact_id);
+									 fdw_conn->umid, fdw_xact_id);
 
 		/*
 		 * Between register_fdw_xact call above till this backend hears back
@@ -547,8 +541,7 @@ prepare_foreign_transactions(void)
 		 * resolved by the foreign transaction resolver.
 		 */
 		if (!fdw_conn->prepare_foreign_xact(fdw_conn->serverid, fdw_conn->userid,
-											fdw_conn->umid, fdw_xact_id_len,
-											fdw_xact_id))
+											fdw_conn->umid, fdw_xact_id))
 		{
 			/*
 			 * An error occurred, and we didn't prepare the transaction.
@@ -590,7 +583,7 @@ prepare_foreign_transactions(void)
  */
 static FDWXact
 register_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
-				  Oid umid, int fdw_xact_id_len, char *fdw_xact_id)
+				  Oid umid, char *fdw_xact_id)
 {
 	FDWXact		fdw_xact;
 	FDWXactOnDiskData *fdw_xact_file_data;
@@ -598,15 +591,14 @@ register_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
 
 	/* Enter the foreign transaction in the shared memory structure */
 	fdw_xact = insert_fdw_xact(dbid, xid, serverid, userid, umid,
-							   fdw_xact_id_len, fdw_xact_id,
-							   FDW_XACT_PREPARING);
+							   fdw_xact_id, FDW_XACT_PREPARING);
 
 	/*
 	 * Prepare to write the entry to a file. Also add xlog entry. The contents
 	 * of the xlog record are same as what is written to the file.
 	 */
 	data_len = offsetof(FDWXactOnDiskData, fdw_xact_id);
-	data_len = data_len + fdw_xact->fdw_xact_id_len;
+	data_len = data_len + FDW_XACT_ID_LEN;
 	data_len = MAXALIGN(data_len);
 	fdw_xact_file_data = (FDWXactOnDiskData *) palloc0(data_len);
 	fdw_xact_file_data->dboid = fdw_xact->dboid;
@@ -614,9 +606,8 @@ register_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
 	fdw_xact_file_data->serverid = fdw_xact->serverid;
 	fdw_xact_file_data->userid = fdw_xact->userid;
 	fdw_xact_file_data->umid = fdw_xact->umid;
-	fdw_xact_file_data->fdw_xact_id_len = fdw_xact->fdw_xact_id_len;
 	memcpy(fdw_xact_file_data->fdw_xact_id, fdw_xact->fdw_xact_id,
-		   fdw_xact->fdw_xact_id_len);
+		   FDW_XACT_ID_LEN);
 
 	START_CRIT_SECTION();
 
@@ -649,7 +640,7 @@ register_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
  */
 static FDWXact
 insert_fdw_xact(Oid dboid, TransactionId xid, Oid serverid, Oid userid, Oid umid,
-	   int fdw_xact_id_len, char *fdw_xact_id, FDWXactStatus fdw_xact_status)
+				char *fdw_xact_id, FDWXactStatus fdw_xact_status)
 {
 	FDWXact		fdw_xact;
 	int			cnt;
@@ -659,10 +650,6 @@ insert_fdw_xact(Oid dboid, TransactionId xid, Oid serverid, Oid userid, Oid umid
 		before_shmem_exit(AtProcExit_FDWXact, 0);
 		fdwXactExitRegistered = true;
 	}
-
-	if (fdw_xact_id_len > MAX_FDW_XACT_ID_LEN)
-		elog(ERROR, "foreign transaction identifier longer (%d) than allowed (%d)",
-			 fdw_xact_id_len, MAX_FDW_XACT_ID_LEN);
 
 	LWLockAcquire(FDWXactLock, LW_EXCLUSIVE);
 	fdw_xact = NULL;
@@ -709,8 +696,7 @@ insert_fdw_xact(Oid dboid, TransactionId xid, Oid serverid, Oid userid, Oid umid
 	fdw_xact->fdw_xact_end_lsn = InvalidXLogRecPtr;
 	fdw_xact->fdw_xact_valid = false;
 	fdw_xact->ondisk = false;
-	fdw_xact->fdw_xact_id_len = fdw_xact_id_len;
-	memcpy(fdw_xact->fdw_xact_id, fdw_xact_id, fdw_xact_id_len);
+	memcpy(fdw_xact->fdw_xact_id, fdw_xact_id, FDW_XACT_ID_LEN);
 
 	/* Remember that we have locked this entry. */
 	MyLockedFDWXacts = lappend(MyLockedFDWXacts, fdw_xact);
@@ -1050,7 +1036,6 @@ resolve_fdw_xact(FDWXact fdw_xact,
 
 	resolved = fdw_xact_handler(fdw_xact->serverid, fdw_xact->userid,
 								fdw_xact->umid, is_commit,
-								fdw_xact->fdw_xact_id_len,
 								fdw_xact->fdw_xact_id);
 
 	/* If we succeeded in resolving the transaction, remove the entry */
@@ -1551,7 +1536,7 @@ pg_fdw_xacts(PG_FUNCTION_ARGS)
 		values[4] = CStringGetTextDatum(xact_status);
 		/* should this be really interpreted by FDW */
 		values[5] = PointerGetDatum(cstring_to_text_with_len(fdw_xact->fdw_xact_id,
-												 fdw_xact->fdw_xact_id_len));
+												 FDW_XACT_ID_LEN));
 
 		tuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
 		result = HeapTupleGetDatum(tuple);
@@ -1777,7 +1762,7 @@ pg_fdw_xact_resolve(PG_FUNCTION_ARGS)
 		values[4] = CStringGetTextDatum(xact_status);
 		/* should this be really interpreted by FDW? */
 		values[5] = PointerGetDatum(cstring_to_text_with_len(fdw_xact->fdw_xact_id,
-												 fdw_xact->fdw_xact_id_len));
+															 FDW_XACT_ID_LEN));
 
 		tuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
 		result = HeapTupleGetDatum(tuple);
@@ -2077,7 +2062,6 @@ RecoverFDWXactFromFiles(void)
 			fdw_xact = insert_fdw_xact(fdw_xact_file_data->dboid, local_xid,
 									   serverid, userid,
 									   fdw_xact_file_data->umid,
-									   fdw_xact_file_data->fdw_xact_id_len,
 									   fdw_xact_file_data->fdw_xact_id,
 									   FDW_XACT_PREPARING);
 
