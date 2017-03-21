@@ -2154,7 +2154,7 @@ FDWXactRedoAdd(XLogReaderState *record)
  *
  * Remove the corresponding fdw_xact entry from FDWXactGlobal.
  * Also remove fdw_xact file if a foreign transaction was saved
- * via an earlier chechpoint.
+ * via an earlier checkpoint.
  */
 void
 FDWXactRedoRemove(TransactionId xid, Oid serverid, Oid userid)
@@ -2165,11 +2165,10 @@ FDWXactRedoRemove(TransactionId xid, Oid serverid, Oid userid)
 
 	fdw_xact = get_fdw_xact(xid, serverid, userid);
 
-	Assert(fdw_xact->inredo);
-
 	if (fdw_xact)
 	{
 		/* Now we can clean up any files we already left */
+		Assert(fdw_xact->inredo);
 		remove_fdw_xact(fdw_xact);
 	}
 	else
@@ -2178,7 +2177,6 @@ FDWXactRedoRemove(TransactionId xid, Oid serverid, Oid userid)
 		 * Entry could be on disk. Call with giveWarning = false
 		 * since it can be expected during replay.
 		 */
-		RemoveFDWXactFile(fdw_xact->local_xid, fdw_xact->serverid,
-						  fdw_xact->userid, false);
+		RemoveFDWXactFile(xid, serverid, userid, false);
 	}
 }
