@@ -9681,7 +9681,6 @@ xlog_redo(XLogReaderState *record)
 					(errmsg("unexpected timeline ID %u (should be %u) in checkpoint record",
 							checkPoint.ThisTimeLineID, ThisTimeLineID)));
 
-		KnownFDWXactRecreateFiles(checkPoint.redo);
 		RecoveryRestartPoint(&checkPoint);
 	}
 	else if (info == XLOG_CHECKPOINT_ONLINE)
