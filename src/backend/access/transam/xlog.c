@@ -7660,7 +7660,7 @@ StartupXLOG(void)
 	RecoverPreparedTransactions();
 
 	/* Recover foreign transaction state and insert into shared-memory. */
-	RecoverFDWXactFromFiles();
+	RecoverFDWXacts();
 
 	/*
 	 * Shutdown the recovery environment. This must occur after
@@ -9681,7 +9681,6 @@ xlog_redo(XLogReaderState *record)
 					(errmsg("unexpected timeline ID %u (should be %u) in checkpoint record",
 							checkPoint.ThisTimeLineID, ThisTimeLineID)));
 
-		KnownFDWXactRecreateFiles(checkPoint.redo);
 		RecoveryRestartPoint(&checkPoint);
 	}
 	else if (info == XLOG_CHECKPOINT_ONLINE)

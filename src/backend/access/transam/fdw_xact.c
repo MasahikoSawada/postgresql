@@ -70,6 +70,27 @@
  * that prepared transaction unresolved. During the first phase, before actually
  * preparing the transactions, enough information is persisted to the disk and
  * logs in order to resolve such transactions.
+ *
+ * During replay and replication FDWXactGlobal also holds information about
+ * active prepared foreign transaction that haven't been moved to disk yet.
+ *
+ * Replay of fdw_xact records happens by the following rules:
+ *
+ *		* On PREPARE redo we add the foreign transaction to
+ *		  FDWXactGlobal->fdw_xacts. We set fdw_xact->inredo to true for
+ *		  such entries.
+ *
+ *		* On Checkpoint redo we iterate through FDWXactGlobal->fdw_xacts.
+ *		  entries that have fdw_xact->inredo set and are behind the redo_horizon.
+ *		  We save them to disk and also set fdw_xact->ondisk to true.
+ *
+ *		* On COMMIT/ABORT we delete the entry from FDWXactGlobal->fdw_xacts.
+ *		  If fdw_xact->ondisk is true, we delete the corresponding entry from
+ *		  the disk as well.
+ *
+ *		* RecoverPreparedTransactions(), StnadbyReoverPreparedTransactions() and
+ *		  PrescanPreparedTransactions() have been modified to go through
+ *		  fdw_xact->inredo entries that have not made to disk yet.
  */
 
 /* Shared memory entry for a prepared or being prepared foreign transaction */
@@ -209,9 +230,9 @@ typedef struct FDWXactData
 								 * place */
 	Oid			userid;			/* user who initiated the foreign transaction */
 	Oid			umid;			/* user mapping id for connection key */
-	FDWXactStatus fdw_xact_status;		/* The state of the foreign
-										 * transaction. This doubles as the
-										 * action to be taken on this entry. */
+	FDWXactStatus status;		/* The state of the foreign
+								 * transaction. This doubles as the
+								 * action to be taken on this entry. */
 
 	/*
 	 * Note that we need to keep track of two LSNs for each FDWXact. We keep
@@ -225,10 +246,10 @@ typedef struct FDWXactData
 	XLogRecPtr	fdw_xact_end_lsn;		/* XLOG offset of inserting this entry
 										 * end */
 
-	bool		fdw_xact_valid; /* Has the entry been complete and written to
-								 * file? */
+	bool		valid; /* Has the entry been complete and written to file? */
 	BackendId	locking_backend;	/* Backend working on this entry */
 	bool		ondisk;			/* TRUE if prepare state file is on disk */
+	bool		inredo;			/* TRUE if entry was added via xlog_redo */
 	char		fdw_xact_id[FDW_XACT_ID_LEN];		/* prepared transaction
 														 * identifier */
 }	FDWXactData;
@@ -252,49 +273,17 @@ typedef struct
 	FDWXact		freeFDWXacts;
 
 	/* Number of valid FDW transaction entries */
-	int			num_fdw_xacts;
+	int			numFDWXacts;
 
 	/* Upto max_prepared_foreign_xacts entries in the array */
 	FDWXact		fdw_xacts[FLEXIBLE_ARRAY_MEMBER];		/* Variable length array */
 }	FDWXactGlobalData;
 
-/*
- * During replay and replication KnownFDWXactList holds info about active foreign server
- * transactions that weren't moved to files yet. We will need that info by the end of
- * recovery (including promote) to restore memory state of that transactions.
- *
- * Naive approach here is to move each PREPARE record to disk, fsync it and don't have
- * that list at all, but that provokes a lot of unnecessary fsyncs on small files
- * causing replica to be slower than master.
- *
- * Replay of twophase records happens by the following rules:
- *		* On PREPARE redo KnownFDWXactAdd() is called to add that transaction to
- *		  KnownFDWXactList and no more actions are taken.
- *		* On checkpoint redo we iterate through KnownFDWXactList and move all prepare
- *		  records that behind redo_horizon to files and deleting them from list.
- *		* On COMMIT/ABORT we delete file or entry in KnownFDWXactList.
- *		* At the end of recovery we move all known foreign server transactions to disk
- *		  to allow RecoverPreparedTransactions/StandbyRecoverPreparedTransactions
- *		  do their work.
- */
-typedef struct KnownFDWXact
-{
-	TransactionId local_xid;
-	Oid			serverid;
-	Oid			userid;
-	XLogRecPtr	fdw_xact_start_lsn;
-	XLogRecPtr	fdw_xact_end_lsn;
-	dlist_node	list_node;
-}	KnownFDWXact;
-
-static dlist_head KnownFDWXactList = DLIST_STATIC_INIT(KnownFDWXactList);
-
 static void AtProcExit_FDWXact(int code, Datum arg);
 static bool resolve_fdw_xact(FDWXact fdw_xact,
   ResolvePreparedForeignTransaction_function prepared_foreign_xact_resolver);
 static FDWXact insert_fdw_xact(Oid dboid, TransactionId xid, Oid serverid, Oid userid,
-				Oid umid, char *fdw_xact_id,
-				FDWXactStatus fdw_xact_status);
+							   Oid umid, char *fdw_xact_id);
 static void unlock_fdw_xact(FDWXact fdw_xact);
 static void unlock_fdw_xact_entries();
 static void remove_fdw_xact(FDWXact fdw_xact);
@@ -310,6 +299,7 @@ static void RecreateFDWXactFile(TransactionId xid, Oid serverid, Oid userid,
 					void *content, int len);
 static void XlogReadFDWXactData(XLogRecPtr lsn, char **buf, int *len);
 static void prepare_foreign_transactions(void);
+static FDWXact get_fdw_xact(TransactionId xid, Oid serverid, Oid userid);
 bool search_fdw_xact(TransactionId xid, Oid dbid, Oid serverid, Oid userid,
 				List **qualifying_xacts);
 
@@ -370,7 +360,7 @@ FDWXactShmemInit(void)
 
 		Assert(!found);
 		FDWXactGlobal->freeFDWXacts = NULL;
-		FDWXactGlobal->num_fdw_xacts = 0;
+		FDWXactGlobal->numFDWXacts = 0;
 
 		/* Initialise the linked list of free FDW transactions */
 		fdw_xacts = (FDWXact)
@@ -591,7 +581,12 @@ register_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
 
 	/* Enter the foreign transaction in the shared memory structure */
 	fdw_xact = insert_fdw_xact(dbid, xid, serverid, userid, umid,
-							   fdw_xact_id, FDW_XACT_PREPARING);
+							   fdw_xact_id);
+	fdw_xact->status = FDW_XACT_PREPARING;
+	fdw_xact->locking_backend = MyBackendId;
+
+	/* Remember that we have locked this entry. */
+	MyLockedFDWXacts = lappend(MyLockedFDWXacts, fdw_xact);
 
 	/*
 	 * Prepare to write the entry to a file. Also add xlog entry. The contents
@@ -621,7 +616,7 @@ register_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
 	fdw_xact->fdw_xact_start_lsn = ProcLastRecPtr;
 
 	/* File is written completely, checkpoint can proceed with syncing */
-	fdw_xact->fdw_xact_valid = true;
+	fdw_xact->valid = true;
 
 	END_CRIT_SECTION();
 
@@ -633,17 +628,15 @@ register_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
  * insert_fdw_xact
  *
  * Insert a new entry for a given foreign transaction identified by transaction
- * id, foreign server and user mapping, in the shared memory. The inserted entry
- * is returned locked.
+ * id, foreign server and user mapping, in the shared memory.
  *
  * If the entry already exists, the function raises an error.
  */
 static FDWXact
 insert_fdw_xact(Oid dboid, TransactionId xid, Oid serverid, Oid userid, Oid umid,
-				char *fdw_xact_id, FDWXactStatus fdw_xact_status)
+				char *fdw_xact_id)
 {
 	FDWXact		fdw_xact;
-	int			cnt;
 
 	if (!fdwXactExitRegistered)
 	{
@@ -652,17 +645,12 @@ insert_fdw_xact(Oid dboid, TransactionId xid, Oid serverid, Oid userid, Oid umid
 	}
 
 	LWLockAcquire(FDWXactLock, LW_EXCLUSIVE);
-	fdw_xact = NULL;
-	for (cnt = 0; cnt < FDWXactGlobal->num_fdw_xacts; cnt++)
-	{
-		fdw_xact = FDWXactGlobal->fdw_xacts[cnt];
 
-		if (fdw_xact->local_xid == xid &&
-			fdw_xact->serverid == serverid &&
-			fdw_xact->userid == userid)
-			elog(ERROR, "duplicate entry for foreign transaction with transaction id %u, serverid %u, userid %u found",
-				 xid, serverid, userid);
-	}
+	fdw_xact = get_fdw_xact(xid, serverid, userid);
+
+	if (fdw_xact)
+		elog(ERROR, "duplicate entry for foreign transaction with transaction id %u, serverid %u, userid %u found",
+			 xid, serverid, userid);
 
 	/*
 	 * Get the next free foreign transaction entry. Raise error if there are
@@ -681,25 +669,23 @@ insert_fdw_xact(Oid dboid, TransactionId xid, Oid serverid, Oid userid, Oid umid
 	FDWXactGlobal->freeFDWXacts = fdw_xact->fx_next;
 
 	/* Insert the entry to active array */
-	Assert(FDWXactGlobal->num_fdw_xacts < max_prepared_foreign_xacts);
-	FDWXactGlobal->fdw_xacts[FDWXactGlobal->num_fdw_xacts++] = fdw_xact;
+	Assert(FDWXactGlobal->numFDWXacts < max_prepared_foreign_xacts);
+	FDWXactGlobal->fdw_xacts[FDWXactGlobal->numFDWXacts++] = fdw_xact;
 
 	/* Stamp the entry with backend id before releasing the LWLock */
-	fdw_xact->locking_backend = MyBackendId;
+	fdw_xact->locking_backend = InvalidBackendId;
 	fdw_xact->dboid = dboid;
 	fdw_xact->local_xid = xid;
 	fdw_xact->serverid = serverid;
 	fdw_xact->userid = userid;
 	fdw_xact->umid = umid;
-	fdw_xact->fdw_xact_status = fdw_xact_status;
 	fdw_xact->fdw_xact_start_lsn = InvalidXLogRecPtr;
 	fdw_xact->fdw_xact_end_lsn = InvalidXLogRecPtr;
-	fdw_xact->fdw_xact_valid = false;
+	fdw_xact->valid = false;
 	fdw_xact->ondisk = false;
+	fdw_xact->inredo = false;
 	memcpy(fdw_xact->fdw_xact_id, fdw_xact_id, FDW_XACT_ID_LEN);
 
-	/* Remember that we have locked this entry. */
-	MyLockedFDWXacts = lappend(MyLockedFDWXacts, fdw_xact);
 	LWLockRelease(FDWXactLock);
 
 	return fdw_xact;
@@ -718,22 +704,13 @@ remove_fdw_xact(FDWXact fdw_xact)
 
 	LWLockAcquire(FDWXactLock, LW_EXCLUSIVE);
 	/* Search the slot where this entry resided */
-	for (cnt = 0; cnt < FDWXactGlobal->num_fdw_xacts; cnt++)
+	for (cnt = 0; cnt < FDWXactGlobal->numFDWXacts; cnt++)
 	{
 		if (FDWXactGlobal->fdw_xacts[cnt] == fdw_xact)
 		{
-			FdwRemoveXlogRec fdw_remove_xlog;
-			XLogRecPtr	recptr;
-
-			/* Fill up the log record before releasing the entry */
-			fdw_remove_xlog.serverid = fdw_xact->serverid;
-			fdw_remove_xlog.dbid = fdw_xact->dboid;
-			fdw_remove_xlog.xid = fdw_xact->local_xid;
-			fdw_remove_xlog.userid = fdw_xact->userid;
-
 			/* Remove the entry from active array */
-			FDWXactGlobal->num_fdw_xacts--;
-			FDWXactGlobal->fdw_xacts[cnt] = FDWXactGlobal->fdw_xacts[FDWXactGlobal->num_fdw_xacts];
+			FDWXactGlobal->numFDWXacts--;
+			FDWXactGlobal->fdw_xacts[cnt] = FDWXactGlobal->fdw_xacts[FDWXactGlobal->numFDWXacts];
 
 			/* Put it back into free list */
 			fdw_xact->fx_next = FDWXactGlobal->freeFDWXacts;
@@ -745,23 +722,35 @@ remove_fdw_xact(FDWXact fdw_xact)
 
 			LWLockRelease(FDWXactLock);
 
-			START_CRIT_SECTION();
+			if (!RecoveryInProgress())
+			{
+				FdwRemoveXlogRec fdw_remove_xlog;
+				XLogRecPtr	recptr;
 
-			/*
-			 * Log that we are removing the foreign transaction entry and
-			 * remove the file from the disk as well.
-			 */
-			XLogBeginInsert();
-			XLogRegisterData((char *) &fdw_remove_xlog, sizeof(fdw_remove_xlog));
-			recptr = XLogInsert(RM_FDW_XACT_ID, XLOG_FDW_XACT_REMOVE);
-			XLogFlush(recptr);
+				/* Fill up the log record before releasing the entry */
+				fdw_remove_xlog.serverid = fdw_xact->serverid;
+				fdw_remove_xlog.dbid = fdw_xact->dboid;
+				fdw_remove_xlog.xid = fdw_xact->local_xid;
+				fdw_remove_xlog.userid = fdw_xact->userid;
 
-			END_CRIT_SECTION();
+				START_CRIT_SECTION();
+
+				/*
+				 * Log that we are removing the foreign transaction entry and
+				 * remove the file from the disk as well.
+				 */
+				XLogBeginInsert();
+				XLogRegisterData((char *) &fdw_remove_xlog, sizeof(fdw_remove_xlog));
+				recptr = XLogInsert(RM_FDW_XACT_ID, XLOG_FDW_XACT_REMOVE);
+				XLogFlush(recptr);
+
+				END_CRIT_SECTION();
+			}
 
 			/* Remove the file from the disk if exists. */
 			if (fdw_xact->ondisk)
-				RemoveFDWXactFile(fdw_remove_xlog.xid, fdw_remove_xlog.serverid,
-								  fdw_remove_xlog.userid, true);
+				RemoveFDWXactFile(fdw_xact->local_xid, fdw_xact->serverid,
+								  fdw_xact->userid, true);
 			return;
 		}
 	}
@@ -849,7 +838,7 @@ AtEOXact_FDWXacts(bool is_commit)
 		{
 			FDWXact		fdw_xact = fdw_conn->fdw_xact;
 
-			fdw_xact->fdw_xact_status = (is_commit ?
+			fdw_xact->status = (is_commit ?
 										 FDW_XACT_COMMITTING_PREPARED :
 										 FDW_XACT_ABORTING_PREPARED);
 
@@ -981,7 +970,7 @@ FDWXactTwoPhaseFinish(bool isCommit, TransactionId xid)
 		FDWXact		fdw_xact = linitial(entries_to_resolve);
 
 		entries_to_resolve = list_delete_first(entries_to_resolve);
-		fdw_xact->fdw_xact_status = status;
+		fdw_xact->status = status;
 
 		/*
 		 * Resolve the foreign transaction. If resolution is not successful,
@@ -1028,10 +1017,10 @@ resolve_fdw_xact(FDWXact fdw_xact,
 	bool		resolved;
 	bool		is_commit;
 
-	Assert(fdw_xact->fdw_xact_status == FDW_XACT_COMMITTING_PREPARED ||
-		   fdw_xact->fdw_xact_status == FDW_XACT_ABORTING_PREPARED);
+	Assert(fdw_xact->status == FDW_XACT_COMMITTING_PREPARED ||
+		   fdw_xact->status == FDW_XACT_ABORTING_PREPARED);
 
-	is_commit = (fdw_xact->fdw_xact_status == FDW_XACT_COMMITTING_PREPARED) ?
+	is_commit = (fdw_xact->status == FDW_XACT_COMMITTING_PREPARED) ?
 		true : false;
 
 	resolved = fdw_xact_handler(fdw_xact->serverid, fdw_xact->userid,
@@ -1043,6 +1032,29 @@ resolve_fdw_xact(FDWXact fdw_xact,
 		remove_fdw_xact(fdw_xact);
 
 	return resolved;
+}
+
+/*
+ * Get foreign transaction entry from FDWXactGlobal->fdw_xacts. Return NULL
+ * if foreign transacgiven does not exist. The caller must hold FDWXactLock.
+ */
+static FDWXact
+get_fdw_xact(TransactionId xid, Oid serverid, Oid userid)
+{
+	int i;
+	FDWXact fdw_xact;
+
+	for (i = 0; i < FDWXactGlobal->numFDWXacts; i++)
+	{
+		fdw_xact = FDWXactGlobal->fdw_xacts[i];
+
+		if (fdw_xact->local_xid == xid &&
+			fdw_xact->serverid == serverid &&
+			fdw_xact->userid == userid)
+			return fdw_xact;
+	}
+
+	return NULL;
 }
 
 /*
@@ -1110,7 +1122,7 @@ search_fdw_xact(TransactionId xid, Oid dbid, Oid serverid, Oid userid,
 		lock_mode = LW_SHARED;
 
 	LWLockAcquire(FDWXactLock, lock_mode);
-	for (cnt = 0; cnt < FDWXactGlobal->num_fdw_xacts; cnt++)
+	for (cnt = 0; cnt < FDWXactGlobal->numFDWXacts; cnt++)
 	{
 		FDWXact		fdw_xact = FDWXactGlobal->fdw_xacts[cnt];
 		bool		entry_matches = true;
@@ -1187,13 +1199,14 @@ fdw_xact_redo(XLogReaderState *record)
 	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
 
 	if (info == XLOG_FDW_XACT_INSERT)
-		KnownFDWXactAdd(record);
+		FDWXactRedoAdd(record);
 	else if (info == XLOG_FDW_XACT_REMOVE)
 	{
 		FdwRemoveXlogRec *fdw_remove_xlog = (FdwRemoveXlogRec *) rec;
 
-		KnownFDWXactRemove(fdw_remove_xlog->xid, fdw_remove_xlog->serverid,
-						   fdw_remove_xlog->userid);
+		/* Delete FDWXact entry and file if exists */
+		FDWXactRedoRemove(fdw_remove_xlog->xid, fdw_remove_xlog->serverid,
+						  fdw_remove_xlog->userid);
 	}
 	else
 		elog(ERROR, "invalid log type %d in foreign transction log record", info);
@@ -1232,7 +1245,7 @@ CheckPointFDWXact(XLogRecPtr redo_horizon)
 	LWLockAcquire(FDWXactLock, LW_SHARED);
 
 	/* Another quick, before we allocate memory */
-	if (FDWXactGlobal->num_fdw_xacts <= 0)
+	if (FDWXactGlobal->numFDWXacts <= 0)
 	{
 		LWLockRelease(FDWXactLock);
 		return;
@@ -1254,11 +1267,11 @@ CheckPointFDWXact(XLogRecPtr redo_horizon)
 	 * fdw_xact_end_lsn set prior to the last checkpoint yet is marked
 	 * invalid, because of the efforts with delayChkpt.
 	 */
-	for (cnt = 0; cnt < FDWXactGlobal->num_fdw_xacts; cnt++)
+	for (cnt = 0; cnt < FDWXactGlobal->numFDWXacts; cnt++)
 	{
 		FDWXact		fdw_xact = FDWXactGlobal->fdw_xacts[cnt];
 
-		if (fdw_xact->fdw_xact_valid &&
+		if ((fdw_xact->valid || fdw_xact->inredo) &&
 			!fdw_xact->ondisk &&
 			fdw_xact->fdw_xact_end_lsn <= redo_horizon)
 		{
@@ -1282,7 +1295,7 @@ CheckPointFDWXact(XLogRecPtr redo_horizon)
 		ereport(LOG,
 			  (errmsg_plural("%u foreign transaction state file was written "
 							 "for long-running prepared transactions",
-						   "%u foreign transaction state files were written "
+							 "%u foreign transaction state files were written "
 							 "for long-running prepared transactions",
 							 serialized_fdw_xacts,
 							 serialized_fdw_xacts)));
@@ -1505,7 +1518,7 @@ pg_fdw_xacts(PG_FUNCTION_ARGS)
 		HeapTuple	tuple;
 		Datum		result;
 
-		if (!fdw_xact->fdw_xact_valid)
+		if (!fdw_xact->valid)
 			continue;
 
 		/*
@@ -1518,7 +1531,7 @@ pg_fdw_xacts(PG_FUNCTION_ARGS)
 		values[1] = TransactionIdGetDatum(fdw_xact->local_xid);
 		values[2] = ObjectIdGetDatum(fdw_xact->serverid);
 		values[3] = ObjectIdGetDatum(fdw_xact->userid);
-		switch (fdw_xact->fdw_xact_status)
+		switch (fdw_xact->status)
 		{
 			case FDW_XACT_PREPARING:
 				xact_status = "prepared";
@@ -1566,14 +1579,14 @@ GetFDWXactList(FDWXact * fdw_xacts)
 
 	LWLockAcquire(FDWXactLock, LW_SHARED);
 
-	if (FDWXactGlobal->num_fdw_xacts == 0)
+	if (FDWXactGlobal->numFDWXacts == 0)
 	{
 		LWLockRelease(FDWXactLock);
 		*fdw_xacts = NULL;
 		return 0;
 	}
 
-	num_xacts = FDWXactGlobal->num_fdw_xacts;
+	num_xacts = FDWXactGlobal->numFDWXacts;
 	*fdw_xacts = (FDWXact) palloc(sizeof(FDWXactData) * num_xacts);
 	for (cnt_xacts = 0; cnt_xacts < num_xacts; cnt_xacts++)
 		memcpy((*fdw_xacts) + cnt_xacts, FDWXactGlobal->fdw_xacts[cnt_xacts],
@@ -1641,7 +1654,7 @@ pg_fdw_xact_resolve(PG_FUNCTION_ARGS)
 		 */
 		status = (WorkingStatus *) palloc(sizeof(WorkingStatus));
 		funcctx->user_fctx = (void *) status;
-		status->fdw_xacts = (FDWXact) palloc(sizeof(FDWXactData) * FDWXactGlobal->num_fdw_xacts);
+		status->fdw_xacts = (FDWXact) palloc(sizeof(FDWXactData) * FDWXactGlobal->numFDWXacts);
 		status->num_xacts = 0;
 		status->cur_xact = 0;
 
@@ -1670,8 +1683,8 @@ pg_fdw_xact_resolve(PG_FUNCTION_ARGS)
 			memcpy(status->fdw_xacts + status->num_xacts++,
 				   fdw_xact, sizeof(FDWXactData));
 
-			if (fdw_xact->fdw_xact_status == FDW_XACT_COMMITTING_PREPARED ||
-				fdw_xact->fdw_xact_status == FDW_XACT_ABORTING_PREPARED)
+			if (fdw_xact->status == FDW_XACT_COMMITTING_PREPARED ||
+				fdw_xact->status == FDW_XACT_ABORTING_PREPARED)
 			{
 				/*
 				 * We have already decided what to do with the foreign
@@ -1679,9 +1692,9 @@ pg_fdw_xact_resolve(PG_FUNCTION_ARGS)
 				 */
 			}
 			else if (TransactionIdDidCommit(fdw_xact->local_xid))
-				fdw_xact->fdw_xact_status = FDW_XACT_COMMITTING_PREPARED;
+				fdw_xact->status = FDW_XACT_COMMITTING_PREPARED;
 			else if (TransactionIdDidAbort(fdw_xact->local_xid))
-				fdw_xact->fdw_xact_status = FDW_XACT_ABORTING_PREPARED;
+				fdw_xact->status = FDW_XACT_ABORTING_PREPARED;
 			else if (!TransactionIdIsInProgress(fdw_xact->local_xid))
 			{
 				/*
@@ -1689,7 +1702,7 @@ pg_fdw_xact_resolve(PG_FUNCTION_ARGS)
 				 * backends. So probably, it crashed before actual abort or
 				 * commit. So assume it to be aborted.
 				 */
-				fdw_xact->fdw_xact_status = FDW_XACT_ABORTING_PREPARED;
+				fdw_xact->status = FDW_XACT_ABORTING_PREPARED;
 			}
 			else
 			{
@@ -1712,7 +1725,7 @@ pg_fdw_xact_resolve(PG_FUNCTION_ARGS)
 				unlock_fdw_xact(fdw_xact);
 			else
 				/* Update the status in the result set */
-				status->fdw_xacts[status->num_xacts - 1].fdw_xact_status = FDW_XACT_RESOLVED;
+				status->fdw_xacts[status->num_xacts - 1].status = FDW_XACT_RESOLVED;
 		}
 	}
 
@@ -1728,7 +1741,7 @@ pg_fdw_xact_resolve(PG_FUNCTION_ARGS)
 		HeapTuple	tuple;
 		Datum		result;
 
-		if (!fdw_xact->fdw_xact_valid)
+		if (!fdw_xact->valid)
 			continue;
 
 		/*
@@ -1741,7 +1754,7 @@ pg_fdw_xact_resolve(PG_FUNCTION_ARGS)
 		values[1] = TransactionIdGetDatum(fdw_xact->local_xid);
 		values[2] = ObjectIdGetDatum(fdw_xact->serverid);
 		values[3] = ObjectIdGetDatum(fdw_xact->userid);
-		switch (fdw_xact->fdw_xact_status)
+		switch (fdw_xact->status)
 		{
 			case FDW_XACT_PREPARING:
 				xact_status = "preparing";
@@ -1968,14 +1981,6 @@ PrescanFDWXacts(TransactionId oldestActiveXid)
 	DIR		   *cldir;
 	struct dirent *clde;
 
-	/*
-	 * Move foreign transactions from kownFDWXactList to files, if any. It is
-	 * possible to skip that step and teach subsequent code about
-	 * KnownFDWXactList, but whole PreScan() happens once during end of
-	 * recovery or promote, so probably it isn't worth complications.
-	 */
-	KnownFDWXactRecreateFiles(InvalidXLogRecPtr);
-
 	cldir = AllocateDir(FDW_XACTS_DIR);
 	while ((clde = ReadDir(cldir, FDW_XACTS_DIR)) != NULL)
 	{
@@ -2017,7 +2022,7 @@ PrescanFDWXacts(TransactionId oldestActiveXid)
  * usage.
  */
 void
-RecoverFDWXactFromFiles(void)
+RecoverFDWXacts(void)
 {
 	DIR		   *cldir;
 	struct dirent *clde;
@@ -2052,28 +2057,36 @@ RecoverFDWXactFromFiles(void)
 					(errmsg("recovering foreign transaction entry for xid %u, foreign server %u and user %u",
 							local_xid, serverid, userid)));
 
-			/*
-			 * Add this entry into the table of foreign transactions. The
-			 * status of the transaction is set as preparing, since we do not
-			 * know the exact status right now. Resolver will set it later
-			 * based on the status of local transaction which prepared this
-			 * foreign transaction.
-			 */
-			fdw_xact = insert_fdw_xact(fdw_xact_file_data->dboid, local_xid,
-									   serverid, userid,
-									   fdw_xact_file_data->umid,
-									   fdw_xact_file_data->fdw_xact_id,
-									   FDW_XACT_PREPARING);
+			LWLockAcquire(FDWXactLock, LW_SHARED);
 
-			/* Add some valid LSNs */
-			fdw_xact->fdw_xact_start_lsn = 0;
-			fdw_xact->fdw_xact_end_lsn = 0;
+			fdw_xact = get_fdw_xact(local_xid, serverid, userid);
+
+			if (!fdw_xact)
+			{
+				/*
+				 * Add this entry into the table of foreign transactions. The
+				 * status of the transaction is set as preparing, since we do not
+				 * know the exact status right now. Resolver will set it later
+				 * based on the status of local transaction which prepared this
+				 * foreign transaction.
+				 */
+				fdw_xact = insert_fdw_xact(fdw_xact_file_data->dboid, local_xid,
+										   serverid, userid,
+										   fdw_xact_file_data->umid,
+										   fdw_xact_file_data->fdw_xact_id);
+				fdw_xact->locking_backend = MyBackendId;
+				fdw_xact->status = FDW_XACT_PREPARING;
+			}
+			else
+			{
+				Assert(fdw_xact->inredo);
+				fdw_xact->inredo = false;
+			}
+
 			/* Mark the entry as ready */
-			fdw_xact->fdw_xact_valid = true;
+			fdw_xact->valid = true;
 			/* Already synced to disk */
 			fdw_xact->ondisk = true;
-			/* Unlock the entry as we don't need it any further */
-			unlock_fdw_xact(fdw_xact);
 			pfree(fdw_xact_file_data);
 		}
 	}
@@ -2102,116 +2115,59 @@ RemoveFDWXactFile(TransactionId xid, Oid serverid, Oid userid, bool giveWarning)
 }
 
 /*
- * KnownFDWXactAdd
+ * FDWXactRedoAdd
  *
- * Store correspondence of start/end lsn and xid in KnownFDWXactList.
- * This is called during redo of prepare record to have list of prepared
- * transactions on foreign server that aren't yet moved to 2PC files by the
- * end of recovery.
+ * Store pointer to the start/end of the WAL record along with the xid in
+ * a fdw_xact entry in shared memory FDWXactData structure.
  */
 void
-KnownFDWXactAdd(XLogReaderState *record)
+FDWXactRedoAdd(XLogReaderState *record)
 {
-	KnownFDWXact *fdw_xact;
-	FDWXactOnDiskData *fdw_xact_data_file = (FDWXactOnDiskData *) XLogRecGetData(record);
+	FDWXactOnDiskData *fdw_xact_data = (FDWXactOnDiskData *) XLogRecGetData(record);
+	FDWXact fdw_xact;
 
 	Assert(RecoveryInProgress());
 
-	fdw_xact = (KnownFDWXact *) palloc(sizeof(KnownFDWXact));
-	fdw_xact->local_xid = fdw_xact_data_file->local_xid;
-	fdw_xact->serverid = fdw_xact_data_file->serverid;;
-	fdw_xact->userid = fdw_xact_data_file->userid;;
+	fdw_xact = insert_fdw_xact(fdw_xact_data->dboid, fdw_xact_data->local_xid,
+							   fdw_xact_data->serverid, fdw_xact_data->userid,
+							   fdw_xact_data->umid, fdw_xact_data->fdw_xact_id);
+	fdw_xact->status = FDW_XACT_PREPARING;
 	fdw_xact->fdw_xact_start_lsn = record->ReadRecPtr;
 	fdw_xact->fdw_xact_end_lsn = record->EndRecPtr;
-
-	dlist_push_tail(&KnownFDWXactList, &fdw_xact->list_node);
+	fdw_xact->inredo = true;
 }
-
 /*
- * KnownFDWXactRemove
+ * FDWXactRedoRemove
  *
- * Forgot about foreign transaction. Called during commit/abort redo.
+ * Remove the corresponding fdw_xact entry from FDWXactGlobal.
+ * Also remove fdw_xact file if a foreign transaction was saved
+ * via an earlier chechpoint.
  */
 void
-KnownFDWXactRemove(TransactionId xid, Oid serverid, Oid userid)
+FDWXactRedoRemove(TransactionId xid, Oid serverid, Oid userid)
 {
-	dlist_mutable_iter miter;
+	FDWXact	fdw_xact;
 
 	Assert(RecoveryInProgress());
 
-	dlist_foreach_modify(miter, &KnownFDWXactList)
+	LWLockAcquire(FDWXactLock, LW_SHARED);
+	fdw_xact = get_fdw_xact(xid, serverid, userid);
+	LWLockRelease(FDWXactLock);
+
+	Assert(fdw_xact->inredo);
+
+	if (fdw_xact)
 	{
-		KnownFDWXact *fdw_xact = dlist_container(KnownFDWXact, list_node,
-												 miter.cur);
-
-		if (fdw_xact->local_xid == xid &&
-			fdw_xact->serverid == serverid &&
-			fdw_xact->userid == userid)
-		{
-			dlist_delete(miter.cur);
-
-			/*
-			 * SInce we found entry in KnownFDWXactList we know that file
-			 * isn't on disk yet and we can end up here.
-			 */
-			return;
-		}
+		/* Now we can clean up any files we already left */
+		remove_fdw_xact(fdw_xact);
 	}
-
-	/*
-	 * Here we know that file should be removed from disk. But aborting
-	 * recovery because of absence of unnecessary file doesn't seems to be a
-	 * good idea, so call remove with giveWarning = false.
-	 */
-	RemoveFDWXactFile(xid, serverid, userid, false);
-}
-
-/*
- * KnownFDWXactRecreateFiles
- *
- * Moves foreign server transaction records from WAL to files. Called during
- * checkpoint replay or PrescanPreparedTransactions.
- *
- * redo_horizon = InvalidXLogRecPtr indicates that all transactions from
- *		KnownFDWXactList should be moved to disk.
- */
-void
-KnownFDWXactRecreateFiles(XLogRecPtr redo_horizon)
-{
-	dlist_mutable_iter miter;
-	int			serialized_fdw_xacts = 0;
-
-	Assert(RecoveryInProgress());
-
-	TRACE_POSTGRESQL_FDWXACT_CHECKPOINT_START();
-
-	dlist_foreach_modify(miter, &KnownFDWXactList)
+	else
 	{
-		KnownFDWXact *fdw_xact = dlist_container(KnownFDWXact,
-												 list_node, miter.cur);
-
-		if (fdw_xact->fdw_xact_end_lsn <= redo_horizon || redo_horizon == InvalidXLogRecPtr)
-		{
-			char	   *buf;
-			int			len;
-
-			XlogReadFDWXactData(fdw_xact->fdw_xact_start_lsn, &buf, &len);
-			RecreateFDWXactFile(fdw_xact->local_xid, fdw_xact->serverid,
-								fdw_xact->userid, buf, len);
-			pfree(buf);
-			dlist_delete(miter.cur);
-			serialized_fdw_xacts++;
-		}
+		/*
+		 * Entry could be on disk. Call with giveWarning = false
+		 * since it can be expected during replay.
+		 */
+		RemoveFDWXactFile(fdw_xact->local_xid, fdw_xact->serverid,
+						  fdw_xact->userid, false);
 	}
-
-	TRACE_POSTGRESQL_FDWXACT_CHECKPOINT_DONE();
-
-	if (log_checkpoints && serialized_fdw_xacts > 0)
-		ereport(LOG,
-			  (errmsg_plural("%u foreign transaction state file was written "
-							 "for long-running prepared transactions",
-						   "%u foreign transaction state files were written "
-							 "for long-running prepared transactions",
-							 serialized_fdw_xacts,
-							 serialized_fdw_xacts)));
 }

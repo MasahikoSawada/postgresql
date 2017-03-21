@@ -52,7 +52,7 @@ extern int	max_prepared_foreign_xacts;
 
 extern Size FDWXactShmemSize(void);
 extern void FDWXactShmemInit(void);
-extern void RecoverFDWXactFromFiles(void);
+extern void RecoverFDWXacts(void);
 extern TransactionId PrescanFDWXacts(TransactionId oldestActiveXid);
 extern bool fdw_xact_has_usermapping(Oid serverid, Oid userid);
 extern bool fdw_xact_has_server(Oid serverid);
@@ -68,8 +68,8 @@ extern void CheckPointFDWXact(XLogRecPtr redo_horizon);
 extern void RegisterXactForeignServer(Oid serverid, Oid userid, bool can_prepare);
 extern bool FdwTwoPhaseNeeded(void);
 extern void PreCommit_FDWXacts(void);
-extern void KnownFDWXactAdd(XLogReaderState *record);
-extern void KnownFDWXactRemove(TransactionId xid, Oid serverid, Oid userid);
+extern void FDWXactRedoAdd(XLogReaderState *record);
+extern void FDWXactRedoRemove(TransactionId xid, Oid serverid, Oid userid);
 extern void KnownFDWXactRecreateFiles(XLogRecPtr redo_horizon);
 
 #endif   /* FDW_XACT_H */
