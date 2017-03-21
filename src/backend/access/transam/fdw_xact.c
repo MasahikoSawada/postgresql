@@ -727,7 +727,7 @@ remove_fdw_xact(FDWXact fdw_xact)
 
 			LWLockRelease(FDWXactLock);
 
-			if (RecoveryInProgress())
+			if (!RecoveryInProgress())
 			{
 				FdwRemoveXlogRec fdw_remove_xlog;
 				XLogRecPtr	recptr;
@@ -1277,7 +1277,7 @@ CheckPointFDWXact(XLogRecPtr redo_horizon)
 		ereport(LOG,
 			  (errmsg_plural("%u foreign transaction state file was written "
 							 "for long-running prepared transactions",
-						   "%u foreign transaction state files were written "
+							 "%u foreign transaction state files were written "
 							 "for long-running prepared transactions",
 							 serialized_fdw_xacts,
 							 serialized_fdw_xacts)));
@@ -2051,9 +2051,6 @@ RecoverFDWXactFromFiles(void)
 									   fdw_xact_file_data->umid,
 									   fdw_xact_file_data->fdw_xact_id);
 			fdw_xact->locking_backend = MyBackendId;
-			fdw_xact->valid = false;
-			fdw_xact->ondisk = false;
-			fdw_xact->inredo = false;
 			fdw_xact->status = FDW_XACT_PREPARING;
 
 			/* Remember that we have locked this entry. */
@@ -2116,6 +2113,7 @@ FDWXactRedoAdd(XLogReaderState *record)
 	fdw_xact->fdw_xact_start_lsn = record->ReadRecPtr;
 	fdw_xact->fdw_xact_end_lsn = record->EndRecPtr;
 	fdw_xact->inredo = true;
+	fdw_xact->valid = true;
 }
 /*
  * FDWXactRedoRemove
