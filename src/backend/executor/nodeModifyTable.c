@@ -45,6 +45,7 @@
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
+#include "parser/parsetree.h"
 #include "storage/bufmgr.h"
 #include "storage/lmgr.h"
 #include "utils/builtins.h"
@@ -1734,8 +1735,20 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 
 	estate->es_result_relation_info = saved_resultRelInfo;
 
+	/* The root table RT index is at the head of the partitioned_rels list */
+	if (node->partitioned_rels)
+	{
+		Index	root_rti;
+		Oid		root_oid;
+
+		root_rti = linitial_int(node->partitioned_rels);
+		root_oid = getrelid(root_rti, estate->es_range_table);
+		rel = heap_open(root_oid, NoLock);	/* locked by InitPlan */
+	}
+	else
+		rel = mtstate->resultRelInfo->ri_RelationDesc;
+
 	/* Build state for INSERT tuple routing */
-	rel = mtstate->resultRelInfo->ri_RelationDesc;
 	if (operation == CMD_INSERT &&
 		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
@@ -1905,6 +1918,10 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 
 		mtstate->ps.ps_ExprContext = NULL;
 	}
+
+	/* Close the root partitioned rel if we opened it above. */
+	if (rel != mtstate->resultRelInfo->ri_RelationDesc)
+		heap_close(rel, NoLock);
 
 	/*
 	 * If needed, Initialize target list, projection and qual for ON CONFLICT
