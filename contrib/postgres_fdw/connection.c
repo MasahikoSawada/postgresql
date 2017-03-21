@@ -636,6 +636,23 @@ pgfdw_report_error(int elevel, PGresult *res, PGconn *conn,
  * here and UUID extension which provides the function to generate UUID is
  * not part of the core.
  */
+extern char *
+postgresGetPrepareId(Oid serverid, Oid userid, int *prep_info_len)
+{
+/* Maximum length of the prepared transaction id, borrowed from twophase.c */
+#define PREP_XACT_ID_MAX_LEN 200
+#define RANDOM_LARGE_MULTIPLIER 1000
+	char	*prep_info;
+
+	/* Allocate the memory in the same context as the hash entry */
+	prep_info = (char *)palloc(PREP_XACT_ID_MAX_LEN * sizeof(char));
+	snprintf(prep_info, PREP_XACT_ID_MAX_LEN, "%s_%4d_%d_%d",
+								"px", abs(random() * RANDOM_LARGE_MULTIPLIER),
+								serverid, userid);
+	/* Account for the last NULL byte */
+	*prep_info_len = strlen(prep_info);
+	return prep_info;
+}
 
 /*
  * postgresPrepareForeignTransaction
@@ -644,7 +661,7 @@ pgfdw_report_error(int elevel, PGresult *res, PGconn *conn,
  */
 bool
 postgresPrepareForeignTransaction(Oid serverid, Oid userid, Oid umid,
-								  char *prep_info)
+								  int prep_info_len, char *prep_info)
 {
 	StringInfo		command;
 	PGresult		*res;
@@ -664,7 +681,8 @@ postgresPrepareForeignTransaction(Oid serverid, Oid userid, Oid umid,
 		PGconn	*conn = entry->conn;
 
 		command = makeStringInfo();
-		appendStringInfo(command, "PREPARE TRANSACTION '%s'", prep_info);
+		appendStringInfo(command, "PREPARE TRANSACTION '%.*s'", prep_info_len,
+																	prep_info);
 		res = PQexec(conn, command->data);
 		result = (PQresultStatus(res) == PGRES_COMMAND_OK);
 
@@ -738,7 +756,8 @@ postgresEndForeignTransaction(Oid serverid, Oid userid, Oid umid, bool is_commit
  */
 bool
 postgresResolvePreparedForeignTransaction(Oid serverid, Oid userid, Oid umid,
-										  bool is_commit, char *prep_info)
+										  bool is_commit,
+										  int prep_info_len, char *prep_info)
 {
 	PGconn			*conn = NULL;
 
@@ -777,9 +796,9 @@ postgresResolvePreparedForeignTransaction(Oid serverid, Oid userid, Oid umid,
 		bool			result;
 
 		command = makeStringInfo();
-		appendStringInfo(command, "%s PREPARED '%s'",
-						 is_commit ? "COMMIT" : "ROLLBACK",
-						 prep_info);
+		appendStringInfo(command, "%s PREPARED '%.*s'",
+							is_commit ? "COMMIT" : "ROLLBACK",
+							prep_info_len, prep_info);
 		res = PQexec(conn, command->data);
 
 		if (PQresultStatus(res) != PGRES_COMMAND_OK)

@@ -16,11 +16,6 @@
 #include "lib/stringinfo.h"
 #include "nodes/pg_list.h"
 
-#define FDW_XACT_ID_LEN (2 + 1 + 8 + 1 + 8 + 1 + 8)
-#define FDWXactId(path, prefix, xid, serverid, userid)	\
-	snprintf((path), FDW_XACT_ID_LEN + 1, "%s_%08X_%08X_%08X", (prefix), \
-			 (xid), (serverid), (userid))
-
 /*
  * On disk file structure
  */
@@ -33,7 +28,13 @@ typedef struct
 								 * place */
 	Oid			userid;			/* user who initiated the foreign transaction */
 	Oid			umid;
-	char		fdw_xact_id[FDW_XACT_ID_LEN]; /* foreign txn prepare id */
+	uint32		fdw_xact_id_len;/* Length of the value stored in the next
+								 * field */
+	/* This should always be the last member */
+	char		fdw_xact_id[FLEXIBLE_ARRAY_MEMBER];		/* variable length array
+														 * to store foreign
+														 * transaction
+														 * information. */
 }	FDWXactOnDiskData;
 
 typedef struct

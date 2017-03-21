@@ -469,6 +469,7 @@ postgres_fdw_handler(PG_FUNCTION_ARGS)
 	routine->GetForeignJoinPaths = postgresGetForeignJoinPaths;
 
 	/* Support functions for foreign transactions */
+	routine->GetPrepareId = postgresGetPrepareId;
 	routine->PrepareForeignTransaction = postgresPrepareForeignTransaction;
 	routine->ResolvePreparedForeignTransaction = postgresResolvePreparedForeignTransaction;
 	routine->EndForeignTransaction = postgresEndForeignTransaction;
