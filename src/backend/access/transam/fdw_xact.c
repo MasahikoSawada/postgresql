@@ -299,6 +299,7 @@ static void RecreateFDWXactFile(TransactionId xid, Oid serverid, Oid userid,
 					void *content, int len);
 static void XlogReadFDWXactData(XLogRecPtr lsn, char **buf, int *len);
 static void prepare_foreign_transactions(void);
+static FDWXact get_fdw_xact(TransactionId xid, Oid serverid, Oid userid);
 bool search_fdw_xact(TransactionId xid, Oid dbid, Oid serverid, Oid userid,
 				List **qualifying_xacts);
 
@@ -636,7 +637,6 @@ insert_fdw_xact(Oid dboid, TransactionId xid, Oid serverid, Oid userid, Oid umid
 				char *fdw_xact_id)
 {
 	FDWXact		fdw_xact;
-	int			cnt;
 
 	if (!fdwXactExitRegistered)
 	{
@@ -645,17 +645,12 @@ insert_fdw_xact(Oid dboid, TransactionId xid, Oid serverid, Oid userid, Oid umid
 	}
 
 	LWLockAcquire(FDWXactLock, LW_EXCLUSIVE);
-	fdw_xact = NULL;
-	for (cnt = 0; cnt < FDWXactGlobal->numFDWXacts; cnt++)
-	{
-		fdw_xact = FDWXactGlobal->fdw_xacts[cnt];
 
-		if (fdw_xact->local_xid == xid &&
-			fdw_xact->serverid == serverid &&
-			fdw_xact->userid == userid)
-			elog(ERROR, "duplicate entry for foreign transaction with transaction id %u, serverid %u, userid %u found",
-				 xid, serverid, userid);
-	}
+	fdw_xact = get_fdw_xact(xid, serverid, userid);
+
+	if (fdw_xact)
+		elog(ERROR, "duplicate entry for foreign transaction with transaction id %u, serverid %u, userid %u found",
+			 xid, serverid, userid);
 
 	/*
 	 * Get the next free foreign transaction entry. Raise error if there are
@@ -1037,6 +1032,29 @@ resolve_fdw_xact(FDWXact fdw_xact,
 		remove_fdw_xact(fdw_xact);
 
 	return resolved;
+}
+
+/*
+ * Get foreign transaction entry from FDWXactGlobal->fdw_xacts. Return NULL
+ * if foreign transacgiven does not exist. The caller must hold FDWXactLock.
+ */
+static FDWXact
+get_fdw_xact(TransactionId xid, Oid serverid, Oid userid)
+{
+	int i;
+	FDWXact fdw_xact;
+
+	for (i = 0; i < FDWXactGlobal->numFDWXacts; i++)
+	{
+		fdw_xact = FDWXactGlobal->fdw_xacts[i];
+
+		if (fdw_xact->local_xid == xid &&
+			fdw_xact->serverid == serverid &&
+			fdw_xact->userid == userid)
+			return fdw_xact;
+	}
+
+	return NULL;
 }
 
 /*
@@ -2004,7 +2022,7 @@ PrescanFDWXacts(TransactionId oldestActiveXid)
  * usage.
  */
 void
-RecoverFDWXactFromFiles(void)
+RecoverFDWXacts(void)
 {
 	DIR		   *cldir;
 	struct dirent *clde;
@@ -2039,32 +2057,36 @@ RecoverFDWXactFromFiles(void)
 					(errmsg("recovering foreign transaction entry for xid %u, foreign server %u and user %u",
 							local_xid, serverid, userid)));
 
-			/*
-			 * Add this entry into the table of foreign transactions. The
-			 * status of the transaction is set as preparing, since we do not
-			 * know the exact status right now. Resolver will set it later
-			 * based on the status of local transaction which prepared this
-			 * foreign transaction.
-			 */
-			fdw_xact = insert_fdw_xact(fdw_xact_file_data->dboid, local_xid,
-									   serverid, userid,
-									   fdw_xact_file_data->umid,
-									   fdw_xact_file_data->fdw_xact_id);
-			fdw_xact->locking_backend = MyBackendId;
-			fdw_xact->status = FDW_XACT_PREPARING;
+			LWLockAcquire(FDWXactLock, LW_SHARED);
 
-			/* Remember that we have locked this entry. */
-			MyLockedFDWXacts = lappend(MyLockedFDWXacts, fdw_xact);
+			fdw_xact = get_fdw_xact(local_xid, serverid, userid);
 
-			/* Add some valid LSNs */
-			fdw_xact->fdw_xact_start_lsn = 0;
-			fdw_xact->fdw_xact_end_lsn = 0;
+			if (!fdw_xact)
+			{
+				/*
+				 * Add this entry into the table of foreign transactions. The
+				 * status of the transaction is set as preparing, since we do not
+				 * know the exact status right now. Resolver will set it later
+				 * based on the status of local transaction which prepared this
+				 * foreign transaction.
+				 */
+				fdw_xact = insert_fdw_xact(fdw_xact_file_data->dboid, local_xid,
+										   serverid, userid,
+										   fdw_xact_file_data->umid,
+										   fdw_xact_file_data->fdw_xact_id);
+				fdw_xact->locking_backend = MyBackendId;
+				fdw_xact->status = FDW_XACT_PREPARING;
+			}
+			else
+			{
+				Assert(fdw_xact->inredo);
+				fdw_xact->inredo = false;
+			}
+
 			/* Mark the entry as ready */
 			fdw_xact->valid = true;
 			/* Already synced to disk */
 			fdw_xact->ondisk = true;
-			/* Unlock the entry as we don't need it any further */
-			unlock_fdw_xact(fdw_xact);
 			pfree(fdw_xact_file_data);
 		}
 	}
@@ -2113,7 +2135,6 @@ FDWXactRedoAdd(XLogReaderState *record)
 	fdw_xact->fdw_xact_start_lsn = record->ReadRecPtr;
 	fdw_xact->fdw_xact_end_lsn = record->EndRecPtr;
 	fdw_xact->inredo = true;
-	fdw_xact->valid = true;
 }
 /*
  * FDWXactRedoRemove
@@ -2125,30 +2146,17 @@ FDWXactRedoAdd(XLogReaderState *record)
 void
 FDWXactRedoRemove(TransactionId xid, Oid serverid, Oid userid)
 {
-	bool	found = false;
-	int		i;
 	FDWXact	fdw_xact;
 
 	Assert(RecoveryInProgress());
 
 	LWLockAcquire(FDWXactLock, LW_SHARED);
-	for (i = 0; i < FDWXactGlobal->numFDWXacts; i++)
-	{
-		fdw_xact = FDWXactGlobal->fdw_xacts[i];
-
-		if (fdw_xact->local_xid == xid &&
-			fdw_xact->serverid == serverid &&
-			fdw_xact->userid == userid)
-		{
-			Assert(fdw_xact->inredo);
-			found = true;
-			break;
-		}
-	}
-
+	fdw_xact = get_fdw_xact(xid, serverid, userid);
 	LWLockRelease(FDWXactLock);
 
-	if (found)
+	Assert(fdw_xact->inredo);
+
+	if (fdw_xact)
 	{
 		/* Now we can clean up any files we already left */
 		remove_fdw_xact(fdw_xact);

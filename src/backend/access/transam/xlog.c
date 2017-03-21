@@ -7660,7 +7660,7 @@ StartupXLOG(void)
 	RecoverPreparedTransactions();
 
 	/* Recover foreign transaction state and insert into shared-memory. */
-	RecoverFDWXactFromFiles();
+	RecoverFDWXacts();
 
 	/*
 	 * Shutdown the recovery environment. This must occur after
