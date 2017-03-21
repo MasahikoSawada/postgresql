@@ -6,7 +6,7 @@ use TestLib;
 use Test::More tests => 9;
 
 # Setup master node
-my $node_master = get_new_node("maseter");
+my $node_master = get_new_node("master");
 my $node_standby = get_new_node("standby");
 
 $node_master->init(allows_streaming => 1);
