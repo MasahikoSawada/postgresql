@@ -116,6 +116,7 @@ extern char *default_tablespace;
 extern char *temp_tablespaces;
 extern bool ignore_checksum_failure;
 extern bool synchronize_seqscans;
+extern int parallel_scan_range;
 
 #ifdef TRACE_SYNCSCAN
 extern bool trace_syncscan;
@@ -2699,6 +2700,16 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_parallel_workers,
 		8, 0, 1024,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"parallel_scan_range", PGC_USERSET, RESOURCES_ASYNCHRONOUS,
+		 gettext_noop("The number of blocks parallel worker reserves at a time."),
+		 NULL
+		},
+		&parallel_scan_range,
+		1, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 

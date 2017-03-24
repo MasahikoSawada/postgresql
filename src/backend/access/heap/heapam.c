@@ -77,6 +77,7 @@
 
 /* GUC variable */
 bool		synchronize_seqscans = true;
+int			parallel_scan_range = 1;
 
 
 static HeapScanDesc heap_beginscan_internal(Relation relation,
@@ -300,6 +301,7 @@ initscan(HeapScanDesc scan, ScanKey key, bool keep_startblock)
 	ItemPointerSetInvalid(&scan->rs_ctup.t_self);
 	scan->rs_cbuf = InvalidBuffer;
 	scan->rs_cblock = InvalidBlockNumber;
+	scan->rs_rblock = InvalidBlockNumber;
 
 	/* page-at-a-time fields are always invalid when not rs_inited */
 
@@ -1683,6 +1685,20 @@ heap_parallelscan_nextpage(HeapScanDesc scan)
 	parallel_scan = scan->rs_parallel;
 
 retry:
+
+	/* XXX : need to handle sync scan case */
+	if (parallel_scan->phs_startblock != InvalidBlockNumber &&
+		scan->rs_cblock < scan->rs_rblock)
+	{
+		page = scan->rs_cblock + 1;
+
+		if (page == scan->rs_nblocks)
+			page = InvalidBlockNumber;
+
+		//elog(NOTICE, "        [%d] quick return %d", MyProcPid, scan->rs_cblock + 1);
+		return page;
+	}
+
 	/* Grab the spinlock. */
 	SpinLockAcquire(&parallel_scan->phs_mutex);
 
@@ -1699,9 +1715,15 @@ retry:
 	if (parallel_scan->phs_startblock == InvalidBlockNumber)
 	{
 		if (!parallel_scan->phs_syncscan)
+		{
 			parallel_scan->phs_startblock = 0;
+			scan->rs_rblock = 0;
+		}
 		else if (sync_startpage != InvalidBlockNumber)
+		{
 			parallel_scan->phs_startblock = sync_startpage;
+			scan->rs_rblock = sync_startpage;
+		}
 		else
 		{
 			SpinLockRelease(&parallel_scan->phs_mutex);
@@ -1721,14 +1743,21 @@ retry:
 	page = parallel_scan->phs_cblock;
 	if (page != InvalidBlockNumber)
 	{
-		parallel_scan->phs_cblock++;
+		scan->rs_rblock = page + parallel_scan_range;
+		parallel_scan->phs_cblock += parallel_scan_range;
+
 		if (parallel_scan->phs_cblock >= scan->rs_nblocks)
+		{
 			parallel_scan->phs_cblock = 0;
+			scan->rs_rblock = scan->rs_nblocks;
+		}
+		/* XXX : need to handle below */
 		if (parallel_scan->phs_cblock == parallel_scan->phs_startblock)
 		{
 			parallel_scan->phs_cblock = InvalidBlockNumber;
 			report_page = parallel_scan->phs_startblock;
 		}
+		//elog(NOTICE, "[%d] Advance cblock to %d, reserved %d - %d", MyProcPid, parallel_scan->phs_cblock, page, scan->rs_rblock);
 	}
 
 	/* Release the lock. */
