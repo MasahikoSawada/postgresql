@@ -830,6 +830,7 @@ heapgettup_pagemode(HeapScanDesc scan,
 			else
 				page = scan->rs_startblock;		/* first page */
 			heapgetpage(scan, page);
+//			elog(NOTICE, "%d page %d", MyProcPid, page);
 			lineindex = 0;
 			scan->rs_inited = true;
 		}
@@ -1037,6 +1038,7 @@ heapgettup_pagemode(HeapScanDesc scan,
 		}
 
 		heapgetpage(scan, page);
+//		elog(NOTICE, "%d page %d", MyProcPid, page);
 
 		dp = BufferGetPage(scan->rs_cbuf);
 		TestForOldSnapshot(scan->rs_snapshot, scan->rs_rd, dp);
@@ -1688,14 +1690,16 @@ retry:
 
 	/* XXX : need to handle sync scan case */
 	if (parallel_scan->phs_startblock != InvalidBlockNumber &&
-		scan->rs_cblock < scan->rs_rblock)
+		scan->rs_rblock != InvalidBlockNumber &&
+		(scan->rs_cblock + 1) < scan->rs_rblock)
 	{
 		page = scan->rs_cblock + 1;
 
 		if (page == scan->rs_nblocks)
 			page = InvalidBlockNumber;
 
-		//elog(NOTICE, "        [%d] quick return %d", MyProcPid, scan->rs_cblock + 1);
+//		elog(NOTICE, "        %d Qreturn %d ( rs_cblock+1(%d) < rs_rblock(%d) )", MyProcPid, page,
+//			 scan->rs_cblock + 1, scan->rs_rblock);
 		return page;
 	}
 
@@ -1741,6 +1745,7 @@ retry:
 	 * scanned.
 	 */
 	page = parallel_scan->phs_cblock;
+
 	if (page != InvalidBlockNumber)
 	{
 		scan->rs_rblock = page + parallel_scan_range;
@@ -1757,7 +1762,7 @@ retry:
 			parallel_scan->phs_cblock = InvalidBlockNumber;
 			report_page = parallel_scan->phs_startblock;
 		}
-		//elog(NOTICE, "[%d] Advance cblock to %d, reserved %d - %d", MyProcPid, parallel_scan->phs_cblock, page, scan->rs_rblock);
+//		elog(NOTICE, "%d Advance cblock to %d, reserved %d <= x < %d", MyProcPid, parallel_scan->phs_cblock, page, scan->rs_rblock);
 	}
 
 	/* Release the lock. */
@@ -1779,6 +1784,7 @@ retry:
 			ss_report_location(scan->rs_rd, report_page);
 	}
 
+//	elog(NOTICE, "        %d Lreturn  %d", MyProcPid, page);
 	return page;
 }
 
