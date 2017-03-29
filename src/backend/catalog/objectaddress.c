@@ -48,6 +48,7 @@
 #include "catalog/pg_publication.h"
 #include "catalog/pg_publication_rel.h"
 #include "catalog/pg_rewrite.h"
+#include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_transform.h"
@@ -478,6 +479,18 @@ static const ObjectPropertyType ObjectProperty[] =
 		InvalidAttrNumber,
 		ACL_KIND_SUBSCRIPTION,
 		true
+	},
+	{
+		StatisticExtRelationId,
+		StatisticExtOidIndexId,
+		STATEXTOID,
+		STATEXTNAMENSP,
+		Anum_pg_statistic_ext_staname,
+		Anum_pg_statistic_ext_stanamespace,
+		Anum_pg_statistic_ext_staowner,
+		InvalidAttrNumber,		/* no ACL (same as relation) */
+		ACL_KIND_STATISTICS,
+		true
 	}
 };
 
@@ -696,6 +709,10 @@ static const struct object_type_map
 	/* OCLASS_TRANSFORM */
 	{
 		"transform", OBJECT_TRANSFORM
+	},
+	/* OBJECT_STATISTIC_EXT */
+	{
+		"statistics", OBJECT_STATISTIC_EXT
 	}
 };
 
@@ -973,6 +990,12 @@ get_object_address(ObjectType objtype, Node *object,
 			case OBJECT_DEFACL:
 				address = get_object_address_defacl(castNode(List, object),
 													missing_ok);
+				break;
+			case OBJECT_STATISTIC_EXT:
+				address.classId = StatisticExtRelationId;
+				address.objectId = get_statistics_oid(castNode(List, object),
+													  missing_ok);
+				address.objectSubId = 0;
 				break;
 			default:
 				elog(ERROR, "unrecognized objtype: %d", (int) objtype);
@@ -1820,11 +1843,14 @@ get_object_address_defacl(List *object, bool missing_ok)
 		case DEFACLOBJ_TYPE:
 			objtype_str = "types";
 			break;
+		case DEFACLOBJ_NAMESPACE:
+			objtype_str = "schemas";
+			break;
 		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				  errmsg("unrecognized default ACL object type %c", objtype),
-					 errhint("Valid object types are \"r\", \"S\", \"f\", and \"T\".")));
+					 errhint("Valid object types are \"r\", \"S\", \"f\", \"T\" and \"s\".")));
 	}
 
 	/*
@@ -2083,6 +2109,7 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 		case OBJECT_ATTRIBUTE:
 		case OBJECT_COLLATION:
 		case OBJECT_CONVERSION:
+		case OBJECT_STATISTIC_EXT:
 		case OBJECT_TSPARSER:
 		case OBJECT_TSDICTIONARY:
 		case OBJECT_TSTEMPLATE:
@@ -2369,6 +2396,10 @@ check_object_ownership(Oid roleid, ObjectType objtype, ObjectAddress address,
 				ereport(ERROR,
 						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 						 errmsg("must be superuser")));
+			break;
+		case OBJECT_STATISTIC_EXT:
+			if (!pg_statistics_ownercheck(address.objectId, roleid))
+				aclcheck_error_type(ACLCHECK_NOT_OWNER, address.objectId);
 			break;
 		default:
 			elog(ERROR, "unrecognized object type: %d",
@@ -3227,6 +3258,11 @@ getObjectDescription(const ObjectAddress *object)
 										 _("default privileges on new types belonging to role %s"),
 							   GetUserNameFromId(defacl->defaclrole, false));
 						break;
+					case DEFACLOBJ_NAMESPACE:
+						appendStringInfo(&buffer,
+										 _("default privileges on new schemas belonging to role %s"),
+							   GetUserNameFromId(defacl->defaclrole, false));
+						break;
 					default:
 						/* shouldn't get here */
 						appendStringInfo(&buffer,
@@ -3855,6 +3891,10 @@ getObjectTypeDescription(const ObjectAddress *object)
 
 		case OCLASS_SUBSCRIPTION:
 			appendStringInfoString(&buffer, "subscription");
+			break;
+
+		case OCLASS_STATISTIC_EXT:
+			appendStringInfoString(&buffer, "statistics");
 			break;
 
 		default:
@@ -4730,6 +4770,10 @@ getObjectIdentityParts(const ObjectAddress *object,
 						appendStringInfoString(&buffer,
 											   " on types");
 						break;
+					case DEFACLOBJ_NAMESPACE:
+						appendStringInfoString(&buffer,
+											   " on schemas");
+						break;
 				}
 
 				if (objname)
@@ -4879,6 +4923,29 @@ getObjectIdentityParts(const ObjectAddress *object,
 					*objname = list_make1(subname);
 				break;
 			}
+
+		case OCLASS_STATISTIC_EXT:
+			{
+				HeapTuple	tup;
+				Form_pg_statistic_ext formStatistic;
+				char	   *schema;
+
+				tup = SearchSysCache1(STATEXTOID,
+									  ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(tup))
+					elog(ERROR, "cache lookup failed for statistics %u",
+						 object->objectId);
+				formStatistic = (Form_pg_statistic_ext) GETSTRUCT(tup);
+				schema = get_namespace_name_or_temp(formStatistic->stanamespace);
+				appendStringInfoString(&buffer,
+									   quote_qualified_identifier(schema,
+										   NameStr(formStatistic->staname)));
+				if (objname)
+					*objname = list_make2(schema,
+								   pstrdup(NameStr(formStatistic->staname)));
+				ReleaseSysCache(tup);
+			}
+			break;
 
 		default:
 			appendStringInfo(&buffer, "unrecognized object %u %u %d",

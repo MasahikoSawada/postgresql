@@ -347,7 +347,7 @@ sub set_replication_conf
 	$self->host eq $test_pghost
 	  or die "set_replication_conf only works with the default host";
 
-	open my $hba, ">>$pgdata/pg_hba.conf";
+	open my $hba, '>>', "$pgdata/pg_hba.conf";
 	print $hba "\n# Allow replication (set up by PostgresNode.pm)\n";
 	if ($TestLib::windows_os)
 	{
@@ -399,7 +399,7 @@ sub init
 		@{ $params{extra} });
 	TestLib::system_or_bail($ENV{PG_REGRESS}, '--config-auth', $pgdata);
 
-	open my $conf, ">>$pgdata/postgresql.conf";
+	open my $conf, '>>', "$pgdata/postgresql.conf";
 	print $conf "\n# Added by PostgresNode.pm\n";
 	print $conf "fsync = off\n";
 	print $conf "log_line_prefix = '%m [%p] %q%a '\n";
@@ -551,7 +551,7 @@ sub _backup_fs
 		$backup_path,
 		filterfn => sub {
 			my $src = shift;
-			return ($src ne 'pg_log' and $src ne 'postmaster.pid');
+			return ($src ne 'log' and $src ne 'postmaster.pid');
 		});
 
 	if ($hot)
@@ -820,7 +820,7 @@ sub _update_pid
 	# If we can open the PID file, read its first line and that's the PID we
 	# want.  If the file cannot be opened, presumably the server is not
 	# running; don't be noisy in that case.
-	if (open my $pidfile, $self->data_dir . "/postmaster.pid")
+	if (open my $pidfile, '<', $self->data_dir . "/postmaster.pid")
 	{
 		chomp($self->{_pid} = <$pidfile>);
 		print "# Postmaster PID for node \"$name\" is $self->{_pid}\n";
@@ -1357,7 +1357,7 @@ sub lsn
 	chomp($result);
 	if ($result eq '')
 	{
-		return undef;
+		return;
 	}
 	else
 	{
@@ -1501,6 +1501,84 @@ sub slot
 	my ($self, $slot_name) = @_;
 	my @columns = ('plugin', 'slot_type', 'datoid', 'database', 'active', 'active_pid', 'xmin', 'catalog_xmin', 'restart_lsn');
 	return $self->query_hash('postgres', "SELECT __COLUMNS__ FROM pg_catalog.pg_replication_slots WHERE slot_name = '$slot_name'", @columns);
+}
+
+=pod
+
+=item $node->pg_recvlogical_upto(self, dbname, slot_name, endpos, timeout_secs, ...)
+
+Invoke pg_recvlogical to read from slot_name on dbname until LSN endpos, which
+corresponds to pg_recvlogical --endpos.  Gives up after timeout (if nonzero).
+
+Disallows pg_recvlogical from internally retrying on error by passing --no-loop.
+
+Plugin options are passed as additional keyword arguments.
+
+If called in scalar context, returns stdout, and die()s on timeout or nonzero return.
+
+If called in array context, returns a tuple of (retval, stdout, stderr, timeout).
+timeout is the IPC::Run::Timeout object whose is_expired method can be tested
+to check for timeout. retval is undef on timeout.
+
+=cut
+
+sub pg_recvlogical_upto
+{
+	my ($self, $dbname, $slot_name, $endpos, $timeout_secs, %plugin_options) = @_;
+	my ($stdout, $stderr);
+
+	my $timeout_exception = 'pg_recvlogical timed out';
+
+	die 'slot name must be specified' unless defined($slot_name);
+	die 'endpos must be specified' unless defined($endpos);
+
+	my @cmd = ('pg_recvlogical', '-S', $slot_name, '--dbname', $self->connstr($dbname));
+	push @cmd, '--endpos', $endpos;
+	push @cmd, '-f', '-', '--no-loop', '--start';
+
+	while (my ($k, $v) = each %plugin_options)
+	{
+		die "= is not permitted to appear in replication option name" if ($k =~ qr/=/);
+		push @cmd, "-o", "$k=$v";
+	}
+
+	my $timeout;
+	$timeout = IPC::Run::timeout($timeout_secs, exception => $timeout_exception ) if $timeout_secs;
+	my $ret = 0;
+
+	do {
+		local $@;
+		eval {
+			IPC::Run::run(\@cmd, ">", \$stdout, "2>", \$stderr, $timeout);
+			$ret = $?;
+		};
+		my $exc_save = $@;
+		if ($exc_save)
+		{
+			# IPC::Run::run threw an exception. re-throw unless it's a
+			# timeout, which we'll handle by testing is_expired
+			die $exc_save
+			  if (blessed($exc_save) || $exc_save !~ qr/$timeout_exception/);
+
+			$ret = undef;
+
+			die "Got timeout exception '$exc_save' but timer not expired?!"
+			  unless $timeout->is_expired;
+
+			die "$exc_save waiting for endpos $endpos with stdout '$stdout', stderr '$stderr'"
+				unless wantarray;
+		}
+	};
+
+	if (wantarray)
+	{
+		return ($ret, $stdout, $stderr, $timeout);
+	}
+	else
+	{
+		die "pg_recvlogical exited with code '$ret', stdout '$stdout' and stderr '$stderr'" if $ret;
+		return $stdout;
+	}
 }
 
 =pod
