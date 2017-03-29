@@ -85,7 +85,8 @@ static void ExecutePlan(EState *estate, PlanState *planstate,
 			bool sendTuples,
 			uint64 numberTuples,
 			ScanDirection direction,
-			DestReceiver *dest);
+			DestReceiver *dest,
+			bool execute_once);
 static bool ExecCheckRTEPerms(RangeTblEntry *rte);
 static bool ExecCheckRTEPermsModified(Oid relOid, Oid userid,
 						  Bitmapset *modifiedCols,
@@ -288,17 +289,18 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
  */
 void
 ExecutorRun(QueryDesc *queryDesc,
-			ScanDirection direction, uint64 count)
+			ScanDirection direction, uint64 count,
+			bool execute_once)
 {
 	if (ExecutorRun_hook)
-		(*ExecutorRun_hook) (queryDesc, direction, count);
+		(*ExecutorRun_hook) (queryDesc, direction, count, execute_once);
 	else
-		standard_ExecutorRun(queryDesc, direction, count);
+		standard_ExecutorRun(queryDesc, direction, count, execute_once);
 }
 
 void
 standard_ExecutorRun(QueryDesc *queryDesc,
-					 ScanDirection direction, uint64 count)
+					 ScanDirection direction, uint64 count, bool execute_once)
 {
 	EState	   *estate;
 	CmdType		operation;
@@ -345,6 +347,11 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	 * run plan
 	 */
 	if (!ScanDirectionIsNoMovement(direction))
+	{
+		if (execute_once && queryDesc->already_executed)
+			elog(ERROR, "can't re-execute query flagged for single execution");
+		queryDesc->already_executed = true;
+
 		ExecutePlan(estate,
 					queryDesc->planstate,
 					queryDesc->plannedstmt->parallelModeNeeded,
@@ -352,7 +359,9 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 					sendTuples,
 					count,
 					direction,
-					dest);
+					dest,
+					execute_once);
+	}
 
 	/*
 	 * shutdown tuple receiver, if we started it
@@ -591,8 +600,8 @@ ExecCheckRTEPerms(RangeTblEntry *rte)
 
 	/*
 	 * Only plain-relation RTEs need to be checked here.  Function RTEs are
-	 * checked by init_fcache when the function is prepared for execution.
-	 * Join, subquery, and special RTEs need no checks.
+	 * checked when the function is prepared for execution.  Join, subquery,
+	 * and special RTEs need no checks.
 	 */
 	if (rte->rtekind != RTE_RELATION)
 		return true;
@@ -844,6 +853,22 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 		estate->es_num_result_relations = numResultRelations;
 		/* es_result_relation_info is NULL except when within ModifyTable */
 		estate->es_result_relation_info = NULL;
+
+		/*
+		 * In the partitioned result relation case, lock the non-leaf result
+		 * relations too.  We don't however need ResultRelInfos for them.
+		 */
+		if (plannedstmt->nonleafResultRelations)
+		{
+			foreach(l, plannedstmt->nonleafResultRelations)
+			{
+				Index		resultRelationIndex = lfirst_int(l);
+				Oid			resultRelationOid;
+
+				resultRelationOid = getrelid(resultRelationIndex, rangeTable);
+				LockRelationOid(resultRelationOid, RowExclusiveLock);
+			}
+		}
 	}
 	else
 	{
@@ -858,7 +883,11 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	/*
 	 * Similarly, we have to lock relations selected FOR [KEY] UPDATE/SHARE
 	 * before we initialize the plan tree, else we'd be risking lock upgrades.
-	 * While we are at it, build the ExecRowMark list.
+	 * While we are at it, build the ExecRowMark list.  Any partitioned child
+	 * tables are ignored here (because isParent=true) and will be locked by
+	 * the first Append or MergeAppend node that references them.  (Note that
+	 * the RowMarks corresponding to partitioned child tables are present in
+	 * the same list as the rest, i.e., plannedstmt->rowMarks.)
 	 */
 	estate->es_rowMarks = NIL;
 	foreach(l, plannedstmt->rowMarks)
@@ -1246,8 +1275,8 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
 
 		resultRelInfo->ri_TrigFunctions = (FmgrInfo *)
 			palloc0(n * sizeof(FmgrInfo));
-		resultRelInfo->ri_TrigWhenExprs = (List **)
-			palloc0(n * sizeof(List *));
+		resultRelInfo->ri_TrigWhenExprs = (ExprState **)
+			palloc0(n * sizeof(ExprState *));
 		if (instrument_options)
 			resultRelInfo->ri_TrigInstrument = InstrAlloc(n, instrument_options);
 	}
@@ -1575,7 +1604,8 @@ ExecutePlan(EState *estate,
 			bool sendTuples,
 			uint64 numberTuples,
 			ScanDirection direction,
-			DestReceiver *dest)
+			DestReceiver *dest,
+			bool execute_once)
 {
 	TupleTableSlot *slot;
 	uint64		current_tuple_count;
@@ -1591,12 +1621,12 @@ ExecutePlan(EState *estate,
 	estate->es_direction = direction;
 
 	/*
-	 * If a tuple count was supplied, we must force the plan to run without
-	 * parallelism, because we might exit early.  Also disable parallelism
-	 * when writing into a relation, because no database changes are allowed
-	 * in parallel mode.
+	 * If the plan might potentially be executed multiple times, we must force
+	 * it to run without parallelism, because we might exit early.  Also
+	 * disable parallelism when writing into a relation, because no database
+	 * changes are allowed in parallel mode.
 	 */
-	if (numberTuples || dest->mydest == DestIntoRel)
+	if (!execute_once || dest->mydest == DestIntoRel)
 		use_parallel_mode = false;
 
 	if (use_parallel_mode)
@@ -1667,7 +1697,11 @@ ExecutePlan(EState *estate,
 		 */
 		current_tuple_count++;
 		if (numberTuples && numberTuples == current_tuple_count)
+		{
+			/* Allow nodes to release or shut down resources. */
+			(void) ExecShutdownNode(planstate);
 			break;
+		}
 	}
 
 	if (use_parallel_mode)
@@ -1689,7 +1723,6 @@ ExecRelCheck(ResultRelInfo *resultRelInfo,
 	ConstrCheck *check = rel->rd_att->constr->check;
 	ExprContext *econtext;
 	MemoryContext oldContext;
-	List	   *qual;
 	int			i;
 
 	/*
@@ -1701,13 +1734,14 @@ ExecRelCheck(ResultRelInfo *resultRelInfo,
 	{
 		oldContext = MemoryContextSwitchTo(estate->es_query_cxt);
 		resultRelInfo->ri_ConstraintExprs =
-			(List **) palloc(ncheck * sizeof(List *));
+			(ExprState **) palloc(ncheck * sizeof(ExprState *));
 		for (i = 0; i < ncheck; i++)
 		{
-			/* ExecQual wants implicit-AND form */
-			qual = make_ands_implicit(stringToNode(check[i].ccbin));
-			resultRelInfo->ri_ConstraintExprs[i] = (List *)
-				ExecPrepareExpr((Expr *) qual, estate);
+			Expr	   *checkconstr;
+
+			checkconstr = stringToNode(check[i].ccbin);
+			resultRelInfo->ri_ConstraintExprs[i] =
+				ExecPrepareExpr(checkconstr, estate);
 		}
 		MemoryContextSwitchTo(oldContext);
 	}
@@ -1724,14 +1758,14 @@ ExecRelCheck(ResultRelInfo *resultRelInfo,
 	/* And evaluate the constraints */
 	for (i = 0; i < ncheck; i++)
 	{
-		qual = resultRelInfo->ri_ConstraintExprs[i];
+		ExprState  *checkconstr = resultRelInfo->ri_ConstraintExprs[i];
 
 		/*
 		 * NOTE: SQL specifies that a NULL result from a constraint expression
-		 * is not to be treated as a failure.  Therefore, tell ExecQual to
-		 * return TRUE for NULL.
+		 * is not to be treated as a failure.  Therefore, use ExecCheck not
+		 * ExecQual.
 		 */
-		if (!ExecQual(qual, econtext, true))
+		if (!ExecCheck(checkconstr, econtext))
 			return check[i].ccname;
 	}
 
@@ -1759,8 +1793,7 @@ ExecPartitionCheck(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
 	{
 		List	   *qual = resultRelInfo->ri_PartitionCheck;
 
-		resultRelInfo->ri_PartitionCheckExpr = (List *)
-			ExecPrepareExpr((Expr *) qual, estate);
+		resultRelInfo->ri_PartitionCheckExpr = ExecPrepareCheck(qual, estate);
 	}
 
 	/*
@@ -1776,7 +1809,7 @@ ExecPartitionCheck(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
 	 * As in case of the catalogued constraints, we treat a NULL result as
 	 * success here, not a failure.
 	 */
-	return ExecQual(resultRelInfo->ri_PartitionCheckExpr, econtext, true);
+	return ExecCheck(resultRelInfo->ri_PartitionCheckExpr, econtext);
 }
 
 /*
@@ -1956,11 +1989,9 @@ ExecWithCheckOptions(WCOKind kind, ResultRelInfo *resultRelInfo,
 		 * is visible (in the case of a view) or that it passes the
 		 * 'with-check' policy (in the case of row security). If the qual
 		 * evaluates to NULL or FALSE, then the new tuple won't be included in
-		 * the view or doesn't pass the 'with-check' policy for the table.  We
-		 * need ExecQual to return FALSE for NULL to handle the view case (the
-		 * opposite of what we do above for CHECK constraints).
+		 * the view or doesn't pass the 'with-check' policy for the table.
 		 */
-		if (!ExecQual((List *) wcoExpr, econtext, false))
+		if (!ExecQual(wcoExpr, econtext))
 		{
 			char	   *val_desc;
 			Bitmapset  *modifiedCols;

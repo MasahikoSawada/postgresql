@@ -398,15 +398,12 @@ DROP FUNCTION testfunc1(int); -- ok
 -- restore to sanity
 GRANT ALL PRIVILEGES ON LANGUAGE sql TO PUBLIC;
 
--- verify privilege checks on coercions
+-- verify privilege checks on array-element coercions
 BEGIN;
-SELECT NULL::int4[]::int8[];
 SELECT '{1}'::int4[]::int8[];
 REVOKE ALL ON FUNCTION int8(integer) FROM PUBLIC;
-SELECT NULL::int4[]::int8[];
 SELECT '{1}'::int4[]::int8[]; --superuser, suceed
 SET SESSION AUTHORIZATION regress_user4;
-SELECT NULL::int4[]::int8[];  --other user, no elements to convert
 SELECT '{1}'::int4[]::int8[]; --other user, fail
 ROLLBACK;
 
@@ -819,6 +816,36 @@ SELECT has_table_privilege('regress_user1', 'testns.acltest1', 'INSERT'); -- no
 
 ALTER DEFAULT PRIVILEGES FOR ROLE regress_user1 REVOKE EXECUTE ON FUNCTIONS FROM public;
 
+ALTER DEFAULT PRIVILEGES IN SCHEMA testns GRANT USAGE ON SCHEMAS TO regress_user2; -- error
+
+ALTER DEFAULT PRIVILEGES GRANT USAGE ON SCHEMAS TO regress_user2;
+
+CREATE SCHEMA testns2;
+
+SELECT has_schema_privilege('regress_user2', 'testns2', 'USAGE'); -- yes
+SELECT has_schema_privilege('regress_user2', 'testns2', 'CREATE'); -- no
+
+ALTER DEFAULT PRIVILEGES REVOKE USAGE ON SCHEMAS FROM regress_user2;
+
+CREATE SCHEMA testns3;
+
+SELECT has_schema_privilege('regress_user2', 'testns3', 'USAGE'); -- no
+SELECT has_schema_privilege('regress_user2', 'testns3', 'CREATE'); -- no
+
+ALTER DEFAULT PRIVILEGES GRANT ALL ON SCHEMAS TO regress_user2;
+
+CREATE SCHEMA testns4;
+
+SELECT has_schema_privilege('regress_user2', 'testns4', 'USAGE'); -- yes
+SELECT has_schema_privilege('regress_user2', 'testns4', 'CREATE'); -- yes
+
+ALTER DEFAULT PRIVILEGES REVOKE ALL ON SCHEMAS FROM regress_user2;
+
+CREATE SCHEMA testns5;
+
+SELECT has_schema_privilege('regress_user2', 'testns5', 'USAGE'); -- no
+SELECT has_schema_privilege('regress_user2', 'testns5', 'CREATE'); -- no
+
 SET ROLE regress_user1;
 
 CREATE FUNCTION testns.foo() RETURNS int AS 'select 1' LANGUAGE sql;
@@ -856,6 +883,10 @@ SELECT count(*)
   WHERE nspname = 'testns';
 
 DROP SCHEMA testns CASCADE;
+DROP SCHEMA testns2 CASCADE;
+DROP SCHEMA testns3 CASCADE;
+DROP SCHEMA testns4 CASCADE;
+DROP SCHEMA testns5 CASCADE;
 
 SELECT d.*     -- check that entries went away
   FROM pg_default_acl d LEFT JOIN pg_namespace n ON defaclnamespace = n.oid

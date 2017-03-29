@@ -107,6 +107,8 @@ typedef struct PlannerGlobal
 
 	List	   *resultRelations;	/* "flat" list of integer RT indexes */
 
+	List   *nonleafResultRelations; /* "flat" list of integer RT indexes */
+
 	List	   *relationOids;	/* OIDs of relations the plan depends on */
 
 	List	   *invalItems;		/* other dependencies, as PlanInvalItems */
@@ -247,6 +249,8 @@ typedef struct PlannerInfo
 	List	   *join_info_list; /* list of SpecialJoinInfos */
 
 	List	   *append_rel_list;	/* list of AppendRelInfos */
+
+	List	   *pcinfo_list;	/* list of PartitionedChildRelInfos */
 
 	List	   *rowMarks;		/* list of PlanRowMarks */
 
@@ -525,6 +529,7 @@ typedef struct RelOptInfo
 	List	   *lateral_vars;	/* LATERAL Vars and PHVs referenced by rel */
 	Relids		lateral_referencers;	/* rels that reference me laterally */
 	List	   *indexlist;		/* list of IndexOptInfo */
+	List	   *statlist;		/* list of StatisticExtInfo */
 	BlockNumber pages;			/* size estimates derived from pg_class */
 	double		tuples;
 	double		allvisfrac;
@@ -664,6 +669,24 @@ typedef struct ForeignKeyOptInfo
 	List	   *rinfos[INDEX_MAX_KEYS];
 } ForeignKeyOptInfo;
 
+/*
+ * StatisticExtInfo
+ *		Information about extended statistics for planning/optimization
+ *
+ * This contains information about which columns are covered by the
+ * statistics (stakeys), which options were requested while adding the
+ * statistics (*_enabled), and which kinds of statistics were actually
+ * built and are available for the optimizer (*_built).
+ */
+typedef struct StatisticExtInfo
+{
+	NodeTag		type;
+
+	Oid			statOid;		/* OID of the statistics row */
+	RelOptInfo *rel;			/* back-link to index's table */
+	char		kind;			/* statistic kind of this entry */
+	Bitmapset  *keys;			/* attnums of the columns covered */
+} StatisticExtInfo;
 
 /*
  * EquivalenceClasses
@@ -1116,6 +1139,8 @@ typedef struct CustomPath
 typedef struct AppendPath
 {
 	Path		path;
+	/* RT indexes of non-leaf tables in a partition tree */
+	List	   *partitioned_rels;
 	List	   *subpaths;		/* list of component Paths */
 } AppendPath;
 
@@ -1134,6 +1159,8 @@ typedef struct AppendPath
 typedef struct MergeAppendPath
 {
 	Path		path;
+	/* RT indexes of non-leaf tables in a partition tree */
+	List	   *partitioned_rels;
 	List	   *subpaths;		/* list of component Paths */
 	double		limit_tuples;	/* hard limit on output tuples, or -1 */
 } MergeAppendPath;
@@ -1391,17 +1418,37 @@ typedef struct AggPath
 } AggPath;
 
 /*
- * GroupingSetsPath represents a GROUPING SETS aggregation
- *
- * Currently we only support this in sorted not hashed form, so the input
- * must always be appropriately presorted.
+ * Various annotations used for grouping sets in the planner.
  */
+
+typedef struct GroupingSetData
+{
+	NodeTag		type;
+	List	   *set;			/* grouping set as list of sortgrouprefs */
+	double		numGroups;		/* est. number of result groups */
+} GroupingSetData;
+
+typedef struct RollupData
+{
+	NodeTag		type;
+	List	   *groupClause;	/* applicable subset of parse->groupClause */
+	List	   *gsets;			/* lists of integer indexes into groupClause */
+	List	   *gsets_data;		/* list of GroupingSetData */
+	double		numGroups;		/* est. number of result groups */
+	bool		hashable;		/* can be hashed */
+	bool		is_hashed;		/* to be implemented as a hashagg */
+} RollupData;
+
+/*
+ * GroupingSetsPath represents a GROUPING SETS aggregation
+ */
+
 typedef struct GroupingSetsPath
 {
 	Path		path;
 	Path	   *subpath;		/* path representing input source */
-	List	   *rollup_groupclauses;	/* list of lists of SortGroupClause's */
-	List	   *rollup_lists;	/* parallel list of lists of grouping sets */
+	AggStrategy aggstrategy;	/* basic strategy */
+	List	   *rollups;		/* list of RollupData */
 	List	   *qual;			/* quals (HAVING quals), if any */
 } GroupingSetsPath;
 
@@ -1482,6 +1529,8 @@ typedef struct ModifyTablePath
 	CmdType		operation;		/* INSERT, UPDATE, or DELETE */
 	bool		canSetTag;		/* do we set the command tag/es_processed? */
 	Index		nominalRelation;	/* Parent RT index for use of EXPLAIN */
+	/* RT indexes of non-leaf tables in a partition tree */
+	List	   *partitioned_rels;
 	List	   *resultRelations;	/* integer list of RT indexes */
 	List	   *subpaths;		/* Path(s) producing source data */
 	List	   *subroots;		/* per-target-table PlannerInfos */
@@ -1836,10 +1885,10 @@ typedef struct SpecialJoinInfo
  *
  * When we expand an inheritable table or a UNION-ALL subselect into an
  * "append relation" (essentially, a list of child RTEs), we build an
- * AppendRelInfo for each child RTE.  The list of AppendRelInfos indicates
- * which child RTEs must be included when expanding the parent, and each
- * node carries information needed to translate Vars referencing the parent
- * into Vars referencing that child.
+ * AppendRelInfo for each non-partitioned child RTE.  The list of
+ * AppendRelInfos indicates which child RTEs must be included when expanding
+ * the parent, and each node carries information needed to translate Vars
+ * referencing the parent into Vars referencing that child.
  *
  * These structs are kept in the PlannerInfo node's append_rel_list.
  * Note that we just throw all the structs into one list, and scan the
@@ -1912,6 +1961,25 @@ typedef struct AppendRelInfo
 	 */
 	Oid			parent_reloid;	/* OID of parent relation */
 } AppendRelInfo;
+
+/*
+ * For a partitioned table, this maps its RT index to the list of RT indexes
+ * of the partitioned child tables in the partition tree.  We need to
+ * separately store this information, because we do not create AppendRelInfos
+ * for the partitioned child tables of a parent table, since AppendRelInfos
+ * contain information that is unnecessary for the partitioned child tables.
+ * The child_rels list must contain at least one element, because the parent
+ * partitioned table is itself counted as a child.
+ *
+ * These structs are kept in the PlannerInfo node's pcinfo_list.
+ */
+typedef struct PartitionedChildRelInfo
+{
+	NodeTag		type;
+
+	Index		parent_relid;
+	List	   *child_rels;
+} PartitionedChildRelInfo;
 
 /*
  * For each distinct placeholder expression generated during planning, we
