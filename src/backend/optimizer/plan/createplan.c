@@ -199,7 +199,7 @@ static CteScan *make_ctescan(List *qptlist, List *qpqual,
 			 Index scanrelid, int ctePlanId, int cteParam);
 static WorkTableScan *make_worktablescan(List *qptlist, List *qpqual,
 				   Index scanrelid, int wtParam);
-static Append *make_append(List *appendplans, List *tlist);
+static Append *make_append(List *appendplans, List *tlist, List *partitioned_rels);
 static RecursiveUnion *make_recursive_union(List *tlist,
 					 Plan *lefttree,
 					 Plan *righttree,
@@ -273,7 +273,7 @@ static Result *make_result(List *tlist, Node *resconstantqual, Plan *subplan);
 static ProjectSet *make_project_set(List *tlist, Plan *subplan);
 static ModifyTable *make_modifytable(PlannerInfo *root,
 				 CmdType operation, bool canSetTag,
-				 Index nominalRelation,
+				 Index nominalRelation, List *partitioned_rels,
 				 List *resultRelations, List *subplans,
 				 List *withCheckOptionLists, List *returningLists,
 				 List *rowMarks, OnConflictExpr *onconflict, int epqParam);
@@ -1026,7 +1026,7 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path)
 	 * parent-rel Vars it'll be asked to emit.
 	 */
 
-	plan = make_append(subplans, tlist);
+	plan = make_append(subplans, tlist, best_path->partitioned_rels);
 
 	copy_generic_path_info(&plan->plan, (Path *) best_path);
 
@@ -1134,6 +1134,7 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path)
 		subplans = lappend(subplans, subplan);
 	}
 
+	node->partitioned_rels = best_path->partitioned_rels;
 	node->mergeplans = subplans;
 
 	return (Plan *) node;
@@ -1274,7 +1275,7 @@ create_unique_plan(PlannerInfo *root, UniquePath *best_path, int flags)
 
 	foreach(l, uniq_exprs)
 	{
-		Node	   *uniqexpr = lfirst(l);
+		Expr	   *uniqexpr = lfirst(l);
 		TargetEntry *tle;
 
 		tle = tlist_member(uniqexpr, newtlist);
@@ -1317,7 +1318,7 @@ create_unique_plan(PlannerInfo *root, UniquePath *best_path, int flags)
 	groupColPos = 0;
 	foreach(l, uniq_exprs)
 	{
-		Node	   *uniqexpr = lfirst(l);
+		Expr	   *uniqexpr = lfirst(l);
 		TargetEntry *tle;
 
 		tle = tlist_member(uniqexpr, newtlist);
@@ -1782,18 +1783,15 @@ create_groupingsets_plan(PlannerInfo *root, GroupingSetsPath *best_path)
 {
 	Agg		   *plan;
 	Plan	   *subplan;
-	List	   *rollup_groupclauses = best_path->rollup_groupclauses;
-	List	   *rollup_lists = best_path->rollup_lists;
+	List	   *rollups = best_path->rollups;
 	AttrNumber *grouping_map;
 	int			maxref;
 	List	   *chain;
-	ListCell   *lc,
-			   *lc2;
+	ListCell   *lc;
 
 	/* Shouldn't get here without grouping sets */
 	Assert(root->parse->groupingSets);
-	Assert(rollup_lists != NIL);
-	Assert(list_length(rollup_lists) == list_length(rollup_groupclauses));
+	Assert(rollups != NIL);
 
 	/*
 	 * Agg can project, so no need to be terribly picky about child tlist, but
@@ -1845,72 +1843,86 @@ create_groupingsets_plan(PlannerInfo *root, GroupingSetsPath *best_path)
 	 * costs will be shown by EXPLAIN.
 	 */
 	chain = NIL;
-	if (list_length(rollup_groupclauses) > 1)
+	if (list_length(rollups) > 1)
 	{
-		forboth(lc, rollup_groupclauses, lc2, rollup_lists)
+		ListCell   *lc2 = lnext(list_head(rollups));
+		bool		is_first_sort = ((RollupData *) linitial(rollups))->is_hashed;
+
+		for_each_cell(lc, lc2)
 		{
-			List	   *groupClause = (List *) lfirst(lc);
-			List	   *gsets = (List *) lfirst(lc2);
+			RollupData *rollup = lfirst(lc);
 			AttrNumber *new_grpColIdx;
-			Plan	   *sort_plan;
+			Plan	   *sort_plan = NULL;
 			Plan	   *agg_plan;
+			AggStrategy strat;
 
-			/* We want to iterate over all but the last rollup list elements */
-			if (lnext(lc) == NULL)
-				break;
+			new_grpColIdx = remap_groupColIdx(root, rollup->groupClause);
 
-			new_grpColIdx = remap_groupColIdx(root, groupClause);
+			if (!rollup->is_hashed && !is_first_sort)
+			{
+				sort_plan = (Plan *)
+					make_sort_from_groupcols(rollup->groupClause,
+											 new_grpColIdx,
+											 subplan);
+			}
 
-			sort_plan = (Plan *)
-				make_sort_from_groupcols(groupClause,
-										 new_grpColIdx,
-										 subplan);
+			if (!rollup->is_hashed)
+				is_first_sort = false;
+
+			if (rollup->is_hashed)
+				strat = AGG_HASHED;
+			else if (list_length(linitial(rollup->gsets)) == 0)
+				strat = AGG_PLAIN;
+			else
+				strat = AGG_SORTED;
 
 			agg_plan = (Plan *) make_agg(NIL,
 										 NIL,
-										 AGG_SORTED,
+										 strat,
 										 AGGSPLIT_SIMPLE,
-									   list_length((List *) linitial(gsets)),
+							   list_length((List *) linitial(rollup->gsets)),
 										 new_grpColIdx,
-										 extract_grouping_ops(groupClause),
-										 gsets,
+								   extract_grouping_ops(rollup->groupClause),
+										 rollup->gsets,
 										 NIL,
-										 0,		/* numGroups not needed */
+										 rollup->numGroups,
 										 sort_plan);
 
 			/*
-			 * Nuke stuff we don't need to avoid bloating debug output.
+			 * Remove stuff we don't need to avoid bloating debug output.
 			 */
-			sort_plan->targetlist = NIL;
-			sort_plan->lefttree = NULL;
+			if (sort_plan)
+			{
+				sort_plan->targetlist = NIL;
+				sort_plan->lefttree = NULL;
+			}
 
 			chain = lappend(chain, agg_plan);
 		}
 	}
 
 	/*
-	 * Now make the final Agg node
+	 * Now make the real Agg node
 	 */
 	{
-		List	   *groupClause = (List *) llast(rollup_groupclauses);
-		List	   *gsets = (List *) llast(rollup_lists);
+		RollupData *rollup = linitial(rollups);
 		AttrNumber *top_grpColIdx;
 		int			numGroupCols;
 
-		top_grpColIdx = remap_groupColIdx(root, groupClause);
+		top_grpColIdx = remap_groupColIdx(root, rollup->groupClause);
 
-		numGroupCols = list_length((List *) linitial(gsets));
+		numGroupCols = list_length((List *) linitial(rollup->gsets));
 
 		plan = make_agg(build_path_tlist(root, &best_path->path),
 						best_path->qual,
-						(numGroupCols > 0) ? AGG_SORTED : AGG_PLAIN,
+						best_path->aggstrategy,
 						AGGSPLIT_SIMPLE,
 						numGroupCols,
 						top_grpColIdx,
-						extract_grouping_ops(groupClause),
-						gsets,
+						extract_grouping_ops(rollup->groupClause),
+						rollup->gsets,
 						chain,
-						0,		/* numGroups not needed */
+						rollup->numGroups,
 						subplan);
 
 		/* Copy cost data from Path to Plan */
@@ -2314,6 +2326,7 @@ create_modifytable_plan(PlannerInfo *root, ModifyTablePath *best_path)
 							best_path->operation,
 							best_path->canSetTag,
 							best_path->nominalRelation,
+							best_path->partitioned_rels,
 							best_path->resultRelations,
 							subplans,
 							best_path->withCheckOptionLists,
@@ -4305,7 +4318,7 @@ process_subquery_nestloop_params(PlannerInfo *root, List *subplan_params)
 				/* No, so add it */
 				nlp = makeNode(NestLoopParam);
 				nlp->paramno = pitem->paramId;
-				nlp->paramval = copyObject(phv);
+				nlp->paramval = (Var *) copyObject(phv);
 				root->curOuterParams = lappend(root->curOuterParams, nlp);
 			}
 		}
@@ -5161,7 +5174,7 @@ make_foreignscan(List *qptlist,
 }
 
 static Append *
-make_append(List *appendplans, List *tlist)
+make_append(List *appendplans, List *tlist, List *partitioned_rels)
 {
 	Append	   *node = makeNode(Append);
 	Plan	   *plan = &node->plan;
@@ -5170,6 +5183,7 @@ make_append(List *appendplans, List *tlist)
 	plan->qual = NIL;
 	plan->lefttree = NULL;
 	plan->righttree = NULL;
+	node->partitioned_rels = partitioned_rels;
 	node->appendplans = appendplans;
 
 	return node;
@@ -6282,7 +6296,7 @@ make_project_set(List *tlist,
 static ModifyTable *
 make_modifytable(PlannerInfo *root,
 				 CmdType operation, bool canSetTag,
-				 Index nominalRelation,
+				 Index nominalRelation, List *partitioned_rels,
 				 List *resultRelations, List *subplans,
 				 List *withCheckOptionLists, List *returningLists,
 				 List *rowMarks, OnConflictExpr *onconflict, int epqParam)
@@ -6308,6 +6322,7 @@ make_modifytable(PlannerInfo *root,
 	node->operation = operation;
 	node->canSetTag = canSetTag;
 	node->nominalRelation = nominalRelation;
+	node->partitioned_rels = partitioned_rels;
 	node->resultRelations = resultRelations;
 	node->resultRelIndex = -1;	/* will be set correctly in setrefs.c */
 	node->plans = subplans;

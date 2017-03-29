@@ -161,6 +161,7 @@ ExecSerializePlan(Plan *plan, EState *estate)
 	pstmt->planTree = plan;
 	pstmt->rtable = estate->es_range_table;
 	pstmt->resultRelations = NIL;
+	pstmt->nonleafResultRelations = NIL;
 	pstmt->subplans = estate->es_plannedstmt->subplans;
 	pstmt->rewindPlanIDs = NULL;
 	pstmt->rowMarks = NIL;
@@ -852,7 +853,7 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	ExecParallelInitializeWorker(queryDesc->planstate, toc);
 
 	/* Run the plan */
-	ExecutorRun(queryDesc, ForwardScanDirection, 0L);
+	ExecutorRun(queryDesc, ForwardScanDirection, 0L, true);
 
 	/* Shut down the executor */
 	ExecutorFinish(queryDesc);

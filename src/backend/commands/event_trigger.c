@@ -112,6 +112,7 @@ static event_trigger_support_data event_trigger_support[] = {
 	{"SCHEMA", true},
 	{"SEQUENCE", true},
 	{"SERVER", true},
+	{"STATISTICS", true},
 	{"SUBSCRIPTION", true},
 	{"TABLE", true},
 	{"TABLESPACE", false},
@@ -1108,6 +1109,7 @@ EventTriggerSupportsObjectType(ObjectType obtype)
 		case OBJECT_SCHEMA:
 		case OBJECT_SEQUENCE:
 		case OBJECT_SUBSCRIPTION:
+		case OBJECT_STATISTIC_EXT:
 		case OBJECT_TABCONSTRAINT:
 		case OBJECT_TABLE:
 		case OBJECT_TRANSFORM:
@@ -1173,6 +1175,7 @@ EventTriggerSupportsObjectClass(ObjectClass objclass)
 		case OCLASS_PUBLICATION:
 		case OCLASS_PUBLICATION_REL:
 		case OCLASS_SUBSCRIPTION:
+		case OCLASS_STATISTIC_EXT:
 			return true;
 	}
 
@@ -1866,7 +1869,7 @@ EventTriggerCollectAlterOpFam(AlterOpFamilyStmt *stmt, Oid opfamoid,
 					 OperatorFamilyRelationId, opfamoid);
 	command->d.opfam.operators = operators;
 	command->d.opfam.procedures = procedures;
-	command->parsetree = copyObject(stmt);
+	command->parsetree = (Node *) copyObject(stmt);
 
 	currentEventTriggerState->commandList =
 		lappend(currentEventTriggerState->commandList, command);
@@ -1899,7 +1902,7 @@ EventTriggerCollectCreateOpClass(CreateOpClassStmt *stmt, Oid opcoid,
 					 OperatorClassRelationId, opcoid);
 	command->d.createopc.operators = operators;
 	command->d.createopc.procedures = procedures;
-	command->parsetree = copyObject(stmt);
+	command->parsetree = (Node *) copyObject(stmt);
 
 	currentEventTriggerState->commandList =
 		lappend(currentEventTriggerState->commandList, command);
@@ -1934,7 +1937,7 @@ EventTriggerCollectAlterTSConfig(AlterTSConfigurationStmt *stmt, Oid cfgId,
 	command->d.atscfg.dictIds = palloc(sizeof(Oid) * ndicts);
 	memcpy(command->d.atscfg.dictIds, dictIds, sizeof(Oid) * ndicts);
 	command->d.atscfg.ndicts = ndicts;
-	command->parsetree = copyObject(stmt);
+	command->parsetree = (Node *) copyObject(stmt);
 
 	currentEventTriggerState->commandList =
 		lappend(currentEventTriggerState->commandList, command);
@@ -1964,7 +1967,7 @@ EventTriggerCollectAlterDefPrivs(AlterDefaultPrivilegesStmt *stmt)
 	command->type = SCT_AlterDefaultPrivileges;
 	command->d.defprivs.objtype = stmt->action->objtype;
 	command->in_extension = creating_extension;
-	command->parsetree = copyObject(stmt);
+	command->parsetree = (Node *) copyObject(stmt);
 
 	currentEventTriggerState->commandList =
 		lappend(currentEventTriggerState->commandList, command);

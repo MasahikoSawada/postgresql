@@ -49,4 +49,5 @@ MultiXactTruncationLock				41
 OldSnapshotTimeMapLock				42
 BackendRandomLock					43
 LogicalRepWorkerLock				44
-FDWXactLock					45
+CLogTruncationLock					45
+FDWXactLock					46
