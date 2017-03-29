@@ -142,7 +142,9 @@ pg_shdepend|t
 pg_shdescription|t
 pg_shseclabel|t
 pg_statistic|t
+pg_statistic_ext|t
 pg_subscription|t
+pg_subscription_rel|t
 pg_tablespace|t
 pg_transform|t
 pg_trigger|t
@@ -155,6 +157,7 @@ pg_type|t
 pg_user_mapping|t
 point_tbl|t
 polygon_tbl|t
+quad_box_tbl|t
 quad_point_tbl|t
 radix_text_tbl|t
 ramp|f

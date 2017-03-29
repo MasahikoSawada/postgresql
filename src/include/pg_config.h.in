@@ -603,8 +603,14 @@
 /* Define to 1 if you have the `towlower' function. */
 #undef HAVE_TOWLOWER
 
+/* Define to 1 if your compiler understands `typeof' or something similar. */
+#undef HAVE_TYPEOF
+
 /* Define to 1 if you have the external array `tzname'. */
 #undef HAVE_TZNAME
+
+/* Define to 1 if you have the `ucol_strcollUTF8' function. */
+#undef HAVE_UCOL_STRCOLLUTF8
 
 /* Define to 1 if you have the <ucred.h> header file. */
 #undef HAVE_UCRED_H
@@ -819,6 +825,9 @@
    (--enable-float8-byval) */
 #undef USE_FLOAT8_BYVAL
 
+/* Define to build with ICU support. (--with-icu) */
+#undef USE_ICU
+
 /* Define to 1 to build with LDAP support. (--with-ldap) */
 #undef USE_LDAP
 
@@ -924,6 +933,9 @@
 
 /* Define to empty if the C compiler does not understand signed types. */
 #undef signed
+
+/* Define to how the compiler spells `typeof'. */
+#undef typeof
 
 /* Define to the type of an unsigned integer type wide enough to hold a
    pointer, if such a type exists, and if the system does not define it. */

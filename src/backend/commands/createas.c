@@ -315,7 +315,7 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 		 * and is executed repeatedly.  (See also the same hack in EXPLAIN and
 		 * PREPARE.)
 		 */
-		rewritten = QueryRewrite((Query *) copyObject(query));
+		rewritten = QueryRewrite(copyObject(query));
 
 		/* SELECT should never rewrite to more or less than one SELECT query */
 		if (list_length(rewritten) != 1)
@@ -347,7 +347,7 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 		ExecutorStart(queryDesc, GetIntoRelEFlags(into));
 
 		/* run the plan to completion */
-		ExecutorRun(queryDesc, ForwardScanDirection, 0L);
+		ExecutorRun(queryDesc, ForwardScanDirection, 0L, true);
 
 		/* save the rowcount if we're given a completionTag to fill */
 		if (completionTag)

@@ -301,7 +301,7 @@ ExecuteQuery(ExecuteStmt *stmt, IntoClause *intoClause,
 	 */
 	PortalStart(portal, paramLI, eflags, GetActiveSnapshot());
 
-	(void) PortalRun(portal, count, false, dest, dest, completionTag);
+	(void) PortalRun(portal, count, false, true, dest, dest, completionTag);
 
 	PortalDrop(portal, false);
 
@@ -352,7 +352,7 @@ EvaluateParams(PreparedStatement *pstmt, List *params,
 	 * We have to run parse analysis for the expressions.  Since the parser is
 	 * not cool about scribbling on its input, copy first.
 	 */
-	params = (List *) copyObject(params);
+	params = copyObject(params);
 
 	pstate = make_parsestate(NULL);
 	pstate->p_sourcetext = queryString;
@@ -391,7 +391,7 @@ EvaluateParams(PreparedStatement *pstmt, List *params,
 	}
 
 	/* Prepare the expressions for execution */
-	exprstates = (List *) ExecPrepareExpr((Expr *) params, estate);
+	exprstates = ExecPrepareExprList(params, estate);
 
 	paramLI = (ParamListInfo)
 		palloc(offsetof(ParamListInfoData, params) +
@@ -407,7 +407,7 @@ EvaluateParams(PreparedStatement *pstmt, List *params,
 	i = 0;
 	foreach(l, exprstates)
 	{
-		ExprState  *n = lfirst(l);
+		ExprState  *n = (ExprState *) lfirst(l);
 		ParamExternData *prm = &paramLI->params[i];
 
 		prm->ptype = param_types[i];
@@ -554,7 +554,7 @@ FetchPreparedStatementTargetList(PreparedStatement *stmt)
 	tlist = CachedPlanGetTargetList(stmt->plansource);
 
 	/* Copy into caller's context in case plan gets invalidated */
-	return (List *) copyObject(tlist);
+	return copyObject(tlist);
 }
 
 /*
