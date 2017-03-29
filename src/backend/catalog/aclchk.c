@@ -48,6 +48,7 @@
 #include "catalog/pg_operator.h"
 #include "catalog/pg_opfamily.h"
 #include "catalog/pg_proc.h"
+#include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_type.h"
@@ -958,6 +959,10 @@ ExecAlterDefaultPrivilegesStmt(ParseState *pstate, AlterDefaultPrivilegesStmt *s
 			all_privileges = ACL_ALL_RIGHTS_TYPE;
 			errormsg = gettext_noop("invalid privilege type %s for type");
 			break;
+		case ACL_OBJECT_NAMESPACE:
+			all_privileges = ACL_ALL_RIGHTS_NAMESPACE;
+			errormsg = gettext_noop("invalid privilege type %s for schema");
+			break;
 		default:
 			elog(ERROR, "unrecognized GrantStmt.objtype: %d",
 				 (int) action->objtype);
@@ -1143,6 +1148,16 @@ SetDefaultACL(InternalDefaultACL *iacls)
 			objtype = DEFACLOBJ_TYPE;
 			if (iacls->all_privs && this_privileges == ACL_NO_RIGHTS)
 				this_privileges = ACL_ALL_RIGHTS_TYPE;
+			break;
+
+		case ACL_OBJECT_NAMESPACE:
+			if (OidIsValid(iacls->nspid))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_GRANT_OPERATION),
+						 errmsg("cannot use IN SCHEMA clause when using GRANT/REVOKE ON SCHEMAS")));
+			objtype = DEFACLOBJ_NAMESPACE;
+			if (iacls->all_privs && this_privileges == ACL_NO_RIGHTS)
+				this_privileges = ACL_ALL_RIGHTS_NAMESPACE;
 			break;
 
 		default:
@@ -1367,6 +1382,9 @@ RemoveRoleFromObjectACL(Oid roleid, Oid classid, Oid objid)
 				break;
 			case DEFACLOBJ_TYPE:
 				iacls.objtype = ACL_OBJECT_TYPE;
+				break;
+			case DEFACLOBJ_NAMESPACE:
+				iacls.objtype = ACL_OBJECT_NAMESPACE;
 				break;
 			default:
 				/* Shouldn't get here */
@@ -3302,6 +3320,8 @@ static const char *const no_priv_msg[MAX_ACL_KIND] =
 	gettext_noop("permission denied for collation %s"),
 	/* ACL_KIND_CONVERSION */
 	gettext_noop("permission denied for conversion %s"),
+	/* ACL_KIND_STATISTICS */
+	gettext_noop("permission denied for statistics %s"),
 	/* ACL_KIND_TABLESPACE */
 	gettext_noop("permission denied for tablespace %s"),
 	/* ACL_KIND_TSDICTIONARY */
@@ -3352,6 +3372,8 @@ static const char *const not_owner_msg[MAX_ACL_KIND] =
 	gettext_noop("must be owner of collation %s"),
 	/* ACL_KIND_CONVERSION */
 	gettext_noop("must be owner of conversion %s"),
+	/* ACL_KIND_STATISTICS */
+	gettext_noop("must be owner of statistics %s"),
 	/* ACL_KIND_TABLESPACE */
 	gettext_noop("must be owner of tablespace %s"),
 	/* ACL_KIND_TSDICTIONARY */
@@ -3467,6 +3489,10 @@ pg_aclmask(AclObjectKind objkind, Oid table_oid, AttrNumber attnum, Oid roleid,
 												   mask, how, NULL);
 		case ACL_KIND_NAMESPACE:
 			return pg_namespace_aclmask(table_oid, roleid, mask, how);
+		case ACL_KIND_STATISTICS:
+			elog(ERROR, "grantable rights not supported for statistics");
+			/* not reached, but keep compiler quiet */
+			return ACL_NO_RIGHTS;
 		case ACL_KIND_TABLESPACE:
 			return pg_tablespace_aclmask(table_oid, roleid, mask, how);
 		case ACL_KIND_FDW:
@@ -5104,6 +5130,32 @@ pg_subscription_ownercheck(Oid sub_oid, Oid roleid)
 }
 
 /*
+ * Ownership check for a extended statistics (specified by OID).
+ */
+bool
+pg_statistics_ownercheck(Oid stat_oid, Oid roleid)
+{
+	HeapTuple	tuple;
+	Oid			ownerId;
+
+	/* Superusers bypass all permission checking. */
+	if (superuser_arg(roleid))
+		return true;
+
+	tuple = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(stat_oid));
+	if (!HeapTupleIsValid(tuple))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("statistics with OID %u do not exist", stat_oid)));
+
+	ownerId = ((Form_pg_statistic_ext) GETSTRUCT(tuple))->staowner;
+
+	ReleaseSysCache(tuple);
+
+	return has_privs_of_role(roleid, ownerId);
+}
+
+/*
  * Check whether specified role has CREATEROLE privilege (or is a superuser)
  *
  * Note: roles do not have owners per se; instead we use this test in
@@ -5222,6 +5274,10 @@ get_user_default_acl(GrantObjectType objtype, Oid ownerId, Oid nsp_oid)
 
 		case ACL_OBJECT_TYPE:
 			defaclobjtype = DEFACLOBJ_TYPE;
+			break;
+
+		case ACL_OBJECT_NAMESPACE:
+			defaclobjtype = DEFACLOBJ_NAMESPACE;
 			break;
 
 		default:

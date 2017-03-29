@@ -1657,6 +1657,14 @@ CheckPointTwoPhase(XLogRecPtr redo_horizon)
 	}
 	LWLockRelease(TwoPhaseStateLock);
 
+	/*
+	 * Flush unconditionally the parent directory to make any information
+	 * durable on disk.  Two-phase files could have been removed and those
+	 * removals need to be made persistent as well as any files newly created
+	 * previously since the last checkpoint.
+	 */
+	fsync_fname(TWOPHASE_DIR, true);
+
 	TRACE_POSTGRESQL_TWOPHASE_CHECKPOINT_DONE();
 
 	if (log_checkpoints && serialized_xacts > 0)
@@ -2072,11 +2080,15 @@ RecordTransactionCommitPrepared(TransactionId xid,
 	/* See notes in RecordTransactionCommit */
 	MyPgXact->delayChkpt = true;
 
-	/* Emit the XLOG commit record */
+	/*
+	 * Emit the XLOG commit record. Note that we mark 2PC commits as potentially
+	 * having AccessExclusiveLocks since we don't know whether or not they do.
+	 */
 	recptr = XactLogCommitRecord(committs,
 								 nchildren, children, nrels, rels,
 								 ninvalmsgs, invalmsgs,
 								 initfileinval, false,
+						 MyXactFlags | XACT_FLAGS_ACQUIREDACCESSEXCLUSIVELOCK,
 								 xid);
 
 
@@ -2153,10 +2165,14 @@ RecordTransactionAbortPrepared(TransactionId xid,
 
 	START_CRIT_SECTION();
 
-	/* Emit the XLOG abort record */
+	/*
+	 * Emit the XLOG commit record. Note that we mark 2PC aborts as potentially
+	 * having AccessExclusiveLocks since we don't know whether or not they do.
+	 */
 	recptr = XactLogAbortRecord(GetCurrentTimestamp(),
 								nchildren, children,
 								nrels, rels,
+						 MyXactFlags | XACT_FLAGS_ACQUIREDACCESSEXCLUSIVELOCK,
 								xid);
 
 	/* Always flush, since we're about to remove the 2PC state file */

@@ -505,6 +505,12 @@ typedef enum ExclusiveBackupState
 } ExclusiveBackupState;
 
 /*
+ * Session status of running backup, used for sanity checks in SQL-callable
+ * functions to start and stop backups.
+ */
+static SessionBackupState sessionBackupState = SESSION_BACKUP_NONE;
+
+/*
  * Shared state data for WAL insertion.
  */
 typedef struct XLogCtlInsert
@@ -3470,7 +3476,7 @@ InstallXLogFileSegment(XLogSegNo *segno, char *tmppath,
 	if (!find_free)
 	{
 		/* Force installation: get rid of any pre-existing segment file */
-		unlink(path);
+		durable_unlink(path, DEBUG1);
 	}
 	else
 	{
@@ -4021,16 +4027,13 @@ RemoveXlogFile(const char *segname, XLogRecPtr PriorRedoPtr, XLogRecPtr endptr)
 					  path)));
 			return;
 		}
-		rc = unlink(newpath);
+		rc = durable_unlink(newpath, LOG);
 #else
-		rc = unlink(path);
+		rc = durable_unlink(path, LOG);
 #endif
 		if (rc != 0)
 		{
-			ereport(LOG,
-					(errcode_for_file_access(),
-			   errmsg("could not remove old transaction log file \"%s\": %m",
-					  path)));
+			/* Message already logged by durable_unlink() */
 			return;
 		}
 		CheckpointStats.ckpt_segs_removed++;
@@ -4978,7 +4981,7 @@ BootStrapXLOG(void)
 	if (!pg_backend_random(mock_auth_nonce, MOCK_AUTH_NONCE_LEN))
 		ereport(PANIC,
 			(errcode(ERRCODE_INTERNAL_ERROR),
-			 errmsg("could not generation secret authorization token")));
+			 errmsg("could not generate secret authorization token")));
 
 	/* First timeline ID is always 1 */
 	ThisTimeLineID = 1;
@@ -5017,6 +5020,7 @@ BootStrapXLOG(void)
 	ShmemVariableCache->nextOid = checkPoint.nextOid;
 	ShmemVariableCache->oidCount = 0;
 	MultiXactSetNextMXact(checkPoint.nextMulti, checkPoint.nextMultiOffset);
+	AdvanceOldestClogXid(checkPoint.oldestXid);
 	SetTransactionIdLimit(checkPoint.oldestXid, checkPoint.oldestXidDB);
 	SetMultiXactIdLimit(checkPoint.oldestMulti, checkPoint.oldestMultiDB, true);
 	SetCommitTsLimit(InvalidTransactionId, InvalidTransactionId);
@@ -5041,7 +5045,7 @@ BootStrapXLOG(void)
 	record->xl_rmid = RM_XLOG_ID;
 	recptr += SizeOfXLogRecord;
 	/* fill the XLogRecordDataHeaderShort struct */
-	*(recptr++) = XLR_BLOCK_ID_DATA_SHORT;
+	*(recptr++) = (char) XLR_BLOCK_ID_DATA_SHORT;
 	*(recptr++) = sizeof(checkPoint);
 	memcpy(recptr, &checkPoint, sizeof(checkPoint));
 	recptr += sizeof(checkPoint);
@@ -6627,6 +6631,7 @@ StartupXLOG(void)
 	ShmemVariableCache->nextOid = checkPoint.nextOid;
 	ShmemVariableCache->oidCount = 0;
 	MultiXactSetNextMXact(checkPoint.nextMulti, checkPoint.nextMultiOffset);
+	AdvanceOldestClogXid(checkPoint.oldestXid);
 	SetTransactionIdLimit(checkPoint.oldestXid, checkPoint.oldestXidDB);
 	SetMultiXactIdLimit(checkPoint.oldestMulti, checkPoint.oldestMultiDB, true);
 	SetCommitTsLimit(checkPoint.oldestCommitTsXid,
@@ -8699,6 +8704,11 @@ CreateCheckPoint(int flags)
 
 	/*
 	 * Get the other info we need for the checkpoint record.
+	 *
+	 * We don't need to save oldestClogXid in the checkpoint, it only matters
+	 * for the short period in which clog is being truncated, and if we crash
+	 * during that we'll redo the clog truncation and fix up oldestClogXid
+	 * there.
 	 */
 	LWLockAcquire(XidGenLock, LW_SHARED);
 	checkPoint.nextXid = ShmemVariableCache->nextXid;
@@ -8907,7 +8917,7 @@ CreateCheckPoint(int flags)
 	 * StartupSUBTRANS hasn't been called yet.
 	 */
 	if (!RecoveryInProgress())
-		TruncateSUBTRANS(GetOldestXmin(NULL, false));
+		TruncateSUBTRANS(GetOldestXmin(NULL, PROCARRAY_FLAGS_DEFAULT));
 
 	/* Real work is done, but log and update stats before releasing lock. */
 	LogCheckpointEnd(false);
@@ -9275,7 +9285,7 @@ CreateRestartPoint(int flags)
 	 * this because StartupSUBTRANS hasn't been called yet.
 	 */
 	if (EnableHotStandby)
-		TruncateSUBTRANS(GetOldestXmin(NULL, false));
+		TruncateSUBTRANS(GetOldestXmin(NULL, PROCARRAY_FLAGS_DEFAULT));
 
 	/* Real work is done, but log and update before releasing lock. */
 	LogCheckpointEnd(true);
@@ -9636,6 +9646,10 @@ xlog_redo(XLogReaderState *record)
 
 		MultiXactAdvanceOldest(checkPoint.oldestMulti,
 							   checkPoint.oldestMultiDB);
+		/*
+		 * No need to set oldestClogXid here as well; it'll be set when we
+		 * redo an xl_clog_truncate if it changed since initialization.
+		 */
 		SetTransactionIdLimit(checkPoint.oldestXid, checkPoint.oldestXidDB);
 
 		/*
@@ -10577,13 +10591,17 @@ do_pg_start_backup(const char *backupidstr, bool fast, TimeLineID *starttli_p,
 
 	/*
 	 * Mark that start phase has correctly finished for an exclusive backup.
+	 * Session-level locks are updated as well to reflect that state.
 	 */
 	if (exclusive)
 	{
 		WALInsertLockAcquireExclusive();
 		XLogCtl->Insert.exclusiveBackupState = EXCLUSIVE_BACKUP_IN_PROGRESS;
 		WALInsertLockRelease();
+		sessionBackupState = SESSION_BACKUP_EXCLUSIVE;
 	}
+	else
+		sessionBackupState = SESSION_BACKUP_NON_EXCLUSIVE;
 
 	/*
 	 * We're done.  As a convenience, return the starting WAL location.
@@ -10636,6 +10654,15 @@ pg_stop_backup_callback(int code, Datum arg)
 		XLogCtl->Insert.exclusiveBackupState = EXCLUSIVE_BACKUP_IN_PROGRESS;
 	}
 	WALInsertLockRelease();
+}
+
+/*
+ * Utility routine to fetch the session-level status of a backup running.
+ */
+SessionBackupState
+get_backup_status(void)
+{
+	return sessionBackupState;
 }
 
 /*
@@ -10763,17 +10790,13 @@ do_pg_stop_backup(char *labelfile, bool waitforarchive, TimeLineID *stoptli_p)
 						(errcode_for_file_access(),
 						 errmsg("could not read file \"%s\": %m",
 								BACKUP_LABEL_FILE)));
-			if (unlink(BACKUP_LABEL_FILE) != 0)
-				ereport(ERROR,
-						(errcode_for_file_access(),
-						 errmsg("could not remove file \"%s\": %m",
-								BACKUP_LABEL_FILE)));
+			durable_unlink(BACKUP_LABEL_FILE, ERROR);
 
 			/*
 			 * Remove tablespace_map file if present, it is created only if there
 			 * are tablespaces.
 			 */
-			unlink(TABLESPACE_MAP);
+			durable_unlink(TABLESPACE_MAP, DEBUG1);
 		}
 		PG_END_ENSURE_ERROR_CLEANUP(pg_stop_backup_callback, (Datum) BoolGetDatum(exclusive));
 	}
@@ -10804,6 +10827,9 @@ do_pg_stop_backup(char *labelfile, bool waitforarchive, TimeLineID *stoptli_p)
 		XLogCtl->Insert.forcePageWrites = false;
 	}
 	WALInsertLockRelease();
+
+	/* Clean up session-level lock */
+	sessionBackupState = SESSION_BACKUP_NONE;
 
 	/*
 	 * Read and parse the START WAL LOCATION line (this code is pretty crude,
@@ -10966,7 +10992,8 @@ do_pg_stop_backup(char *labelfile, bool waitforarchive, TimeLineID *stoptli_p)
 	 *
 	 * We wait forever, since archive_command is supposed to work and we
 	 * assume the admin wanted his backup to work completely. If you don't
-	 * wish to wait, you can set statement_timeout.  Also, some notices are
+	 * wish to wait, then either waitforarchive should be passed in as false,
+	 * or you can set statement_timeout.  Also, some notices are
 	 * issued to clue in anyone who might be doing this interactively.
 	 */
 	if (waitforarchive && XLogArchivingActive())
@@ -11576,6 +11603,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 {
 	static TimestampTz last_fail_time = 0;
 	TimestampTz now;
+	bool		streaming_reply_sent = false;
 
 	/*-------
 	 * Standby mode is implemented by a state machine:
@@ -11896,6 +11924,19 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						 */
 						lastSourceFailed = true;
 						break;
+					}
+
+					/*
+					 * Since we have replayed everything we have received so
+					 * far and are about to start waiting for more WAL, let's
+					 * tell the upstream server our replay location now so
+					 * that pg_stat_replication doesn't show stale
+					 * information.
+					 */
+					if (!streaming_reply_sent)
+					{
+						WalRcvForceReply();
+						streaming_reply_sent = true;
 					}
 
 					/*

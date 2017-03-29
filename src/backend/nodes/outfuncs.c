@@ -252,6 +252,7 @@ _outPlannedStmt(StringInfo str, const PlannedStmt *node)
 	WRITE_NODE_FIELD(planTree);
 	WRITE_NODE_FIELD(rtable);
 	WRITE_NODE_FIELD(resultRelations);
+	WRITE_NODE_FIELD(nonleafResultRelations);
 	WRITE_NODE_FIELD(subplans);
 	WRITE_BITMAPSET_FIELD(rewindPlanIDs);
 	WRITE_NODE_FIELD(rowMarks);
@@ -344,6 +345,7 @@ _outModifyTable(StringInfo str, const ModifyTable *node)
 	WRITE_ENUM_FIELD(operation, CmdType);
 	WRITE_BOOL_FIELD(canSetTag);
 	WRITE_UINT_FIELD(nominalRelation);
+	WRITE_NODE_FIELD(partitioned_rels);
 	WRITE_NODE_FIELD(resultRelations);
 	WRITE_INT_FIELD(resultRelIndex);
 	WRITE_NODE_FIELD(plans);
@@ -368,6 +370,7 @@ _outAppend(StringInfo str, const Append *node)
 
 	_outPlanInfo(str, (const Plan *) node);
 
+	WRITE_NODE_FIELD(partitioned_rels);
 	WRITE_NODE_FIELD(appendplans);
 }
 
@@ -380,6 +383,7 @@ _outMergeAppend(StringInfo str, const MergeAppend *node)
 
 	_outPlanInfo(str, (const Plan *) node);
 
+	WRITE_NODE_FIELD(partitioned_rels);
 	WRITE_NODE_FIELD(mergeplans);
 
 	WRITE_INT_FIELD(numCols);
@@ -1808,6 +1812,7 @@ _outAppendPath(StringInfo str, const AppendPath *node)
 
 	_outPathInfo(str, (const Path *) node);
 
+	WRITE_NODE_FIELD(partitioned_rels);
 	WRITE_NODE_FIELD(subpaths);
 }
 
@@ -1818,6 +1823,7 @@ _outMergeAppendPath(StringInfo str, const MergeAppendPath *node)
 
 	_outPathInfo(str, (const Path *) node);
 
+	WRITE_NODE_FIELD(partitioned_rels);
 	WRITE_NODE_FIELD(subpaths);
 	WRITE_FLOAT_FIELD(limit_tuples, "%.0f");
 }
@@ -1936,6 +1942,28 @@ _outAggPath(StringInfo str, const AggPath *node)
 }
 
 static void
+_outRollupData(StringInfo str, const RollupData *node)
+{
+	WRITE_NODE_TYPE("ROLLUP");
+
+	WRITE_NODE_FIELD(groupClause);
+	WRITE_NODE_FIELD(gsets);
+	WRITE_NODE_FIELD(gsets_data);
+	WRITE_FLOAT_FIELD(numGroups, "%.0f");
+	WRITE_BOOL_FIELD(hashable);
+	WRITE_BOOL_FIELD(is_hashed);
+}
+
+static void
+_outGroupingSetData(StringInfo str, const GroupingSetData *node)
+{
+	WRITE_NODE_TYPE("GSDATA");
+
+	WRITE_NODE_FIELD(set);
+	WRITE_FLOAT_FIELD(numGroups, "%.0f");
+}
+
+static void
 _outGroupingSetsPath(StringInfo str, const GroupingSetsPath *node)
 {
 	WRITE_NODE_TYPE("GROUPINGSETSPATH");
@@ -1943,8 +1971,8 @@ _outGroupingSetsPath(StringInfo str, const GroupingSetsPath *node)
 	_outPathInfo(str, (const Path *) node);
 
 	WRITE_NODE_FIELD(subpath);
-	WRITE_NODE_FIELD(rollup_groupclauses);
-	WRITE_NODE_FIELD(rollup_lists);
+	WRITE_ENUM_FIELD(aggstrategy, AggStrategy);
+	WRITE_NODE_FIELD(rollups);
 	WRITE_NODE_FIELD(qual);
 }
 
@@ -2023,6 +2051,7 @@ _outModifyTablePath(StringInfo str, const ModifyTablePath *node)
 	WRITE_ENUM_FIELD(operation, CmdType);
 	WRITE_BOOL_FIELD(canSetTag);
 	WRITE_UINT_FIELD(nominalRelation);
+	WRITE_NODE_FIELD(partitioned_rels);
 	WRITE_NODE_FIELD(resultRelations);
 	WRITE_NODE_FIELD(subpaths);
 	WRITE_NODE_FIELD(subroots);
@@ -2099,6 +2128,7 @@ _outPlannerGlobal(StringInfo str, const PlannerGlobal *node)
 	WRITE_NODE_FIELD(finalrtable);
 	WRITE_NODE_FIELD(finalrowmarks);
 	WRITE_NODE_FIELD(resultRelations);
+	WRITE_NODE_FIELD(nonleafResultRelations);
 	WRITE_NODE_FIELD(relationOids);
 	WRITE_NODE_FIELD(invalItems);
 	WRITE_INT_FIELD(nParamExec);
@@ -2137,6 +2167,7 @@ _outPlannerInfo(StringInfo str, const PlannerInfo *node)
 	WRITE_NODE_FIELD(full_join_clauses);
 	WRITE_NODE_FIELD(join_info_list);
 	WRITE_NODE_FIELD(append_rel_list);
+	WRITE_NODE_FIELD(pcinfo_list);
 	WRITE_NODE_FIELD(rowMarks);
 	WRITE_NODE_FIELD(placeholder_list);
 	WRITE_NODE_FIELD(fkey_list);
@@ -2193,6 +2224,7 @@ _outRelOptInfo(StringInfo str, const RelOptInfo *node)
 	WRITE_NODE_FIELD(lateral_vars);
 	WRITE_BITMAPSET_FIELD(lateral_referencers);
 	WRITE_NODE_FIELD(indexlist);
+	WRITE_NODE_FIELD(statlist);
 	WRITE_UINT_FIELD(pages);
 	WRITE_FLOAT_FIELD(tuples, "%.0f");
 	WRITE_FLOAT_FIELD(allvisfrac, "%.6f");
@@ -2263,6 +2295,18 @@ _outForeignKeyOptInfo(StringInfo str, const ForeignKeyOptInfo *node)
 	appendStringInfoString(str, " :rinfos");
 	for (i = 0; i < node->nkeys; i++)
 		appendStringInfo(str, " %d", list_length(node->rinfos[i]));
+}
+
+static void
+_outStatisticExtInfo(StringInfo str, const StatisticExtInfo *node)
+{
+	WRITE_NODE_TYPE("STATISTICEXTINFO");
+
+	/* NB: this isn't a complete set of fields */
+	WRITE_OID_FIELD(statOid);
+	/* don't write rel, leads to infinite recursion in plan tree dump */
+	WRITE_CHAR_FIELD(kind);
+	WRITE_BITMAPSET_FIELD(keys);
 }
 
 static void
@@ -2420,6 +2464,15 @@ _outAppendRelInfo(StringInfo str, const AppendRelInfo *node)
 }
 
 static void
+_outPartitionedChildRelInfo(StringInfo str, const PartitionedChildRelInfo *node)
+{
+	WRITE_NODE_TYPE("PARTITIONEDCHILDRELINFO");
+
+	WRITE_UINT_FIELD(parent_relid);
+	WRITE_NODE_FIELD(child_rels);
+}
+
+static void
 _outPlaceHolderInfo(StringInfo str, const PlaceHolderInfo *node)
 {
 	WRITE_NODE_TYPE("PLACEHOLDERINFO");
@@ -2556,6 +2609,18 @@ _outIndexStmt(StringInfo str, const IndexStmt *node)
 	WRITE_BOOL_FIELD(initdeferred);
 	WRITE_BOOL_FIELD(transformed);
 	WRITE_BOOL_FIELD(concurrent);
+	WRITE_BOOL_FIELD(if_not_exists);
+}
+
+static void
+_outCreateStatsStmt(StringInfo str, const CreateStatsStmt *node)
+{
+	WRITE_NODE_TYPE("CREATESTATSSTMT");
+
+	WRITE_NODE_FIELD(defnames);
+	WRITE_NODE_FIELD(relation);
+	WRITE_NODE_FIELD(keys);
+	WRITE_NODE_FIELD(options);
 	WRITE_BOOL_FIELD(if_not_exists);
 }
 
@@ -3906,6 +3971,9 @@ outNode(StringInfo str, const void *obj)
 			case T_AppendRelInfo:
 				_outAppendRelInfo(str, obj);
 				break;
+			case T_PartitionedChildRelInfo:
+				_outPartitionedChildRelInfo(str, obj);
+				break;
 			case T_PlaceHolderInfo:
 				_outPlaceHolderInfo(str, obj);
 				break;
@@ -3915,11 +3983,18 @@ outNode(StringInfo str, const void *obj)
 			case T_PlannerParamItem:
 				_outPlannerParamItem(str, obj);
 				break;
-
+			case T_RollupData:
+				_outRollupData(str, obj);
+				break;
+			case T_GroupingSetData:
+				_outGroupingSetData(str, obj);
+				break;
+			case T_StatisticExtInfo:
+				_outStatisticExtInfo(str, obj);
+				break;
 			case T_ExtensibleNode:
 				_outExtensibleNode(str, obj);
 				break;
-
 			case T_CreateStmt:
 				_outCreateStmt(str, obj);
 				break;
@@ -3931,6 +4006,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_IndexStmt:
 				_outIndexStmt(str, obj);
+				break;
+			case T_CreateStatsStmt:
+				_outCreateStatsStmt(str, obj);
 				break;
 			case T_NotifyStmt:
 				_outNotifyStmt(str, obj);

@@ -111,10 +111,10 @@ static Var *search_indexed_tlist_for_var(Var *var,
 							 indexed_tlist *itlist,
 							 Index newvarno,
 							 int rtoffset);
-static Var *search_indexed_tlist_for_non_var(Node *node,
+static Var *search_indexed_tlist_for_non_var(Expr *node,
 								 indexed_tlist *itlist,
 								 Index newvarno);
-static Var *search_indexed_tlist_for_sortgroupref(Node *node,
+static Var *search_indexed_tlist_for_sortgroupref(Expr *node,
 									  Index sortgroupref,
 									  indexed_tlist *itlist,
 									  Index newvarno);
@@ -835,6 +835,10 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 				splan->nominalRelation += rtoffset;
 				splan->exclRelRTI += rtoffset;
 
+				foreach(l, splan->partitioned_rels)
+				{
+					lfirst_int(l) += rtoffset;
+				}
 				foreach(l, splan->resultRelations)
 				{
 					lfirst_int(l) += rtoffset;
@@ -863,6 +867,15 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 				root->glob->resultRelations =
 					list_concat(root->glob->resultRelations,
 								list_copy(splan->resultRelations));
+
+				/*
+				 * If the main target relation is a partitioned table, the
+				 * following list contains the RT indexes of partitioned child
+				 * relations, which are not included in the above list.
+				 */
+				root->glob->nonleafResultRelations =
+					list_concat(root->glob->nonleafResultRelations,
+								list_copy(splan->partitioned_rels));
 			}
 			break;
 		case T_Append:
@@ -875,6 +888,10 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 				 */
 				set_dummy_tlist_references(plan, rtoffset);
 				Assert(splan->plan.qual == NIL);
+				foreach(l, splan->partitioned_rels)
+				{
+					lfirst_int(l) += rtoffset;
+				}
 				foreach(l, splan->appendplans)
 				{
 					lfirst(l) = set_plan_refs(root,
@@ -893,6 +910,10 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 				 */
 				set_dummy_tlist_references(plan, rtoffset);
 				Assert(splan->plan.qual == NIL);
+				foreach(l, splan->partitioned_rels)
+				{
+					lfirst_int(l) += rtoffset;
+				}
 				foreach(l, splan->mergeplans)
 				{
 					lfirst(l) = set_plan_refs(root,
@@ -1419,7 +1440,7 @@ fix_param_node(PlannerInfo *root, Param *p)
 			elog(ERROR, "unexpected PARAM_MULTIEXPR ID: %d", p->paramid);
 		return copyObject(list_nth(params, colno - 1));
 	}
-	return copyObject(p);
+	return (Node *) copyObject(p);
 }
 
 /*
@@ -1706,7 +1727,7 @@ set_upper_references(PlannerInfo *root, Plan *plan, int rtoffset)
 		if (tle->ressortgroupref != 0 && !IsA(tle->expr, Var))
 		{
 			newexpr = (Node *)
-				search_indexed_tlist_for_sortgroupref((Node *) tle->expr,
+				search_indexed_tlist_for_sortgroupref(tle->expr,
 													  tle->ressortgroupref,
 													  subplan_itlist,
 													  OUTER_VAR);
@@ -1789,7 +1810,7 @@ convert_combining_aggrefs(Node *node, void *context)
 		 */
 		child_agg->args = NIL;
 		child_agg->aggfilter = NULL;
-		parent_agg = (Aggref *) copyObject(child_agg);
+		parent_agg = copyObject(child_agg);
 		child_agg->args = orig_agg->args;
 		child_agg->aggfilter = orig_agg->aggfilter;
 
@@ -2033,7 +2054,7 @@ search_indexed_tlist_for_var(Var *var, indexed_tlist *itlist,
  * so there's a correctness reason not to call it unless that's set.
  */
 static Var *
-search_indexed_tlist_for_non_var(Node *node,
+search_indexed_tlist_for_non_var(Expr *node,
 								 indexed_tlist *itlist, Index newvarno)
 {
 	TargetEntry *tle;
@@ -2074,7 +2095,7 @@ search_indexed_tlist_for_non_var(Node *node,
  * And it's also faster than search_indexed_tlist_for_non_var.
  */
 static Var *
-search_indexed_tlist_for_sortgroupref(Node *node,
+search_indexed_tlist_for_sortgroupref(Expr *node,
 									  Index sortgroupref,
 									  indexed_tlist *itlist,
 									  Index newvarno)
@@ -2208,7 +2229,7 @@ fix_join_expr_mutator(Node *node, fix_join_expr_context *context)
 		/* See if the PlaceHolderVar has bubbled up from a lower plan node */
 		if (context->outer_itlist && context->outer_itlist->has_ph_vars)
 		{
-			newvar = search_indexed_tlist_for_non_var((Node *) phv,
+			newvar = search_indexed_tlist_for_non_var((Expr *) phv,
 													  context->outer_itlist,
 													  OUTER_VAR);
 			if (newvar)
@@ -2216,7 +2237,7 @@ fix_join_expr_mutator(Node *node, fix_join_expr_context *context)
 		}
 		if (context->inner_itlist && context->inner_itlist->has_ph_vars)
 		{
-			newvar = search_indexed_tlist_for_non_var((Node *) phv,
+			newvar = search_indexed_tlist_for_non_var((Expr *) phv,
 													  context->inner_itlist,
 													  INNER_VAR);
 			if (newvar)
@@ -2231,7 +2252,7 @@ fix_join_expr_mutator(Node *node, fix_join_expr_context *context)
 	/* Try matching more complex expressions too, if tlists have any */
 	if (context->outer_itlist && context->outer_itlist->has_non_vars)
 	{
-		newvar = search_indexed_tlist_for_non_var(node,
+		newvar = search_indexed_tlist_for_non_var((Expr *) node,
 												  context->outer_itlist,
 												  OUTER_VAR);
 		if (newvar)
@@ -2239,7 +2260,7 @@ fix_join_expr_mutator(Node *node, fix_join_expr_context *context)
 	}
 	if (context->inner_itlist && context->inner_itlist->has_non_vars)
 	{
-		newvar = search_indexed_tlist_for_non_var(node,
+		newvar = search_indexed_tlist_for_non_var((Expr *) node,
 												  context->inner_itlist,
 												  INNER_VAR);
 		if (newvar)
@@ -2323,7 +2344,7 @@ fix_upper_expr_mutator(Node *node, fix_upper_expr_context *context)
 		/* See if the PlaceHolderVar has bubbled up from a lower plan node */
 		if (context->subplan_itlist->has_ph_vars)
 		{
-			newvar = search_indexed_tlist_for_non_var((Node *) phv,
+			newvar = search_indexed_tlist_for_non_var((Expr *) phv,
 													  context->subplan_itlist,
 													  context->newvarno);
 			if (newvar)
@@ -2359,7 +2380,7 @@ fix_upper_expr_mutator(Node *node, fix_upper_expr_context *context)
 	/* Try matching more complex expressions too, if tlist has any */
 	if (context->subplan_itlist->has_non_vars)
 	{
-		newvar = search_indexed_tlist_for_non_var(node,
+		newvar = search_indexed_tlist_for_non_var((Expr *) node,
 												  context->subplan_itlist,
 												  context->newvarno);
 		if (newvar)
