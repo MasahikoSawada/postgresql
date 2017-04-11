@@ -1272,8 +1272,8 @@ synchronous_standby_names = 'FIRST 2 (s1, s2, s3)'
     Whichever the synchronous replication method you choose, there is no
     difference between two synchronous replication method, priority-based and
     quorum-based, in term of high availability. Because in both replication
-    the transaction can be proceeded as long as at least the specified number
-    of synchronous standby is running.
+    method the transaction can be proceeded as long as at least the specified
+    number of synchronous standby is running.
   </para>
 
    <para>
