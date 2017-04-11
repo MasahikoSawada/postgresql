@@ -1202,6 +1202,21 @@ synchronous_standby_names = 'FIRST 2 (s1, s2, s3)'
    </para>
 
    <para>
+    In term of performance there is difference between two synchronous
+    replication method. Generally quorum-based synchronous replication
+    tends to be higher performance than priority-based synchronous
+    replication. Because in quorum-based synchronous replication, the
+    transaction can resume as soon as received the specified number of
+    acknowledgement from synchronous standby servers without distinction
+    of standby servers. On the other hand in priority-based synchronous
+    replication, the standby server that the primary server must wait for
+    is fixed until a synchronous standby fails. Therefore, if a server on
+    low-performance machine a has high priority and is chosen as a
+    synchronous standby server it can reduce performance for database
+    applications.
+   </para>
+   
+   <para>
     <productname>PostgreSQL</> allows the application developer
     to specify the durability level required via replication. This can be
     specified for the system overall, though it can also be specified for
@@ -1246,10 +1261,20 @@ synchronous_standby_names = 'FIRST 2 (s1, s2, s3)'
     The best solution for high availability is to ensure you keep as many
     synchronous standbys as requested. This can be achieved by naming multiple
     potential synchronous standbys using <varname>synchronous_standby_names</>.
-    The standbys whose names appear earlier in the list will be used as
-    synchronous standbys. Standbys listed after these will take over
-    the role of synchronous standby if one of current ones should fail.
+    For example in priority-based synchronous replication, the standbys whose
+    names appear earlier in the list will be used as synchronous standbys,
+    as described in <xref linkend="synchronous-replication-multiple-standbys">.
+    Standbys listed after these will take over the role of synchronous standby
+    if one of current ones should fail.
    </para>
+
+   <para>
+    Whichever the synchronous replication method you choose, there is no
+    difference between two synchronous replication method, priority-based and
+    quorum-based, in term of high availability. Because in both replication
+    the transaction can be proceeded as long as at least the specified number
+    of synchronous standby is running.
+  </para>
 
    <para>
     When a standby first attaches to the primary, it will not yet be properly

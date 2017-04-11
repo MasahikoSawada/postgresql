@@ -53,6 +53,9 @@
  * in the list. All the standbys appearing in the list are considered as
  * candidates for quorum synchronous standbys.
  *
+ * The method is optional. When neither FIRST nor ANY is specified in
+ * synchronous_standby_names it's equivalent to specifying FIRST.
+ *
  * Before the standbys chosen from synchronous_standby_names can
  * become the synchronous standbys they must have caught up with
  * the primary; that may take some time. Once caught up,
@@ -385,6 +388,11 @@ SyncRepInitConfig(void)
 	priority = SyncRepGetStandbyPriority();
 	if (MyWalSnd->sync_standby_priority != priority)
 	{
+		/*
+		 * Update priority of this WalSender, but note that in
+		 * quroum-based sync replication, the value of
+		 * sync_standby_priority has no effect.
+		 */
 		LWLockAcquire(SyncRepLock, LW_EXCLUSIVE);
 		MyWalSnd->sync_standby_priority = priority;
 		LWLockRelease(SyncRepLock);
@@ -599,6 +607,10 @@ SyncRepGetOldestSyncRecPtr(XLogRecPtr *writePtr, XLogRecPtr *flushPtr,
 /*
  * Calculate the Nth latest Write, Flush and Apply positions among sync
  * standbys.
+ *
+ * XXX it costs O(n log n) but since we suppose the n is not large,
+ * maybe less than 10 in most cases, we can optimize it by another
+ * sorting algorithm.
  */
 static void
 SyncRepGetNthLatestSyncRecPtr(XLogRecPtr *writePtr, XLogRecPtr *flushPtr,
@@ -629,6 +641,7 @@ SyncRepGetNthLatestSyncRecPtr(XLogRecPtr *writePtr, XLogRecPtr *flushPtr,
 		i++;
 	}
 
+	/* Sort each array in descending order */
 	qsort(write_array, len, sizeof(XLogRecPtr), cmp_lsn);
 	qsort(flush_array, len, sizeof(XLogRecPtr), cmp_lsn);
 	qsort(apply_array, len, sizeof(XLogRecPtr), cmp_lsn);
@@ -687,6 +700,10 @@ SyncRepGetSyncStandbys(bool	*am_sync)
 /*
  * Return the list of all the candidates for quorum sync standbys,
  * or NIL if no such standby is connected.
+ *
+ * In quorum-based sync replication we select the quorum sync
+ * standby without theirs priority. The all running active standbys
+ * are considered as a candidate for quorum sync standbys
  *
  * The caller must hold SyncRepLock. This function must be called only in
  * a quorum-based sync replication.
