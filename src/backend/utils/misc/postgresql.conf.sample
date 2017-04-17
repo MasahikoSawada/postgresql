@@ -278,6 +278,7 @@
 
 #max_logical_replication_workers = 4	# taken from max_worker_processes
 #max_sync_workers_per_subscription = 2	# taken from max_logical_replication_workers
+#apply_worker_launch_interval = 5s	# time to wait before start apply worker
 
 
 #------------------------------------------------------------------------------

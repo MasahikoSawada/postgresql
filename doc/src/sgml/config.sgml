@@ -3421,9 +3421,8 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
      </para>
 
      <para>
-      Note that <varname>wal_receiver_timeout</varname> and
-      <varname>wal_retrieve_retry_interval</varname> configuration parameters
-      affect the logical replication workers as well.
+      Note that <varname>wal_receiver_timeout</varname> configuraiton
+      parameters affect the logical replication workers as well.
      </para>
 
      <variablelist>
@@ -3470,6 +3469,20 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
        </para>
        <para>
         The default value is 2.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-apply-worker-launch-interval" xreflabel="apply_worker_launch_interval">
+      <term><varname>apply_worker_launch_interval</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>apply_worker_launch_interval</> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specify the interval of launching logical replication apply worker.
+        The default value is t seconds. Units are milliseconds if not specified.
        </para>
       </listitem>
      </varlistentry>

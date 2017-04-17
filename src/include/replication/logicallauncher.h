@@ -14,6 +14,7 @@
 
 extern int max_logical_replication_workers;
 extern int max_sync_workers_per_subscription;
+extern int apply_worker_launch_interval;
 
 extern void ApplyLauncherRegister(void);
 extern void ApplyLauncherMain(Datum main_arg);

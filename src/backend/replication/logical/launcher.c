@@ -58,6 +58,7 @@
 
 int	max_logical_replication_workers = 4;
 int max_sync_workers_per_subscription = 2;
+int	apply_worker_launch_interval = 5000;
 
 LogicalRepWorker *MyLogicalRepWorker = NULL;
 
@@ -688,9 +689,9 @@ ApplyLauncherMain(Datum main_arg)
 
 		now = GetCurrentTimestamp();
 
-		/* Limit the start retry to once a wal_retrieve_retry_interval */
+		/* Limit the start retry to once a apply_worker_launch_interval */
 		if (TimestampDifferenceExceeds(last_start_time, now,
-									   wal_retrieve_retry_interval))
+									   apply_worker_launch_interval))
 		{
 			/* Use temporary context for the database list and worker info. */
 			subctx = AllocSetContextCreate(TopMemoryContext,
@@ -718,7 +719,7 @@ ApplyLauncherMain(Datum main_arg)
 					logicalrep_worker_launch(sub->dbid, sub->oid, sub->name,
 											 sub->owner, InvalidOid);
 					last_start_time = now;
-					wait_time = wal_retrieve_retry_interval;
+					wait_time = apply_worker_launch_interval;
 					/* Limit to one worker per mainloop cycle. */
 					break;
 				}
@@ -733,11 +734,12 @@ ApplyLauncherMain(Datum main_arg)
 		{
 			/*
 			 * The wait in previous cycle was interrupted in less than
-			 * wal_retrieve_retry_interval since last worker was started,
-			 * this usually means crash of the worker, so we should retry
-			 * in wal_retrieve_retry_interval again.
+			 * apply_worker_launch_interval since last
+			 * worker was started, this usually means crash of the worker,
+			 * so we should retry in apply_worker_launch_interval
+			 * again.
 			 */
-			wait_time = wal_retrieve_retry_interval;
+			wait_time = apply_worker_launch_interval;
 		}
 
 		/* Wait for more work. */

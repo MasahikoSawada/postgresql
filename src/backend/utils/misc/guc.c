@@ -2535,6 +2535,19 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"apply_worker_launch_interval",
+			PGC_SIGHUP,
+			REPLICATION_SUBSCRIBERS,
+			gettext_noop("Sets the time to wait before launching aply woker."),
+			NULL,
+			GUC_UNIT_MS,
+		},
+		&apply_worker_launch_interval,
+		5000, 1, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"log_rotation_age", PGC_SIGHUP, LOGGING_WHERE,
 			gettext_noop("Automatic log file rotation will occur after N minutes."),
 			NULL,
