@@ -234,7 +234,6 @@ pg_lock_status(PG_FUNCTION_ARGS)
 		switch ((LockTagType) instance->locktag.locktag_type)
 		{
 			case LOCKTAG_RELATION:
-			case LOCKTAG_RELATION_EXTEND:
 				values[1] = ObjectIdGetDatum(instance->locktag.locktag_field1);
 				values[2] = ObjectIdGetDatum(instance->locktag.locktag_field2);
 				nulls[3] = true;

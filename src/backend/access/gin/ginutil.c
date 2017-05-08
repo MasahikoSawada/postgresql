@@ -323,13 +323,13 @@ GinNewBuffer(Relation index)
 	/* Must extend the file */
 	needLock = !RELATION_IS_LOCAL(index);
 	if (needLock)
-		LockRelationForExtension(index, ExclusiveLock);
+		LockRelationForExtension(index, LW_EXCLUSIVE);
 
 	buffer = ReadBuffer(index, P_NEW);
 	LockBuffer(buffer, GIN_EXCLUSIVE);
 
 	if (needLock)
-		UnlockRelationForExtension(index, ExclusiveLock);
+		UnlockRelationForExtension(index, LW_EXCLUSIVE);
 
 	return buffer;
 }

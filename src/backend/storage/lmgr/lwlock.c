@@ -451,6 +451,13 @@ InitializeLWLocks(void)
 	for (id = 0; id < NUM_PREDICATELOCK_PARTITIONS; id++, lock++)
 		LWLockInitialize(&lock->lock, LWTRANCHE_PREDICATE_LOCK_MANAGER);
 
+	/* Initialize relation extension lmgr's LWLocks in main array */
+	lock = MainLWLockArray + NUM_INDIVIDUAL_LWLOCKS +
+		NUM_BUFFER_PARTITIONS + NUM_LOCK_PARTITIONS +
+		NUM_PREDICATELOCK_PARTITIONS;
+	for (id = 0; id < NUM_RELEXTLOCK_PARTITIONS; id++, lock++)
+		LWLockInitialize(&lock->lock, LWTRANCHE_RELEXT_LOCK_MANAGER);
+
 	/* Initialize named tranches. */
 	if (NamedLWLockTrancheRequests > 0)
 	{
@@ -494,7 +501,7 @@ RegisterLWLockTranches(void)
 
 	if (LWLockTrancheArray == NULL)
 	{
-		LWLockTranchesAllocated = 64;
+		LWLockTranchesAllocated = 128;
 		LWLockTrancheArray = (char **)
 			MemoryContextAllocZero(TopMemoryContext,
 						  LWLockTranchesAllocated * sizeof(char *));
@@ -508,6 +515,7 @@ RegisterLWLockTranches(void)
 	LWLockRegisterTranche(LWTRANCHE_LOCK_MANAGER, "lock_manager");
 	LWLockRegisterTranche(LWTRANCHE_PREDICATE_LOCK_MANAGER,
 						  "predicate_lock_manager");
+	LWLockRegisterTranche(LWTRANCHE_RELEXT_LOCK_MANAGER, "relext_lock_manager");
 	LWLockRegisterTranche(LWTRANCHE_PARALLEL_QUERY_DSA,
 						  "parallel_query_dsa");
 	LWLockRegisterTranche(LWTRANCHE_TBM, "tbm");
@@ -1856,4 +1864,47 @@ LWLockHeldByMeInMode(LWLock *l, LWLockMode mode)
 			return true;
 	}
 	return false;
+}
+
+/*
+ * LWLockCheckForCleanup
+ *
+ * Return true only if there is no backend who waiting for this lock and is
+ * acquiring.
+ */
+bool
+LWLockCheckForCleanup(LWLock *lock)
+{
+	uint32	state;
+	bool ret;
+
+	state = pg_atomic_read_u32(&(lock->state));
+
+	ret = (state & LW_LOCK_MASK) == 0;
+	ret &= (state & LW_SHARED_MASK) == 0;
+
+	return ret;
+}
+
+int
+LWLockWaiterCount(LWLock *lock)
+{
+	int     nwaiters = 0;
+	proclist_mutable_iter iter;
+	uint32 state;
+
+	state = pg_atomic_read_u32(&(lock->state));
+
+	/* Quick check using state of lock */
+	if ((state & LW_FLAG_HAS_WAITERS) == 0)
+		return 0;
+
+	LWLockWaitListLock(lock);
+
+	proclist_foreach_modify(iter, &lock->waiters, lwWaitLink)
+		nwaiters++;
+
+	LWLockWaitListUnlock(lock);
+
+	return nwaiters;
 }

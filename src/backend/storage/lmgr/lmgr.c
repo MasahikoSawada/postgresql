@@ -24,6 +24,31 @@
 #include "storage/procarray.h"
 #include "utils/inval.h"
 
+/*
+ * Compute the hash code associated with a RELEXTLOCK.
+ *
+ * To avoid unnecessary recomputations of the hash code, we try to do this
+ * just once per function, and then pass it around as needed.  Aside from
+ * passing the hashcode to hash_search_with_hash_value(), we can extract
+ * the lock partition number from the hashcode.
+ */
+#define RelExtLockTargetTagHashCode(relextlocktargettag) \
+	get_hash_value(RelExtLockHash, (const void *) relextlocktargettag)
+
+/*
+ * The lockmgr's shared hash tables are partitioned to reduce contention.
+ * To determine which partition a given relid belongs to, compute the tag's
+ * hash code with ExtLockTagHashCode(), then apply one of these macros.
+ * NB: NUM_RELEXTENSIONLOCK_PARTITIONS must be a power of 2!
+ */
+#define RelExtLockHashPartition(hashcode) \
+	((hashcode) % NUM_RELEXTLOCK_PARTITIONS)
+#define RelExtLockHashPartitionLock(hashcode) \
+	(&MainLWLockArray[RELEXTLOCK_MANAGER_LWLOCK_OFFSET + \
+					  LockHashPartition(hashcode)].lock)
+#define RelExtLockHashPartitionLockByIndex(i) \
+	(&MainLWLockArray[RELEXTLOCK_MANAGER_LWLOCK_OFFSET + (i)].lock
+
 
 /*
  * Per-backend counter for generating speculative insertion tokens.
@@ -57,6 +82,67 @@ typedef struct XactLockTableWaitInfo
 } XactLockTableWaitInfo;
 
 static void XactLockTableWaitErrorCb(void *arg);
+static bool CreateRelExtLock(const RELEXTLOCKTAG *targettag, uint32 hashcode,
+							 LWLockMode lockmode, bool conditional);
+static void DeleteRelExtLock(const RELEXTLOCKTAG *targettag, uint32 hashcode);
+static bool RelExtLockExists(const RELEXTLOCKTAG *targettag);
+
+/*
+ * Pointers to hash tables containing lock state
+ *
+ * The RelExtLockHash hash table is in shared memory; LocalRelExtLockHash
+ * hashtable is local to each backend.
+ */
+static HTAB *RelExtLockHash;
+static HTAB *LocalRelExtLockHash;
+
+
+/*
+ * InitRelExtLock
+ *      Initialize the relation extension lock manager's data structures.
+ */
+void
+InitRelExtLock(long max_table_size)
+{
+	HASHCTL	info;
+	long		init_table_size;
+
+	/*
+	 * Compute init/max size to request for lock hashtables.  Note these
+	 * calculations must agree with LockShmemSize!
+	 */
+	init_table_size = max_table_size / 2;
+
+	/*
+	 * Allocate hash table for RELEXTLOCK structs. This stores per-relation
+	 * lock.
+	 */
+	MemSet(&info, 0, sizeof(info));
+	info.keysize = sizeof(Oid);
+	info.entrysize = sizeof(RELEXTLOCK);
+	info.num_partitions = NUM_RELEXTLOCK_PARTITIONS;
+
+	RelExtLockHash = ShmemInitHash("EXTRELLOCK Hash",
+								   init_table_size,
+								   max_table_size,
+								   &info,
+								   HASH_ELEM | HASH_BLOBS | HASH_PARTITION);
+
+	if (LocalRelExtLockHash)
+		hash_destroy(LocalRelExtLockHash);
+
+	/*
+	 * Allocate non-shared hash table for RELEXTLOCK structs.  This stores
+	 * per-relation extension lock and holding information.
+	 */
+	info.keysize = sizeof(Oid);
+	info.entrysize = sizeof(LOCALRELEXTLOCK);
+
+	LocalRelExtLockHash = hash_create("LOCALRELEXTLOCK hash",
+									  16,
+									  &info,
+									  HASH_ELEM | HASH_BLOBS);
+}
 
 /*
  * RelationInitLockInfo
@@ -321,7 +407,7 @@ UnlockRelationIdForSession(LockRelId *relid, LOCKMODE lockmode)
 /*
  *		LockRelationForExtension
  *
- * This lock tag is used to interlock addition of pages to relations.
+ * This lock is used to interlock addition of pages to relations.
  * We need such locking because bufmgr/smgr definition of P_NEW is not
  * race-condition-proof.
  *
@@ -329,15 +415,31 @@ UnlockRelationIdForSession(LockRelId *relid, LOCKMODE lockmode)
  * the relation, so no AcceptInvalidationMessages call is needed here.
  */
 void
-LockRelationForExtension(Relation relation, LOCKMODE lockmode)
+LockRelationForExtension(Relation relation, LWLockMode lockmode)
 {
-	LOCKTAG		tag;
+	RELEXTLOCKTAG	locktag;
+	LOCALRELEXTLOCK	*local_lock;
+	bool	found;
+	uint32	hashcode;
 
-	SET_LOCKTAG_RELATION_EXTEND(tag,
-								relation->rd_lockInfo.lockRelId.dbId,
-								relation->rd_lockInfo.lockRelId.relId);
+	locktag.relid = relation->rd_id;
+	locktag.mode = lockmode;
 
-	(void) LockAcquire(&tag, lockmode, false, false);
+	/* Do we have the lock already? */
+	if (RelExtLockExists(&locktag))
+		return;
+
+	hashcode = RelExtLockTargetTagHashCode(&locktag);
+
+	/* Acquire lock in local hash table */
+	local_lock = (LOCALRELEXTLOCK *) hash_search_with_hash_value(LocalRelExtLockHash,
+																 (void *) &locktag,
+																 hashcode,
+																 HASH_ENTER, &found);
+	local_lock->held = true;
+
+	/* Actually create the lock in shared hash table */
+	CreateRelExtLock(&locktag, hashcode, lockmode, false);
 }
 
 /*
@@ -347,47 +449,95 @@ LockRelationForExtension(Relation relation, LOCKMODE lockmode)
  * Returns TRUE iff the lock was acquired.
  */
 bool
-ConditionalLockRelationForExtension(Relation relation, LOCKMODE lockmode)
+ConditionalLockRelationForExtension(Relation relation, LWLockMode lockmode)
 {
-	LOCKTAG		tag;
+	RELEXTLOCKTAG	locktag;
+	LOCALRELEXTLOCK	*local_lock;
+	bool	found;
+	uint32	hashcode;
+	bool	ret;
 
-	SET_LOCKTAG_RELATION_EXTEND(tag,
-								relation->rd_lockInfo.lockRelId.dbId,
-								relation->rd_lockInfo.lockRelId.relId);
+	locktag.relid = relation->rd_id;
+	locktag.mode = lockmode;
 
-	return (LockAcquire(&tag, lockmode, false, true) != LOCKACQUIRE_NOT_AVAIL);
+	/* Do we have the lock already? */
+	if (RelExtLockExists(&locktag))
+		return true;
+
+	hashcode = RelExtLockTargetTagHashCode(&locktag);
+
+	/* Acquire lock in local hash table, but we're not sure the result of acquire yet */
+	local_lock = (LOCALRELEXTLOCK *) hash_search_with_hash_value(LocalRelExtLockHash,
+																 (void *) &locktag,
+																 hashcode,
+																 HASH_ENTER, &found);
+	ret = CreateRelExtLock(&locktag, hashcode, lockmode, true);
+	local_lock->held = ret;
+
+	return ret;
 }
 
 /*
  *		RelationExtensionLockWaiterCount
  *
  * Count the number of processes waiting for the given relation extension lock.
+ * NOte that this routine doesn't acquire the partition lock. Please make sure
+ * that the caller must acquire partitionlock in exclusive mode or we must call
+ * this routine after acquired the relation extension lock of this relation.
  */
 int
 RelationExtensionLockWaiterCount(Relation relation)
 {
-	LOCKTAG		tag;
+	RELEXTLOCKTAG	locktag;
+	RELEXTLOCK	*ext_lock;
+	bool	found;
+	int		nwaiters;
+	uint32	hashcode;
 
-	SET_LOCKTAG_RELATION_EXTEND(tag,
-								relation->rd_lockInfo.lockRelId.dbId,
-								relation->rd_lockInfo.lockRelId.relId);
+	locktag.relid = relation->rd_id;
+	locktag.mode = LW_EXCLUSIVE;
+	hashcode = RelExtLockTargetTagHashCode(&locktag);
 
-	return LockWaiterCount(&tag);
+	ext_lock = (RELEXTLOCK *) hash_search_with_hash_value(RelExtLockHash,
+														  (void *) &locktag,
+														  hashcode,
+														  HASH_FIND, &found);
+	/* We assume that we already acquire this lock */
+	Assert(found);
+
+	nwaiters = LWLockWaiterCount(&(ext_lock->lock));
+
+	return nwaiters;
 }
 
 /*
  *		UnlockRelationForExtension
  */
 void
-UnlockRelationForExtension(Relation relation, LOCKMODE lockmode)
+UnlockRelationForExtension(Relation relation, LWLockMode lockmode)
 {
-	LOCKTAG		tag;
+	RELEXTLOCKTAG	locktag;
+	uint32	hashcode;
+	bool	found;
 
-	SET_LOCKTAG_RELATION_EXTEND(tag,
-								relation->rd_lockInfo.lockRelId.dbId,
-								relation->rd_lockInfo.lockRelId.relId);
+	locktag.relid = relation->rd_id;
+	locktag.mode = lockmode;
 
-	LockRelease(&tag, lockmode, false);
+	/* Quick exit, if we don't acquire lock */
+	if (!RelExtLockExists(&locktag))
+		return;
+
+	/* Remove hash entry from local hash table */
+	hashcode = RelExtLockTargetTagHashCode(&locktag);
+	hash_search_with_hash_value(LocalRelExtLockHash,
+								(void *) &locktag,
+								hashcode, HASH_REMOVE,
+								&found);
+
+	Assert(found);
+
+	/* Actually remove the lock in shared hash table */
+	DeleteRelExtLock(&locktag, hashcode);
 }
 
 /*
@@ -961,12 +1111,6 @@ DescribeLockTag(StringInfo buf, const LOCKTAG *tag)
 							 tag->locktag_field2,
 							 tag->locktag_field1);
 			break;
-		case LOCKTAG_RELATION_EXTEND:
-			appendStringInfo(buf,
-							 _("extension of relation %u of database %u"),
-							 tag->locktag_field2,
-							 tag->locktag_field1);
-			break;
 		case LOCKTAG_PAGE:
 			appendStringInfo(buf,
 							 _("page %u of relation %u of database %u"),
@@ -1041,4 +1185,113 @@ GetLockNameFromTagType(uint16 locktag_type)
 	if (locktag_type > LOCKTAG_LAST_TYPE)
 		return "???";
 	return LockTagTypeNames[locktag_type];
+}
+
+
+/*
+ * Check whether a particular relation extension lock is held by this transaction.
+ *
+ * Note that this function may return false even when it fhe lock exists in local
+ * hash table, because the conditional relation extension lock doesn't remove the
+ * local hash entry even when failed to acquire lock.
+ */
+static bool
+RelExtLockExists(const RELEXTLOCKTAG *targettag)
+{
+	LOCALRELEXTLOCK	*lock;
+	uint32	hashcode;
+
+	hashcode = RelExtLockTargetTagHashCode(targettag);
+
+	lock = (LOCALRELEXTLOCK *) hash_search_with_hash_value(LocalRelExtLockHash,
+														   (void *) targettag,
+														   hashcode, HASH_FIND, NULL);
+
+	if (!lock)
+		return false;
+
+	/*
+	 * Found entry in the table, but still need to check whether it's actually
+	 * held -- it could be just created when acquiring conditional lock.
+	 */
+	return lock->held;
+}
+
+/*
+ * Create RELEXTLOCK hash entry on shared hash table. To avoid dead-lock with
+ * partition lock and LWLock, we acquire them but don't release it here. The
+ * caller must call DeleteRelExtLock later to release these locks.
+ */
+static bool
+CreateRelExtLock(const RELEXTLOCKTAG *targettag, uint32 hashcode, LWLockMode lockmode,
+				 bool conditional)
+{
+	RELEXTLOCK	*ext_lock;
+	LWLock	*partitionLock;
+	bool	found;
+	bool	ret = false;
+
+	partitionLock = RelExtLockHashPartitionLock(hashcode);
+	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
+
+	ext_lock = (RELEXTLOCK *) hash_search_with_hash_value(RelExtLockHash,
+														  (void * ) targettag,
+														  hashcode, HASH_ENTER, &found);
+
+	if (!ext_lock)
+		ereport(ERROR,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("out of shared memory"),
+				 errhint("You might need to increase max_pred_locks_per_transaction.")));
+
+	/* This is a new hash entry, initialize it */
+	if (!found)
+		LWLockInitialize(&(ext_lock->lock), LWTRANCHE_RELEXT_LOCK_MANAGER);
+
+	if (conditional)
+		ret = LWLockConditionalAcquire(&(ext_lock->lock), lockmode);
+	else
+		ret = LWLockAcquire(&(ext_lock->lock), lockmode);
+
+	/* Always return true if not conditional lock */
+	return ret;
+}
+
+/*
+ * Remove RELEXTLOCK from shared RelExtLockHash hash table. Since other backends
+ * might be acquiring it or waiting for this lock, we can delete it only if there
+ * is no longer backends who are interested in it.
+ *
+ * Note that we assume partition lock for hash table is already acquired when
+ * acquiring the lock. This routine should release partition lock as well after
+ * released LWLock.
+ */
+static void
+DeleteRelExtLock(const RELEXTLOCKTAG *targettag, uint32 hashcode)
+{
+	RELEXTLOCK	*ext_lock;
+	LOCALRELEXTLOCK	*lock;
+	LWLock	*partitionLock;
+	bool	found;
+
+	partitionLock = RelExtLockHashPartitionLock(hashcode);
+
+	ext_lock = (RELEXTLOCK *) hash_search_with_hash_value(RelExtLockHash,
+														  (void * ) targettag,
+														  hashcode,
+														  HASH_FIND, &found);
+
+	if (!found)
+		return;
+
+	/*
+	 * Remove this hash entry if there is no longer someone who is interested
+	 * in extension lock of this relation.
+	 */
+	if (LWLockCheckForCleanup(&(ext_lock->lock)))
+		hash_search_with_hash_value(RelExtLockHash, (void *) targettag,
+									hashcode, HASH_REMOVE, &found);
+
+	LWLockRelease(&(ext_lock->lock));
+	LWLockRelease(partitionLock);
 }

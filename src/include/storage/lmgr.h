@@ -34,6 +34,36 @@ typedef enum XLTW_Oper
 	XLTW_RecheckExclusionConstr
 } XLTW_Oper;
 
+typedef	struct RELEXTLOCKTAG
+{
+	Oid		relid;		/* identifies the lockable object */
+	LWLockMode mode;	/* lock mode for this table entry */
+} RELEXTLOCKTAG;
+
+/*
+ * This structure holds information per-object relation extension
+ * lock.
+ */
+typedef struct RELEXTLOCK
+{
+	RELEXTLOCKTAG	tag;	/* hash key -- must be first */
+	LWLock			lock;	/* LWLock for relation extension */
+} RELEXTLOCK;
+
+/*
+ * The LOCALRELEXTLOCK struct represents a local copy of data which is
+ * also present in the RELEXTLOCK table, organized for fast access without
+ * needing to acquire a LWLock.  It is strictly for optimization.
+ */
+typedef struct LOCALRELEXTLOCK
+{
+	/* hash key */
+	RELEXTLOCKTAG	relid;	/* unique identifier of locktable object */
+
+	/* data */
+	bool			held;	/* is lock held? */
+} LOCALRELEXTLOCK;
+
 extern void RelationInitLockInfo(Relation relation);
 
 /* Lock a relation */
@@ -51,10 +81,10 @@ extern void LockRelationIdForSession(LockRelId *relid, LOCKMODE lockmode);
 extern void UnlockRelationIdForSession(LockRelId *relid, LOCKMODE lockmode);
 
 /* Lock a relation for extension */
-extern void LockRelationForExtension(Relation relation, LOCKMODE lockmode);
-extern void UnlockRelationForExtension(Relation relation, LOCKMODE lockmode);
-extern bool ConditionalLockRelationForExtension(Relation relation,
-									LOCKMODE lockmode);
+extern void InitRelExtLock(long max_table_size);
+extern void LockRelationForExtension(Relation relation, LWLockMode lockmode);
+extern void UnlockRelationForExtension(Relation relation, LWLockMode lockmode);
+extern bool ConditionalLockRelationForExtension(Relation relation, LWLockMode lockmode);
 extern int	RelationExtensionLockWaiterCount(Relation relation);
 
 /* Lock a page (currently only used within indexes) */
