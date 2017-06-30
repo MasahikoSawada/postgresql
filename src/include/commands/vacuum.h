@@ -192,6 +192,7 @@ extern void vacuum_delay_point(void);
 /* in commands/vacuumlazy.c */
 extern void lazy_vacuum_rel(Relation onerel, VacuumOptions options,
 				VacuumParams *params, BufferAccessStrategy bstrategy);
+extern void lazy_vacuum_worker(dsm_segment *seg, shm_toc *toc);
 
 /* in commands/analyze.c */
 extern void analyze_rel(Oid relid, RangeVar *relation, int options,
