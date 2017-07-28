@@ -93,6 +93,7 @@ CREATE FUNCTION bt_page_items(IN page bytea,
     OUT itemlen smallint,
     OUT nulls bool,
     OUT vars bool,
+    OUT abbrev int4,
     OUT data text)
 RETURNS SETOF record
 AS 'MODULE_PATHNAME', 'bt_page_items_bytea'

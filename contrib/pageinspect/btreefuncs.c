@@ -66,6 +66,7 @@ typedef struct BTPageStat
 	uint32		free_size;
 	uint32		avg_item_size;
 	char		type;
+	ItemAbbrev	abbrev;
 
 	/* opaque data */
 	BlockNumber btpo_prev;
@@ -255,7 +256,7 @@ struct user_args
 static Datum
 bt_page_print_tuples(FuncCallContext *fctx, Page page, OffsetNumber offset)
 {
-	char	   *values[6];
+	char	   *values[7];
 	HeapTuple	tuple;
 	ItemId		id;
 	IndexTuple	itup;
@@ -280,6 +281,8 @@ bt_page_print_tuples(FuncCallContext *fctx, Page page, OffsetNumber offset)
 	values[j++] = psprintf("%d", (int) IndexTupleSize(itup));
 	values[j++] = psprintf("%c", IndexTupleHasNulls(itup) ? 't' : 'f');
 	values[j++] = psprintf("%c", IndexTupleHasVarwidths(itup) ? 't' : 'f');
+
+	values[j++] = psprintf("%u", ItemIdGetAbbrev(id));
 
 	ptr = (char *) itup + IndexInfoFindDataOffset(itup->t_info);
 	dlen = IndexTupleSize(itup) - IndexInfoFindDataOffset(itup->t_info);
