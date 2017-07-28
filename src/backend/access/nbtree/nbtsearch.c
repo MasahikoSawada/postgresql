@@ -138,7 +138,7 @@ _bt_search(Relation rel, int keysz, ScanKey scankey, bool nextkey,
 		/* if this is a leaf page, we're done */
 		page = BufferGetPage(*bufP);
 		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-		if (P_ISLEAF(opaque))
+		if (P_ISLEAF(page))
 			break;
 
 		/*
@@ -249,13 +249,13 @@ _bt_moveright(Relation rel,
 		TestForOldSnapshot(snapshot, rel, page);
 		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 
-		if (P_RIGHTMOST(opaque))
+		if (P_RIGHTMOST(page))
 			break;
 
 		/*
 		 * Finish any incomplete splits we encounter along the way.
 		 */
-		if (forupdate && P_INCOMPLETE_SPLIT(opaque))
+		if (forupdate && P_INCOMPLETE_SPLIT(page))
 		{
 			BlockNumber blkno = BufferGetBlockNumber(buf);
 
@@ -266,7 +266,7 @@ _bt_moveright(Relation rel,
 				LockBuffer(buf, BT_WRITE);
 			}
 
-			if (P_INCOMPLETE_SPLIT(opaque))
+			if (P_INCOMPLETE_SPLIT(page))
 				_bt_finish_split(rel, buf, stack);
 			else
 				_bt_relbuf(rel, buf);
@@ -277,10 +277,10 @@ _bt_moveright(Relation rel,
 		}
 
 #ifdef ABBREV_DEBUG
-		if (scankey->sk_do_abbrev && !P_ISLEAF(opaque))
+		if (scankey->sk_do_abbrev && !P_ISLEAF(page))
 			elog(WARNING, "checking high key against scan key on level %u", opaque->btpo.level);
 #endif
-		if (P_IGNORE(opaque) || _bt_compare(rel, keysz, scankey, page, P_HIKEY) >= cmpval)
+		if (P_IGNORE(page) || _bt_compare(rel, keysz, scankey, page, P_HIKEY) >= cmpval)
 		{
 			/* step right one page */
 			buf = _bt_relandgetbuf(rel, buf, opaque->btpo_next, access);
@@ -290,7 +290,7 @@ _bt_moveright(Relation rel,
 			break;
 	}
 
-	if (P_IGNORE(opaque))
+	if (P_IGNORE(page))
 		elog(ERROR, "fell off the end of index \"%s\"",
 			 RelationGetRelationName(rel));
 
@@ -341,7 +341,7 @@ _bt_binsrch(Relation rel,
 	page = BufferGetPage(buf);
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 
-	low = P_FIRSTDATAKEY(opaque);
+	low = P_FIRSTDATAKEY(page);
 	high = PageGetMaxOffsetNumber(page);
 
 	/*
@@ -396,14 +396,14 @@ _bt_binsrch(Relation rel,
 	 * On a leaf page, we always return the first key >= scan key (resp. >
 	 * scan key), which could be the last slot + 1.
 	 */
-	if (P_ISLEAF(opaque))
+	if (P_ISLEAF(page))
 		return low;
 
 	/*
 	 * On a non-leaf page, return the last key < scan key (resp. <= scan key).
 	 * There must be one if _bt_compare() is playing by the rules.
 	 */
-	Assert(low > P_FIRSTDATAKEY(opaque));
+	Assert(low > P_FIRSTDATAKEY(page));
 
 	return OffsetNumberPrev(low);
 }
@@ -451,7 +451,6 @@ _bt_compare(Relation rel,
 			OffsetNumber offnum)
 {
 	TupleDesc	itupdesc = RelationGetDescr(rel);
-	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 	ItemId		item;
 	IndexTuple	itup;
 	int32		result = 0;
@@ -461,7 +460,7 @@ _bt_compare(Relation rel,
 	 * Force result ">" if target item is first data item on an internal page
 	 * --- see NOTE above.
 	 */
-	if (!P_ISLEAF(opaque) && offnum == P_FIRSTDATAKEY(opaque))
+	if (!P_ISLEAF(page) && offnum == P_FIRSTDATAKEY(page))
 		return 1;
 
 	item = PageGetItemId(page, offnum);
@@ -469,34 +468,31 @@ _bt_compare(Relation rel,
 	/*
 	 * Attempt to resolve comparison using abbreviated key within ItemId array.
 	 */
-	if (!P_ISLEAF(opaque) && scankey->sk_do_abbrev)
+	if (!P_ISLEAF(page) && scankey->sk_do_abbrev)
 	{
 		ItemAbbrev	itemAbbrev = ItemIdGetAbbrev(item);
 
 		if (itemAbbrev < scankey->sk_abbrev)
 		{
 #ifdef ABBREV_DEBUG
-			elog(WARNING, "%s offnum %u (%u)  < scankey->sk_abbrev (%u) on level %u",
-				 RelationGetRelationName(rel), offnum, itemAbbrev, scankey->sk_abbrev,
-				 opaque->btpo.level);
+			elog(WARNING, "%s offnum %u (%u)  < scankey->sk_abbrev (%u)",
+				 RelationGetRelationName(rel), offnum, itemAbbrev, scankey->sk_abbrev);
 #endif
 			result = 1;
 		}
 		else if (itemAbbrev > scankey->sk_abbrev)
 		{
 #ifdef ABBREV_DEBUG
-			elog(WARNING, "%s offnum %u (%u)  > scankey->sk_abbrev (%u) on level %u",
-				 RelationGetRelationName(rel), offnum, itemAbbrev, scankey->sk_abbrev,
-				 opaque->btpo.level);
+			elog(WARNING, "%s offnum %u (%u)  > scankey->sk_abbrev (%u)",
+				 RelationGetRelationName(rel), offnum, itemAbbrev, scankey->sk_abbrev);
 #endif
 			result = -1;
 		}
 		else
 		{
 #ifdef ABBREV_DEBUG
-			elog(WARNING, "%s offnum %u (%u) == scankey->sk_abbrev (%u) on level %u",
-				 RelationGetRelationName(rel), offnum, itemAbbrev, scankey->sk_abbrev,
-				 opaque->btpo.level);
+			elog(WARNING, "%s offnum %u (%u) == scankey->sk_abbrev (%u)",
+				 RelationGetRelationName(rel), offnum, itemAbbrev, scankey->sk_abbrev);
 #endif
 			result = 0;
 		}
@@ -1311,7 +1307,7 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 			_bt_parallel_release(scan, BufferGetBlockNumber(so->currPos.buf));
 	}
 
-	minoff = P_FIRSTDATAKEY(opaque);
+	minoff = P_FIRSTDATAKEY(page);
 	maxoff = PageGetMaxOffsetNumber(page);
 
 	/*
@@ -1579,12 +1575,12 @@ _bt_readnextpage(IndexScanDesc scan, BlockNumber blkno, ScanDirection dir)
 			TestForOldSnapshot(scan->xs_snapshot, rel, page);
 			opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 			/* check for deleted page */
-			if (!P_IGNORE(opaque))
+			if (!P_IGNORE(page))
 			{
 				PredicateLockPage(rel, blkno, scan->xs_snapshot);
 				/* see if there are any matches on this page */
 				/* note that this will clear moreRight if we can stop */
-				if (_bt_readpage(scan, dir, P_FIRSTDATAKEY(opaque)))
+				if (_bt_readpage(scan, dir, P_FIRSTDATAKEY(page)))
 					break;
 			}
 
@@ -1674,7 +1670,7 @@ _bt_readnextpage(IndexScanDesc scan, BlockNumber blkno, ScanDirection dir)
 			page = BufferGetPage(so->currPos.buf);
 			TestForOldSnapshot(scan->xs_snapshot, rel, page);
 			opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-			if (!P_IGNORE(opaque))
+			if (!P_IGNORE(page))
 			{
 				PredicateLockPage(rel, BufferGetBlockNumber(so->currPos.buf), scan->xs_snapshot);
 				/* see if there are any matches on this page */
@@ -1790,12 +1786,12 @@ _bt_walk_left(Relation rel, Buffer buf, Snapshot snapshot)
 		tries = 0;
 		for (;;)
 		{
-			if (!P_ISDELETED(opaque) && opaque->btpo_next == obknum)
+			if (!P_ISDELETED(page) && opaque->btpo_next == obknum)
 			{
 				/* Found desired page, return it */
 				return buf;
 			}
-			if (P_RIGHTMOST(opaque) || ++tries > 4)
+			if (P_RIGHTMOST(page) || ++tries > 4)
 				break;
 			blkno = opaque->btpo_next;
 			buf = _bt_relandgetbuf(rel, buf, blkno, BT_READ);
@@ -1809,7 +1805,7 @@ _bt_walk_left(Relation rel, Buffer buf, Snapshot snapshot)
 		page = BufferGetPage(buf);
 		TestForOldSnapshot(snapshot, rel, page);
 		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-		if (P_ISDELETED(opaque))
+		if (P_ISDELETED(page))
 		{
 			/*
 			 * It was deleted.  Move right to first nondeleted page (there
@@ -1819,7 +1815,7 @@ _bt_walk_left(Relation rel, Buffer buf, Snapshot snapshot)
 			 */
 			for (;;)
 			{
-				if (P_RIGHTMOST(opaque))
+				if (P_RIGHTMOST(page))
 					elog(ERROR, "fell off the end of index \"%s\"",
 						 RelationGetRelationName(rel));
 				blkno = opaque->btpo_next;
@@ -1827,7 +1823,7 @@ _bt_walk_left(Relation rel, Buffer buf, Snapshot snapshot)
 				page = BufferGetPage(buf);
 				TestForOldSnapshot(snapshot, rel, page);
 				opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-				if (!P_ISDELETED(opaque))
+				if (!P_ISDELETED(page))
 					break;
 			}
 
@@ -1897,8 +1893,8 @@ _bt_get_endpoint(Relation rel, uint32 level, bool rightmost,
 		 * right if needed to get to it (this could happen if the page split
 		 * since we obtained a pointer to it).
 		 */
-		while (P_IGNORE(opaque) ||
-			   (rightmost && !P_RIGHTMOST(opaque)))
+		while (P_IGNORE(page) ||
+			   (rightmost && !P_RIGHTMOST(page)))
 		{
 			blkno = opaque->btpo_next;
 			if (blkno == P_NONE)
@@ -1921,7 +1917,7 @@ _bt_get_endpoint(Relation rel, uint32 level, bool rightmost,
 		if (rightmost)
 			offnum = PageGetMaxOffsetNumber(page);
 		else
-			offnum = P_FIRSTDATAKEY(opaque);
+			offnum = P_FIRSTDATAKEY(page);
 
 		itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, offnum));
 		blkno = ItemPointerGetBlockNumber(&(itup->t_tid));
@@ -1975,18 +1971,18 @@ _bt_endpoint(IndexScanDesc scan, ScanDirection dir)
 	PredicateLockPage(rel, BufferGetBlockNumber(buf), scan->xs_snapshot);
 	page = BufferGetPage(buf);
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-	Assert(P_ISLEAF(opaque));
+	Assert(P_ISLEAF(page));
 
 	if (ScanDirectionIsForward(dir))
 	{
 		/* There could be dead pages to the left, so not this: */
 		/* Assert(P_LEFTMOST(opaque)); */
 
-		start = P_FIRSTDATAKEY(opaque);
+		start = P_FIRSTDATAKEY(page);
 	}
 	else if (ScanDirectionIsBackward(dir))
 	{
-		Assert(P_RIGHTMOST(opaque));
+		Assert(P_RIGHTMOST(page));
 
 		start = PageGetMaxOffsetNumber(page);
 	}

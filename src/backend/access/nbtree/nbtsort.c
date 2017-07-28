@@ -254,9 +254,14 @@ _bt_blnewpage(uint32 level)
 
 	/* Initialize BT opaque state */
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-	opaque->btpo_prev = opaque->btpo_next = P_NONE;
+	opaque->btpo_prev = P_NONE;
+	BTSetNextBlkNumber(page, P_NONE);
+
 	opaque->btpo.level = level;
-	opaque->btpo_flags = (level > 0) ? 0 : BTP_LEAF;
+	if (level > 0)
+		BTClearAllBTPFlags(page);
+	else
+		BTSetBTPLeafFlag(page);
 	opaque->btpo_cycleid = 0;
 
 	/* Make the P_HIKEY line pointer appear allocated */
@@ -402,7 +407,6 @@ _bt_sortaddtup(Page page,
 			   abbreviate_func abbreviator,
 			   OffsetNumber itup_off)
 {
-	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 	TupleDesc itupdesc = RelationGetDescr(rel);
 	IndexTupleData trunctuple;
 	ItemAbbrev	abbrev;
@@ -413,7 +417,7 @@ _bt_sortaddtup(Page page,
 	 * critical here as it is in other paths that do everything with an
 	 * exclusive buffer lock held, though.
 	 */
-	if (!P_ISLEAF(opaque) && itup_off == P_FIRSTKEY)
+	if (!P_ISLEAF(page) && itup_off == P_FIRSTKEY)
 	{
 		trunctuple = *itup;
 		trunctuple.t_info = sizeof(IndexTupleData);
@@ -421,7 +425,7 @@ _bt_sortaddtup(Page page,
 		itemsize = sizeof(IndexTupleData);
 		abbrev = 0;
 	}
-	else if (abbreviator && !P_ISLEAF(opaque))
+	else if (abbreviator && !P_ISLEAF(page))
 	{
 		Datum		datum;
 		bool		isNull;
@@ -585,12 +589,11 @@ _bt_buildadd(BTWriteState *wstate, BTPageState *state, IndexTuple itup)
 		 * Set the sibling links for both pages.
 		 */
 		{
-			BTPageOpaque oopaque = (BTPageOpaque) PageGetSpecialPointer(opage);
 			BTPageOpaque nopaque = (BTPageOpaque) PageGetSpecialPointer(npage);
 
-			oopaque->btpo_next = nblkno;
+			BTSetNextBlkNumber(opage, nblkno);
 			nopaque->btpo_prev = oblkno;
-			nopaque->btpo_next = P_NONE;	/* redundant */
+			BTSetNextBlkNumber(npage, P_NONE); /* redundant */
 		}
 
 		/*

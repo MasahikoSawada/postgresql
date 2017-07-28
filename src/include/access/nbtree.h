@@ -76,6 +76,58 @@ typedef BTPageOpaqueData *BTPageOpaque;
 #define BTP_HAS_GARBAGE (1 << 6)	/* page has LP_DEAD tuples */
 #define BTP_INCOMPLETE_SPLIT (1 << 7)	/* right sibling's downlink is missing */
 
+#define BTP_VALID_BITS	0x7F
+
+/* Bits defined in AM reserved bits in page header */
+#define BTP_RSVD_LEAF			(1 << 0)
+#define BTP_RSVD_DELETED		(1 << 1)
+#define BTP_RSVD_HALF_DEAD		(1 << 2)
+#define BTP_RSVD_INCOMPLETE_SPLIT (1 << 3)
+#define BTP_RSVD_RIGHTMOST		(1 << 4)
+
+#define BTP_RSVD_BTPO_FLAGS		0x0F	/* exclude BTP_RSVD_RIGHTMOST */
+#define BTP_RSVD_VALID_BITS		0x1F
+
+/* Macros for AM reserved bits routines for btree */
+/* BTP_LEAF and BTP_RSVD_LEAF */
+#define BTAddBTPLeafFlag(page)		_bt_add_btpflag(page, BTP_LEAF, BTP_RSVD_LEAF)
+#define BTClearBTPLeafFlag(page)	_bt_clear_btpflag(page, BTP_LEAF, BTP_RSVD_LEAF)
+#define BTSetBTPLeafFlag(page)		_bt_set_btpflag(page, BTP_LEAF, BTP_RSVD_LEAF)
+
+/* BTP_DELETED and BTP_RSVD_DELETED */
+#define BTAddBTPDeletedFlag(page) \
+	_bt_add_btpflag(page, BTP_DELETED, BTP_RSVD_DELETED)
+#define BTClearBTPDeletedFlag(page) \
+	_bt_clear_btpflag(page, BTP_DELETED, BTP_RSVD_DELETED)
+#define BTSetBTPDeletedFlag(page) \
+	_bt_set_btpflag(page, BTP_DELETED, BTP_RSVD_DELETED)
+
+/* BTP_HALF_DEAD and BTP_RSVD_HALF_DEAD */
+#define BTAddBTPHalfDeadFlag(page) \
+	_bt_add_btpflag(page, BTP_HALF_DEAD, BTP_RSVD_HALF_DEAD)
+#define BTClearBTPHalfDeadFlag(page) \
+	_bt_clear_btpflag(page, BTP_HALF_DEAD, BTP_RSVD_HALF_DEAD)
+#define BTSetBTPHalfDeadFlag(page) \
+	_bt_set_btpflag(page, BTP_LEAF, BTP_RSVD_HALF_DEAD)
+
+/* BTP_INCOMPLETE_SPLIT and BTP_RSVD_INCOMPLETE_SPLIT */
+#define BTAddBTPIncompleteSplitFlag(page) \
+	_bt_add_btpflag(page, BTP_INCOMPLETE_SPLIT, BTP_RSVD_INCOMPLETE_SPLIT)
+#define BTClearBTPIncompleteSplitFlag(page) \
+	_bt_clear_btpflag(page, BTP_INCOMPLETE_SPLIT, BTP_RSVD_INCOMPLETE_SPLIT)
+#define BTSetBTPIncompleteSplitFlag(page) \
+	_bt_set_btpflag(page, BTP_INCOMPLETE_SPLIT, BTP_RSVD_INCOMPLETE_SPLIT)
+
+/* btpo_next and BTP_RSVD_RIGHTMOST */
+#define BTSetNextBlkNumber(page, blkno) _bt_set_nextblkno(page, blkno)
+
+/* Clear both btpo_flags and cached flags */
+#define BTClearAllBTPFlags(page) \
+	_bt_clear_btpflag(page, BTP_VALID_BITS, BTP_RSVD_BTPO_FLAGS)
+
+/* Copy both btpo_flags and cached flags */
+#define BTCopyBTPFlags(dstpage, srcpage) _bt_copy_btpflag(dstpage, srcpage)
+
 /*
  * The max allowed value of a cycle ID is a bit less than 64K.  This is
  * for convenience of pg_filedump and similar utilities: we want to use
@@ -172,15 +224,24 @@ typedef struct BTMetaPageData
  * as well as other state info kept in the opaque data.
  */
 #define P_LEFTMOST(opaque)		((opaque)->btpo_prev == P_NONE)
-#define P_RIGHTMOST(opaque)		((opaque)->btpo_next == P_NONE)
-#define P_ISLEAF(opaque)		((opaque)->btpo_flags & BTP_LEAF)
+//#define P_RIGHTMOST(opaque)		((opaque)->btpo_next == P_NONE)
+//#define P_ISLEAF(opaque)		((opaque)->btpo_flags & BTP_LEAF)
 #define P_ISROOT(opaque)		((opaque)->btpo_flags & BTP_ROOT)
-#define P_ISDELETED(opaque)		((opaque)->btpo_flags & BTP_DELETED)
+//#define P_ISDELETED(opaque)		((opaque)->btpo_flags & BTP_DELETED)
 #define P_ISMETA(opaque)		((opaque)->btpo_flags & BTP_META)
-#define P_ISHALFDEAD(opaque)	((opaque)->btpo_flags & BTP_HALF_DEAD)
-#define P_IGNORE(opaque)		((opaque)->btpo_flags & (BTP_DELETED|BTP_HALF_DEAD))
+//#define P_ISHALFDEAD(opaque)	((opaque)->btpo_flags & BTP_HALF_DEAD)
+//#define P_IGNORE(opaque)		((opaque)->btpo_flags & (BTP_DELETED|BTP_HALF_DEAD))
 #define P_HAS_GARBAGE(opaque)	((opaque)->btpo_flags & BTP_HAS_GARBAGE)
-#define P_INCOMPLETE_SPLIT(opaque)	((opaque)->btpo_flags & BTP_INCOMPLETE_SPLIT)
+//#define P_INCOMPLETE_SPLIT(opaque)	((opaque)->btpo_flags & BTP_INCOMPLETE_SPLIT)
+
+#define P_ISLEAF(page)		(PageGetAMReservedBits(page) & BTP_RSVD_LEAF)
+#define P_RIGHTMOST(page)	(PageGetAMReservedBits(page) & BTP_RSVD_RIGHTMOST)
+#define P_ISDELETED(page)	(PageGetAMReservedBits(page) & BTP_RSVD_DELETED)
+#define P_ISHALFDEAD(page)	(PageGetAMReservedBits(page) & BTP_RSVD_HALF_DEAD)
+#define P_IGNORE(page)		(PageGetAMReservedBits(page) & \
+							 (BTP_RSVD_DELETED | BTP_RSVD_HALF_DEAD))
+#define P_INCOMPLETE_SPLIT(page) \
+	(PageGetAMReservedBits(page) & BTP_RSVD_INCOMPLETE_SPLIT)
 
 /*
  *	Lehman and Yao's algorithm requires a ``high key'' on every non-rightmost
@@ -492,6 +553,13 @@ extern void _bt_delitems_vacuum(Relation rel, Buffer buf,
 					OffsetNumber *itemnos, int nitems,
 					BlockNumber lastBlockVacuumed);
 extern int	_bt_pagedel(Relation rel, Buffer buf);
+
+extern inline void _bt_set_btpflag(Page page, uint16 flag, uint16 cflag);
+extern inline void _bt_add_btpflag(Page page, uint16 flag, uint16 cflag);
+extern inline void _bt_clear_btpflag(Page page, uint16 flag, uint16 cflag);
+extern inline void _bt_set_nextblkno(Page page, BlockNumber blkno);
+extern inline void _bt_copy_btpflag(Page dstpage, Page srcpage);
+extern inline void check_btpflag(Page page);
 
 /*
  * prototypes for functions in nbtsearch.c

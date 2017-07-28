@@ -1169,8 +1169,8 @@ restart:
 	if (blkno != orig_blkno)
 	{
 		if (_bt_page_recyclable(page) ||
-			P_IGNORE(opaque) ||
-			!P_ISLEAF(opaque) ||
+			P_IGNORE(page) ||
+			!P_ISLEAF(page) ||
 			opaque->btpo_cycleid != vstate->cycleid)
 		{
 			_bt_relbuf(rel, buf);
@@ -1186,17 +1186,17 @@ restart:
 		vstate->totFreePages++;
 		stats->pages_deleted++;
 	}
-	else if (P_ISDELETED(opaque))
+	else if (P_ISDELETED(page))
 	{
 		/* Already deleted, but can't recycle yet */
 		stats->pages_deleted++;
 	}
-	else if (P_ISHALFDEAD(opaque))
+	else if (P_ISHALFDEAD(page))
 	{
 		/* Half-dead, try to delete */
 		delete_now = true;
 	}
-	else if (P_ISLEAF(opaque))
+	else if (P_ISLEAF(page))
 	{
 		OffsetNumber deletable[MaxOffsetNumber];
 		int			ndeletable;
@@ -1230,7 +1230,7 @@ restart:
 		if (vstate->cycleid != 0 &&
 			opaque->btpo_cycleid == vstate->cycleid &&
 			!(opaque->btpo_flags & BTP_SPLIT_END) &&
-			!P_RIGHTMOST(opaque) &&
+			!P_RIGHTMOST(page) &&
 			opaque->btpo_next < orig_blkno)
 			recurse_to = opaque->btpo_next;
 
@@ -1239,7 +1239,7 @@ restart:
 		 * callback function.
 		 */
 		ndeletable = 0;
-		minoff = P_FIRSTDATAKEY(opaque);
+		minoff = P_FIRSTDATAKEY(page);
 		maxoff = PageGetMaxOffsetNumber(page);
 		if (callback)
 		{

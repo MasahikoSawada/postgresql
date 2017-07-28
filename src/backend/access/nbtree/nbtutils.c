@@ -1569,9 +1569,7 @@ _bt_checkkeys(IndexScanDesc scan,
 		}
 		else
 		{
-			BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-
-			if (offnum > P_FIRSTDATAKEY(opaque))
+			if (offnum > P_FIRSTDATAKEY(page))
 				return NULL;
 		}
 
@@ -1965,7 +1963,7 @@ _bt_killitems(IndexScanDesc scan)
 	}
 
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-	minoff = P_FIRSTDATAKEY(opaque);
+	minoff = P_FIRSTDATAKEY(page);
 	maxoff = PageGetMaxOffsetNumber(page);
 
 	for (i = 0; i < numKilled; i++)
