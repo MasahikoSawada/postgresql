@@ -366,7 +366,7 @@ _hash_vacuum_one_page(Relation rel, Buffer metabuf, Buffer buf,
 		/* No ereport(ERROR) until changes are logged */
 		START_CRIT_SECTION();
 
-		PageIndexMultiDelete(page, deletable, ndeletable);
+		PageIndexMultiDelete(page, deletable, ndeletable, false);
 
 		/*
 		 * Mark the page as not containing any LP_DEAD items. This is not

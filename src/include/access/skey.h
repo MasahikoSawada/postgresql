@@ -16,6 +16,7 @@
 
 #include "access/attnum.h"
 #include "access/stratnum.h"
+#include "storage/bufpage.h"
 #include "fmgr.h"
 
 
@@ -69,6 +70,8 @@ typedef struct ScanKeyData
 	Oid			sk_subtype;		/* strategy subtype */
 	Oid			sk_collation;	/* collation to use, if needed */
 	FmgrInfo	sk_func;		/* lookup info for function to call */
+	bool		sk_do_abbrev;
+	ItemAbbrev 	sk_abbrev;		/* abbreviated key value to compare */
 	Datum		sk_argument;	/* data to compare */
 } ScanKeyData;
 

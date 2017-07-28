@@ -525,7 +525,7 @@ ginVacuumEntryPage(GinVacuumState *gvs, Buffer buffer, BlockNumber *roots, uint3
 									nitems, true);
 				if (plist)
 					pfree(plist);
-				PageIndexTupleDelete(tmppage, i);
+				PageIndexTupleDelete(tmppage, i, false);
 
 				if (PageAddItem(tmppage, (Item) itup, IndexTupleSize(itup), i, false, false) != i)
 					elog(ERROR, "failed to add item to index page in \"%s\"",

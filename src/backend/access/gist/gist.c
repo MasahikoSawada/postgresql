@@ -522,7 +522,7 @@ gistplacetopage(Relation rel, Size freespace, GISTSTATE *giststate,
 			else
 			{
 				/* Delete old, then append new tuple(s) to page */
-				PageIndexTupleDelete(page, oldoffnum);
+				PageIndexTupleDelete(page, oldoffnum, false);
 				gistfillbuffer(page, itup, ntup, InvalidOffsetNumber);
 			}
 		}
@@ -1546,7 +1546,7 @@ gistvacuumpage(Relation rel, Page page, Buffer buffer)
 	{
 		START_CRIT_SECTION();
 
-		PageIndexMultiDelete(page, deletable, ndeletable);
+		PageIndexMultiDelete(page, deletable, ndeletable, false);
 
 		/*
 		 * Mark the page as not containing any LP_DEAD items.  This is not

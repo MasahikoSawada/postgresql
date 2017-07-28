@@ -20,12 +20,15 @@
  * In some cases an item pointer is "in use" but does not have any associated
  * storage on the page.  By convention, lp_len == 0 in every item pointer
  * that does not have storage, independently of its lp_flags state.
+ *
+ * Note that not all AMs can get a usable length from lp_len.  Some may opt to
+ * use the bits for abbreviated keys instead.
  */
 typedef struct ItemIdData
 {
 	unsigned	lp_off:15,		/* offset to tuple (from start of page) */
 				lp_flags:2,		/* state of item pointer, see below */
-				lp_len:15;		/* byte length of tuple */
+				lp_len:15;		/* byte length of tuple, or abbreviated key */
 } ItemIdData;
 
 typedef ItemIdData *ItemId;
@@ -40,11 +43,12 @@ typedef ItemIdData *ItemId;
 #define LP_DEAD			3		/* dead, may or may not have storage */
 
 /*
- * Item offsets and lengths are represented by these types when
- * they're not actually stored in an ItemIdData.
+ * Item offsets, lengths, and abbreviated keys are represented by
+ * these types when they're not actually stored in an ItemIdData.
  */
 typedef uint16 ItemOffset;
 typedef uint16 ItemLength;
+typedef uint16 ItemAbbrev;
 
 
 /* ----------------
@@ -115,6 +119,10 @@ typedef uint16 ItemLength;
 /*
  * ItemIdHasStorage
  *		True iff item identifier has associated storage.
+ *
+ * Note:  This cannot be used by access methods that support abbreviated keys.
+ * Abbreviated keys are not supported with index AMs that support overwrite, or
+ * with the heap AM.
  */
 #define ItemIdHasStorage(itemId) \
 	((itemId)->lp_len != 0)
@@ -135,6 +143,8 @@ typedef uint16 ItemLength;
  * ItemIdSetNormal
  *		Set the item identifier to be NORMAL, with the specified storage.
  *		Beware of multiple evaluations of itemId!
+ *
+ * Some callers may pass an abbreviated key value as "len".
  */
 #define ItemIdSetNormal(itemId, off, len) \
 ( \
@@ -166,6 +176,12 @@ typedef uint16 ItemLength;
 	(itemId)->lp_off = 0, \
 	(itemId)->lp_len = 0 \
 )
+
+/*
+ *		ItemIdGetAbbrev
+ */
+#define ItemIdGetAbbrev(itemId) \
+   ((itemId)->lp_len)
 
 /*
  * ItemIdMarkDead

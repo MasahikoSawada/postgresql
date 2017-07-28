@@ -184,12 +184,17 @@ PageIsVerified(Page page, BlockNumber blkno)
  *	If flag PAI_IS_HEAP is set, we enforce that there can't be more than
  *	MaxHeapTuplesPerPage line pointers on the page.
  *
+ *	If flag PAI_ABBREV_KEY is set, we know that abbrev is a valid value, which
+ *	is what we store in lp_len rather than the actual tuple length.  Caller
+ *	provides abbrev argument in that cases, which must be <= 0x7FFF.
+ *
  *	!!! EREPORT(ERROR) IS DISALLOWED HERE !!!
  */
 OffsetNumber
 PageAddItemExtended(Page page,
 					Item item,
 					Size size,
+					ItemAbbrev abbrev,
 					OffsetNumber offsetNumber,
 					int flags)
 {
@@ -246,15 +251,11 @@ PageAddItemExtended(Page page,
 		/* if no free slot, we'll put it at limit (1st open slot) */
 		if (PageHasFreeLinePointers(phdr))
 		{
-			/*
-			 * Look for "recyclable" (unused) ItemId.  We check for no storage
-			 * as well, just to be paranoid --- unused items should never have
-			 * storage.
-			 */
+			/* Look for "recyclable" (unused) ItemId */
 			for (offsetNumber = 1; offsetNumber < limit; offsetNumber++)
 			{
 				itemId = PageGetItemId(phdr, offsetNumber);
-				if (!ItemIdIsUsed(itemId) && !ItemIdHasStorage(itemId))
+				if (!ItemIdIsUsed(itemId))
 					break;
 			}
 			if (offsetNumber >= limit)
@@ -312,7 +313,17 @@ PageAddItemExtended(Page page,
 				(limit - offsetNumber) * sizeof(ItemIdData));
 
 	/* set the item pointer */
-	ItemIdSetNormal(itemId, upper, size);
+	if (flags & PAI_ABBREV_KEY)
+	{
+		Assert(!(flags & PAI_OVERWRITE));
+		Assert(abbrev <= 0x7FFF);
+		ItemIdSetNormal(itemId, upper, abbrev);
+	}
+	else
+	{
+		Assert(abbrev == 0);
+		ItemIdSetNormal(itemId, upper, size);
+	}
 
 	/*
 	 * Items normally contain no uninitialized bytes.  Core bufpage consumers
@@ -724,7 +735,7 @@ PageGetHeapFreeSpace(Page page)
  * Unlike heap pages, we compact out the line pointer for the removed tuple.
  */
 void
-PageIndexTupleDelete(Page page, OffsetNumber offnum)
+PageIndexTupleDelete(Page page, OffsetNumber offnum, bool usingabbrev)
 {
 	PageHeader	phdr = (PageHeader) page;
 	char	   *addr;
@@ -756,8 +767,14 @@ PageIndexTupleDelete(Page page, OffsetNumber offnum)
 	offidx = offnum - 1;
 
 	tup = PageGetItemId(page, offnum);
-	Assert(ItemIdHasStorage(tup));
-	size = ItemIdGetLength(tup);
+	/* ItemId lp_len field may store abbreviated key */
+	if (usingabbrev)
+		size = IndexTupleSize(PageGetItem(page, tup));
+	else
+	{
+		Assert(ItemIdHasStorage(tup));
+		size = ItemIdGetLength(tup);
+	}
 	offset = ItemIdGetOffset(tup);
 
 	if (offset < phdr->pd_upper || (offset + size) > phdr->pd_special ||
@@ -816,7 +833,7 @@ PageIndexTupleDelete(Page page, OffsetNumber offnum)
 		{
 			ItemId		ii = PageGetItemId(phdr, i);
 
-			Assert(ItemIdHasStorage(ii));
+			Assert(usingabbrev || ItemIdHasStorage(ii));
 			if (ItemIdGetOffset(ii) <= offset)
 				ii->lp_off += size;
 		}
@@ -833,7 +850,8 @@ PageIndexTupleDelete(Page page, OffsetNumber offnum)
  * of item numbers to be deleted in item number order!
  */
 void
-PageIndexMultiDelete(Page page, OffsetNumber *itemnos, int nitems)
+PageIndexMultiDelete(Page page, OffsetNumber *itemnos, int nitems,
+					 bool usingabbrev)
 {
 	PageHeader	phdr = (PageHeader) page;
 	Offset		pd_lower = phdr->pd_lower;
@@ -864,7 +882,7 @@ PageIndexMultiDelete(Page page, OffsetNumber *itemnos, int nitems)
 	if (nitems <= 2)
 	{
 		while (--nitems >= 0)
-			PageIndexTupleDelete(page, itemnos[nitems]);
+			PageIndexTupleDelete(page, itemnos[nitems], usingabbrev);
 		return;
 	}
 
@@ -894,8 +912,14 @@ PageIndexMultiDelete(Page page, OffsetNumber *itemnos, int nitems)
 	for (offnum = FirstOffsetNumber; offnum <= nline; offnum = OffsetNumberNext(offnum))
 	{
 		lp = PageGetItemId(page, offnum);
-		Assert(ItemIdHasStorage(lp));
-		size = ItemIdGetLength(lp);
+		/* ItemId lp_len field may store abbreviated key */
+		if (usingabbrev)
+			size = IndexTupleSize(PageGetItem(page, lp));
+		else
+		{
+			Assert(ItemIdHasStorage(lp));
+			size = ItemIdGetLength(lp);
+		}
 		offset = ItemIdGetOffset(lp);
 		if (offset < pd_upper ||
 			(offset + size) > pd_special ||
@@ -953,6 +977,7 @@ PageIndexMultiDelete(Page page, OffsetNumber *itemnos, int nitems)
  *
  * This is used for index AMs that require that existing TIDs of live tuples
  * remain unchanged, and are willing to allow unused line pointers instead.
+ * These index AMs cannot support abbreviated keys.
  */
 void
 PageIndexTupleDeleteNoCompact(Page page, OffsetNumber offnum)

@@ -882,7 +882,7 @@ hashbucketcleanup(Relation rel, Bucket cur_bucket, Buffer bucket_buf,
 			/* No ereport(ERROR) until changes are logged */
 			START_CRIT_SECTION();
 
-			PageIndexMultiDelete(page, deletable, ndeletable);
+			PageIndexMultiDelete(page, deletable, ndeletable, false);
 			bucket_dirty = true;
 
 			/*
