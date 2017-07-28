@@ -20,6 +20,8 @@
 #include "access/nbtree.h"
 #include "access/reloptions.h"
 #include "access/relscan.h"
+#include "catalog/pg_collation.h"
+#include "catalog/pg_type.h"
 #include "miscadmin.h"
 #include "utils/array.h"
 #include "utils/lsyscache.h"
@@ -34,6 +36,9 @@ typedef struct BTSortArrayContext
 	bool		reverse;
 } BTSortArrayContext;
 
+static uint16 _bt_abbreviate_int4(Datum value, bool isnull, bool nullslast);
+static uint16 _bt_abbreviate_text_default_coll(Datum value, bool isnull,
+											   bool nullslast);
 static Datum _bt_find_extreme_element(IndexScanDesc scan, ScanKey skey,
 						 StrategyNumber strat,
 						 Datum *elems, int nelems);
@@ -56,7 +61,11 @@ static bool _bt_check_rowcompare(ScanKey skey,
  *		Build an insertion scan key that contains comparison data from itup
  *		as well as comparator routines appropriate to the key datatypes.
  *
- *		The result is intended for use with _bt_compare().
+ *		The result is intended for use with _bt_compare().  Abbreviated keys
+ *		may be used here.
+ *
+ *		XXX: Only insertion scan keys need abbreviated keys, so don't think
+ *		_bt_first() needs any changes.
  */
 ScanKey
 _bt_mkscankey(Relation rel, IndexTuple itup)
@@ -66,6 +75,7 @@ _bt_mkscankey(Relation rel, IndexTuple itup)
 	int			natts;
 	int16	   *indoption;
 	int			i;
+	abbreviate_func abbreviator = _bt_get_abbreviator(rel);
 
 	itupdesc = RelationGetDescr(rel);
 	natts = RelationGetNumberOfAttributes(rel);
@@ -95,6 +105,28 @@ _bt_mkscankey(Relation rel, IndexTuple itup)
 									   rel->rd_indcollation[i],
 									   procinfo,
 									   arg);
+
+		/*
+		 * Generate abbreviated key for scankey
+		 *
+		 * XXX: This is probably broken when an operator class has multiple
+		 * operator families where the scankey has a type that is related to
+		 * but different from the leading indexed attribute.  Another reason to
+		 * scope this at the level of the operator family.  Guess you might end
+		 * up with multiple pg_amproc entries for an opfamily.
+		 */
+		if (abbreviator && i == 0)
+		{
+			skey->sk_abbrev =
+				abbreviator(skey->sk_argument, null,
+							(indoption[i] & SK_BT_NULLS_FIRST) != 0);
+			skey->sk_do_abbrev = true;
+		}
+		else
+		{
+			skey->sk_abbrev = 0;
+			skey->sk_do_abbrev = false;
+		}
 	}
 
 	return skey;
@@ -146,6 +178,153 @@ _bt_mkscankey_nodata(Relation rel)
 	}
 
 	return skey;
+}
+
+/*
+ * Get abbreviation function for datatype, if any.
+ *
+ * This should eventually come from a new B-Tree support function (support
+ * function 3?).  Maybe it could be a part of sort support instead, though.
+ * This needs to work at the level of a B-Tree operator class (pg_amproc
+ * entry).
+ *
+ * XXX: It might be a good idea to add more of these, simply to increase test
+ * coverage.  Numeric would be a good one, too.
+ */
+abbreviate_func
+_bt_get_abbreviator(Relation rel)
+{
+	if (rel->rd_att->attrs[0]->atttypid == INT4OID)
+		return _bt_abbreviate_int4;
+	else if (rel->rd_att->attrs[0]->atttypid == TEXTOID &&
+			 rel->rd_att->attrs[0]->attcollation == DEFAULT_COLLATION_OID)
+		return _bt_abbreviate_text_default_coll;
+
+
+	return NULL;
+}
+
+//#define ABBREV_DEBUG
+
+/*
+ * This makes some pretty questionable choices about how to distribute
+ * abbreviated keys.  Maybe it's appropriate to assume certain things about the
+ * user's requirements, though.
+ */
+static uint16
+_bt_abbreviate_int4(Datum value, bool isnull, bool nullslast)
+{
+	int32	ivalue = DatumGetInt32(value);
+	uint32	uvalue;
+	uint16	ret;
+
+	if (isnull)
+	{
+		if (!nullslast)
+			return 0;
+		else
+			return 0x7FFF;
+	}
+
+	if (ivalue < 0)
+		return 0;
+
+	/* Don't encode values over 2 ^ 28 (about 268 million) */
+	uvalue = (uint32) ivalue;
+	if (uvalue >= 0x10000000)
+		return 0x7FFF;
+
+	/* must be 4 bits of zero by now */
+	uvalue <<= 4;
+
+	ret = uvalue >> 16;
+
+#ifdef ABBREV_DEBUG
+	elog(WARNING, "ivalue %d, after %u", ivalue, ret);
+#endif
+
+	/* Needs to fit within 15 bits, for scankey callers */
+	return ret & 0x7FFF;
+}
+
+/*
+ * FIXME: Everything!
+ */
+static uint16
+_bt_abbreviate_text_default_coll(Datum value, bool isnull, bool nullslast)
+{
+	char buf_blob[512];
+	char buf_string[512];
+	struct varlena *svalue;
+	Size bsize;
+	Size ssize;
+	uint16	ret;
+
+	/*
+	 * NULL encoding.
+	 *
+	 * FIXME: No NULLS FIRST/NULLS LAST handling here, which is needed.  Also
+	 * need to think about DESC/ASC handling.  See BTCommuteStrategyNumber() +
+	 * its callers.
+	 *
+	 * FIXME: Pretty sure this needs to have SK_BT_DESC handling for when
+	 * on-disk order and scan key order don't commute.  The regression tests
+	 * don't catch this, but they also didn't catch the bug in 606c012 (a
+	 * commit that was wholly reverted), so I wouldn't take too much comfort
+	 * from that.
+	 *
+	 * As Lomet says, seems essential that everything be encoded as unsigned
+	 * integers, which are closely related to simple binary strings that we
+	 * just memcmp() (they're exactly the same on big-endian machines).  You
+	 * don't get to provide your own comparator, as with sort support -- you
+	 * need to make your encoding scheme work with the hard-coded comparator.
+	 *
+	 * Once you do that, then user-defined opclass code (new type of support
+	 * function) is not required to care about NULL, or SK_BT_DESC, because
+	 * core code can inject 0x7FFF and know it won't break opclass assumptions.
+	 * I regret not making it mandatory for sort support abbreviated keys to be
+	 * simple unsigned integers.  It still matters much more for index stuff,
+	 * though.
+	 */
+	if (isnull)
+	{
+		if (!nullslast)
+			return 0;
+		else
+			return 0x7FFF;
+	}
+	svalue = ((struct varlena *) PG_DETOAST_DATUM_PACKED(value));
+
+	/*
+	 * strxfrm requires that we copy whole blob, even though only 2 bytes used
+	 *
+	 * FIXME: use palloc().  Move to varlena.c, and maybe reuse sortsupport
+	 * infrastructure.
+	 */
+	ssize = VARSIZE_ANY_EXHDR(svalue);
+	memcpy(&buf_string, VARDATA_ANY(svalue), ssize);
+	buf_string[ssize] = '\0';
+	for (;;)
+	{
+		bsize = strxfrm(buf_blob, buf_string, sizeof(buf_blob));
+		break;
+	}
+	memset(&ret, 0, sizeof(ret));
+	memcpy(&ret, buf_blob, Min(bsize, sizeof(ret)));
+
+	/*
+	 * XXX No BSWAP16() presently.  Actually, this should be more like
+	 * DatumBigEndianToNative();  this is only correct/needed on little-endian
+	 * machines.
+	 */
+	ret = (ret << 8) | (ret >> 8);
+
+#ifdef ABBREV_DEBUG
+	elog(WARNING, "%s %u", buf_string, ret);
+#endif
+
+	/* Needs to fit within 15 bits, for scankey callers */
+	return ret & 0x7FFF;
 }
 
 /*
@@ -204,6 +383,7 @@ _bt_preprocess_array_keys(IndexScanDesc scan)
 	for (i = 0; i < numberOfKeys; i++)
 	{
 		cur = &scan->keyData[i];
+		cur->sk_abbrev = 0;
 		if (cur->sk_flags & SK_SEARCHARRAY)
 		{
 			numArrayKeys++;
@@ -1417,6 +1597,7 @@ _bt_checkkeys(IndexScanDesc scan,
 		Datum		test;
 
 		/* row-comparison keys need special processing */
+		/* FIXME */
 		if (key->sk_flags & SK_ROW_HEADER)
 		{
 			if (_bt_check_rowcompare(key, tuple, tupdesc, dir, continuescan))
@@ -1432,6 +1613,7 @@ _bt_checkkeys(IndexScanDesc scan,
 		if (key->sk_flags & SK_ISNULL)
 		{
 			/* Handle IS NULL/NOT NULL tests */
+			/* FIXME */
 			if (key->sk_flags & SK_SEARCHNULL)
 			{
 				if (isNull)

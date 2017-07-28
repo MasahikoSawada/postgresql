@@ -497,7 +497,7 @@ entryPreparePage(GinBtree btree, Page page, OffsetNumber off,
 	if (insertData->isDelete)
 	{
 		Assert(GinPageIsLeaf(page));
-		PageIndexTupleDelete(page, off);
+		PageIndexTupleDelete(page, off, false);
 	}
 
 	if (!GinPageIsLeaf(page) && updateblkno != InvalidBlockNumber)

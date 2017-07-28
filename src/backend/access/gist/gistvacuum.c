@@ -216,7 +216,7 @@ gistbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 
 				MarkBufferDirty(buffer);
 
-				PageIndexMultiDelete(page, todelete, ntodelete);
+				PageIndexMultiDelete(page, todelete, ntodelete, false);
 				GistMarkTuplesDeleted(page);
 
 				if (RelationNeedsWAL(rel))

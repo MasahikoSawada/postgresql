@@ -62,7 +62,7 @@ addOrReplaceTuple(Page page, Item tuple, int size, OffsetNumber offset)
 		Assert(SpGistPageGetOpaque(page)->nPlaceholder > 0);
 		SpGistPageGetOpaque(page)->nPlaceholder--;
 
-		PageIndexTupleDelete(page, offset);
+		PageIndexTupleDelete(page, offset, false);
 	}
 
 	Assert(offset <= PageGetMaxOffsetNumber(page) + 1);
@@ -161,7 +161,7 @@ spgRedoAddLeaf(XLogReaderState *record)
 		else
 		{
 			/* replacing a DEAD tuple */
-			PageIndexTupleDelete(page, xldata->offnumLeaf);
+			PageIndexTupleDelete(page, xldata->offnumLeaf, false);
 			if (PageAddItem(page,
 							(Item) leafTuple, leafTupleHdr.size,
 							xldata->offnumLeaf, false, false) != xldata->offnumLeaf)
@@ -342,7 +342,7 @@ spgRedoAddNode(XLogReaderState *record)
 		{
 			page = BufferGetPage(buffer);
 
-			PageIndexTupleDelete(page, xldata->offnum);
+			PageIndexTupleDelete(page, xldata->offnum, false);
 			if (PageAddItem(page, (Item) innerTuple, innerTupleHdr.size,
 							xldata->offnum,
 							false, false) != xldata->offnum)
@@ -423,7 +423,7 @@ spgRedoAddNode(XLogReaderState *record)
 									  blknoNew,
 									  xldata->offnumNew);
 
-			PageIndexTupleDelete(page, xldata->offnum);
+			PageIndexTupleDelete(page, xldata->offnum, false);
 			if (PageAddItem(page, (Item) dt, dt->size,
 							xldata->offnum,
 							false, false) != xldata->offnum)
@@ -541,7 +541,7 @@ spgRedoSplitTuple(XLogReaderState *record)
 	{
 		page = BufferGetPage(buffer);
 
-		PageIndexTupleDelete(page, xldata->offnumPrefix);
+		PageIndexTupleDelete(page, xldata->offnumPrefix, false);
 		if (PageAddItem(page, (Item) prefixTuple, prefixTupleHdr.size,
 						xldata->offnumPrefix, false, false) != xldata->offnumPrefix)
 			elog(ERROR, "failed to add item of size %u to SPGiST index page",
@@ -881,7 +881,7 @@ spgRedoVacuumRoot(XLogReaderState *record)
 		page = BufferGetPage(buffer);
 
 		/* The tuple numbers are in order */
-		PageIndexMultiDelete(page, toDelete, xldata->nDelete);
+		PageIndexMultiDelete(page, toDelete, xldata->nDelete, false);
 
 		PageSetLSN(page, lsn);
 		MarkBufferDirty(buffer);
@@ -955,7 +955,7 @@ spgRedoVacuumRedirect(XLogReaderState *record)
 			opaque->nPlaceholder -= i;
 
 			/* The array is sorted, so can use PageIndexMultiDelete */
-			PageIndexMultiDelete(page, toDelete, i);
+			PageIndexMultiDelete(page, toDelete, i, false);
 
 			pfree(toDelete);
 		}

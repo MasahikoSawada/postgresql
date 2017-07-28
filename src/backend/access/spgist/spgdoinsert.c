@@ -152,7 +152,7 @@ spgPageIndexMultiDelete(SpGistState *state, Page page,
 	if (nitems > 1)
 		qsort(sortednos, nitems, sizeof(OffsetNumber), cmpOffsetNumbers);
 
-	PageIndexMultiDelete(page, sortednos, nitems);
+	PageIndexMultiDelete(page, sortednos, nitems, false);
 
 	firstItem = itemnos[0];
 
@@ -272,7 +272,7 @@ addLeafTuple(Relation index, SpGistState *state, SpGistLeafTuple leafTuple,
 		else if (head->tupstate == SPGIST_DEAD)
 		{
 			leafTuple->nextOffset = InvalidOffsetNumber;
-			PageIndexTupleDelete(current->page, current->offnum);
+			PageIndexTupleDelete(current->page, current->offnum, false);
 			if (PageAddItem(current->page,
 							(Item) leafTuple, leafTuple->size,
 							current->offnum, false, false) != current->offnum)
@@ -1522,7 +1522,7 @@ spgAddNodeAction(Relation index, SpGistState *state,
 		 */
 		START_CRIT_SECTION();
 
-		PageIndexTupleDelete(current->page, current->offnum);
+		PageIndexTupleDelete(current->page, current->offnum, false);
 		if (PageAddItem(current->page,
 						(Item) newInnerTuple, newInnerTuple->size,
 						current->offnum, false, false) != current->offnum)
@@ -1630,7 +1630,7 @@ spgAddNodeAction(Relation index, SpGistState *state,
 			dt = spgFormDeadTuple(state, SPGIST_REDIRECT,
 								  current->blkno, current->offnum);
 
-		PageIndexTupleDelete(saveCurrent.page, saveCurrent.offnum);
+		PageIndexTupleDelete(saveCurrent.page, saveCurrent.offnum, false);
 		if (PageAddItem(saveCurrent.page, (Item) dt, dt->size,
 						saveCurrent.offnum,
 						false, false) != saveCurrent.offnum)
@@ -1793,7 +1793,7 @@ spgSplitNodeAction(Relation index, SpGistState *state,
 	/*
 	 * Replace old tuple by prefix tuple
 	 */
-	PageIndexTupleDelete(current->page, current->offnum);
+	PageIndexTupleDelete(current->page, current->offnum, false);
 	xlrec.offnumPrefix = PageAddItem(current->page,
 									 (Item) prefixTuple, prefixTuple->size,
 									 current->offnum, false, false);

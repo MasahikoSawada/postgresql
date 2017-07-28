@@ -24,6 +24,7 @@
 #include "utils/rel.h"
 #include "utils/tqual.h"
 
+//#define ABBREV_DEBUG
 
 static bool _bt_readpage(IndexScanDesc scan, ScanDirection dir,
 			 OffsetNumber offnum);
@@ -275,6 +276,10 @@ _bt_moveright(Relation rel,
 			continue;
 		}
 
+#ifdef ABBREV_DEBUG
+		if (scankey->sk_do_abbrev && !P_ISLEAF(opaque))
+			elog(WARNING, "checking high key against scan key on level %u", opaque->btpo.level);
+#endif
 		if (P_IGNORE(opaque) || _bt_compare(rel, keysz, scankey, page, P_HIKEY) >= cmpval)
 		{
 			/* step right one page */
@@ -365,6 +370,11 @@ _bt_binsrch(Relation rel,
 
 	cmpval = nextkey ? 0 : 1;	/* select comparison value */
 
+#ifdef ABBREV_DEBUG
+	if (scankey->sk_do_abbrev)
+		elog(WARNING, "block for binary search: %u", BufferGetBlockNumber(buf));
+#endif
+
 	while (high > low)
 	{
 		OffsetNumber mid = low + ((high - low) / 2);
@@ -424,6 +434,15 @@ _bt_binsrch(Relation rel,
  * See backend/access/nbtree/README for details.
  *----------
  */
+
+/*
+ * XXX:  There is an annoying tendency for completely broken index abbreviated
+ * keys to not make SQL queries give wrong answers.  Enabling the debug
+ * WARNINGs here is a quick way to make sure that things haven't gone totally
+ * wrong, for one thing.
+ *
+ * Probably a good idea to look into amcheck.
+ */
 int32
 _bt_compare(Relation rel,
 			int keysz,
@@ -433,7 +452,9 @@ _bt_compare(Relation rel,
 {
 	TupleDesc	itupdesc = RelationGetDescr(rel);
 	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+	ItemId		item;
 	IndexTuple	itup;
+	int32		result = 0;
 	int			i;
 
 	/*
@@ -443,7 +464,61 @@ _bt_compare(Relation rel,
 	if (!P_ISLEAF(opaque) && offnum == P_FIRSTDATAKEY(opaque))
 		return 1;
 
-	itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, offnum));
+	item = PageGetItemId(page, offnum);
+
+	/*
+	 * Attempt to resolve comparison using abbreviated key within ItemId array.
+	 */
+	if (!P_ISLEAF(opaque) && scankey->sk_do_abbrev)
+	{
+		ItemAbbrev	itemAbbrev = ItemIdGetAbbrev(item);
+
+		if (itemAbbrev < scankey->sk_abbrev)
+		{
+#ifdef ABBREV_DEBUG
+			elog(WARNING, "%s offnum %u (%u)  < scankey->sk_abbrev (%u) on level %u",
+				 RelationGetRelationName(rel), offnum, itemAbbrev, scankey->sk_abbrev,
+				 opaque->btpo.level);
+#endif
+			result = 1;
+		}
+		else if (itemAbbrev > scankey->sk_abbrev)
+		{
+#ifdef ABBREV_DEBUG
+			elog(WARNING, "%s offnum %u (%u)  > scankey->sk_abbrev (%u) on level %u",
+				 RelationGetRelationName(rel), offnum, itemAbbrev, scankey->sk_abbrev,
+				 opaque->btpo.level);
+#endif
+			result = -1;
+		}
+		else
+		{
+#ifdef ABBREV_DEBUG
+			elog(WARNING, "%s offnum %u (%u) == scankey->sk_abbrev (%u) on level %u",
+				 RelationGetRelationName(rel), offnum, itemAbbrev, scankey->sk_abbrev,
+				 opaque->btpo.level);
+#endif
+			result = 0;
+		}
+	}
+
+	/*
+	 * Note that we don't do SK_BT_DESC handling for abbreviated keys, because
+	 * that's supposed to happen during encoding.  Because we know that opclass
+	 * defined encoding scheme always produces unsigned int, it follows that
+	 * that's just a matter of getting the complement for scankey abbreviated
+	 * key iff it's a scankey that needed to be commutted by
+	 * BTCommuteStrategyNumber() to make work with on-disk ordering.
+	 *
+	 * FIXME: Make that happen!
+	 */
+
+	/* if the keys are unequal, return the difference */
+	if (result != 0)
+		return result;
+
+	/* Comparison must be resolved using IndexTuple */
+	itup = (IndexTuple) PageGetItem(page, item);
 
 	/*
 	 * The scan key is set up with the attribute number associated with each
@@ -461,7 +536,6 @@ _bt_compare(Relation rel,
 	{
 		Datum		datum;
 		bool		isNull;
-		int32		result;
 
 		datum = index_getattr(itup, scankey->sk_attno, itupdesc, &isNull);
 
@@ -552,6 +626,7 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	StrategyNumber strat_total;
 	BTScanPosItem *currItem;
 	BlockNumber blkno;
+	abbreviate_func abbreviator = _bt_get_abbreviator(rel);
 
 	Assert(!BTScanPosIsValid(so->currPos));
 
@@ -927,6 +1002,32 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 									   cmp_proc,
 									   cur->sk_argument);
 			}
+		}
+		/*
+		 * Generate abbreviated key for new insertion scankey
+		 *
+		 * XXX: This is probably broken when an operator class has multiple
+		 * operator families where the scankey has a type that is related to
+		 * but different from the leading indexed attribute.  Another reason to
+		 * scope this at the level of the operator family.  Guess you might end
+		 * up with multiple pg_amproc entries for an opfamily.
+		 */
+		if (abbreviator && i == 0)
+		{
+			cur->sk_abbrev =
+				abbreviator(cur->sk_argument,
+							(cur->sk_flags & SK_ISNULL) != 0,
+							false);
+			cur->sk_do_abbrev = true;
+			scankeys[i].sk_abbrev = cur->sk_abbrev;
+			scankeys[i].sk_do_abbrev = cur->sk_do_abbrev;
+		}
+		else
+		{
+			cur->sk_abbrev = 0;
+			cur->sk_do_abbrev = false;
+			scankeys[i].sk_abbrev = cur->sk_abbrev;
+			scankeys[i].sk_do_abbrev = cur->sk_do_abbrev;
 		}
 	}
 

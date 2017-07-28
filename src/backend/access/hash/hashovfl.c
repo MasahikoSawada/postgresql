@@ -942,7 +942,7 @@ readpage:
 					MarkBufferDirty(wbuf);
 
 					/* Delete tuples we already moved off read page */
-					PageIndexMultiDelete(rpage, deletable, ndeletable);
+					PageIndexMultiDelete(rpage, deletable, ndeletable, false);
 					MarkBufferDirty(rbuf);
 
 					/* XLOG stuff */

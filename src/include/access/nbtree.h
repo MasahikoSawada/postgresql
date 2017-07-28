@@ -514,6 +514,10 @@ extern Buffer _bt_get_endpoint(Relation rel, uint32 level, bool rightmost,
 /*
  * prototypes for functions in nbtutils.c
  */
+
+typedef uint16 (*abbreviate_func) (Datum value, bool isnull, bool nullslast);
+
+extern abbreviate_func _bt_get_abbreviator(Relation rel);
 extern ScanKey _bt_mkscankey(Relation rel, IndexTuple itup);
 extern ScanKey _bt_mkscankey_nodata(Relation rel);
 extern void _bt_freeskey(ScanKey skey);

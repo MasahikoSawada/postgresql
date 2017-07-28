@@ -876,7 +876,7 @@ SpGistPageAddNewItem(SpGistState *state, Page page, Item item, Size size,
 		if (offnum != InvalidOffsetNumber)
 		{
 			/* Replace the placeholder tuple */
-			PageIndexTupleDelete(page, offnum);
+			PageIndexTupleDelete(page, offnum, false);
 
 			offnum = PageAddItem(page, item, size, offnum, false, false);
 

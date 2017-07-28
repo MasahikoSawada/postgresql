@@ -336,7 +336,6 @@ PageValidateSpecialPointer(Page page)
 #define PageGetItem(page, itemId) \
 ( \
 	AssertMacro(PageIsValid(page)), \
-	AssertMacro(ItemIdHasStorage(itemId)), \
 	(Item)(((char *)(page)) + ItemIdGetOffset(itemId)) \
 )
 
@@ -408,16 +407,22 @@ do { \
  */
 #define PAI_OVERWRITE			(1 << 0)
 #define PAI_IS_HEAP				(1 << 1)
+#define PAI_ABBREV_KEY			(1 << 2)
+
+#define PageAddItemAbbrev(page, item, size, abbrev, offsetNumber) \
+	PageAddItemExtended(page, item, size, abbrev, offsetNumber, \
+						(PAI_ABBREV_KEY))
 
 #define PageAddItem(page, item, size, offsetNumber, overwrite, is_heap) \
-	PageAddItemExtended(page, item, size, offsetNumber, \
+	PageAddItemExtended(page, item, size, 0, offsetNumber, \
 						((overwrite) ? PAI_OVERWRITE : 0) | \
 						((is_heap) ? PAI_IS_HEAP : 0))
 
 extern void PageInit(Page page, Size pageSize, Size specialSize);
 extern bool PageIsVerified(Page page, BlockNumber blkno);
 extern OffsetNumber PageAddItemExtended(Page page, Item item, Size size,
-					OffsetNumber offsetNumber, int flags);
+										ItemAbbrev abbrev,
+										OffsetNumber offsetNumber, int flags);
 extern Page PageGetTempPage(Page page);
 extern Page PageGetTempPageCopy(Page page);
 extern Page PageGetTempPageCopySpecial(Page page);
@@ -427,8 +432,10 @@ extern Size PageGetFreeSpace(Page page);
 extern Size PageGetFreeSpaceForMultipleTuples(Page page, int ntups);
 extern Size PageGetExactFreeSpace(Page page);
 extern Size PageGetHeapFreeSpace(Page page);
-extern void PageIndexTupleDelete(Page page, OffsetNumber offset);
-extern void PageIndexMultiDelete(Page page, OffsetNumber *itemnos, int nitems);
+extern void PageIndexTupleDelete(Page page, OffsetNumber offset,
+								 bool usingabbrev);
+extern void PageIndexMultiDelete(Page page, OffsetNumber *itemnos, int nitems,
+								 bool usingabbrev);
 extern void PageIndexTupleDeleteNoCompact(Page page, OffsetNumber offset);
 extern bool PageIndexTupleOverwrite(Page page, OffsetNumber offnum,
 						Item newtup, Size newsize);

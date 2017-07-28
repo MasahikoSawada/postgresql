@@ -3,6 +3,10 @@
  * nbtxlog.c
  *	  WAL replay logic for btrees.
  *
+ * XXX Note that of all parts of this rough patch, recovery routines have
+ * received the least attention.  They're totally broken.  Scarily, "make
+ * check-world" (with TAP/recovery tests) passes!
+ *
  *
  * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -40,6 +44,7 @@ _bt_restore_page(Page page, char *from, int len)
 	char	   *end = from + len;
 	Item		items[MaxIndexTuplesPerPage];
 	uint16		itemsizes[MaxIndexTuplesPerPage];
+	ItemAbbrev	abbrevs[MaxIndexTuplesPerPage];
 	int			i;
 	int			nitems;
 
@@ -58,6 +63,14 @@ _bt_restore_page(Page page, char *from, int len)
 
 		items[i] = (Item) from;
 		itemsizes[i] = itemsz;
+		/*
+		 * FIXME: WAL replay will have to fetch original value somehow; for
+		 * now, this is 100% bogus.
+		 *
+		 * It would probably be fine to WAL-log abbreviated value, since there
+		 * are so few, but passing that in here for page splits looks awkward.
+		 */
+		abbrevs[i] = 0x7F7F;
 		i++;
 
 		from += itemsz;
@@ -66,8 +79,8 @@ _bt_restore_page(Page page, char *from, int len)
 
 	for (i = nitems - 1; i >= 0; i--)
 	{
-		if (PageAddItem(page, items[i], itemsizes[i], nitems - i,
-						false, false) == InvalidOffsetNumber)
+		if (PageAddItemAbbrev(page, items[i], itemsizes[i], abbrevs[i],
+							  nitems - i) == InvalidOffsetNumber)
 			elog(PANIC, "_bt_restore_page: cannot add item to page");
 		from += itemsz;
 	}
@@ -171,8 +184,8 @@ btree_xlog_insert(bool isleaf, bool ismeta, XLogReaderState *record)
 
 		page = BufferGetPage(buffer);
 
-		if (PageAddItem(page, (Item) datapos, datalen, xlrec->offnum,
-						false, false) == InvalidOffsetNumber)
+		if (PageAddItemAbbrev(page, (Item) datapos, datalen, 0x7F7F,
+							  xlrec->offnum) == InvalidOffsetNumber)
 			elog(PANIC, "btree_insert_redo: failed to add item");
 
 		PageSetLSN(page, lsn);
@@ -246,9 +259,11 @@ btree_xlog_split(bool onleft, bool isroot, XLogReaderState *record)
 	if (isleaf)
 	{
 		ItemId		hiItemId = PageGetItemId(rpage, P_FIRSTDATAKEY(ropaque));
+		IndexTuple	lphit;
 
 		left_hikey = PageGetItem(rpage, hiItemId);
-		left_hikeysz = ItemIdGetLength(hiItemId);
+		lphit = (IndexTuple) left_hikey;
+		left_hikeysz = IndexTupleSize(lphit);
 	}
 
 	PageSetLSN(rpage, lsn);
@@ -300,8 +315,8 @@ btree_xlog_split(bool onleft, bool isroot, XLogReaderState *record)
 
 		/* Set high key */
 		leftoff = P_HIKEY;
-		if (PageAddItem(newlpage, left_hikey, left_hikeysz,
-						P_HIKEY, false, false) == InvalidOffsetNumber)
+		if (PageAddItemAbbrev(newlpage, left_hikey, left_hikeysz, 0x7F7F,
+							  P_HIKEY) == InvalidOffsetNumber)
 			elog(PANIC, "failed to add high key to left page after split");
 		leftoff = OffsetNumberNext(leftoff);
 
@@ -314,17 +329,17 @@ btree_xlog_split(bool onleft, bool isroot, XLogReaderState *record)
 			/* add the new item if it was inserted on left page */
 			if (onleft && off == xlrec->newitemoff)
 			{
-				if (PageAddItem(newlpage, newitem, newitemsz, leftoff,
-								false, false) == InvalidOffsetNumber)
+				if (PageAddItemAbbrev(newlpage, newitem, newitemsz, 0x7F7F,
+									  leftoff) == InvalidOffsetNumber)
 					elog(ERROR, "failed to add new item to left page after split");
 				leftoff = OffsetNumberNext(leftoff);
 			}
 
 			itemid = PageGetItemId(lpage, off);
-			itemsz = ItemIdGetLength(itemid);
 			item = PageGetItem(lpage, itemid);
-			if (PageAddItem(newlpage, item, itemsz, leftoff,
-							false, false) == InvalidOffsetNumber)
+			itemsz = IndexTupleSize((IndexTuple) item);
+			if (PageAddItemAbbrev(newlpage, item, itemsz, 0x7F7F, leftoff) ==
+				InvalidOffsetNumber)
 				elog(ERROR, "failed to add old item to left page after split");
 			leftoff = OffsetNumberNext(leftoff);
 		}
@@ -332,8 +347,8 @@ btree_xlog_split(bool onleft, bool isroot, XLogReaderState *record)
 		/* cope with possibility that newitem goes at the end */
 		if (onleft && off == xlrec->newitemoff)
 		{
-			if (PageAddItem(newlpage, newitem, newitemsz, leftoff,
-							false, false) == InvalidOffsetNumber)
+			if (PageAddItemAbbrev(newlpage, newitem, newitemsz, 0x7F7F,
+								  leftoff) == InvalidOffsetNumber)
 				elog(ERROR, "failed to add new item to left page after split");
 			leftoff = OffsetNumberNext(leftoff);
 		}
@@ -489,7 +504,7 @@ btree_xlog_vacuum(XLogReaderState *record)
 			unend = (OffsetNumber *) ((char *) ptr + len);
 
 			if ((unend - unused) > 0)
-				PageIndexMultiDelete(page, unused, unend - unused);
+				PageIndexMultiDelete(page, unused, unend - unused, true);
 		}
 
 		/*
@@ -703,7 +718,7 @@ btree_xlog_delete(XLogReaderState *record)
 
 			unused = (OffsetNumber *) ((char *) xlrec + SizeOfBtreeDelete);
 
-			PageIndexMultiDelete(page, unused, xlrec->nitems);
+			PageIndexMultiDelete(page, unused, xlrec->nitems, true);
 		}
 
 		/*
@@ -761,7 +776,7 @@ btree_xlog_mark_page_halfdead(uint8 info, XLogReaderState *record)
 		itup = (IndexTuple) PageGetItem(page, itemid);
 		ItemPointerSet(&(itup->t_tid), rightsib, P_HIKEY);
 		nextoffset = OffsetNumberNext(poffset);
-		PageIndexTupleDelete(page, nextoffset);
+		PageIndexTupleDelete(page, nextoffset, true);
 
 		PageSetLSN(page, lsn);
 		MarkBufferDirty(buffer);
@@ -792,8 +807,8 @@ btree_xlog_mark_page_halfdead(uint8 info, XLogReaderState *record)
 		ItemPointerSet(&trunctuple.t_tid, xlrec->topparent, P_HIKEY);
 	else
 		ItemPointerSetInvalid(&trunctuple.t_tid);
-	if (PageAddItem(page, (Item) &trunctuple, sizeof(IndexTupleData), P_HIKEY,
-					false, false) == InvalidOffsetNumber)
+	if (PageAddItemAbbrev(page, (Item) &trunctuple, sizeof(IndexTupleData),
+						  0x7F7F, P_HIKEY) == InvalidOffsetNumber)
 		elog(ERROR, "could not add dummy high key to half-dead page");
 
 	PageSetLSN(page, lsn);
@@ -902,8 +917,8 @@ btree_xlog_unlink_page(uint8 info, XLogReaderState *record)
 			ItemPointerSet(&trunctuple.t_tid, xlrec->topparent, P_HIKEY);
 		else
 			ItemPointerSetInvalid(&trunctuple.t_tid);
-		if (PageAddItem(page, (Item) &trunctuple, sizeof(IndexTupleData), P_HIKEY,
-						false, false) == InvalidOffsetNumber)
+		if (PageAddItemAbbrev(page, (Item) &trunctuple, sizeof(IndexTupleData),
+							  0x7F7F, P_HIKEY) == InvalidOffsetNumber)
 			elog(ERROR, "could not add dummy high key to half-dead page");
 
 		PageSetLSN(page, lsn);
