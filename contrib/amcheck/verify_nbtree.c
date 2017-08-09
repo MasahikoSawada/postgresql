@@ -101,8 +101,7 @@ static void bt_target_page_check(BtreeCheckState *state);
 static ScanKey bt_right_page_check_scankey(BtreeCheckState *state);
 static void bt_downlink_check(BtreeCheckState *state, BlockNumber childblock,
 				  ScanKey targetkey);
-static inline bool offset_is_negative_infinity(BTPageOpaque opaque,
-							OffsetNumber offset);
+static inline bool offset_is_negative_infinity(Page page, OffsetNumber offset);
 static inline bool invariant_leq_offset(BtreeCheckState *state,
 					 ScanKey key,
 					 OffsetNumber upperbound);
@@ -114,6 +113,7 @@ static inline bool invariant_leq_nontarget_offset(BtreeCheckState *state,
 							   ScanKey key,
 							   OffsetNumber upperbound);
 static Page palloc_btree_page(BtreeCheckState *state, BlockNumber blocknum);
+static void bt_check_btpflag(Relation rel, Page page);
 
 /*
  * bt_index_check(index regclass)
@@ -405,9 +405,9 @@ bt_check_level_from_leftmost(BtreeCheckState *state, BtreeLevel level)
 
 		opaque = (BTPageOpaque) PageGetSpecialPointer(state->target);
 
-		if (P_IGNORE(opaque))
+		if (P_IGNORE(state->target))
 		{
-			if (P_RIGHTMOST(opaque))
+			if (P_RIGHTMOST(state->target))
 				ereport(ERROR,
 						(errcode(ERRCODE_INDEX_CORRUPTED),
 						 errmsg("block %u fell off the end of index \"%s\"",
@@ -452,7 +452,7 @@ bt_check_level_from_leftmost(BtreeCheckState *state, BtreeLevel level)
 			 * unless this is the leaf level, which is assumed by caller to be
 			 * final level.
 			 */
-			if (!P_ISLEAF(opaque))
+			if (!P_ISLEAF(state->target))
 			{
 				IndexTuple	itup;
 				ItemId		itemid;
@@ -560,7 +560,9 @@ bt_target_page_check(BtreeCheckState *state)
 	max = PageGetMaxOffsetNumber(state->target);
 
 	elog(DEBUG2, "verifying %u items on %s block %u", max,
-		 P_ISLEAF(topaque) ? "leaf" : "internal", state->targetblock);
+		 P_ISLEAF(state->target) ? "leaf" : "internal", state->targetblock);
+
+	bt_check_btpflag(state->rel, state->target);
 
 	/*
 	 * Loop over page items, starting from first non-highkey item, not high
@@ -581,7 +583,7 @@ bt_target_page_check(BtreeCheckState *state)
 		 * Don't try to generate scankey using "negative infinity" garbage
 		 * data
 		 */
-		if (offset_is_negative_infinity(topaque, offset))
+		if (offset_is_negative_infinity(state->target, offset))
 			continue;
 
 		/* Build insertion scankey for current page offset */
@@ -609,7 +611,7 @@ bt_target_page_check(BtreeCheckState *state)
 		 * go to those lengths because that would be prohibitively expensive,
 		 * and probably not markedly more effective in practice.
 		 */
-		if (!P_RIGHTMOST(topaque) &&
+		if (!P_RIGHTMOST(state->target) &&
 			!invariant_leq_offset(state, skey, P_HIKEY))
 		{
 			char	   *itid,
@@ -626,7 +628,7 @@ bt_target_page_check(BtreeCheckState *state)
 							RelationGetRelationName(state->rel)),
 					 errdetail_internal("Index tid=%s points to %s tid=%s page lsn=%X/%X.",
 										itid,
-										P_ISLEAF(topaque) ? "heap" : "index",
+										P_ISLEAF(state->target) ? "heap" : "index",
 										htid,
 										(uint32) (state->targetlsn >> 32),
 										(uint32) state->targetlsn)));
@@ -669,10 +671,10 @@ bt_target_page_check(BtreeCheckState *state)
 										"higher index tid=%s (points to %s tid=%s) "
 										"page lsn=%X/%X.",
 										itid,
-										P_ISLEAF(topaque) ? "heap" : "index",
+										P_ISLEAF(state->target) ? "heap" : "index",
 										htid,
 										nitid,
-										P_ISLEAF(topaque) ? "heap" : "index",
+										P_ISLEAF(state->target) ? "heap" : "index",
 										nhtid,
 										(uint32) (state->targetlsn >> 32),
 										(uint32) state->targetlsn)));
@@ -720,7 +722,7 @@ bt_target_page_check(BtreeCheckState *state)
 					/*
 					 * All !readonly checks now performed; just return
 					 */
-					if (P_IGNORE(topaque))
+					if (P_IGNORE(state->target))
 						return;
 				}
 
@@ -743,7 +745,7 @@ bt_target_page_check(BtreeCheckState *state)
 		 * in target excluding the negative-infinity downlink (again, this is
 		 * because it has no useful value to compare).
 		 */
-		if (!P_ISLEAF(topaque) && state->readonly)
+		if (!P_ISLEAF(state->target) && state->readonly)
 		{
 			BlockNumber childblock = ItemPointerGetBlockNumber(&(itup->t_tid));
 
@@ -781,7 +783,7 @@ bt_right_page_check_scankey(BtreeCheckState *state)
 	opaque = (BTPageOpaque) PageGetSpecialPointer(state->target);
 
 	/* If target is already rightmost, no right sibling; nothing to do here */
-	if (P_RIGHTMOST(opaque))
+	if (P_RIGHTMOST(state->target))
 		return NULL;
 
 	/*
@@ -816,7 +818,7 @@ bt_right_page_check_scankey(BtreeCheckState *state)
 		rightpage = palloc_btree_page(state, targetnext);
 		opaque = (BTPageOpaque) PageGetSpecialPointer(rightpage);
 
-		if (!P_IGNORE(opaque) || P_RIGHTMOST(opaque))
+		if (!P_IGNORE(rightpage) || P_RIGHTMOST(rightpage))
 			break;
 
 		/* We landed on a deleted page, so step right to find a live page */
@@ -926,12 +928,12 @@ bt_right_page_check_scankey(BtreeCheckState *state)
 	/*
 	 * Get first data item, if any
 	 */
-	if (P_ISLEAF(opaque) && nline >= P_FIRSTDATAKEY(opaque))
+	if (P_ISLEAF(rightpage) && nline >= P_FIRSTDATAKEY(opaque))
 	{
 		/* Return first data item (if any) */
 		rightitem = PageGetItemId(rightpage, P_FIRSTDATAKEY(opaque));
 	}
-	else if (!P_ISLEAF(opaque) &&
+	else if (!P_ISLEAF(rightpage) &&
 			 nline >= OffsetNumberNext(P_FIRSTDATAKEY(opaque)))
 	{
 		/*
@@ -951,7 +953,7 @@ bt_right_page_check_scankey(BtreeCheckState *state)
 		ereport(DEBUG1,
 				(errcode(ERRCODE_NO_DATA),
 				 errmsg("%s block %u of index \"%s\" has no first data item",
-						P_ISLEAF(opaque) ? "leaf" : "internal", targetnext,
+						P_ISLEAF(rightpage) ? "leaf" : "internal", targetnext,
 						RelationGetRelationName(state->rel))));
 		return NULL;
 	}
@@ -1043,7 +1045,7 @@ bt_downlink_check(BtreeCheckState *state, BlockNumber childblock,
 		 * bound, but that's only because of the hard-coding within
 		 * _bt_compare().
 		 */
-		if (offset_is_negative_infinity(copaque, offset))
+		if (offset_is_negative_infinity(child, offset))
 			continue;
 
 		if (!invariant_leq_nontarget_offset(state, child,
@@ -1072,8 +1074,10 @@ bt_downlink_check(BtreeCheckState *state, BlockNumber childblock,
  * reference TID to child page).
  */
 static inline bool
-offset_is_negative_infinity(BTPageOpaque opaque, OffsetNumber offset)
+offset_is_negative_infinity(Page page, OffsetNumber offset)
 {
+	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+
 	/*
 	 * For internal pages only, the first item after high key, if any, is
 	 * negative infinity item.  Internal pages always have a negative infinity
@@ -1090,7 +1094,7 @@ offset_is_negative_infinity(BTPageOpaque opaque, OffsetNumber offset)
 	 * negative infinity downlink, and positive infinity as an upper bound
 	 * (implicitly, from "imaginary" positive infinity high key in root).
 	 */
-	return !P_ISLEAF(opaque) && offset == P_FIRSTDATAKEY(opaque);
+	return !P_ISLEAF(page) && offset == P_FIRSTDATAKEY(opaque);
 }
 
 /*
@@ -1225,24 +1229,77 @@ palloc_btree_page(BtreeCheckState *state, BlockNumber blocknum)
 	 * Deleted pages have no sane "level" field, so can only check non-deleted
 	 * page level
 	 */
-	if (P_ISLEAF(opaque) && !P_ISDELETED(opaque) && opaque->btpo.level != 0)
+	if (P_ISLEAF(page) && !P_ISDELETED(page) && opaque->btpo.level != 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_INDEX_CORRUPTED),
 				 errmsg("invalid leaf page level %u for block %u in index \"%s\"",
 						opaque->btpo.level, blocknum, RelationGetRelationName(state->rel))));
 
-	if (blocknum != BTREE_METAPAGE && !P_ISLEAF(opaque) &&
-		!P_ISDELETED(opaque) && opaque->btpo.level == 0)
+	if (blocknum != BTREE_METAPAGE && !P_ISLEAF(page) &&
+		!P_ISDELETED(page) && opaque->btpo.level == 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_INDEX_CORRUPTED),
 				 errmsg("invalid internal page level 0 for block %u in index \"%s\"",
 						opaque->btpo.level, RelationGetRelationName(state->rel))));
 
-	if (!P_ISLEAF(opaque) && P_HAS_GARBAGE(opaque))
+	if (!P_ISLEAF(page) && P_HAS_GARBAGE(opaque))
 		ereport(ERROR,
 				(errcode(ERRCODE_INDEX_CORRUPTED),
 				 errmsg("internal page block %u in index \"%s\" has garbage items",
 						blocknum, RelationGetRelationName(state->rel))));
 
 	return page;
+}
+
+static void
+bt_check_btpflag(Relation rel, Page page)
+{
+	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+	uint16 flag_opaque = opaque->btpo_flags;
+	uint16 flag_cached = PageGetAMReservedBits(page);
+
+	if (((flag_opaque & BTP_LEAF) && !(flag_cached & BTP_RSVD_LEAF)) ||
+		((!(flag_opaque & BTP_LEAF)) && (flag_cached & BTP_RSVD_LEAF)))
+			ereport(ERROR,
+					(errcode(ERRCODE_INDEX_CORRUPTED),
+					 errmsg("btpo BTP_LEAF flags and cached BTP_RSVD_LEAF flag invariant violated for index \"%s\"",
+							RelationGetRelationName(rel)),
+					 errdetail_internal("flag opaque=%x, flag cached=%x",
+										flag_opaque, flag_cached)));
+
+	if (((flag_opaque & BTP_DELETED) && !(flag_cached & BTP_RSVD_DELETED)) ||
+		((!(flag_opaque & BTP_DELETED)) && (flag_cached & BTP_RSVD_DELETED)))
+		ereport(ERROR,
+				(errcode(ERRCODE_INDEX_CORRUPTED),
+				 errmsg("btpo BTP_DELETED flags and cached BTP_RSVD_DELETED flag invariant violated for index \"%s\"",
+						RelationGetRelationName(rel)),
+				 errdetail_internal("flag opaque=%x, flag cached=%x",
+									flag_opaque, flag_cached)));
+
+	if (((flag_opaque & BTP_HALF_DEAD) && !(flag_cached & BTP_RSVD_HALF_DEAD)) ||
+		((!(flag_opaque & BTP_HALF_DEAD)) && (flag_cached & BTP_RSVD_HALF_DEAD)))
+		ereport(ERROR,
+				(errcode(ERRCODE_INDEX_CORRUPTED),
+				 errmsg("btpo BTP_HALF_DEAD flags and cached BTP_RSVD_HALF_DEAD flag invariant violated for index \"%s\"",
+						RelationGetRelationName(rel)),
+				 errdetail_internal("flag opaque=%x, flag cached=%x",
+									flag_opaque, flag_cached)));
+
+	if (((flag_opaque & BTP_INCOMPLETE_SPLIT) && !(flag_cached & BTP_RSVD_INCOMPLETE_SPLIT)) ||
+		((!(flag_opaque & BTP_INCOMPLETE_SPLIT)) && (flag_cached & BTP_RSVD_INCOMPLETE_SPLIT)))
+		ereport(ERROR,
+				(errcode(ERRCODE_INDEX_CORRUPTED),
+				 errmsg("btpo BTP_INCOMPLETE_SPLIT flags and cached BTP_RSVD_INCOMPLETE_SPLIT flag invariant violated for index \"%s\"",
+						RelationGetRelationName(rel)),
+				 errdetail_internal("flag opaque=%x, flag cached=%x",
+									flag_opaque, flag_cached)));
+
+	if (((opaque->btpo_next == P_NONE) && !(flag_cached & BTP_RSVD_RIGHTMOST)) ||
+		((opaque->btpo_next != P_NONE) && (flag_cached & BTP_RSVD_RIGHTMOST)))
+		ereport(ERROR,
+				(errcode(ERRCODE_INDEX_CORRUPTED),
+				 errmsg("btpo right most and cached BTP_RSVD_RIGHTMOST flag invariant violated for index \"%s\"",
+						RelationGetRelationName(rel)),
+				 errdetail_internal("btpo_next=%u, flag cached=%x",
+									opaque->btpo_next, flag_cached)));
 }
