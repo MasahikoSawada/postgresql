@@ -35,6 +35,11 @@
 /* syncrep_method of SyncRepConfigData */
 #define SYNC_REP_PRIORITY		0
 #define SYNC_REP_QUORUM		1
+#define SYNC_REP_INVALID	-1
+
+/* type of SyncRepConfigData */
+#define SYNC_REP_CONFIG_NODE	0
+#define SYNC_REP_CONFIG_GROUP	1
 
 /*
  * Struct for the configuration of synchronous replication.
@@ -45,11 +50,13 @@
  */
 typedef struct SyncRepConfigData
 {
+	int			type;			/* node or method */
 	int			config_size;	/* total size of this struct, in bytes */
 	int			num_sync;		/* number of sync standbys that we need to
 								 * wait for */
 	uint8		syncrep_method; /* method to choose sync standbys */
 	int			nmembers;		/* number of members in the following list */
+	bool		has_group;		/* does it have a group member? */
 	/* member_names contains nmembers consecutive nul-terminated C strings */
 	char		member_names[FLEXIBLE_ARRAY_MEMBER];
 } SyncRepConfigData;
