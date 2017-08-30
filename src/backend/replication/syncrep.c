@@ -937,6 +937,50 @@ SyncRepGetSyncStandbysPriority(bool *am_sync)
 	return result;
 }
 
+static int
+SyncRepGetStandbyPriority_impl(SyncRepConfigData *config, int priority, bool *found)
+{
+	int this_pririty;
+	
+	if (config->type == SYNC_REP_CONFIG_NODE)
+	{
+		if (pg_strcasecmp(config->member_names, application_name) == 0 ||
+			strcmp(standby_name, "*") == 0)
+		{
+			*found = true;
+			return priority;
+		}
+	}
+	else
+	{
+		char	*member = config->member_names;
+		int		i;
+
+		for (i = 0; i < config->nmembers; i++)
+		{
+			SyncRepConfigData *m = (SyncRepConfigData *) member;
+
+			priority = SyncRepGetStandbyPriority_impl(m, priority, &found);
+
+			if (found)
+				return priority;
+			
+			/*
+			 * In quorum-based sync replication, all the standbys in the list have the
+			 * same priority, one.
+			 */
+			if (config->syncrep_method == SYNC_REP_PRIORITY)
+				priority++;
+
+			member += m->config_size;
+		}
+		priority++;
+	}
+
+	*found = false;
+	return 0;
+}
+
 /*
  * Check if we are in the list of sync standbys, and if so, determine
  * priority sequence. Return priority if set, or zero to indicate that
@@ -962,26 +1006,10 @@ SyncRepGetStandbyPriority(void)
 	if (!SyncStandbysDefined() || SyncRepConfig == NULL)
 		return 0;
 
-	standby_name = SyncRepConfig->member_names;
-	for (priority = 1; priority <= SyncRepConfig->nmembers; priority++)
-	{
-		if (pg_strcasecmp(standby_name, application_name) == 0 ||
-			strcmp(standby_name, "*") == 0)
-		{
-			found = true;
-			break;
-		}
-		standby_name += strlen(standby_name) + 1;
-	}
+	/* Get standby priority recursively */
+	priority = SyncRepGetStandbyPriority_impl(SyncRepConfig, 1, &found);
 
-	if (!found)
-		return 0;
-
-	/*
-	 * In quorum-based sync replication, all the standbys in the list have the
-	 * same priority, one.
-	 */
-	return (SyncRepConfig->syncrep_method == SYNC_REP_PRIORITY) ? priority : 1;
+	return priority;
 }
 
 /*
