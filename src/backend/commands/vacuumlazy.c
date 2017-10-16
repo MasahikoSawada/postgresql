@@ -839,7 +839,13 @@ do_lazy_scan_heap(LVState *lvstate, Relation onerel, Relation *Irel,
 		 * while running vacuum.
 		 */
 		if (IsDeadTupleShared(lvstate))
+		{
 			SpinLockAcquire(&lvstate->dtctl->mutex);
+			dtcount = lvstate->dtctl->dt_count;
+			SpinLockRelease(&lvstate->dtctl->mutex);
+		}
+		else
+			dtcount = lvstate->dtctl->dt_count;
 
 		dtmax = lvstate->dtctl->dt_max;
 		if (((dtmax - dtcount) < dt_vacuum_threshold) &&	dtcount > 0)
