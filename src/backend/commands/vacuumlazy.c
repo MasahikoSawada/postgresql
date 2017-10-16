@@ -189,7 +189,8 @@ typedef struct LVDeadTupleCtl
 	int 		dt_count; /* # of dead tuple */
 
 	/* Used only for parallel lazy vacuum */
-	int			dt_index;
+	int			dt_index;	/* current index of dead tuple array used
+							   in lazy_vacuum_heap */
 	slock_t 	mutex;
 } LVDeadTupleCtl;
 
@@ -602,6 +603,9 @@ lazy_scan_heap(Relation onerel, LVState *lvstate, VacuumOptions options,
 		InitializeParallelDSM(pcxt);
 		lazy_initialize_dsm(pcxt, onerel, lvstate, options.flags, aggressive);
 
+		/* Set master pid to itself */
+		pgstat_report_leader_pid(MyProcPid);
+
 		/* Launch workers */
 		LaunchParallelWorkers(pcxt);
 	}
@@ -742,6 +746,7 @@ do_lazy_scan_heap(LVState *lvstate, Relation onerel, Relation *Irel,
 				tups_vacuumed,
 				nkeep,
 				nunused;
+	int			dt_vacuum_threshold;
 	IndexBulkDeleteResult **indstats;
 	int			i;
 	PGRUsage	ru0;
@@ -794,6 +799,12 @@ do_lazy_scan_heap(LVState *lvstate, Relation onerel, Relation *Irel,
 	initprog_val[2] = lvstate->dtctl->dt_max;
 	pgstat_progress_update_multi_param(3, initprog_index, initprog_val);
 
+	if (lvstate->parallel_mode)
+		dt_vacuum_threshold = MaxHeapTuplesPerPage *
+			(lvstate->pstate->nworkers + 1);
+	else
+		dt_vacuum_threshold = MaxHeapTuplesPerPage;
+
 #ifdef PLV_TIME
 	pg_rusage_init(&ru_scan);
 #endif
@@ -824,17 +835,14 @@ do_lazy_scan_heap(LVState *lvstate, Relation onerel, Relation *Irel,
 		/*
 		 * If we are close to overrunning the available space for dead-tuple
 		 * TIDs, pause and do a cycle of vacuuming before we tackle this page.
+		 * We don't need to acquire lock because dt_max should not be changed
+		 * while running vacuum.
 		 */
 		if (IsDeadTupleShared(lvstate))
 			SpinLockAcquire(&lvstate->dtctl->mutex);
 
 		dtmax = lvstate->dtctl->dt_max;
-		dtcount = lvstate->dtctl->dt_count;
-
-		if (IsDeadTupleShared(lvstate))
-			SpinLockRelease(&lvstate->dtctl->mutex);
-
-		if (((dtmax - dtcount) < MaxHeapTuplesPerPage) && dtcount > 0)
+		if (((dtmax - dtcount) < dt_vacuum_threshold) &&	dtcount > 0)
 		{
 			const int	hvp_index[] = {
 				PROGRESS_VACUUM_PHASE,

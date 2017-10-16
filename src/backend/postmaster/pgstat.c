@@ -3211,13 +3211,13 @@ pgstat_report_xact_timestamp(TimestampTz tstamp)
 }
 
 /*-----------
- * pgstat_report_master_pid() -
+ * pgstat_report_leader_pid() -
  *
- * Report process id of the master process that this backend is involved
+ * Report process id of the leader process that this backend is involved
  * with.
  */
 void
-pgstat_report_master_pid(int pid)
+pgstat_report_leader_pid(int pid)
 {
 	volatile PgBackendStatus *beentry = MyBEEntry;
 
@@ -3225,7 +3225,7 @@ pgstat_report_master_pid(int pid)
 		return;
 
 	pgstat_increment_changecount_before(beentry);
-	beentry->st_master_pid = pid;
+	beentry->st_leader_pid = pid;
 	pgstat_increment_changecount_after(beentry);
 }
 

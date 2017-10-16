@@ -2976,9 +2976,6 @@ relation_needs_vacanalyze(Oid relid,
 	TransactionId xidForceLimit;
 	MultiXactId multiForceLimit;
 
-	/* parallle vacuum parameter */
-	int			parallel_degree;
-
 	AssertArg(classForm != NULL);
 	AssertArg(OidIsValid(relid));
 
@@ -3014,9 +3011,6 @@ relation_needs_vacanalyze(Oid relid,
 		: effective_multixact_freeze_max_age;
 
 	av_enabled = (relopts ? relopts->enabled : true);
-
-	parallel_degree = (relopts && relopts->vacuum_parallel_workers)
-		? relopts->vacuum_parallel_workers : 0;
 
 	/* Force vacuum if table is at risk of wraparound */
 	xidForceLimit = recentXid - freeze_max_age;

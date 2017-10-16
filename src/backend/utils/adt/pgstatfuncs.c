@@ -516,7 +516,7 @@ pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 		if (has_privs_of_role(GetUserId(), beentry->st_userid))
 		{
 			values[2] = ObjectIdGetDatum(beentry->st_progress_command_target);
-			values[3] = Int32GetDatum(beentry->st_master_pid);
+			values[3] = Int32GetDatum(beentry->st_leader_pid);
 			for (i = 0; i < PGSTAT_NUM_PROGRESS_PARAM; i++)
 				values[i + 4] = Int64GetDatum(beentry->st_progress_param[i]);
 		}
