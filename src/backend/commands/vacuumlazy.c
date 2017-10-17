@@ -1503,7 +1503,8 @@ do_lazy_scan_heap(LVState *lvstate, Relation onerel, Relation *Irel,
 	}
 
 	/* report all blocks vacuumed; and that we're cleaning up */
-	pgstat_progress_update_param(PROGRESS_VACUUM_HEAP_BLKS_VACUUMED, blkno);
+	pgstat_progress_update_param(PROGRESS_VACUUM_HEAP_BLKS_VACUUMED,
+								 RelationGetNumberOfBlocks(onerel));
 	pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
 								 PROGRESS_VACUUM_PHASE_INDEX_CLEANUP);
 
