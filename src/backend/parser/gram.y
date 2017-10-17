@@ -10154,7 +10154,7 @@ cluster_index_specification:
 VacuumStmt: VACUUM opt_full opt_freeze opt_verbose opt_vacuum_relation_list
 				{
 					VacuumStmt *n = makeNode(VacuumStmt);
-					VacuumOptions *vacopts = makeVacOpt(VACOPT_VACUUM, 1);
+					VacuumOptions *vacopts = makeVacOpt(VACOPT_VACUUM, 0);
 					if ($2)
 						vacopts->flags |= VACOPT_FULL;
 					if ($3)
@@ -10226,7 +10226,7 @@ vacuum_option_elem:
 			| IDENT
 				{
 					if (strcmp($1, "disable_page_skipping") == 0)
-						$$ = makeVacOpt(VACOPT_DISABLE_PAGE_SKIPPING, 1);
+						$$ = makeVacOpt(VACOPT_DISABLE_PAGE_SKIPPING, 0);
 					else
 						ereport(ERROR,
 								(errcode(ERRCODE_SYNTAX_ERROR),
@@ -10238,7 +10238,7 @@ vacuum_option_elem:
 AnalyzeStmt: analyze_keyword opt_verbose opt_vacuum_relation_list
 				{
 					VacuumStmt *n = makeNode(VacuumStmt);
-					VacuumOptions *vacopts = makeVacOpt(VACOPT_ANALYZE, 1);
+					VacuumOptions *vacopts = makeVacOpt(VACOPT_ANALYZE, 0);
 
 					if ($2)
 						vacopts->flags |= VACOPT_VERBOSE;

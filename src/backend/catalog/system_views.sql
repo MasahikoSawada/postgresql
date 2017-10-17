@@ -884,6 +884,7 @@ CREATE VIEW pg_stat_bgwriter AS
 CREATE VIEW pg_stat_progress_vacuum AS
 	SELECT
 		S.pid AS pid, S.datid AS datid, D.datname AS datname,
+		S.master_pid AS master_pid,
 		S.relid AS relid,
 		CASE S.param1 WHEN 0 THEN 'initializing'
 					  WHEN 1 THEN 'scanning heap'

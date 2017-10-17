@@ -1129,6 +1129,9 @@ ParallelWorkerMain(Datum main_arg)
 	/* Set ParallelMasterBackendId so we know how to address temp relations. */
 	ParallelMasterBackendId = fps->parallel_master_backend_id;
 
+	/* Report pid of master process for progress information */
+	pgstat_report_master_pid(fps->parallel_master_pid);
+
 	/*
 	 * We've initialized all of our state now; nothing should change
 	 * hereafter.

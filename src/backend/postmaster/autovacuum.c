@@ -2818,6 +2818,7 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 		int			vac_cost_limit;
 		int			vac_cost_delay;
 		int			log_min_duration;
+		int			vacuum_parallel_workers;
 
 		/*
 		 * Calculate the vacuum cost parameters and the freeze ages.  If there
@@ -2864,6 +2865,11 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 			? avopts->multixact_freeze_table_age
 			: default_multixact_freeze_table_age;
 
+		vacuum_parallel_workers = (avopts &&
+								   avopts->vacuum_parallel_workers >= 0)
+			? avopts->vacuum_parallel_workers
+			: 0;
+
 		tab = palloc(sizeof(autovac_table));
 		tab->at_relid = relid;
 		tab->at_sharedrel = classForm->relisshared;
@@ -2871,7 +2877,7 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 			(dovacuum ? VACOPT_VACUUM : 0) |
 			(doanalyze ? VACOPT_ANALYZE : 0) |
 			(!wraparound ? VACOPT_NOWAIT : 0);
-		tab->at_vacoptions.nworkers = 1;
+		tab->at_vacoptions.nworkers = vacuum_parallel_workers;
 		tab->at_params.freeze_min_age = freeze_min_age;
 		tab->at_params.freeze_table_age = freeze_table_age;
 		tab->at_params.multixact_freeze_min_age = multixact_freeze_min_age;
@@ -2970,6 +2976,9 @@ relation_needs_vacanalyze(Oid relid,
 	TransactionId xidForceLimit;
 	MultiXactId multiForceLimit;
 
+	/* parallle vacuum parameter */
+	int			parallel_degree;
+
 	AssertArg(classForm != NULL);
 	AssertArg(OidIsValid(relid));
 
@@ -3005,6 +3014,9 @@ relation_needs_vacanalyze(Oid relid,
 		: effective_multixact_freeze_max_age;
 
 	av_enabled = (relopts ? relopts->enabled : true);
+
+	parallel_degree = (relopts && relopts->vacuum_parallel_workers)
+		? relopts->vacuum_parallel_workers : 0;
 
 	/* Force vacuum if table is at risk of wraparound */
 	xidForceLimit = recentXid - freeze_max_age;

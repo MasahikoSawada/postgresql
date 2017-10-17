@@ -655,6 +655,13 @@ lazy_scan_heap(Relation onerel, LVState *lvstate, VacuumOptions options,
 								   InvalidMultiXactId,
 								   false);
 		}
+
+		pgstat_progress_update_param(PROGRESS_VACUUM_HEAP_BLKS_SCANNED,
+									 vacrelstats->scanned_pages);
+		pgstat_progress_update_param(PROGRESS_VACUUM_HEAP_BLKS_VACUUMED,
+									 vacrelstats->rel_pages);
+		pgstat_progress_update_param(PROGRESS_VACUUM_NUM_INDEX_VACUUMS,
+									 vacrelstats->num_index_scans);
 	}
 
 	vac_close_indexes(nindexes, Irel, RowExclusiveLock);
@@ -682,9 +689,13 @@ LazyVacuumWorkerMain(dsm_segment *seg, shm_toc *toc)
 	vac_open_indexes(rel, RowExclusiveLock, &nindexes_worker,
 					 &indrel);
 
+	pgstat_progress_start_command(PROGRESS_COMMAND_VACUUM,
+								  RelationGetRelid(rel));
 	/* Do lazy vacuum */
 	do_lazy_scan_heap(lvstate, rel, indrel, lvstate->vacrelstats->nindexes,
 					  lvstate->pstate->info.options, lvstate->pstate->info.aggressive);
+
+	pgstat_progress_end_command();
 
 	vac_close_indexes(lvstate->vacrelstats->nindexes, indrel, RowExclusiveLock);
 	heap_close(rel, ShareUpdateExclusiveLock);
@@ -1412,7 +1423,8 @@ do_lazy_scan_heap(LVState *lvstate, Relation onerel, Relation *Irel,
 	}
 
 	/* report that everything is scanned and vacuumed */
-	pgstat_progress_update_param(PROGRESS_VACUUM_HEAP_BLKS_SCANNED, blkno);
+	pgstat_progress_update_param(PROGRESS_VACUUM_HEAP_BLKS_SCANNED,
+								 RelationGetNumberOfBlocks(onerel));
 
 	pfree(frozen);
 
@@ -2321,7 +2333,8 @@ lazy_record_dead_tuple(LVState *lvstate, ItemPointer itemptr)
 
 		lvstate->deadtuples[dtctl->dt_count] = *itemptr;
 		(dtctl->dt_count)++;
-		/* XXX : Update progress information here */
+		pgstat_progress_update_param(PROGRESS_VACUUM_NUM_DEAD_TUPLES,
+									 dtctl->dt_count);
 	}
 
 	if (IsDeadTupleShared(lvstate))

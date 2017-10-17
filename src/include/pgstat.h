@@ -1014,6 +1014,8 @@ typedef struct PgBackendStatus
 	 */
 	char	   *st_activity_raw;
 
+	int			st_master_pid;
+
 	/*
 	 * Command progress reporting.  Any command which wishes can advertise
 	 * that it is running by setting st_progress_command,
@@ -1182,6 +1184,7 @@ extern void pgstat_report_activity(BackendState state, const char *cmd_str);
 extern void pgstat_report_tempfile(size_t filesize);
 extern void pgstat_report_appname(const char *appname);
 extern void pgstat_report_xact_timestamp(TimestampTz tstamp);
+extern void pgstat_report_master_pid(int pid);
 extern const char *pgstat_get_wait_event(uint32 wait_event_info);
 extern const char *pgstat_get_wait_event_type(uint32 wait_event_info);
 extern const char *pgstat_get_backend_current_activity(int pid, bool checkUser);
