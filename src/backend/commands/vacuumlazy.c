@@ -2766,7 +2766,10 @@ lv_beginscan(Relation onerel, ParallelHeapScanDesc pscan)
 	lvscan->lv_nblocks = RelationGetNumberOfBlocks(onerel);
 
 	if (pscan != NULL)
+	{
 		lvscan->heapscan = heap_beginscan_parallel(onerel, pscan);
+		heap_parallelscan_startblock_init(lvscan->heapscan);
+	}
 	else
 		lvscan->heapscan = NULL;
 
