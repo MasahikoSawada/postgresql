@@ -95,6 +95,7 @@
 
 #include "access/transam.h"
 #include "access/xlog.h"
+#include "access/fdwxact_resolver.h"
 #include "bootstrap/bootstrap.h"
 #include "catalog/pg_control.h"
 #include "common/ip.h"
@@ -898,6 +899,10 @@ PostmasterMain(int argc, char *argv[])
 	if (max_wal_senders > 0 && wal_level == WAL_LEVEL_MINIMAL)
 		ereport(ERROR,
 				(errmsg("WAL streaming (max_wal_senders > 0) requires wal_level \"replica\" or \"logical\"")));
+
+	if (max_prepared_foreign_xacts > 0 && max_foreign_xact_resolvers == 0)
+		ereport(ERROR,
+				(errmsg("preparing foreign transactions (max_prepared_foreign_transactions > 0) requires maX_foreign_xact_resolvers > 0")));
 
 	/*
 	 * Other one-time internal sanity checks can go here, if they are fast.

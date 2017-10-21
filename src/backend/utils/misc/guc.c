@@ -27,6 +27,7 @@
 #endif
 
 #include "access/commit_ts.h"
+#include "access/fdwxact.h"
 #include "access/gin.h"
 #include "access/rmgr.h"
 #include "access/transam.h"
@@ -2088,6 +2089,51 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_prepared_xacts,
 		0, 0, MAX_BACKENDS,
+		NULL, NULL, NULL
+	},
+
+	/*
+	 * See also CheckRequiredParameterValues() if this parameter changes
+	 */
+	{
+		{"max_prepared_foreign_transactions", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the maximum number of simultaneously prepared transactions on foreign servers."),
+			NULL
+		},
+		&max_prepared_foreign_xacts,
+		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"foreign_transaction_resolver_timeout", PGC_SIGHUP, RESOURCES_ASYNCHRONOUS,
+			gettext_noop("Sets the maximum time to wait for foreign transaction resolution."),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&foreign_xact_resolver_timeout,
+		60 * 1000, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_foreign_transaction_resolvers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Maximum number of foreign transaction resolution processes."),
+			NULL
+		},
+		&max_foreign_xact_resolvers,
+		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"foreign_transaction_resolution_interval", PGC_SIGHUP, RESOURCES_ASYNCHRONOUS,
+		 gettext_noop("Sets the maximum interval between resolving foreign transactions."),
+		 NULL,
+		 GUC_UNIT_S
+		},
+		&foreign_xact_resolution_interval,
+		10, 0, INT_MAX / 1000,
 		NULL, NULL, NULL
 	},
 

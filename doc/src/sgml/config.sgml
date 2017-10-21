@@ -1451,6 +1451,25 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-max-prepared-foreign-transactions" xreflabel="max_prepared_foreign_transactions">
+      <term><varname>max_prepared_foreign_transactions</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>max_prepared_foreign_transactions</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Sets the maximum number of foreign transactions that can be prepared
+        simultaneously. This parameter can only be set at server start.
+       </para>
+       <para>
+        When running a standby server, you must set this parameter to the
+        same or higher value than on the master server. Otherwise, queries
+        will not be allowed in the standby server.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-work-mem" xreflabel="work_mem">
       <term><varname>work_mem</varname> (<type>integer</type>)
       <indexterm>
@@ -3460,6 +3479,76 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
        </para>
        <para>
         The default value is 2.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     </variablelist>
+    </sect2>
+
+    <sect2 id="runtime-config-foregin-transaction-resolver">
+     <title>Foreign Transaction Resolvers</title>
+
+     <para>
+      These settings control the behavior of a foreign transaction resolver.
+     </para>
+
+     <variablelist>
+
+     <varlistentry id="guc-max-foreign-transaction-resolvers" xreflabel="max_foreign_transaction_resolvers">
+      <term><varname>max_foreign_transaction_resolvers</varname> (<type>int</type>)
+      <indexterm>
+       <primary><varname>max_foreign_transaction_resolvers</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies maximum number of foreign transaction resolution workers. A foreign transaction
+        resolution worker is responsible for a database.
+       </para>
+       <para>
+        Foreign transaction resolution workers are taken from the pool defined by
+        <varname>max_worker_processes</varname>.
+       </para>
+       <para>
+        The default value is 0.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="foreign-transaction-resolution-interval" xreflabel="foreign_transaction_resolution_intervalription">
+      <term><varname>foreign_transaction_resolution_interval</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>foreign_transaction_resolution_interval</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specify how long the foreign transaction resolver should wait before trying to resolve
+        foreign transaction. This parameter can only be set in the
+        <filename>postgresql.conf</filename> file or on the server command line.
+       </para>
+       <para>
+        The default value is 10 seconds.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="foreign-transaction-resolver-timeout" xreflabel="foreign_transaction_resolver_timeout">
+      <term><varname>foreign_transaction_resolver_timeout</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>foreign_transaction_resolver_timeout</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Terminate foreign transaction resolver processes that don't have any foreign
+        transactions to resolve longer than the specified number of milliseconds.
+        A value of zero disables the timeout mechanism.  This parameter can only be set in
+        the <filename>postgresql.conf</filename> file or on the server command line.
+       </para>
+       <para>
+        The default value is 60 seconds.
        </para>
       </listitem>
      </varlistentry>

@@ -16,6 +16,7 @@
 
 #include "libpq/pqsignal.h"
 #include "access/parallel.h"
+#include "access/fdwxact_resolver.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "port/atomics.h"
@@ -129,6 +130,9 @@ static const struct
 	},
 	{
 		"ApplyWorkerMain", ApplyWorkerMain
+	},
+	{
+		"FdwXactRslvMain", FdwXactRslvMain
 	}
 };
 

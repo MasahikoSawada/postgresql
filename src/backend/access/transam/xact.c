@@ -21,6 +21,7 @@
 #include <unistd.h>
 
 #include "access/commit_ts.h"
+#include "access/fdwxact.h"
 #include "access/multixact.h"
 #include "access/parallel.h"
 #include "access/subtrans.h"
@@ -1129,6 +1130,7 @@ RecordTransactionCommit(void)
 	SharedInvalidationMessage *invalMessages = NULL;
 	bool		RelcacheInitFileInval = false;
 	bool		wrote_xlog;
+	bool		need_twophase;
 
 	/* Get data needed for commit record */
 	nrels = smgrGetPendingDeletes(true, &rels);
@@ -1137,6 +1139,7 @@ RecordTransactionCommit(void)
 		nmsgs = xactGetCommittedInvalidationMessages(&invalMessages,
 													 &RelcacheInitFileInval);
 	wrote_xlog = (XactLastRecEnd != 0);
+	need_twophase = TwoPhaseCommitRequired();
 
 	/*
 	 * If we haven't been assigned an XID yet, we neither can, nor do we want
@@ -1175,12 +1178,13 @@ RecordTransactionCommit(void)
 		}
 
 		/*
-		 * If we didn't create XLOG entries, we're done here; otherwise we
-		 * should trigger flushing those entries the same as a commit record
+		 * If we didn't create XLOG entries and the transaction does not need
+		 * to be committed using two-phase commit. we're done here; otherwise
+		 * we should trigger flushing those entries the same as a commit record
 		 * would.  This will primarily happen for HOT pruning and the like; we
 		 * want these to be flushed to disk in due time.
 		 */
-		if (!wrote_xlog)
+		if (!wrote_xlog && !need_twophase)
 			goto cleanup;
 	}
 	else
@@ -1337,6 +1341,14 @@ RecordTransactionCommit(void)
 	 */
 	if (wrote_xlog && markXidCommitted)
 		SyncRepWaitForLSN(XactLastRecEnd, true);
+
+	/*
+	 * Wait for prepared foreign transaction to be resolved, if required.
+	 * We only want to wait if we prepared foreign transaction in this
+	 * transaction.
+	 */
+	if (need_twophase && markXidCommitted)
+		FdwXactWaitForResolution(xid, true);
 
 	/* remember end of last commit record */
 	XactLastCommitEnd = XactLastRecEnd;
@@ -1975,6 +1987,9 @@ CommitTransaction(void)
 			break;
 	}
 
+	/* Pre-commit step for foreign transactions */
+	PreCommit_FdwXacts();
+
 	CallXactCallbacks(is_parallel_worker ? XACT_EVENT_PARALLEL_PRE_COMMIT
 					  : XACT_EVENT_PRE_COMMIT);
 
@@ -2130,6 +2145,7 @@ CommitTransaction(void)
 	AtEOXact_PgStat(true);
 	AtEOXact_Snapshot(true, false);
 	AtEOXact_ApplyLauncher(true);
+	AtEOXact_FdwXacts(true);
 	pgstat_report_xact_timestamp(0);
 
 	CurrentResourceOwner = NULL;
@@ -2216,6 +2232,8 @@ PrepareTransaction(void)
 	 * of this stuff could still throw an error, which would switch us into
 	 * the transaction-abort path.
 	 */
+
+	AtPrepare_FdwXacts();
 
 	/* Shut down the deferred-trigger manager */
 	AfterTriggerEndXact(true);
@@ -2405,6 +2423,7 @@ PrepareTransaction(void)
 	AtEOXact_Files();
 	AtEOXact_ComboCid();
 	AtEOXact_HashTables(true);
+	AtEOXact_FdwXacts(true);
 	/* don't call AtEOXact_PgStat here; we fixed pgstat state above */
 	AtEOXact_Snapshot(true, true);
 	pgstat_report_xact_timestamp(0);
@@ -2609,6 +2628,7 @@ AbortTransaction(void)
 		AtEOXact_HashTables(false);
 		AtEOXact_PgStat(false);
 		AtEOXact_ApplyLauncher(false);
+		AtEOXact_FdwXacts(false);
 		pgstat_report_xact_timestamp(0);
 	}
 

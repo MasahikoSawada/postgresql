@@ -162,6 +162,18 @@ typedef List *(*ReparameterizeForeignPathByChild_function) (PlannerInfo *root,
 															List *fdw_private,
 															RelOptInfo *child_rel);
 
+typedef char *(*GetPrepareId_function) (Oid serverid, Oid userid,
+										int *prep_info_len);
+typedef bool (*PrepareForeignTransaction_function) (Oid serverid, Oid userid,
+													Oid umid, const char *prep_id);
+typedef bool (*EndForeignTransaction_function) (Oid serverid, Oid userid,
+												Oid umid, bool is_commit);
+typedef bool (*ResolvePreparedForeignTransaction_function) (Oid serverid,
+															Oid userid,
+															Oid umid,
+															bool is_commit,
+															const char *prep_id);
+
 /*
  * FdwRoutine is the struct returned by a foreign-data wrapper's handler
  * function.  It provides pointers to the callback functions needed by the
@@ -225,6 +237,12 @@ typedef struct FdwRoutine
 
 	/* Support functions for IMPORT FOREIGN SCHEMA */
 	ImportForeignSchema_function ImportForeignSchema;
+
+	/* Support functions for distributed transactions */
+	GetPrepareId_function GetPrepareId;
+	EndForeignTransaction_function EndForeignTransaction;
+	PrepareForeignTransaction_function PrepareForeignTransaction;
+	ResolvePreparedForeignTransaction_function ResolvePreparedForeignTransaction;
 
 	/* Support functions for parallelism under Gather node */
 	IsForeignScanParallelSafe_function IsForeignScanParallelSafe;

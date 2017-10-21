@@ -2887,6 +2887,8 @@ DATA(insert OID = 3317 (  pg_stat_get_wal_receiver	PGNSP PGUID 12 1 0 0 0 f f f 
 DESCR("statistics: information about WAL receiver");
 DATA(insert OID = 6118 (  pg_stat_get_subscription	PGNSP PGUID 12 1 0 0 0 f f f f f f s r 1 0 2249 "26" "{26,26,26,23,3220,1184,1184,3220,1184}" "{i,o,o,o,o,o,o,o,o}" "{subid,subid,relid,pid,received_lsn,last_msg_send_time,last_msg_receipt_time,latest_end_lsn,latest_end_time}" _null_ _null_ pg_stat_get_subscription _null_ _null_ _null_ ));
 DESCR("statistics: information about subscription");
+DATA(insert OID = 4101 (  pg_stat_get_fdwxact_resolver	PGNSP PGUID 12 1 0 0 0 f f f f f f s r 0 0 2249 "" "{26,26,26,1184}" "{o,o,o,o}" "{pid,dbid,n_entries,last_resolution_time}" _null_ _null_ pg_stat_get_fdwxact_resolver _null_ _null_ _null_ ));
+DESCR("statistics: information about subscription");
 DATA(insert OID = 2026 (  pg_backend_pid				PGNSP PGUID 12 1 0 0 0 f f f f t f s r 0 0 23 "" _null_ _null_ _null_ _null_ _null_ pg_backend_pid _null_ _null_ _null_ ));
 DESCR("statistics: current backend PID");
 DATA(insert OID = 1937 (  pg_stat_get_backend_pid		PGNSP PGUID 12 1 0 0 0 f f f f t f s r 1 0 23 "23" _null_ _null_ _null_ _null_ _null_ pg_stat_get_backend_pid _null_ _null_ _null_ ));
@@ -4203,6 +4205,15 @@ DATA(insert OID = 2856 (  pg_timezone_names		PGNSP PGUID 12 1 1000 0 0 f f f f t
 DESCR("get the available time zone names");
 DATA(insert OID = 2730 (  pg_get_triggerdef		PGNSP PGUID 12 1 0 0 0 f f f f t f s s 2 0 25 "26 16" _null_ _null_ _null_ _null_ _null_ pg_get_triggerdef_ext _null_ _null_ _null_ ));
 DESCR("trigger description with pretty-print option");
+
+/* foreign transactions */
+DATA(insert OID = 4099 ( pg_prepared_fdw_xacts	PGNSP PGUID 12 1 1000 0 0 f f f f t t v u 0 0 2249 "" "{26,28,26,26,25,25}" "{o,o,o,o,o,o}" "{dbid, transaction,serverid,userid,status,identifier}" _null_ _null_ pg_prepared_fdw_xacts _null_ _null_ _null_ ));
+DESCR("view foreign transactions");
+DATA(insert OID = 4100 ( pg_remove_fdw_xacts PGNSP PGUID 12 1 0 0 0 f f f f f f v u 4 0 2278 "28 26 26 26" _null_ _null_ "{transaction,dbid,serverid,userid}" _null_ _null_ pg_remove_fdw_xacts _null_ _null_ _null_ ));
+DESCR("remove foreign transactions");
+DATA(insert OID = 4126 ( pg_resolve_fdw_xacts	PGNSP PGUID 12 1 0 0 0 f f f f t f v s 0 0 16 "" _null_ _null_ _null_ _null_ _null_ pg_resolve_fdw_xacts _null_ _null_ _null_ ));
+DESCR("resolve foreign transactions");
+
 
 /* asynchronous notifications */
 DATA(insert OID = 3035 (  pg_listening_channels PGNSP PGUID 12 1 10 0 0 f f f f t t s r 0 0 25 "" _null_ _null_ _null_ _null_ _null_ pg_listening_channels _null_ _null_ _null_ ));

@@ -20342,6 +20342,53 @@ SELECT (pg_stat_file('filename')).modification;
 
   </sect2>
 
+  <sect2 id="functions-fdw-transaction">
+   <title>Foreign Transaction Management Functions</title>
+
+   <indexterm>
+    <primary>pg_resolve_fdw_xacts</primary>
+   </indexterm>
+   <indexterm>
+    <primary>pg_remove_fdw_xacts</primary>
+   </indexterm>
+
+   <para>
+    <xref linkend="functions-fdw-transaction-table"/> shows the functions
+    available for foreign transaction managements.
+    These functions cannot be executed during recovery. Use of these function
+    is restricted to superusers.
+   </para>
+
+   <table id="functions-fdw-transaction-table">
+    <title>Foreign Transaction Management Functions</title>
+    <tgroup cols="3">
+     <thead>
+      <row><entry>Name</entry> <entry>Return Type</entry> <entry>Description</entry></row>
+     </thead>
+
+     <tbody>
+      <row>
+       <entry>
+        <literal><function>pg_resolve_fdw_xacts(<parameter>void</parameter>)</function></literal>
+       </entry>
+       <entry><type>bool</type></entry>
+       <entry>Resolve all foreign transaction in connecting database</entry>
+      </row>
+      <row>
+       <entry>
+        <literal><function>pg_remove_fdw_xacts(<parameter>xid</parameter> <type>xid</type>, <parameter>dbid</parameter> <type>oid</type>, <parameter>serverid</parameter> <type>oid</type>, <parameter>userid</parameter> <type>oid</type>)</function></literal>
+       </entry>
+       <entry><type>void</type></entry>
+       <entry>
+        Remove prepared foreign transaction entries. This function search prepared foreign
+        transactions matching the criteria and remove then. This function doesn't remove
+        an entry which is locked by some other backend.
+       </entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+  </sect2>
   </sect1>
 
   <sect1 id="functions-trigger">

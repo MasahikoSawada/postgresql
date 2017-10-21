@@ -332,6 +332,14 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       </entry>
      </row>
 
+     <row>
+      <entry><structname>pg_stat_fdw_xact_resolver</structname><indexterm><primary>pg_stat_fdw_xact_resolver</primary></indexterm></entry>
+      <entry>One row per foreign transaction resolver process, showing statistics about
+       foreign transaction resolution. See <xref linkend="pg-stat-foreign-xact-resolver-view"/> for
+       details.
+      </entry>
+     </row>
+
     </tbody>
    </tgroup>
   </table>
@@ -2182,6 +2190,42 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
    connection.
   </para>
 
+  <table id="pg-stat-foreign-xact-resolver-view" xreflabel="pg_stat_fdw_xact_resolver">
+   <title><structname>pg_stat_fdw_xact_resolver</structname> View</title>
+   <tgroup cols="3">
+    <thead>
+    <row>
+      <entry>Column</entry>
+      <entry>Type</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+   <tbody>
+    <row>
+     <entry><structfield>pid</structfield></entry>
+     <entry><type>integer</type></entry>
+     <entry>Process ID of a foreign transaction resolver process</entry>
+    </row>
+    <row>
+     <entry><structfield>dbid</structfield></entry>
+     <entry><type>oid</type></entry>
+     <entry>OID of the database that the foreign transaction resolver process connects to</entry>
+    </row>
+    <row>
+     <entry><structfield>last_resolution_time</structfield></entry>
+     <entry><type>timestamp with time zone</type></entry>
+     <entry>Time of last reolucation of foreign transaction</entry>
+    </row>
+   </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+   The <structname>pg_stat_fdw_xact_resolver</structname> view will contain one
+   row per foreign transaction resolver process, showing state of resolution
+   of foreign trasactions.
+  </para>
 
   <table id="pg-stat-archiver-view" xreflabel="pg_stat_archiver">
    <title><structname>pg_stat_archiver</structname> View</title>

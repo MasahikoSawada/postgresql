@@ -24,6 +24,7 @@
 
 #include "access/clog.h"
 #include "access/commit_ts.h"
+#include "access/fdwxact.h"
 #include "access/multixact.h"
 #include "access/rewriteheap.h"
 #include "access/subtrans.h"
@@ -5157,6 +5158,7 @@ BootStrapXLOG(void)
 	ControlFile->MaxConnections = MaxConnections;
 	ControlFile->max_worker_processes = max_worker_processes;
 	ControlFile->max_prepared_xacts = max_prepared_xacts;
+	ControlFile->max_prepared_foreign_xacts = max_prepared_foreign_xacts;
 	ControlFile->max_locks_per_xact = max_locks_per_xact;
 	ControlFile->wal_level = wal_level;
 	ControlFile->wal_log_hints = wal_log_hints;
@@ -6244,6 +6246,9 @@ CheckRequiredParameterValues(void)
 		RecoveryRequiresIntParameter("max_prepared_transactions",
 									 max_prepared_xacts,
 									 ControlFile->max_prepared_xacts);
+		RecoveryRequiresIntParameter("max_prepared_foreign_transactions",
+									 max_prepared_foreign_xacts,
+									 ControlFile->max_prepared_foreign_xacts);
 		RecoveryRequiresIntParameter("max_locks_per_transaction",
 									 max_locks_per_xact,
 									 ControlFile->max_locks_per_xact);
@@ -6931,8 +6936,12 @@ StartupXLOG(void)
 
 			InitRecoveryTransactionEnvironment();
 
+
 			if (wasShutdown)
+			{
 				oldestActiveXID = PrescanPreparedTransactions(&xids, &nxids);
+				oldestActiveXID = PrescanFdwXacts(oldestActiveXID);
+			}
 			else
 				oldestActiveXID = checkPoint.oldestActiveXid;
 			Assert(TransactionIdIsValid(oldestActiveXID));
@@ -7557,6 +7566,7 @@ StartupXLOG(void)
 
 	/* Pre-scan prepared transactions to find out the range of XIDs present */
 	oldestActiveXID = PrescanPreparedTransactions(NULL, NULL);
+	oldestActiveXID = PrescanFdwXacts(oldestActiveXID);
 
 	/*
 	 * Update full_page_writes in shared memory and write an XLOG_FPW_CHANGE
@@ -7742,6 +7752,8 @@ StartupXLOG(void)
 
 	/* Reload shared-memory state for prepared transactions */
 	RecoverPreparedTransactions();
+
+	RecoverFdwXacts();
 
 	/*
 	 * Shutdown the recovery environment. This must occur after
@@ -9048,6 +9060,7 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 	CheckPointReplicationOrigin();
 	/* We deliberately delay 2PC checkpointing as long as possible */
 	CheckPointTwoPhase(checkPointRedo);
+	CheckPointFdwXacts(checkPointRedo);
 }
 
 /*
@@ -9484,7 +9497,8 @@ XLogReportParameters(void)
 		max_worker_processes != ControlFile->max_worker_processes ||
 		max_prepared_xacts != ControlFile->max_prepared_xacts ||
 		max_locks_per_xact != ControlFile->max_locks_per_xact ||
-		track_commit_timestamp != ControlFile->track_commit_timestamp)
+		track_commit_timestamp != ControlFile->track_commit_timestamp ||
+		max_prepared_foreign_xacts != ControlFile->max_prepared_foreign_xacts)
 	{
 		/*
 		 * The change in number of backend slots doesn't need to be WAL-logged
@@ -9516,6 +9530,7 @@ XLogReportParameters(void)
 		ControlFile->MaxConnections = MaxConnections;
 		ControlFile->max_worker_processes = max_worker_processes;
 		ControlFile->max_prepared_xacts = max_prepared_xacts;
+		ControlFile->max_prepared_foreign_xacts = max_prepared_foreign_xacts;
 		ControlFile->max_locks_per_xact = max_locks_per_xact;
 		ControlFile->wal_level = wal_level;
 		ControlFile->wal_log_hints = wal_log_hints;
@@ -9713,6 +9728,7 @@ xlog_redo(XLogReaderState *record)
 			RunningTransactionsData running;
 
 			oldestActiveXID = PrescanPreparedTransactions(&xids, &nxids);
+			oldestActiveXID = PrescanFdwXacts(oldestActiveXID);
 
 			/*
 			 * Construct a RunningTransactions snapshot representing a shut
@@ -9902,6 +9918,7 @@ xlog_redo(XLogReaderState *record)
 		ControlFile->MaxConnections = xlrec.MaxConnections;
 		ControlFile->max_worker_processes = xlrec.max_worker_processes;
 		ControlFile->max_prepared_xacts = xlrec.max_prepared_xacts;
+		ControlFile->max_prepared_foreign_xacts = xlrec.max_prepared_foreign_xacts;
 		ControlFile->max_locks_per_xact = xlrec.max_locks_per_xact;
 		ControlFile->wal_level = xlrec.wal_level;
 		ControlFile->wal_log_hints = xlrec.wal_log_hints;

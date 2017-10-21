@@ -77,6 +77,7 @@
 #include <unistd.h>
 
 #include "access/commit_ts.h"
+#include "access/fdwxact.h"
 #include "access/htup_details.h"
 #include "access/subtrans.h"
 #include "access/transam.h"
@@ -842,6 +843,35 @@ TwoPhaseGetGXact(TransactionId xid)
 	cached_gxact = result;
 
 	return result;
+}
+
+/*
+ * TwoPhaseExists
+ *		Return true if there is a prepared transaction specified by XID
+ */
+bool
+TwoPhaseExists(TransactionId xid)
+{
+	int		i;
+	bool	found = false;
+
+	LWLockAcquire(TwoPhaseStateLock, LW_SHARED);
+
+	for (i = 0; i < TwoPhaseState->numPrepXacts; i++)
+	{
+		GlobalTransaction gxact = TwoPhaseState->prepXacts[i];
+		PGXACT	*pgxact = &ProcGlobal->allPgXact[gxact->pgprocno];
+
+		if (pgxact->xid == xid)
+		{
+			found = true;
+			break;
+		}
+	}
+
+	LWLockRelease(TwoPhaseStateLock);
+
+	return found;
 }
 
 /*
@@ -2240,6 +2270,12 @@ RecordTransactionCommitPrepared(TransactionId xid,
 	 * in the procarray and continue to hold locks.
 	 */
 	SyncRepWaitForLSN(recptr, true);
+
+	/*
+	 * Wait for foreign transaction prepared as part of this prepared
+	 * transaction to be committed.
+	 */
+	FdwXactWaitForResolution(xid, true);
 }
 
 /*
@@ -2298,6 +2334,12 @@ RecordTransactionAbortPrepared(TransactionId xid,
 	 * in the procarray and continue to hold locks.
 	 */
 	SyncRepWaitForLSN(recptr, false);
+
+	/*
+	 * Wait for foreign transaction prepared as part of this prepared
+	 * transaction to be committed.
+	 */
+	FdwXactWaitForResolution(xid, false);
 }
 
 /*

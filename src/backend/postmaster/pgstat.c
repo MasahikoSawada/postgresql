@@ -3673,6 +3673,12 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_SYNC_REP:
 			event_name = "SyncRep";
 			break;
+		case WAIT_EVENT_FDW_XACT_RESOLUTION:
+			event_name = "FdwXactResolution";
+			break;
+		case WAIT_EVENT_FDW_XACT_RESOLVER_MAIN:
+			event_name = "FdwXactResolver";
+			break;
 			/* no default case, so that compiler will warn */
 	}
 

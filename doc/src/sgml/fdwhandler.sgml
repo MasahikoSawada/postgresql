@@ -1315,6 +1315,61 @@ ReparameterizeForeignPathByChild(PlannerInfo *root, List *fdw_private,
     </para>
    </sect2>
 
+   <sect2 id="fdw-callbacks-transaction-managements">
+    <title>FDW Routines For transaction managements</title>
+
+    <para>
+     If an FDW wishes to support <firstterm>atomic distributed transaction commit</firstterm>
+     (as described in <xref linkend="fdw-transactions"/>), it must provide
+     the following callback functions:
+    </para>
+
+    <para>
+<programlisting>
+char *
+GetPreparedId(Oid serverid, Oid userid, int *prep_info_len);
+</programlisting>
+    Generate prepared transaction identifier. Note that the transaction
+    identifier must be string literal, less than 200 bytes long and
+    should not be same as any other concurrent prepared transaction
+    Id.
+    </para>
+    <para>
+<programlisting>
+bool
+PrepareForignTransaction(Oid serverid, Oid userid, Oid unmid,
+                         const char *prep_id);
+</programlisting>
+    Prepare foreign transaction on foreign server. This function is called
+    before local transaction commit at the pre-commit phase of the local
+    transaction. Returning true means that prepareing the foreign transaction
+    got successful.
+    </para>
+    <para>
+<programlisting>
+bool
+EndForeignTransaction(Oid serverid, Oid userid, Oid unmid,
+                      const char *prep_id);
+</programlisting>
+    Commit or rollback the foreign transaction on foreign server. For foreign
+    servers that supports two-phase commit protocol, this function is called
+    both at the pre-commit phase of the local transaction when committing
+    and at the end of the local transaction when aborting. For foreign servers
+    that don't support two-phase commit protocol, this function is called
+    at the pre-commit phase of the local tranasaction.
+    </para>
+    <para>
+<programlisting>
+bool
+ResolvePreparedForeignTransaction(Oid serverid, Oid userid,
+                                  Oid umid, bool is_commit,
+                                  const char *prep_id)l
+</programlisting>
+    Commit or rollback the prepared foreign transaction on foreign server.
+    This function is called both by foreign transaction resolver process after
+    prepared foreign transaction and by <function>pg_resolve_fdw_xacts</function>
+    </para>
+   </sect2>
    </sect1>
 
    <sect1 id="fdw-helpers">
@@ -1760,4 +1815,91 @@ GetForeignServerByName(const char *name, bool missing_ok);
 
   </sect1>
 
+  <sect1 id="fdw-transactions">
+    <title>Transaction manager for Foreign Data Wrappers</title>
+
+    <para>
+    <productname>PostgreSQL</productname> transaction manager allows FDWs to read
+    and write data on foreign server within a transaction while maintaining atomicity
+    (and hence consistency) of the foreign data. Every Foreign Data Wrapper is
+    required to register the foreign server along with the <productname>PostgreSQL</productname>
+    user whose user mapping is used to connect to the foreign server while starting a
+    transaction on the foreign server as part of the transaction on
+    <productname>PostgreSQL</productname> using <function>RegisterXactForeignServer</function>.
+<programlisting>
+void
+FdwXactRegisterForeignServer(Oid serverid,
+                             Oid userid,
+                             bool can _prepare,
+                             bool modify)
+</programlisting>
+    <varname>can_prepare</varname> should be true if the foreign server supports
+    two-phase commit protocol, false otherwise. <varname>modify</varname> should be
+    true if you're attempting to modify data on foreign server in current transaction.
+    </para>
+
+    <para>
+    An example of such transaction is as follows
+<programlisting>
+BEGIN;
+UPDATE ft1 SET col = 'a';
+UPDATE ft2 SET col = 'b';
+COMMIT;
+</programlisting>
+    ft1 and ft2 are foreign tables on different foreign servers may be using different
+    Foreign Data Wrappers.
+    </para>
+
+    <para>
+    When <varname>max_prepared_foreign_transactions</varname> is more than zero
+    <productname>PostgreSQL</productname> employs Two-phase commit protocol to
+    achieve atomic distributed transaction commit. All the foreign servers registered
+    should support two-phase commit protocol. The two-phase commit protocol is
+    used for achieving atomic distributed transaction commit when more than two foreign
+    servers that support two-phase commit protocol are involved with transaction,
+    or when transaction involves with one foreign server that support two-phase commit
+    protocol and changes on local data. In other case, for example where only one
+    foreign server that support two-phase commit protocol is involved with transaction,
+    the two-phase commit protocol is not used.  In Two-phase commit protocol
+    the commit is processed in two phases: prepare phase and commit phase.
+    In prepare phase, <productname>PostgreSQL</productname> prepares the transactions
+    on all the foreign servers registered using
+    <function>FdwXactPrepareForeignTransactions</function>. If any of the foreign
+    server fails to prepare transaction, prepare phase fails. In commit phase,
+    all the prepared transactions are committed by foreign transaction resolver
+    process if prepare phase has succeeded or rolled back if prepare phase fails
+    to prepare transactions on all the foreign servers.
+    </para>
+
+    <para>
+    During prepare phase the distributed transaction manager calls
+    <function>GetPrepareId</function> to get the prepared transaction
+    identifier for each foreign server involved. It stores this identifier along
+    with the serverid, userid and user mapping id for later use. It then calls
+    <function>PrepareForeignTransaction</function> with the same identifier.
+    </para>
+
+    <para>
+    During commit phase the distributed transaction manager calls
+    <function>ResolveForeignTransaction</function> with the same identifier with
+    action FDW_XACT_COMMITTING_PREPARED to commit the prepared transaction or
+    FDW_XACT_ABORTING_PREPARED to rollback the prepared transaction. In case the
+    distributed transaction manager fails to commit or rollback a prepared
+    transaction because of connection failure, the operation can be tried again
+    through built-in <function>pg_resolve_fdw_xacts</function>, or by foreign
+    transaction resolver process if it's working.
+    </para>
+
+    <para>
+    When <varname>max_prepared_foreign_transaction</varname> is zero, atomicity
+    commit can not be guaranteed across foreign servers. If transaction on
+    <productname>PostgreSQL</productname> is committed, distributed transaction
+    manager commit the transaction on all the foreign servers registered using
+    <function>FdwXactRegisterForeignServer</function>, independent of the outcome
+    of the same operation on other foreign servers. Thus transactions on some
+    foreign servers may be committed, while the same on other foreign servers
+    would be rolled back. If the transaction on <productname>PostgreSQL</productname>
+    aborts transactions on all the foreign servers are aborted too.
+    </para>
+  </sect1>
  </chapter>
