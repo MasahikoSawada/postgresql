@@ -14,6 +14,8 @@
 
 #include "postgres_fdw.h"
 
+#include "access/fdwxact.h"
+#include "access/xact.h"
 #include "access/htup_details.h"
 #include "access/sysattr.h"
 #include "catalog/pg_class.h"
@@ -348,6 +350,7 @@ static void postgresGetForeignUpperPaths(PlannerInfo *root,
 							 UpperRelationKind stage,
 							 RelOptInfo *input_rel,
 							 RelOptInfo *output_rel);
+extern char*postgresGetPrepareId(Oid serveroid, Oid userid, int *prep_info_len);
 
 /*
  * Helper functions
@@ -420,7 +423,6 @@ static void merge_fdw_options(PgFdwRelationInfo *fpinfo,
 				  const PgFdwRelationInfo *fpinfo_o,
 				  const PgFdwRelationInfo *fpinfo_i);
 
-
 /*
  * Foreign-data wrapper handler function: return a struct with pointers
  * to my callback routines.
@@ -469,10 +471,48 @@ postgres_fdw_handler(PG_FUNCTION_ARGS)
 	/* Support functions for join push-down */
 	routine->GetForeignJoinPaths = postgresGetForeignJoinPaths;
 
+	/* Support functions for foreign transactions */
+	routine->GetPrepareId = postgresGetPrepareId;
+	routine->PrepareForeignTransaction = postgresPrepareForeignTransaction;
+	routine->ResolvePreparedForeignTransaction = postgresResolvePreparedForeignTransaction;
+	routine->EndForeignTransaction = postgresEndForeignTransaction;
+
 	/* Support functions for upper relation push-down */
 	routine->GetForeignUpperPaths = postgresGetForeignUpperPaths;
 
 	PG_RETURN_POINTER(routine);
+}
+
+/*
+ * postgresGetPrepareId
+ *
+ * The function crafts prepared transaction identifier. PostgreSQL documentation
+ * mentions two restrictions on the name
+ * 1. String literal, less than 200 bytes long.
+ * 2. Should not be same as any other concurrent prepared transaction id.
+ *
+ * To make the prepared transaction id, we should ideally use something like
+ * UUID, which gives unique ids with high probability, but that may be expensive
+ * here and UUID extension which provides the function to generate UUID is
+ * not part of the core.
+ */
+extern char *
+postgresGetPrepareId(Oid serverid, Oid userid, int *prep_info_len)
+{
+	/* Maximum length of the prepared transaction id, borrowed from twophase.c */
+#define PREP_XACT_ID_MAX_LEN 200
+#define RANDOM_LARGE_MULTIPLIER 1000
+	char*prep_info;
+
+	/* Allocate the memory in the same context as the hash entry */
+	prep_info = (char *)palloc(PREP_XACT_ID_MAX_LEN * sizeof(char));
+	snprintf(prep_info, PREP_XACT_ID_MAX_LEN, "%s_%4ld_%d_%d",
+			 "px", Abs(random() * RANDOM_LARGE_MULTIPLIER),
+			 serverid, userid);
+
+	/* Account for the last NULL byte */
+	*prep_info_len = strlen(prep_info);
+	return prep_info;
 }
 
 /*
@@ -1322,7 +1362,7 @@ postgresBeginForeignScan(ForeignScanState *node, int eflags)
 	 * Get connection to the foreign server.  Connection manager will
 	 * establish new connection if necessary.
 	 */
-	fsstate->conn = GetConnection(user, false);
+	fsstate->conn = GetConnection(user, false, true, false);
 
 	/* Assign a unique ID for my cursor */
 	fsstate->cursor_number = GetCursorNumber(fsstate->conn);
@@ -1671,6 +1711,7 @@ postgresBeginForeignModify(ModifyTableState *mtstate,
 	Oid			userid;
 	ForeignTable *table;
 	UserMapping *user;
+	ForeignServer *server;
 	AttrNumber	n_params;
 	Oid			typefnoid;
 	bool		isvarlena;
@@ -1698,9 +1739,15 @@ postgresBeginForeignModify(ModifyTableState *mtstate,
 	/* Get info about foreign table. */
 	table = GetForeignTable(RelationGetRelid(rel));
 	user = GetUserMapping(userid, table->serverid);
+	server = GetForeignServer(user->serverid);
+
+	/* Remember this foreign server has been modified */
+	FdwXactRegisterForeignServer(user->serverid, user->userid,
+								 server_uses_two_phase_commit(server),
+								 true);
 
 	/* Open connection; report that we'll create a prepared statement. */
-	fmstate->conn = GetConnection(user, true);
+	fmstate->conn = GetConnection(user, true, true, false);
 	fmstate->p_name = NULL;		/* prepared statement not made yet */
 
 	/* Deconstruct fdw_private data. */
@@ -2272,6 +2319,7 @@ postgresBeginDirectModify(ForeignScanState *node, int eflags)
 	RangeTblEntry *rte;
 	Oid			userid;
 	ForeignTable *table;
+	ForeignServer *server;
 	UserMapping *user;
 	int			numParams;
 
@@ -2298,12 +2346,18 @@ postgresBeginDirectModify(ForeignScanState *node, int eflags)
 	dmstate->rel = node->ss.ss_currentRelation;
 	table = GetForeignTable(RelationGetRelid(dmstate->rel));
 	user = GetUserMapping(userid, table->serverid);
+	server = GetForeignServer(user->serverid);
+
+	/* Remember this foreign server has been modified */
+	FdwXactRegisterForeignServer(user->serverid, user->userid,
+								 server_uses_two_phase_commit(server),
+								 true);
 
 	/*
 	 * Get connection to the foreign server.  Connection manager will
 	 * establish new connection if necessary.
 	 */
-	dmstate->conn = GetConnection(user, false);
+	dmstate->conn = GetConnection(user, false, true, false);
 
 	/* Initialize state variable */
 	dmstate->num_tuples = -1;	/* -1 means not set yet */
@@ -2564,7 +2618,7 @@ estimate_path_cost_size(PlannerInfo *root,
 								&retrieved_attrs, NULL);
 
 		/* Get the remote estimate */
-		conn = GetConnection(fpinfo->user, false);
+		conn = GetConnection(fpinfo->user, false, true, false);
 		get_remote_estimate(sql.data, conn, &rows, &width,
 							&startup_cost, &total_cost);
 		ReleaseConnection(conn);
@@ -3501,7 +3555,7 @@ postgresAnalyzeForeignTable(Relation relation,
 	 */
 	table = GetForeignTable(RelationGetRelid(relation));
 	user = GetUserMapping(relation->rd_rel->relowner, table->serverid);
-	conn = GetConnection(user, false);
+	conn = GetConnection(user, false, true, false);
 
 	/*
 	 * Construct command to get page count for relation.
@@ -3591,7 +3645,7 @@ postgresAcquireSampleRowsFunc(Relation relation, int elevel,
 	table = GetForeignTable(RelationGetRelid(relation));
 	server = GetForeignServer(table->serverid);
 	user = GetUserMapping(relation->rd_rel->relowner, table->serverid);
-	conn = GetConnection(user, false);
+	conn = GetConnection(user, false, true, false);
 
 	/*
 	 * Construct cursor that retrieves whole rows from remote.
@@ -3814,7 +3868,7 @@ postgresImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
 	 */
 	server = GetForeignServer(serverOid);
 	mapping = GetUserMapping(GetUserId(), server->serverid);
-	conn = GetConnection(mapping, false);
+	conn = GetConnection(mapping, false, true, false);
 
 	/* Don't attempt to import collation if remote server hasn't got it */
 	if (PQserverVersion(conn) < 90100)
@@ -5172,4 +5226,27 @@ find_em_expr_for_rel(EquivalenceClass *ec, RelOptInfo *rel)
 
 	/* We didn't find any suitable equivalence class expression */
 	return NULL;
+}
+
+/*
+ * server_uses_two_phase_commit
+ * Returns true if the foreign server is configured to support 2PC.
+ */
+bool
+server_uses_two_phase_commit(ForeignServer *server)
+{
+	ListCell		*lc;
+
+	/* Check the options for two phase compliance */
+	foreach(lc, server->options)
+	{
+		DefElem    *d = (DefElem *) lfirst(lc);
+
+		if (strcmp(d->defname, "two_phase_commit") == 0)
+		{
+			return defGetBoolean(d);
+		}
+	}
+	/* By default a server is not 2PC compliant */
+	return false;
 }

@@ -13,6 +13,7 @@
 #ifndef POSTGRES_FDW_H
 #define POSTGRES_FDW_H
 
+#include "access/fdwxact.h"
 #include "foreign/foreign.h"
 #include "lib/stringinfo.h"
 #include "nodes/relation.h"
@@ -115,7 +116,9 @@ extern int	set_transmission_modes(void);
 extern void reset_transmission_modes(int nestlevel);
 
 /* in connection.c */
-extern PGconn *GetConnection(UserMapping *user, bool will_prep_stmt);
+extern PGconn *GetConnection(UserMapping *user, bool will_prep_stmt,
+							 bool start_transaction, bool connection_error_ok);
+extern PGconn *GetExistingConnection(Oid umid);
 extern void ReleaseConnection(PGconn *conn);
 extern unsigned int GetCursorNumber(PGconn *conn);
 extern unsigned int GetPrepStmtNumber(PGconn *conn);
@@ -123,6 +126,14 @@ extern PGresult *pgfdw_get_result(PGconn *conn, const char *query);
 extern PGresult *pgfdw_exec_query(PGconn *conn, const char *query);
 extern void pgfdw_report_error(int elevel, PGresult *res, PGconn *conn,
 				   bool clear, const char *sql);
+extern bool postgresPrepareForeignTransaction(Oid serverid, Oid userid,
+											  Oid umid, const char *prep_id);
+extern bool postgresEndForeignTransaction(Oid serverid, Oid userid,
+										  Oid umid, bool is_commit);
+extern bool postgresResolvePreparedForeignTransaction(Oid serverid, Oid userid,
+													  Oid umid, bool is_commit,
+													  const char *prep_id);
+
 
 /* in option.c */
 extern int ExtractConnectionOptions(List *defelems,
@@ -177,6 +188,7 @@ extern void deparseSelectStmtForRel(StringInfo buf, PlannerInfo *root,
 						List *remote_conds, List *pathkeys, bool is_subquery,
 						List **retrieved_attrs, List **params_list);
 extern const char *get_jointype_name(JoinType jointype);
+extern bool server_uses_two_phase_commit(ForeignServer *server);
 
 /* in shippable.c */
 extern bool is_builtin(Oid objectId);
