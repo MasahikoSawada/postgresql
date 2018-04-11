@@ -153,6 +153,7 @@ extern int	vacuum_freeze_min_age;
 extern int	vacuum_freeze_table_age;
 extern int	vacuum_multixact_freeze_min_age;
 extern int	vacuum_multixact_freeze_table_age;
+extern int	vacuum_index_defer_size;
 
 
 /* in commands/vacuum.c */
@@ -187,6 +188,8 @@ extern void vac_update_datfrozenxid(void);
 extern void vacuum_delay_point(void);
 
 /* in commands/vacuumlazy.c */
+extern Size	LazyVacuumShmemSize(void);
+extern void LazyVacuumShmemInit(void);
 extern void lazy_vacuum_rel(Relation onerel, int options,
 				VacuumParams *params, BufferAccessStrategy bstrategy);
 

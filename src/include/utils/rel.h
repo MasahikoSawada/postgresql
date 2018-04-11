@@ -289,6 +289,7 @@ typedef struct StdRdOptions
 	int			fillfactor;		/* page fill factor in percent (0..100) */
 	/* fraction of newly inserted tuples prior to trigger index cleanup */
 	float8		vacuum_cleanup_index_scale_factor;
+	int			vacuum_index_defer_size;
 	int			toast_tuple_target; /* target for tuple toasting */
 	AutoVacOpts autovacuum;		/* autovacuum-related options */
 	bool		user_catalog_table; /* use as an additional catalog relation */

@@ -22,6 +22,7 @@
 #include "access/subtrans.h"
 #include "access/twophase.h"
 #include "commands/async.h"
+#include "commands/vacuum.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
@@ -141,6 +142,7 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 		size = add_size(size, ProcSignalShmemSize());
 		size = add_size(size, CheckpointerShmemSize());
 		size = add_size(size, AutoVacuumShmemSize());
+		size = add_size(size, LazyVacuumShmemSize());
 		size = add_size(size, ReplicationSlotsShmemSize());
 		size = add_size(size, ReplicationOriginShmemSize());
 		size = add_size(size, WalSndShmemSize());
@@ -257,6 +259,7 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 	ProcSignalShmemInit();
 	CheckpointerShmemInit();
 	AutoVacuumShmemInit();
+	LazyVacuumShmemInit();
 	ReplicationSlotsShmemInit();
 	ReplicationOriginShmemInit();
 	WalSndShmemInit();

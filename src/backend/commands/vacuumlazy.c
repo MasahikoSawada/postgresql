@@ -62,7 +62,6 @@
 #include "utils/timestamp.h"
 #include "utils/tqual.h"
 
-
 /*
  * Space/time tradeoff parameters: do these need to be user-tunable?
  *
@@ -112,6 +111,22 @@
  */
 #define PREFETCH_SIZE			((BlockNumber) 32)
 
+#define SavingDeadTuplesEnabled() \
+	(dynamic_shared_memory_type != DSM_IMPL_NONE)
+
+#define N_RELS_SAVE_DEAD_TUPLE	128
+
+bool called_vacuum = false;
+
+typedef struct LVSavedDeadTuple
+{
+	dsm_segment	*seg;
+	dsm_handle	handle;
+	ItemPointer	dead_tuples;
+	int			num_dead_tuples;
+	int			max_dead_tuples;
+} LVSavedDeadTuple;
+
 typedef struct LVRelStats
 {
 	/* hasindex = true means two-pass strategy; false means one-pass */
@@ -138,10 +153,23 @@ typedef struct LVRelStats
 	int			num_index_scans;
 	TransactionId latestRemovedXid;
 	bool		lock_waiter_detected;
+	/* List of TIDs saved into DSM */
+	/* NB: this list is order by TID address */
+	LVSavedDeadTuple saved_dt;
 } LVRelStats;
 
+typedef struct SavedDeadTupleEntry
+{
+	Oid	relid;	/* hash key */
 
-/* A few variables that don't seem worth passing around as parameters */
+	int max_dead_tuples;
+	int	num_dead_tuples;
+	dsm_handle	handle;
+} LVSavedDeadTupleEntry;
+
+static HTAB	*LVDeadTupleInfoHash;
+
+/* A few variables thatc don't seem worth passing around as parameters */
 static int	elevel = -1;
 
 static TransactionId OldestXmin;
@@ -157,7 +185,7 @@ static void lazy_scan_heap(Relation onerel, int options,
 			   bool aggressive);
 static void lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats);
 static bool lazy_check_needs_freeze(Buffer buf, bool *hastup);
-static void lazy_vacuum_index(Relation indrel,
+static void lazy_vacuum_index(Relation onerel, Relation indrel,
 				  IndexBulkDeleteResult **stats,
 				  LVRelStats *vacrelstats);
 static void lazy_cleanup_index(Relation indrel,
@@ -176,6 +204,8 @@ static bool lazy_tid_reaped(ItemPointer itemptr, void *state);
 static int	vac_cmp_itemptr(const void *left, const void *right);
 static bool heap_page_is_all_visible(Relation rel, Buffer buf,
 						 TransactionId *visibility_cutoff_xid, bool *all_frozen);
+static bool lazy_save_dead_tuples(Relation onerel, LVRelStats *vacrelstats);
+static long lazy_get_maxtuples(int size);
 
 
 /*
@@ -733,11 +763,30 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
 										 PROGRESS_VACUUM_PHASE_VACUUM_INDEX);
 
-			/* Remove index entries */
-			for (i = 0; i < nindexes; i++)
-				lazy_vacuum_index(Irel[i],
-								  &indstats[i],
-								  vacrelstats);
+			/*
+			 * If we skip index vacuums remember the dead tuples for the
+			 * later index vacuum.
+			 */
+			if (!lazy_save_dead_tuples(onerel, vacrelstats))
+			{
+				for (i = 0; i < nindexes; i++)
+					lazy_vacuum_index(onerel, Irel[i],
+									  &indstats[i],
+									  vacrelstats);
+
+				/* Destory saved dead tuple area */
+				if (vacrelstats->saved_dt.seg)
+				{
+					dsm_unpin_segment(vacrelstats->saved_dt.handle);
+					LWLockAcquire(LazyVacuumDeadTupleInfoLock, LW_EXCLUSIVE);
+					hash_search(LVDeadTupleInfoHash, (void *) &RelationGetRelid(onerel),
+								HASH_REMOVE, NULL);
+					LWLockRelease(LazyVacuumDeadTupleInfoLock);
+					vacrelstats->saved_dt.handle = DSM_HANDLE_INVALID;
+					vacrelstats->saved_dt.seg = NULL;
+					elog(WARNING, "Vacuumed index and destory");
+				}
+			}
 
 			/*
 			 * Report that we are now vacuuming the heap.  We also increase
@@ -1378,11 +1427,30 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
 									 PROGRESS_VACUUM_PHASE_VACUUM_INDEX);
 
-		/* Remove index entries */
-		for (i = 0; i < nindexes; i++)
-			lazy_vacuum_index(Irel[i],
-							  &indstats[i],
-							  vacrelstats);
+		/*
+		 * If we skip index vacuums remember the dead tuples for the
+		 * later index vacuum.
+		 */
+		if (!lazy_save_dead_tuples(onerel, vacrelstats))
+		{
+			for (i = 0; i < nindexes; i++)
+				lazy_vacuum_index(onerel, Irel[i],
+								  &indstats[i],
+								  vacrelstats);
+
+			/* Destory saved dead tuple area */
+			if (vacrelstats->saved_dt.seg)
+			{
+				dsm_unpin_segment(vacrelstats->saved_dt.handle);
+				LWLockAcquire(LazyVacuumDeadTupleInfoLock, LW_EXCLUSIVE);
+				hash_search(LVDeadTupleInfoHash, (void *) &RelationGetRelid(onerel),
+							HASH_REMOVE, NULL);
+				LWLockRelease(LazyVacuumDeadTupleInfoLock);
+				vacrelstats->saved_dt.handle = DSM_HANDLE_INVALID;
+				vacrelstats->saved_dt.seg = NULL;
+				elog(WARNING, "Vacuumed index and destory");
+			}
+		}
 
 		/* Report that we are now vacuuming the heap */
 		hvp_val[0] = PROGRESS_VACUUM_PHASE_VACUUM_HEAP;
@@ -1408,9 +1476,13 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
 								 PROGRESS_VACUUM_PHASE_INDEX_CLEANUP);
 
-	/* Do post-vacuum cleanup and statistics update for each index */
-	for (i = 0; i < nindexes; i++)
-		lazy_cleanup_index(Irel[i], indstats[i], vacrelstats);
+	/* Do post-vacuum cleanup and statistics update for each index if required */
+	if (!called_vacuum)
+		for (i = 0; i < nindexes; i++)
+			lazy_cleanup_index(Irel[i], indstats[i], vacrelstats);
+
+	if (vacrelstats->saved_dt.seg)
+		dsm_detach(vacrelstats->saved_dt.seg);
 
 	/* If no indexes, make log report that lazy_vacuum_heap would've made */
 	if (vacuumed_pages)
@@ -1471,6 +1543,8 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
 	int			npages;
 	PGRUsage	ru0;
 	Buffer		vmbuffer = InvalidBuffer;
+
+	called_vacuum = true;
 
 	pg_rusage_init(&ru0);
 	npages = 0;
@@ -1680,7 +1754,7 @@ lazy_check_needs_freeze(Buffer buf, bool *hastup)
  *		vacrelstats->dead_tuples, and update running statistics.
  */
 static void
-lazy_vacuum_index(Relation indrel,
+lazy_vacuum_index(Relation onerel, Relation indrel,
 				  IndexBulkDeleteResult **stats,
 				  LVRelStats *vacrelstats)
 {
@@ -2105,6 +2179,12 @@ lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks)
 	vacrelstats->max_dead_tuples = (int) maxtuples;
 	vacrelstats->dead_tuples = (ItemPointer)
 		palloc(maxtuples * sizeof(ItemPointerData));
+
+	vacrelstats->saved_dt.seg = NULL;
+	vacrelstats->saved_dt.handle = DSM_HANDLE_INVALID;
+	vacrelstats->saved_dt.num_dead_tuples = 0;
+	vacrelstats->saved_dt.max_dead_tuples = 0;
+	vacrelstats->saved_dt.dead_tuples = NULL;
 }
 
 /*
@@ -2147,6 +2227,20 @@ lazy_tid_reaped(ItemPointer itemptr, void *state)
 								sizeof(ItemPointerData),
 								vac_cmp_itemptr);
 
+	/* Found in main dead tuple array */
+	if (res != NULL)
+		return true;
+
+	/* Conclude not found if there is not saved dead tuple */
+	if (!vacrelstats->saved_dt.seg)
+		return false;
+
+	/* we have saved dead tuples, seach itemptr from it */
+	res = (ItemPointer) bsearch((void *) itemptr,
+								(void *) vacrelstats->saved_dt.dead_tuples,
+								vacrelstats->saved_dt.num_dead_tuples,
+								sizeof(ItemPointerData),
+								vac_cmp_itemptr);
 	return (res != NULL);
 }
 
@@ -2290,4 +2384,177 @@ heap_page_is_all_visible(Relation rel, Buffer buf,
 	}							/* scan along page */
 
 	return all_visible;
+}
+
+/*
+ * Initialization of shared memory for Lazy Vacuum
+*/
+Size
+LazyVacuumShmemSize(void)
+{
+	Size	size = 0;
+
+	size = add_size(size, hash_estimate_size(N_RELS_SAVE_DEAD_TUPLE,
+											 sizeof(LVSavedDeadTupleEntry)));
+	return size;
+}
+
+void
+LazyVacuumShmemInit(void)
+{
+	HASHCTL	info;
+
+	MemSet(&info, 0, sizeof(info));
+	info.keysize = sizeof(Oid);
+	info.entrysize = sizeof(LVSavedDeadTupleEntry);
+
+	LVDeadTupleInfoHash = ShmemInitHash("Lazy vacuum dead tuples hash",
+										N_RELS_SAVE_DEAD_TUPLE,
+										N_RELS_SAVE_DEAD_TUPLE,
+										&info,
+										HASH_ELEM | HASH_BLOBS);
+}
+
+static bool
+lazy_save_dead_tuples(Relation onerel, LVRelStats *vacrelstats)
+{
+	LVSavedDeadTupleEntry	*entry;
+	StdRdOptions			*relopts = (StdRdOptions *) onerel->rd_options;
+	Oid						relid;
+	dsm_segment				*seg;
+	bool					found;
+	int						vac_index_defer_size;
+
+	/* Quick return, if disabled */
+	if (!SavingDeadTuplesEnabled())
+		return false;
+
+	vac_index_defer_size =
+		(relopts && relopts->vacuum_index_defer_size >= 0)
+		? relopts->vacuum_index_defer_size
+		: vacuum_index_defer_size;
+
+	/* Also quick return, if not used */
+	if (vac_index_defer_size == 0)
+		return false;
+
+	relid = RelationGetRelid(onerel);
+
+	LWLockAcquire(LazyVacuumDeadTupleInfoLock, LW_EXCLUSIVE);
+	entry = (LVSavedDeadTupleEntry *) hash_search(LVDeadTupleInfoHash,
+												  (void *) &relid,
+												 HASH_ENTER, &found);
+	LWLockRelease(LazyVacuumDeadTupleInfoLock);
+
+	if (!found)
+	{
+		long		maxtuples;
+
+		maxtuples = lazy_get_maxtuples(vac_index_defer_size);
+		seg = dsm_create(maxtuples * sizeof(ItemPointerData), DSM_CREATE_NULL_IF_MAXSEGMENTS);
+
+		if (!seg)
+		{
+			hash_search(LVDeadTupleInfoHash, (void *) &relid, HASH_REMOVE, NULL);
+			return false;
+		}
+
+		/* Fill entry fields */
+		entry->handle = dsm_segment_handle(seg);
+		entry->num_dead_tuples = 0;
+		entry->max_dead_tuples = maxtuples;
+
+		/* Create DSM area */
+		vacrelstats->saved_dt.dead_tuples = (ItemPointer) dsm_segment_address(seg);
+
+		/*
+		 * A process created DSM pins it. It will be unpinned and destory
+		 * by a process who vacuum index.
+		 */
+		dsm_pin_segment(seg);
+
+		vacrelstats->saved_dt.seg = seg;
+		vacrelstats->saved_dt.handle = entry->handle;
+	}
+	else
+	{
+		long new_maxtuples;
+
+		if (!vacrelstats->saved_dt.seg)
+		{
+			/* Found hash entry but first time to get DSM segment, need to attach */
+			vacrelstats->saved_dt.seg = dsm_attach(entry->handle);
+			vacrelstats->saved_dt.dead_tuples = (ItemPointer)
+				dsm_segment_address(vacrelstats->saved_dt.seg);
+		}
+
+		/* Get current maxtuples */
+		new_maxtuples = lazy_get_maxtuples(vac_index_defer_size);
+
+		if (entry->max_dead_tuples < new_maxtuples)
+		{
+			/* RelOption got increased, need to enlarge */
+			vacrelstats->saved_dt.dead_tuples = (ItemPointer) dsm_resize(vacrelstats->saved_dt.seg,
+																		 new_maxtuples * sizeof(ItemPointerData));
+
+			/* Update hash entry */
+			entry->max_dead_tuples = new_maxtuples;
+		}
+		else if (entry->max_dead_tuples > new_maxtuples)
+		{
+			/* RelOption got decreased, could not do that... */
+			elog(ERROR, "could not small DSM for dead tuple segment");
+		}
+	}
+
+	/* Update number of tuples stats */
+	vacrelstats->saved_dt.handle = entry->handle;
+	vacrelstats->saved_dt.num_dead_tuples = entry->num_dead_tuples;
+	vacrelstats->saved_dt.max_dead_tuples = entry->max_dead_tuples;
+
+	/* It's time to vacuum indexes */
+	if (vacrelstats->num_dead_tuples + entry->num_dead_tuples > entry->max_dead_tuples)
+	{
+		elog(WARNING, "reached: max = %d, num = %d(new %d + saved %d)",
+			 entry->max_dead_tuples,
+			 vacrelstats->num_dead_tuples + entry->num_dead_tuples,
+			 vacrelstats->num_dead_tuples,
+			 entry->num_dead_tuples);
+		return false;
+	}
+	else
+		elog(WARNING, "still collect: max = %d, num = %d",
+			 entry->max_dead_tuples,
+			 vacrelstats->num_dead_tuples + entry->num_dead_tuples);
+
+	/* Save recent dead tuples into DSM area */
+	memcpy(&(vacrelstats->saved_dt.dead_tuples[entry->num_dead_tuples]),
+		   vacrelstats->dead_tuples,
+		   vacrelstats->num_dead_tuples * sizeof(ItemPointerData));
+
+	/* Increase number of dead tuples we have */
+	entry->num_dead_tuples += vacrelstats->num_dead_tuples;
+	vacrelstats->saved_dt.num_dead_tuples = entry->num_dead_tuples;
+
+	/* Sort by TID order */
+	qsort(vacrelstats->saved_dt.dead_tuples, entry->num_dead_tuples,
+		  sizeof(ItemPointerData), vac_cmp_itemptr);
+
+	elog(WARNING, "     -> collected : relid = %d, n = %d", RelationGetRelid(onerel),
+		 vacrelstats->saved_dt.num_dead_tuples);
+
+	/* Saved all dead tuple ItemPointers into DSM */
+	return true;
+}
+
+static long
+lazy_get_maxtuples(int size)
+{
+	long maxtuples;
+
+	maxtuples = (size * 1024L) / sizeof(ItemPointerData);
+	maxtuples = Min(maxtuples, INT_MAX);
+	maxtuples = Min(maxtuples, MaxAllocSize / sizeof(ItemPointerData));
+
+	return maxtuples;
 }

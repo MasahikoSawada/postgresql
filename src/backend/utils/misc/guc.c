@@ -3035,6 +3035,17 @@ static struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"vacuum_index_defer_size", PGC_SIGHUP, AUTOVACUUM,
+		 	gettext_noop("Number of tuple updates or deletes prior to index vacuum."),
+			NULL,
+			GUC_UNIT_KB
+		},
+		&vacuum_index_defer_size,
+		0, 0, MAX_KILOBYTES,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, 0, 0, 0, NULL, NULL, NULL

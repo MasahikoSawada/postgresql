@@ -349,6 +349,15 @@ static relopt_int intRelOpts[] =
 		-1, 0, 1024
 	},
 
+	{
+		{
+			"vacuum_index_defer_size",
+			"Number of tuple deletes, updates prior to index vacuum.",
+			RELOPT_KIND_HEAP,
+			ShareUpdateExclusiveLock
+		},
+		-1, 0, MAX_KILOBYTES,
+	},
 	/* list terminator */
 	{{NULL}}
 };
@@ -1382,7 +1391,9 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		{"parallel_workers", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, parallel_workers)},
 		{"vacuum_cleanup_index_scale_factor", RELOPT_TYPE_REAL,
-		offsetof(StdRdOptions, vacuum_cleanup_index_scale_factor)}
+		offsetof(StdRdOptions, vacuum_index_defer_size)},
+		{"vacuum_index_defer_size", RELOPT_TYPE_INT,
+		offsetof(StdRdOptions, vacuum_index_defer_size)}
 	};
 
 	options = parseRelOptions(reloptions, validate, kind, &numoptions);

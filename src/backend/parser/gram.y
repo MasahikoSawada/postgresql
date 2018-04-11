@@ -698,6 +698,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	VACUUM VALID VALIDATE VALIDATOR VALUE_P VALUES VARCHAR VARIADIC VARYING
 	VERBOSE VERSION_P VIEW VIEWS VOLATILE
 
+	SKIP_INDEX
+
 	WHEN WHERE WHITESPACE_P WINDOW WITH WITHIN WITHOUT WORK WRAPPER WRITE
 
 	XML_P XMLATTRIBUTES XMLCONCAT XMLELEMENT XMLEXISTS XMLFOREST XMLNAMESPACES
@@ -10559,6 +10561,8 @@ vacuum_option_elem:
 				{
 					if (strcmp($1, "disable_page_skipping") == 0)
 						$$ = VACOPT_DISABLE_PAGE_SKIPPING;
+					else if (strcmp($1, "skip_index") == 0)
+						$$ = VACOPT_SKIP_INDEX;
 					else
 						ereport(ERROR,
 								(errcode(ERRCODE_SYNTAX_ERROR),
