@@ -151,9 +151,8 @@ static BufferAccessStrategy vac_strategy;
 
 
 /* non-export function prototypes */
-static void lazy_scan_heap(Relation onerel, int options,
-			   LVRelStats *vacrelstats, Relation *Irel, int nindexes,
-			   bool aggressive);
+static void lazy_scan_heap(Relation onerel, VacuumWorkItem *workitem,
+						   LVRelStats *vacrelstats, Relation *Irel, int nindexes);
 static void lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats);
 static bool lazy_check_needs_freeze(Buffer buf, bool *hastup);
 static void lazy_vacuum_index(Relation indrel,
@@ -192,6 +191,7 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 {
 	LVRelStats *vacrelstats;
 	Relation   *Irel;
+	VacuumWorkItem *workitem;
 	int			nindexes;
 	PGRUsage	ru0;
 	TimestampTz starttime = 0;
@@ -199,7 +199,6 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	int			usecs;
 	double		read_rate,
 				write_rate;
-	bool		aggressive;		/* should we scan all unfrozen pages? */
 	bool		scanned_all_unfrozen;	/* actually scanned all such pages? */
 	TransactionId xidFullScanLimit;
 	MultiXactId mxactFullScanLimit;
@@ -236,18 +235,8 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 						  &OldestXmin, &FreezeLimit, &xidFullScanLimit,
 						  &MultiXactCutoff, &mxactFullScanLimit);
 
-	/*
-	 * We request an aggressive scan if the table's frozen Xid is now older
-	 * than or equal to the requested Xid full-table scan limit; or if the
-	 * table's minimum MultiXactId is older than or equal to the requested
-	 * mxid full-table scan limit; or if DISABLE_PAGE_SKIPPING was specified.
-	 */
-	aggressive = TransactionIdPrecedesOrEquals(onerel->rd_rel->relfrozenxid,
-											   xidFullScanLimit);
-	aggressive |= MultiXactIdPrecedesOrEquals(onerel->rd_rel->relminmxid,
-											  mxactFullScanLimit);
-	if (options & VACOPT_DISABLE_PAGE_SKIPPING)
-		aggressive = true;
+	workitem = VacuumMgrGetWorkItem(onerel, options, xidFullScanLimit,
+									mxactFullScanLimit);
 
 	vacrelstats = (LVRelStats *) palloc0(sizeof(LVRelStats));
 
@@ -262,7 +251,7 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	vacrelstats->hasindex = (nindexes > 0);
 
 	/* Do the vacuuming */
-	lazy_scan_heap(onerel, options, vacrelstats, Irel, nindexes, aggressive);
+	lazy_scan_heap(onerel, workitem, vacrelstats, Irel, nindexes);
 
 	/* Done with indexes */
 	vac_close_indexes(nindexes, Irel, NoLock);
@@ -277,7 +266,7 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	if ((vacrelstats->scanned_pages + vacrelstats->frozenskipped_pages)
 		< vacrelstats->rel_pages)
 	{
-		Assert(!aggressive);
+		Assert(!workitem->wi_aggressive);
 		scanned_all_unfrozen = false;
 	}
 	else
@@ -374,7 +363,7 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 			 * emitting individual parts of the message when not applicable.
 			 */
 			initStringInfo(&buf);
-			if (aggressive)
+			if (workitem->wi_aggressive)
 				msgfmt = _("automatic aggressive vacuum of table \"%s.%s.%s\": index scans: %d\n");
 			else
 				msgfmt = _("automatic vacuum of table \"%s.%s.%s\": index scans: %d\n");
@@ -460,8 +449,8 @@ vacuum_log_cleanup_info(Relation rel, LVRelStats *vacrelstats)
  *		reference them have been killed.
  */
 static void
-lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
-			   Relation *Irel, int nindexes, bool aggressive)
+lazy_scan_heap(Relation onerel, VacuumWorkItem *workitem, LVRelStats *vacrelstats,
+			   Relation *Irel, int nindexes)
 {
 	BlockNumber nblocks,
 				blkno;
@@ -495,7 +484,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	pg_rusage_init(&ru0);
 
 	relname = RelationGetRelationName(onerel);
-	if (aggressive)
+	if (workitem->wi_aggressive)
 		ereport(elevel,
 				(errmsg("aggressively vacuuming \"%s.%s\"",
 						get_namespace_name(RelationGetNamespace(onerel)),
@@ -573,16 +562,16 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	 * the last page.  This is worth avoiding mainly because such a lock must
 	 * be replayed on any hot standby, where it can be disruptive.
 	 */
-	next_unskippable_block = 0;
-	if ((options & VACOPT_DISABLE_PAGE_SKIPPING) == 0)
+	next_unskippable_block = workitem->wi_startblk;
+	if ((workitem->wi_options & VACOPT_DISABLE_PAGE_SKIPPING) == 0)
 	{
-		while (next_unskippable_block < nblocks)
+		while (next_unskippable_block < workitem->wi_endblk)
 		{
 			uint8		vmstatus;
 
 			vmstatus = visibilitymap_get_status(onerel, next_unskippable_block,
 												&vmbuffer);
-			if (aggressive)
+			if (workitem->wi_aggressive)
 			{
 				if ((vmstatus & VISIBILITYMAP_ALL_FROZEN) == 0)
 					break;
@@ -602,7 +591,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	else
 		skipping_blocks = false;
 
-	for (blkno = 0; blkno < nblocks; blkno++)
+	for (blkno = 0; blkno < workitem->wi_endblk; blkno++)
 	{
 		Buffer		buf;
 		Page		page;
@@ -629,16 +618,16 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		{
 			/* Time to advance next_unskippable_block */
 			next_unskippable_block++;
-			if ((options & VACOPT_DISABLE_PAGE_SKIPPING) == 0)
+			if ((workitem->wi_options & VACOPT_DISABLE_PAGE_SKIPPING) == 0)
 			{
-				while (next_unskippable_block < nblocks)
+				while (next_unskippable_block < workitem->wi_endblk)
 				{
 					uint8		vmskipflags;
 
 					vmskipflags = visibilitymap_get_status(onerel,
 														   next_unskippable_block,
 														   &vmbuffer);
-					if (aggressive)
+					if (workitem->wi_aggressive)
 					{
 						if ((vmskipflags & VISIBILITYMAP_ALL_FROZEN) == 0)
 							break;
@@ -667,7 +656,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			 * it's not all-visible.  But in an aggressive vacuum we know only
 			 * that it's not all-frozen, so it might still be all-visible.
 			 */
-			if (aggressive && VM_ALL_VISIBLE(onerel, blkno, &vmbuffer))
+			if (workitem->wi_aggressive && VM_ALL_VISIBLE(onerel, blkno, &vmbuffer))
 				all_visible_according_to_vm = true;
 		}
 		else
@@ -691,7 +680,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 				 * know whether it was all-frozen, so we have to recheck; but
 				 * in this case an approximate answer is OK.
 				 */
-				if (aggressive || VM_ALL_FROZEN(onerel, blkno, &vmbuffer))
+				if (workitem->wi_aggressive || VM_ALL_FROZEN(onerel, blkno, &vmbuffer))
 					vacrelstats->frozenskipped_pages++;
 				continue;
 			}
@@ -794,7 +783,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			 * it's OK to skip vacuuming pages we get a lock conflict on. They
 			 * will be dealt with in some future vacuum.
 			 */
-			if (!aggressive && !FORCE_CHECK_PAGE())
+			if (!workitem->wi_aggressive && !FORCE_CHECK_PAGE())
 			{
 				ReleaseBuffer(buf);
 				vacrelstats->pinskipped_pages++;
@@ -827,7 +816,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 					vacrelstats->nonempty_pages = blkno + 1;
 				continue;
 			}
-			if (!aggressive)
+			if (!workitem->wi_aggressive)
 			{
 				/*
 				 * Here, we must not advance scanned_pages; that would amount
@@ -1423,6 +1412,11 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	 * individual parts of the message when not applicable.
 	 */
 	initStringInfo(&buf);
+	appendStringInfo(&buf,
+					 _("vacuumed from %u to %u, total %u blocks out of %u blocks\n"),
+					 workitem->wi_startblk, workitem->wi_endblk,
+					 workitem->wi_endblk - workitem->wi_startblk,
+					 nblocks);
 	appendStringInfo(&buf,
 					 _("%.0f dead row versions cannot be removed yet, oldest xmin: %u\n"),
 					 nkeep, OldestXmin);
