@@ -349,6 +349,16 @@ static relopt_int intRelOpts[] =
 		-1, 0, 1024
 	},
 
+	{
+		{
+			"garbagemap_pages_per_range",
+			"Number of pages that each page range covers in a GarbageMap",
+			RELOPT_KIND_HEAP,
+			ShareUpdateExclusiveLock
+		},
+		-1, 0, INT_MAX
+	},
+
 	/* list terminator */
 	{{NULL}}
 };
@@ -1382,7 +1392,9 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		{"parallel_workers", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, parallel_workers)},
 		{"vacuum_cleanup_index_scale_factor", RELOPT_TYPE_REAL,
-		offsetof(StdRdOptions, vacuum_cleanup_index_scale_factor)}
+		offsetof(StdRdOptions, vacuum_cleanup_index_scale_factor)},
+		{"garbagemap_pages_per_range", RELOPT_TYPE_INT,
+		 offsetof(StdRdOptions, garbagemap_pages_per_range)}
 	};
 
 	options = parseRelOptions(reloptions, validate, kind, &numoptions);

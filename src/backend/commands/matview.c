@@ -343,7 +343,7 @@ ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
 		 */
 		pgstat_count_truncate(matviewRel);
 		if (!stmt->skipData)
-			pgstat_count_heap_insert(matviewRel, processed);
+			pgstat_count_heap_insert(matviewRel, processed, 0);
 	}
 
 	heap_close(matviewRel, NoLock);

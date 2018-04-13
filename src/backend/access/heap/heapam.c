@@ -2446,6 +2446,7 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 	Buffer		buffer;
 	Buffer		vmbuffer = InvalidBuffer;
 	bool		all_visible_cleared = false;
+	BlockNumber	blkno;
 
 	/*
 	 * Fill in tuple header fields, assign an OID, and toast the tuple if
@@ -2586,6 +2587,7 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 
 	END_CRIT_SECTION();
 
+	blkno = BufferGetBlockNumber(buffer);
 	UnlockReleaseBuffer(buffer);
 	if (vmbuffer != InvalidBuffer)
 		ReleaseBuffer(vmbuffer);
@@ -2599,7 +2601,7 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 	CacheInvalidateHeapTuple(relation, heaptup, NULL);
 
 	/* Note: speculative insertions are counted too, even if aborted later */
-	pgstat_count_heap_insert(relation, 1);
+	pgstat_count_heap_insert(relation, blkno, 1);
 
 	/*
 	 * If heaptup is a private copy, release it.  Don't forget to copy t_self
@@ -2812,6 +2814,10 @@ heap_multi_insert(Relation relation, HeapTuple *tuples, int ntuples,
 								vmbuffer, VISIBILITYMAP_VALID_BITS);
 		}
 
+		/* Send detailed insert stats for garbage map */
+		pgstat_count_heap_insert(relation, BufferGetBlockNumber(buffer),
+								 nthispage);
+
 		/*
 		 * XXX Should we set PageSetPrunable on this page ? See heap_insert()
 		 */
@@ -2970,7 +2976,7 @@ heap_multi_insert(Relation relation, HeapTuple *tuples, int ntuples,
 	for (i = 0; i < ntuples; i++)
 		tuples[i]->t_self = heaptuples[i]->t_self;
 
-	pgstat_count_heap_insert(relation, ntuples);
+	pgstat_count_heap_insert(relation, InvalidBlockNumber, ntuples);
 }
 
 /*
@@ -3436,7 +3442,7 @@ l1:
 	if (have_tuple_lock)
 		UnlockTupleTuplock(relation, &(tp.t_self), LockTupleExclusive);
 
-	pgstat_count_heap_delete(relation);
+	pgstat_count_heap_delete(relation, block);
 
 	if (old_key_tuple != NULL && old_key_copied)
 		heap_freetuple(old_key_tuple);
@@ -3560,6 +3566,8 @@ heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 				infomask_new_tuple,
 				infomask2_new_tuple;
 	LockTupleMode	lockmode;
+	BlockNumber	old_blk,
+				new_blk;
 
 	Assert(ItemPointerIsValid(otid));
 	Assert(hufd != NULL);
@@ -4350,6 +4358,9 @@ l2:
 
 	END_CRIT_SECTION();
 
+	old_blk = BufferGetBlockNumber(buffer);
+	new_blk = BufferGetBlockNumber(newbuf);
+
 	if (newbuf != buffer)
 		LockBuffer(newbuf, BUFFER_LOCK_UNLOCK);
 	LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
@@ -4379,7 +4390,7 @@ l2:
 	if (have_tuple_lock)
 		UnlockTupleTuplock(relation, &(oldtup.t_self), lockmode);
 
-	pgstat_count_heap_update(relation, use_hot_update);
+	pgstat_count_heap_update(relation, use_hot_update, old_blk, new_blk);
 
 	/*
 	 * If heaptup is a private copy, release it.  Don't forget to copy t_self
@@ -6369,7 +6380,7 @@ heap_abort_speculative(Relation relation, HeapTuple tuple)
 	ReleaseBuffer(buffer);
 
 	/* count deletion, as we counted the insertion too */
-	pgstat_count_heap_delete(relation);
+	pgstat_count_heap_delete(relation, block);
 }
 
 /*

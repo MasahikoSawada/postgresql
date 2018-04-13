@@ -359,6 +359,36 @@ pg_stat_get_autoanalyze_count(PG_FUNCTION_ARGS)
 }
 
 Datum
+pg_stat_get_garbage(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	PgStat_StatGarbageEntry *gentry;
+
+	if ((gentry = pgstat_fetch_stat_garbageentry(relid)) == NULL)
+		PG_RETURN_NULL();
+	else
+	{
+		StringInfoData buf;
+		GarbageMap *gmap = gentry->gmap;
+		int bank, slot;
+
+		initStringInfo(&buf);
+		for (bank = gmap->min_bank; bank <= gmap->max_bank; bank++)
+		{
+			for (slot = 0; slot < GM_SLOTS_PER_BANK; slot++)
+			{
+				appendStringInfo(&buf, "%s%d",
+								 (slot == 0) ? "" : ",",
+								 gmap->gmbank[bank][slot]);
+			}
+			elog(NOTICE, "relid %d, map %s", relid, buf.data);
+			resetStringInfo(&buf);
+		}
+	}
+	PG_RETURN_NULL();
+}
+
+Datum
 pg_stat_get_function_calls(PG_FUNCTION_ARGS)
 {
 	Oid			funcid = PG_GETARG_OID(0);

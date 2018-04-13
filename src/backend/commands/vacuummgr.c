@@ -44,6 +44,9 @@
 
 static PgStat_StatTabEntry *get_pgstat_tabentry(Relation rel);
 
+static void GarbageMapCount_common(Relation rel, BlockNumber blkno,
+								   int count, bool is_insert);
+
 static PgStat_StatTabEntry *
 get_pgstat_tabentry(Relation rel)
 {
@@ -75,7 +78,7 @@ VacuumMgrGetWorkItem(Relation onerel, int options,
 	workitem->wi_parallel_workers = 0;
 
 	/* Get stats of relation */
-	tabentry = get_pgstat_tabentry(onerel);
+	//tabentry = get_pgstat_tabentry(onerel);
 
 	/*
 	 * We request an aggressive scan if the table's frozen Xid is now older
@@ -97,4 +100,385 @@ VacuumMgrGetWorkItem(Relation onerel, int options,
 	workitem->wi_endblk = RelationGetNumberOfBlocks(onerel);
 
 	return workitem;
+}
+
+static void
+GarbageMapCount_common(Relation rel, BlockNumber blkno, int count,
+					   bool is_insert)
+{
+	int slotno;
+	int bankno;
+	GarbageMap	*gmap;
+
+	Assert(rel->pgstat_info);
+	Assert(count != 0);
+
+	/* Quick return, if garbage map is not enabled */
+	if (!rel->pgstat_info->gmap)
+		return;
+
+	/* Get bank and slot number for GarbageMap */
+	slotno = GarbageMapGetSlotNo(blkno,
+								 rel->pgstat_info->gmap->pages_per_range);
+	bankno = GarbageMapGetBankNo(
+		GarbageMapGetRangeNo(blkno,
+							 rel->pgstat_info->gmap->pages_per_range));
+	if (is_insert)
+		gmap = rel->pgstat_info->trans->tran_gmap.insmap;
+	else
+		gmap = rel->pgstat_info->trans->tran_gmap.delmap;
+
+	/* Initialize slots we're interested in */
+	if (!gmap->gmbank[bankno])
+	{
+		gmap->gmbank[bankno] = (GarbageMapBank)
+			MemoryContextAllocZero(TopMemoryContext,
+								   sizeof(GarbageMapSlot));
+
+		/* Update min/max bank number */
+		if (bankno > gmap->max_bank)
+			gmap->max_bank = bankno;
+		if (bankno < gmap->min_bank)
+			gmap->min_bank = bankno;
+	}
+
+	/* Count tuples */
+	gmap->gmbank[bankno][slotno] += count;
+	gmap->n_tuples += count;
+}
+
+/*
+ * Count up garbagemap by insert
+ */
+void
+GarbageMapCountInsert(Relation rel, BlockNumber blkno, int count)
+{
+	GarbageMapCount_common(rel, blkno, count, true);
+}
+
+void
+GarbageMapCountDelete(Relation rel, BlockNumber blkno)
+{
+	GarbageMapCount_common(rel, blkno, 1, false);
+}
+
+void
+GarbageMapCountUpdate(Relation rel, BlockNumber old_blkno,
+					  BlockNumber new_blkno)
+{
+	if (BlockNumberIsValid(new_blkno))
+		GarbageMapCount_common(rel, new_blkno, 1, true);
+	if (BlockNumberIsValid(old_blkno))
+		GarbageMapCount_common(rel, old_blkno, 1, false);
+}
+
+/* -- Calculation logic of temprature --
+	rand = random() % 10000;
+	prob = (long) (powf(0.5, curval) * 10000);
+	if (rand < prob)
+	{
+		(gmap->gmbank[bankno][slotno])++;
+		elog(NOTICE, "blk %d : map[%d][%d] = %d ... rand %ld, prob %ld",
+			 blkno, bankno, slotno,
+			 gmap->gmbank[bankno][slotno],
+			 rand, prob);
+	}
+*/
+
+GarbageMap *
+GarbageMapInitMap(int pages_per_range)
+{
+	GarbageMap		*gmap;
+	int nbanks;
+
+	nbanks = MaxBlockNumber / pages_per_range / GM_SLOTS_PER_BANK;
+
+	/* Initialize garbage map */
+	gmap = MemoryContextAllocZero(TopMemoryContext,
+								  sizeof(GarbageMap));
+	gmap->gmbank = MemoryContextAllocZero(TopMemoryContext,
+										  sizeof(GarbageMapBank) * nbanks);
+	gmap->max_bank = 0;
+	gmap->min_bank = INT_MAX;
+	gmap->pages_per_range = pages_per_range;
+	gmap->n_tuples = 0;
+
+	return gmap;
+}
+
+void
+AtEOXact_GarbageMap(GarbageMap *gmap, GarbageMapTran tran_gmap,
+					bool isCommit)
+{
+	GarbageMap *target_map;
+	int bankno, slotno;
+	StringInfoData buf;
+
+	/* Return if not enabled */
+	if (!gmap)
+		return;
+
+	/*
+	 * In commit case, we're interested in only deleted tuples.
+	 */
+	if (isCommit)
+		target_map = tran_gmap.delmap;
+	else
+		target_map = tran_gmap.insmap;
+
+	Assert(target_map);
+
+	/* There is no garbage tules, return */
+	if (target_map->n_tuples == 0)
+		return;
+
+	for (bankno = target_map->min_bank;
+		 bankno <= target_map->max_bank;
+		 bankno++)
+	{
+		for (slotno = 0; slotno < GM_SLOTS_PER_BANK; slotno++)
+		{
+			if (target_map->gmbank[bankno][slotno] < 0)
+				continue;
+
+			if (!gmap->gmbank[bankno])
+			{
+				gmap->gmbank[bankno] = (GarbageMapBank)
+					MemoryContextAllocZero(TopMemoryContext,
+										   sizeof(GarbageMapSlot));
+			}
+
+			gmap->gmbank[bankno][slotno] +=
+				target_map->gmbank[bankno][slotno];
+		}
+	}
+
+	/* Update table garbage map stats */
+	if (target_map->min_bank < gmap->min_bank)
+		gmap->min_bank = target_map->min_bank;
+	if (target_map->max_bank > gmap->max_bank)
+		gmap->max_bank = target_map->max_bank;
+
+	/* DEBUG output */
+	initStringInfo(&buf);
+	appendStringInfo(&buf, "At EOXact\n");
+	for (bankno = gmap->min_bank; bankno <= gmap->max_bank; bankno++)
+	{
+		for (slotno = 0; slotno < GM_SLOTS_PER_BANK; slotno++)
+		{
+			appendStringInfo(&buf, "%s%d",
+							 (slotno == 0) ? "" : ",",
+							 gmap->gmbank[bankno][slotno]);
+		}
+		elog(NOTICE, "bank[%d] %s", bankno, buf.data);
+		resetStringInfo(&buf);
+	}
+}
+
+GarbageMapScanState *
+garbagemap_beginscan(GarbageMap *gmap)
+{
+	GarbageMapScanState *state;
+
+	state = (GarbageMapScanState *)palloc(sizeof(GarbageMapScanState));
+	state->gmap = gmap;
+	state->n_ents = 0;
+	state->cur_slot = 0;
+	state->cur_bank = gmap->min_bank;
+	state->max_bank = gmap->max_bank;
+
+	return state;
+}
+
+void
+garbagemap_endscan(GarbageMapScanState *state)
+{
+	pfree(state);
+}
+
+GarbageMapEntry *
+garbagemap_getnext(GarbageMapScanState *state)
+{
+	GarbageMapEntry *ent = NULL;
+	int slotno;
+	int bankno;
+
+	/* Reached to end of garbagemap */
+	if (state->cur_bank > state->max_bank)
+		return NULL;
+
+	for (bankno = state->cur_bank; bankno <= state->max_bank; bankno++)
+	{
+		for (slotno = state->cur_slot; slotno < GM_SLOTS_PER_BANK; slotno++)
+		{
+			/* Found! */
+			if (state->gmap->gmbank[bankno][slotno] > 0)
+			{
+				ent = (GarbageMapEntry *) palloc(sizeof(GarbageMapEntry));
+				ent->bankno = bankno;
+				ent->slotno = slotno;
+				ent->val = state->gmap->gmbank[bankno][slotno];
+				state->n_ents++;
+				break;
+			}
+		}
+
+		/* Break if we already found the entry */
+		if (ent)
+			break;
+	}
+
+	/* Advance the scan state to the next value */
+	state->cur_slot = ++slotno;
+	state->cur_bank = bankno;
+
+	return ent;
+}
+
+/*
+ * Construct garbagemap using by entries.
+ */
+void
+GarbageMapConstructMapByEnt(GarbageMap *gmap, GarbageMapEntry *entries,
+							int n_entries)
+{
+	int i;
+
+	/* Register each garbage map entries */
+	for (i = 0; i < n_entries; i++)
+	{
+		GarbageMapEntry *ent = &(entries[i]);
+
+		/* Alloc slots of the bank */
+		if (!gmap->gmbank[ent->bankno])
+		{
+			gmap->gmbank[ent->bankno] = (GarbageMapBank)
+				MemoryContextAllocZero(TopMemoryContext,
+									   sizeof(GarbageMapSlot));
+
+			/* Update min/max bank number */
+			if (ent->bankno > gmap->max_bank)
+				gmap->max_bank = ent->bankno;
+			if (ent->bankno < gmap->min_bank)
+				gmap->min_bank = ent->bankno;
+		}
+
+		/* XXXX */
+		gmap->gmbank[ent->bankno][ent->slotno] += ent->val;
+
+		/*
+		elog(WARNING, "stats collector RECV [%d][%d] = %d",
+			 ent->bankno, ent->slotno,
+			 gmap->gmbank[ent->bankno][ent->slotno]);
+		*/
+	}
+}
+
+GarbageMap *
+GarbageMapCopy(GarbageMap *orig)
+{
+	GarbageMap *copied;
+	int i;
+
+	copied = GarbageMapInitMap(orig->pages_per_range);
+	for (i = orig->min_bank; i <= orig->max_bank; i++)
+	{
+		copied->gmbank[i] = (GarbageMapBank)
+			MemoryContextAllocZero(TopMemoryContext,
+								   sizeof(GarbageMapSlot));
+
+		memcpy(copied->gmbank[i],
+			   orig->gmbank[i],
+			   sizeof(GarbageMapBankInfo));
+	}
+
+	return copied;
+}
+
+/*
+ * Reset garbagemap struct
+ */
+void
+GarbageMapReset(GarbageMap *gmap)
+{
+	int bankno;
+
+	for (bankno = gmap->min_bank; bankno < gmap->max_bank; bankno++)
+	{
+		pfree(gmap->gmbank[bankno]);
+		gmap->gmbank[bankno] = NULL;
+	}
+
+	gmap->min_bank = INT_MAX;
+	gmap->max_bank = 0;
+	gmap->n_tuples = 0;
+}
+
+/*
+ * Constrcut garbage map by bankinfos.
+ *
+ * Note caller must reset 'gmap' beforehand.
+ */
+void
+GarbageMapConstructMapByBankinfo(GarbageMap *gmap,
+								 GarbageMapBankInfo *banks,
+								 int nbanks)
+{
+	int i;
+
+	/* Register each garbage map entries */
+	for (i = 0; i < nbanks; i++)
+	{
+		GarbageMapBankInfo *b = &(banks[i]);
+
+		Assert(gmap->gmbank[b->bankno] == NULL);
+
+		gmap->gmbank[b->bankno] = (GarbageMapBank)
+			MemoryContextAllocZero(TopMemoryContext,
+								   sizeof(GarbageMapSlot));
+
+		/* Update min/max bank number */
+		if (b->bankno > gmap->max_bank)
+			gmap->max_bank = b->bankno;
+		if (b->bankno < gmap->min_bank)
+			gmap->min_bank = b->bankno;
+
+		memcpy(gmap->gmbank[b->bankno],
+			   b->bank,
+			   sizeof(GarbageMapBankInfo));
+	}
+}
+
+/*
+ * Serialize contents of gmap for dump
+ */
+GarbageMapSerializedData *
+GarbageMapSerialize(GarbageMap *gmap, Oid relid, int *size)
+{
+	GarbageMapSerializedData *serialized_gmap;
+	int n_serialized = 0;
+	int	nbanks;
+	int i;
+
+	nbanks = gmap->max_bank - gmap->min_bank + 1;
+	*size =	sizeof(GarbageMapSerializedHeaderData) +
+		sizeof(GarbageMapBankInfo) * nbanks;
+
+	serialized_gmap = (GarbageMapSerializedData *) palloc(*size);
+
+	/* Set header info */
+	serialized_gmap->gm_header.relid = relid;
+	serialized_gmap->gm_header.pages_per_range = gmap->pages_per_range;
+	serialized_gmap->gm_header.nbanks = nbanks;
+
+	/* serialize each bank */
+	for (i = gmap->min_bank; i <= gmap->max_bank; i++)
+	{
+		serialized_gmap->bankinfo[n_serialized].bankno = i;
+		memcpy(&(serialized_gmap->bankinfo[n_serialized].bank),
+			   gmap->gmbank[i], sizeof(GarbageMapSlot));
+		n_serialized++;
+	}
+
+	return serialized_gmap;
 }

@@ -157,6 +157,79 @@ typedef struct VacuumWorkItem
 	int			wi_parallel_workers;
 } VacuumWorkItem;
 
+#define GM_SLOTS_PER_BANK	1024
+#define GarbageMapGetRangeNo(blkno, range) \
+	((blkno) / (range))
+#define GarbageMapGetSlotNo(blkno, range) \
+	(GarbageMapGetRangeNo((blkno), (range)) % GM_SLOTS_PER_BANK)
+#define GarbageMapGetBankNo(slot) \
+	((slot) / GM_SLOTS_PER_BANK)
+
+typedef int *GarbageMapBank;
+typedef int GarbageMapSlot[GM_SLOTS_PER_BANK];
+
+/* Per table garbage map struct */
+typedef struct GarbageMap
+{
+	int	pages_per_range;
+	int	max_bank;
+	int min_bank;
+	int n_tuples;
+	GarbageMapBank *gmbank;
+} GarbageMap;
+
+/* Per transactio garbage map struct */
+typedef struct GarbageMapTran
+{
+	GarbageMap *insmap;
+	GarbageMap *delmap;
+} GarbageMapTran;
+
+/*
+ * Extracted format of garbage map entry. It's used for
+ * passing stats to the stats collector.
+ */
+typedef struct GarbageMapEntry
+{
+	int	slotno;
+	int	bankno;
+	int val;
+} GarbageMapEntry;
+
+typedef struct GarbageMapScanState
+{
+	int cur_slot;	/* Current position of slot */
+	int cur_bank;	/* Current position of bank */
+	int max_bank;
+	int n_ents;		/* # entries in *gmap */
+	GarbageMap *gmap;
+} GarbageMapScanState;
+
+/* Header data for Serialized data */
+typedef struct GarbageMapSerializedHeaderData
+{
+	Oid relid;
+	int	pages_per_range;
+	int nbanks;
+} GarbageMapSerializedHeaderData;
+
+/* Per bank information */
+typedef struct GarbageMapBankInfo
+{
+		int bankno;
+		GarbageMapSlot bank;
+} GarbageMapBankInfo;
+
+/*
+ * Serialized data representation for GarbageMap. It's used for
+ * dumping pgstat data.
+ */
+typedef struct GarbageMapSerializedData
+{
+	GarbageMapSerializedHeaderData gm_header;
+	GarbageMapBankInfo	bankinfo[FLEXIBLE_ARRAY_MEMBER];
+} GarbageMapSerializedData;
+
 /* GUC parameters */
 extern PGDLLIMPORT int default_statistics_target;	/* PGDLLIMPORT for PostGIS */
 extern int	vacuum_freeze_min_age;
@@ -215,5 +288,25 @@ extern double anl_get_next_S(double t, int n, double *stateptr);
 extern VacuumWorkItem *VacuumMgrGetWorkItem(Relation onerel, int options,
 											TransactionId xidFullScanLimit,
 											MultiXactId mxactFullScanLimit);
+extern void GarbageMapCountInsert(Relation rel, BlockNumber blkno, int count);
+extern void GarbageMapCountDelete(Relation rel, BlockNumber blkno);
+extern void GarbageMapCountUpdate(Relation rel, BlockNumber old_blkno,
+								  BlockNumber new_blkno);
+extern GarbageMap *GarbageMapInitMap(int pages_per_range);
+extern void AtEOXact_GarbageMap(GarbageMap *gmap, GarbageMapTran tran_gmap,
+								bool isCommit);
+extern void GarbageMapConstructMapByEnt(GarbageMap *gmap, GarbageMapEntry *entries,
+										int n_entries);
+extern void GarbageMapConstructMapByBankinfo(GarbageMap *gmap,
+											 GarbageMapBankInfo *banks,
+											 int nbanks);
+extern GarbageMap *GarbageMapCopy(GarbageMap *orig);
+extern void GarbageMapReset(GarbageMap *gmap);
+extern GarbageMapScanState *garbagemap_beginscan(GarbageMap *gmap);
+extern void garbagemap_endscan(GarbageMapScanState *state);
+extern GarbageMapEntry *garbagemap_getnext(GarbageMapScanState *state);
+extern GarbageMapSerializedData *GarbageMapSerialize(GarbageMap *gmap,
+													  Oid relid,
+													  int *size);
 
 #endif							/* VACUUM_H */

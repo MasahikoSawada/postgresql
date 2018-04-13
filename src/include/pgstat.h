@@ -11,6 +11,7 @@
 #ifndef PGSTAT_H
 #define PGSTAT_H
 
+#include "commands/vacuum.h"
 #include "datatype/timestamp.h"
 #include "fmgr.h"
 #include "libpq/pqcomm.h"
@@ -50,6 +51,7 @@ typedef enum StatMsgType
 	PGSTAT_MTYPE_DUMMY,
 	PGSTAT_MTYPE_INQUIRY,
 	PGSTAT_MTYPE_TABSTAT,
+	PGSTAT_MTYPE_GARBAGE,
 	PGSTAT_MTYPE_TABPURGE,
 	PGSTAT_MTYPE_DROPDB,
 	PGSTAT_MTYPE_RESETCOUNTER,
@@ -156,6 +158,7 @@ typedef struct PgStat_TableStatus
 	bool		t_shared;		/* is it a shared catalog? */
 	struct PgStat_TableXactStatus *trans;	/* lowest subxact's counts */
 	PgStat_TableCounts t_counts;	/* event counts to be sent */
+	GarbageMap	*gmap;
 } PgStat_TableStatus;
 
 /* ----------
@@ -177,6 +180,10 @@ typedef struct PgStat_TableXactStatus
 	PgStat_TableStatus *parent; /* per-table status */
 	/* structs of same subxact level are linked here: */
 	struct PgStat_TableXactStatus *next;	/* next of same subxact */
+
+	/* Extra statistics */
+	GarbageMapTran	tran_gmap;
+	GarbageMapTran	tran_gmap_pre_trunc;
 } PgStat_TableXactStatus;
 
 
@@ -244,6 +251,19 @@ typedef struct PgStat_MsgInquiry
 	Oid			databaseid;		/* requested DB (InvalidOid => shared only) */
 } PgStat_MsgInquiry;
 
+/* ----------
+ * PgStat_TabMsgGarbage
+ * ----------
+ */
+typedef struct PgStat_MsgGarbage
+{
+	PgStat_MsgHdr m_hdr;
+	Oid				relid;
+	Oid				dbid;
+	int				pages_per_range;
+	int				n_garbages;
+	GarbageMapEntry garbages[FLEXIBLE_ARRAY_MEMBER];
+} PgStat_MsgGarbage;
 
 /* ----------
  * PgStat_TableEntry			Per-table info in a MsgTabstat
@@ -605,8 +625,14 @@ typedef struct PgStat_StatDBEntry
 	 */
 	HTAB	   *tables;
 	HTAB	   *functions;
+	HTAB	   *garbages;
 } PgStat_StatDBEntry;
 
+typedef struct PgStat_StatGarbageEntry
+{
+	Oid			relid;
+	GarbageMap	*gmap;
+} PgStat_StatGarbageEntry;
 
 /* ----------
  * PgStat_StatTabEntry			The collector's data per table (or index)
@@ -1313,9 +1339,11 @@ pgstat_report_wait_end(void)
 #define pgstat_count_buffer_write_time(n)							\
 	(pgStatBlockWriteTime += (n))
 
-extern void pgstat_count_heap_insert(Relation rel, PgStat_Counter n);
-extern void pgstat_count_heap_update(Relation rel, bool hot);
-extern void pgstat_count_heap_delete(Relation rel);
+extern void pgstat_count_heap_insert(Relation rel, BlockNumber blkno,
+									 PgStat_Counter n);
+extern void pgstat_count_heap_update(Relation rel, bool hot,
+									 BlockNumber old, BlockNumber newblkno);
+extern void pgstat_count_heap_delete(Relation rel, BlockNumber blkno);
 extern void pgstat_count_truncate(Relation rel);
 extern void pgstat_update_heap_dead_tuples(Relation rel, int delta);
 
@@ -1345,6 +1373,7 @@ extern void pgstat_send_bgwriter(void);
  */
 extern PgStat_StatDBEntry *pgstat_fetch_stat_dbentry(Oid dbid);
 extern PgStat_StatTabEntry *pgstat_fetch_stat_tabentry(Oid relid);
+extern PgStat_StatGarbageEntry *pgstat_fetch_stat_garbageentry(Oid relid);
 extern PgBackendStatus *pgstat_fetch_stat_beentry(int beid);
 extern LocalPgBackendStatus *pgstat_fetch_stat_local_beentry(int beid);
 extern PgStat_StatFuncEntry *pgstat_fetch_stat_funcentry(Oid funcid);
