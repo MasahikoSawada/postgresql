@@ -359,6 +359,21 @@ pg_stat_get_autoanalyze_count(PG_FUNCTION_ARGS)
 }
 
 Datum
+pg_stat_get_garbage_count(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	PgStat_StatGarbageEntry *gentry;
+	GarbageMap *gmap;
+
+	if ((gentry = pgstat_fetch_stat_garbageentry(relid)) == NULL)
+		PG_RETURN_NULL();
+
+	gmap = gentry->gmap;
+
+	PG_RETURN_INT32(gmap->n_tuples);
+}
+
+Datum
 pg_stat_get_garbage(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);

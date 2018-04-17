@@ -320,6 +320,9 @@ heap_page_prune(Relation relation, Buffer buffer, TransactionId OldestXmin,
 	 * and update FSM with the remaining space.
 	 */
 
+	pgstat_count_heap_vacuum(relation, BufferGetBlockNumber(buffer),
+							 prstate.nunused + prstate.nredirected);
+
 	return ndeleted;
 }
 

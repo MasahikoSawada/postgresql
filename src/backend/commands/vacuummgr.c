@@ -42,25 +42,29 @@
 #include "utils/timestamp.h"
 #include "utils/tqual.h"
 
-static PgStat_StatTabEntry *get_pgstat_tabentry(Relation rel);
+static void get_pgstat_entries(Relation rel, PgStat_StatTabEntry **tabentry,
+								PgStat_StatGarbageEntry **gentry);
 
 static void GarbageMapCount_common(Relation rel, BlockNumber blkno,
 								   int count, bool is_insert);
 
-static PgStat_StatTabEntry *
-get_pgstat_tabentry(Relation rel)
+static void
+get_pgstat_entries(Relation rel, PgStat_StatTabEntry **tabentry,
+					PgStat_StatGarbageEntry **gentry)
 {
 	bool isshared = rel->rd_rel->relisshared;
 	Oid	dbid = isshared ? InvalidOid : MyDatabaseId;
 	PgStat_StatDBEntry	*dbentry;
-	PgStat_StatTabEntry *tabentry = NULL;
 
 	dbentry = pgstat_fetch_stat_dbentry(dbid);
 
 	if (PointerIsValid(dbentry))
-		tabentry = hash_search(dbentry->tables, &RelationGetRelid(rel),
-							   HASH_FIND, NULL);
-	return tabentry;
+	{
+		*tabentry = hash_search(dbentry->tables, &RelationGetRelid(rel),
+								HASH_FIND, NULL);
+		*gentry = hash_search(dbentry->garbages, &RelationGetRelid(rel),
+							  HASH_FIND, NULL);
+	}
 }
 
 VacuumWorkItem *
@@ -70,6 +74,7 @@ VacuumMgrGetWorkItem(Relation onerel, int options,
 {
 	VacuumWorkItem *workitem = palloc(sizeof(VacuumWorkItem));
 	PgStat_StatTabEntry *tabentry = NULL;
+	PgStat_StatGarbageEntry *gentry = NULL;
 	bool				aggressive;
 
 	/* Initialize */
@@ -78,7 +83,9 @@ VacuumMgrGetWorkItem(Relation onerel, int options,
 	workitem->wi_parallel_workers = 0;
 
 	/* Get stats of relation */
-	//tabentry = get_pgstat_tabentry(onerel);
+	if (IsUnderPostmaster)
+		get_pgstat_entries(onerel, &tabentry, &gentry);
+//		tabentry = get_pgstat_tabentry(onerel);
 
 	/*
 	 * We request an aggressive scan if the table's frozen Xid is now older
@@ -111,7 +118,6 @@ GarbageMapCount_common(Relation rel, BlockNumber blkno, int count,
 	GarbageMap	*gmap;
 
 	Assert(rel->pgstat_info);
-	Assert(count != 0);
 
 	/* Quick return, if garbage map is not enabled */
 	if (!rel->pgstat_info->gmap)
@@ -144,7 +150,14 @@ GarbageMapCount_common(Relation rel, BlockNumber blkno, int count,
 
 	/* Count tuples */
 	gmap->gmbank[bankno][slotno] += count;
-	gmap->n_tuples += count;
+	gmap->n_tuples += abs(count);
+
+//	elog(WARNING, "count blkno %u, count %d, [%d][%d] = %d",
+//		 blkno, count, bankno, slotno, gmap->gmbank[bankno][slotno]);
+
+	/* Keep sane value */
+//	if (gmap->n_tuples < 0)
+//		gmap->n_tuples = 0;
 }
 
 /*
@@ -184,6 +197,14 @@ GarbageMapCountUpdate(Relation rel, BlockNumber old_blkno,
 			 rand, prob);
 	}
 */
+
+void
+GarbageMapCountVacuum(Relation rel, BlockNumber blkno,
+					  int count)
+{
+	GarbageMapCount_common(rel, blkno, (-1) * count, false);
+//	GarbageMapCount_common(rel, blkno, (-1) * count, false);
+}
 
 GarbageMap *
 GarbageMapInitMap(int pages_per_range)
@@ -228,7 +249,7 @@ AtEOXact_GarbageMap(GarbageMap *gmap, GarbageMapTran tran_gmap,
 
 	Assert(target_map);
 
-	/* There is no garbage tules, return */
+	/* There is no garbage tuples, return */
 	if (target_map->n_tuples == 0)
 		return;
 
@@ -238,7 +259,7 @@ AtEOXact_GarbageMap(GarbageMap *gmap, GarbageMapTran tran_gmap,
 	{
 		for (slotno = 0; slotno < GM_SLOTS_PER_BANK; slotno++)
 		{
-			if (target_map->gmbank[bankno][slotno] < 0)
+			if (target_map->gmbank[bankno][slotno] == 0)
 				continue;
 
 			if (!gmap->gmbank[bankno])
@@ -258,19 +279,51 @@ AtEOXact_GarbageMap(GarbageMap *gmap, GarbageMapTran tran_gmap,
 		gmap->min_bank = target_map->min_bank;
 	if (target_map->max_bank > gmap->max_bank)
 		gmap->max_bank = target_map->max_bank;
+	gmap->n_tuples += target_map->n_tuples;
 
 	/* DEBUG output */
 	initStringInfo(&buf);
-	appendStringInfo(&buf, "At EOXact\n");
 	for (bankno = gmap->min_bank; bankno <= gmap->max_bank; bankno++)
 	{
-		for (slotno = 0; slotno < GM_SLOTS_PER_BANK; slotno++)
+		int prev = gmap->gmbank[bankno][0];
+		int nconts = 0;
+		bool is_first = true;
+		for (slotno = 1; slotno < GM_SLOTS_PER_BANK; slotno++)
 		{
-			appendStringInfo(&buf, "%s%d",
-							 (slotno == 0) ? "" : ",",
-							 gmap->gmbank[bankno][slotno]);
+			int cur = gmap->gmbank[bankno][slotno];
+
+			if (cur != prev)
+			{
+				if (nconts > 0)
+					appendStringInfo(&buf, "%s%d:%d",
+									 (is_first) ? "" : ",",
+									 prev,
+									 nconts);
+				else
+					appendStringInfo(&buf, "%s%d",
+									 (is_first) ? "" : ",",
+									 prev);
+				nconts = 0;
+				is_first = false;
+				prev = cur;
+				continue;
+			}
+
+			nconts++;
+			prev = cur;
 		}
-		elog(NOTICE, "bank[%d] %s", bankno, buf.data);
+
+		if (nconts > 0)
+			appendStringInfo(&buf, "%s%d:%d",
+							 (is_first) ? "" : ",",
+							 prev,
+							 nconts);
+		else
+			appendStringInfo(&buf, "%s%d",
+							 (is_first) ? "" : ",",
+							 prev);
+
+		elog(NOTICE, "bank[%d] \"%s\" : ntup %d", bankno, buf.data, gmap->n_tuples);
 		resetStringInfo(&buf);
 	}
 }
@@ -312,7 +365,7 @@ garbagemap_getnext(GarbageMapScanState *state)
 		for (slotno = state->cur_slot; slotno < GM_SLOTS_PER_BANK; slotno++)
 		{
 			/* Found! */
-			if (state->gmap->gmbank[bankno][slotno] > 0)
+			if (state->gmap->gmbank[bankno][slotno] != 0)
 			{
 				ent = (GarbageMapEntry *) palloc(sizeof(GarbageMapEntry));
 				ent->bankno = bankno;
@@ -355,22 +408,24 @@ GarbageMapConstructMapByEnt(GarbageMap *gmap, GarbageMapEntry *entries,
 			gmap->gmbank[ent->bankno] = (GarbageMapBank)
 				MemoryContextAllocZero(TopMemoryContext,
 									   sizeof(GarbageMapSlot));
-
-			/* Update min/max bank number */
-			if (ent->bankno > gmap->max_bank)
-				gmap->max_bank = ent->bankno;
-			if (ent->bankno < gmap->min_bank)
-				gmap->min_bank = ent->bankno;
 		}
 
-		/* XXXX */
-		gmap->gmbank[ent->bankno][ent->slotno] += ent->val;
 
-		/*
-		elog(WARNING, "stats collector RECV [%d][%d] = %d",
-			 ent->bankno, ent->slotno,
-			 gmap->gmbank[ent->bankno][ent->slotno]);
-		*/
+		/* Update min/max bank number */
+		if (ent->bankno > gmap->max_bank)
+			gmap->max_bank = ent->bankno;
+		if (ent->bankno < gmap->min_bank)
+			gmap->min_bank = ent->bankno;
+
+		/* XXXX : maybe use temprature? */
+		gmap->gmbank[ent->bankno][ent->slotno] += ent->val;
+		gmap->n_tuples += ent->val;
+
+		elog(WARNING, "   Restored an ent : bank[%d] val = %d, ret = %d, ntup %d, min %d, max %d",
+			 ent->bankno, ent->val,
+			 gmap->gmbank[ent->bankno][ent->slotno],
+			 gmap->n_tuples,
+			 gmap->min_bank, gmap->max_bank);
 	}
 }
 
@@ -403,7 +458,7 @@ GarbageMapReset(GarbageMap *gmap)
 {
 	int bankno;
 
-	for (bankno = gmap->min_bank; bankno < gmap->max_bank; bankno++)
+	for (bankno = gmap->min_bank; bankno <= gmap->max_bank; bankno++)
 	{
 		pfree(gmap->gmbank[bankno]);
 		gmap->gmbank[bankno] = NULL;
@@ -470,6 +525,7 @@ GarbageMapSerialize(GarbageMap *gmap, Oid relid, int *size)
 	serialized_gmap->gm_header.relid = relid;
 	serialized_gmap->gm_header.pages_per_range = gmap->pages_per_range;
 	serialized_gmap->gm_header.nbanks = nbanks;
+	serialized_gmap->gm_header.n_tuples = gmap->n_tuples;
 
 	/* serialize each bank */
 	for (i = gmap->min_bank; i <= gmap->max_bank; i++)

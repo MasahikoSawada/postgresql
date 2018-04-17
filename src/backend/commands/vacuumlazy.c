@@ -1578,6 +1578,9 @@ lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 	 */
 	END_CRIT_SECTION();
 
+	if (uncnt > 0)
+		pgstat_count_heap_vacuum(onerel, BufferGetBlockNumber(buffer), uncnt);
+
 	/*
 	 * Now that we have removed the dead tuples from the page, once again
 	 * check if the page has become all-visible.  The page is already marked

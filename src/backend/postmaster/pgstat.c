@@ -899,44 +899,56 @@ pgstat_report_stat(bool force)
 				this_msg->m_nentries = 0;
 			}
 
-			/* Send garbage info */
 			if (entry->gmap)
 			{
-				GarbageMapScanState *state;
-				GarbageMapEntry *ent;
-				PgStat_MsgGarbage *msg;
-				List		*entries = NIL;
-				ListCell	*cell;
-
-				/* Extract all garbagemap entries */
-				state = garbagemap_beginscan(entry->gmap);
-				while ((ent = garbagemap_getnext(state)) != NULL)
-					entries = lappend(entries, ent);
-				garbagemap_endscan(state);
-
-				/* Construct message */
-				msg = (PgStat_MsgGarbage *)
-					palloc(offsetof(PgStat_MsgGarbage, garbages) +
-						   sizeof(GarbageMapEntry) * list_length(entries));
-				msg->relid = entry->t_id;;
-				msg->dbid = entry->t_shared ? InvalidOid : MyDatabaseId;
-				msg->pages_per_range = entry->gmap->pages_per_range;
-				msg->n_garbages = 0;
-
-				/* Store all entries into the message */
-				foreach(cell, entries)
+				if (entry->gmap->n_tuples < 0)
 				{
-					GarbageMapEntry *ent = (GarbageMapEntry *) lfirst(cell);
+					PgStat_MsgGarbage *msg = palloc(sizeof(PgStat_MsgGarbage));
 
-					memcpy(&(msg->garbages[msg->n_garbages++]),
-						   ent, sizeof(GarbageMapEntry));
-					elog(NOTICE, "SEND [%d] slot %d, bank %d, val %d",
-						 msg->n_garbages - 1,
-						 ent->slotno, ent->bankno, ent->val);
+					/* Empty garbage map means to clear existing garbage map by truncate */
+					msg->relid = entry->t_id;
+					msg->dbid = entry->t_shared ? InvalidOid : MyDatabaseId;
+					msg->pages_per_range = entry->gmap->pages_per_range;
+					msg->n_garbages = -1;
+					pgstat_send_garbage(msg);
 				}
+				/* Send garbage info */
+				else if (entry->gmap->n_tuples > 0)
+				{
+					GarbageMapScanState *state;
+					GarbageMapEntry *ent;
+					PgStat_MsgGarbage *msg;
+					List		*entries = NIL;
+					ListCell	*cell;
+					int			i = 0;
 
-				pgstat_send_garbage(msg);
-				list_free_deep(entries);
+					/* Extract all garbagemap entries */
+					state = garbagemap_beginscan(entry->gmap);
+					while ((ent = garbagemap_getnext(state)) != NULL)
+						entries = lappend(entries, ent);
+					garbagemap_endscan(state);
+
+					/* Construct message */
+					msg = (PgStat_MsgGarbage *)
+						palloc(offsetof(PgStat_MsgGarbage, garbages) +
+							   sizeof(GarbageMapEntry) * list_length(entries));
+					msg->relid = entry->t_id;;
+					msg->dbid = entry->t_shared ? InvalidOid : MyDatabaseId;
+					msg->pages_per_range = entry->gmap->pages_per_range;
+					msg->n_garbages = 0; //entry->gmap->n_tuples;
+
+					/* Store all entries into the message */
+					foreach(cell, entries)
+					{
+						GarbageMapEntry *ent = (GarbageMapEntry *) lfirst(cell);
+
+						memcpy(&(msg->garbages[msg->n_garbages++]),
+							   ent, sizeof(GarbageMapEntry));
+					}
+
+					pgstat_send_garbage(msg);
+					list_free_deep(entries);
+				}
 			}
 		}
 		/* zero out TableStatus structs after use */
@@ -963,12 +975,17 @@ static void
 pgstat_send_garbage(PgStat_MsgGarbage *tgmsg)
 {
 	int len;
+	int ngarbages = tgmsg->n_garbages < 0 ? 0 : tgmsg->n_garbages;
 
 	if (pgStatSock == PGINVALID_SOCKET)
 		return;
 
 	len = offsetof(PgStat_MsgGarbage, garbages) +
-		sizeof(GarbageMapEntry) * tgmsg->n_garbages;
+		sizeof(GarbageMapEntry) * ngarbages;
+
+	elog(NOTICE, "SEND MSG pages_p_range %d, n_garbages %d, len %d",
+		 tgmsg->pages_per_range,
+		 tgmsg->n_garbages, len);
 
 	pgstat_setheader(&tgmsg->m_hdr, PGSTAT_MTYPE_GARBAGE);
 	pgstat_send(tgmsg, len);
@@ -1982,6 +1999,27 @@ pgstat_init_garbagemap(Relation rel, PgStat_TableStatus *pgstat_info)
 		GarbageMapInitMap(relopts->garbagemap_pages_per_range);
 }
 
+void
+pgstat_count_heap_vacuum(Relation rel, BlockNumber blkno, PgStat_Counter n)
+{
+	PgStat_TableStatus *pgstat_info = rel->pgstat_info;
+
+	if (pgstat_info != NULL)
+	{
+		/* We have to log the effect at the proper transactional level */
+		int			nest_level = GetCurrentTransactionNestLevel();
+
+		if (pgstat_info->trans == NULL ||
+			pgstat_info->trans->nest_level != nest_level)
+		{
+			add_tabstat_xact_level(pgstat_info, nest_level);
+			pgstat_init_garbagemap(rel, pgstat_info);
+		}
+
+		GarbageMapCountVacuum(rel, blkno, n);
+	}
+}
+
 /*
  * pgstat_count_heap_insert - count a tuple insertion of n tuples
  */
@@ -2255,9 +2293,15 @@ AtEOXact_PgStat(bool isCommit)
 				/* an aborted xact generates no changed_tuple events */
 			}
 
-			/* Transfer garbagemap data as well */
-			AtEOXact_GarbageMap(tabstat->gmap, trans->tran_gmap,
-								isCommit);
+			/* Summarize garbage map data collected at this transaction */
+			if (trans->truncated)
+			{
+//				elog(NOTICE, "truncated");
+				tabstat->gmap->n_tuples = -1;
+			}
+			else
+				AtEOXact_GarbageMap(tabstat->gmap, trans->tran_gmap,
+									isCommit);
 
 			tabstat->trans = NULL;
 		}
@@ -5070,27 +5114,33 @@ pgstat_write_db_statsfile(PgStat_StatDBEntry *dbentry, bool permanent)
 	/*
 	 * Walk through the database's garbage stats per table.
 	 */
-	//elog(WARNING, "WRITING");
+//	elog(WARNING, "WRITING");
 	hash_seq_init(&gstat, dbentry->garbages);
 	while ((gentry = (PgStat_StatGarbageEntry *) hash_seq_search(&gstat)) != NULL)
 	{
 		GarbageMapSerializedData *serialized_gmap;
 		int size;
 
+		if (gentry->gmap->n_tuples <= 0)
+		{
+//			elog(WARNING, "  skipped rel = %d, n_gbs = %d", gentry->relid,
+//				 gentry->gmap->n_tuples);
+			continue;
+		}
+
 		serialized_gmap = GarbageMapSerialize(gentry->gmap,
 											  gentry->relid,
 											  &size);
 
-		/*
-		elog(WARNING, "WRITE rel %d, nbanks %d",
-			 gentry->relid, serialized_gmap->gm_header.nbanks);
-		*/
+//		elog(WARNING, "WRITE rel %d, nbanks %d, n_gbs %d (%s:%s",
+//			 gentry->relid, serialized_gmap->gm_header.nbanks,
+//			 gentry->gmap->n_tuples, tmpfile, statfile);
 
 		fputc('G', fpout);
 		rc = fwrite(serialized_gmap, size, 1, fpout);
 		(void) rc;
 	}
-	//elog(WARNING, "WROTE");
+//	elog(WARNING, "WROTE");
 
 	/*
 	 * Walk through the database's function stats table.
@@ -5543,10 +5593,8 @@ pgstat_read_db_statsfile(Oid databaseid, HTAB *tabhash, HTAB *funchash,
 						goto done;
 					}
 
-					/*
-					elog(WARNING, "READ rel %d, nbanks %d",
-						 header.relid, header.nbanks);
-					*/
+//					elog(WARNING, "READ rel %d, nbanks %d",
+//						 header.relid, header.nbanks);
 
 					/* Prepare data for bankinfos */
 					datalen = sizeof(GarbageMapBankInfo) * header.nbanks;
@@ -5567,6 +5615,7 @@ pgstat_read_db_statsfile(Oid databaseid, HTAB *tabhash, HTAB *funchash,
 					gentry = (PgStat_StatGarbageEntry *) hash_search(garbagehash,
 																	 (void *) &(header.relid),
 																	 HASH_ENTER, &found);
+
 					if (found)
 					{
 						ereport(pgStatRunningInCollector ? LOG : WARNING,
@@ -5578,10 +5627,8 @@ pgstat_read_db_statsfile(Oid databaseid, HTAB *tabhash, HTAB *funchash,
 					/* initialize garbage map */
 					gentry->gmap = GarbageMapInitMap(header.pages_per_range);
 
-					/* Reset before construction */
-					//GarbageMapReset(gentry->gmap);
-
 					/* Constrcut new garbage map */
+					gentry->gmap->n_tuples = header.n_tuples;
 					GarbageMapConstructMapByBankinfo(gentry->gmap,
 													 bankinfos,
 													 header.nbanks);
@@ -5613,7 +5660,7 @@ done:
 }
 
 /* ----------
- * pgstat_read_db_statsfile_timestamp() -
+ * pgstat_read_db_sttasfile_timestamp() -
  *
  *	Attempt to determine the timestamp of the last db statfile write.
  *	Returns true if successful; the timestamp is stored in *ts.
@@ -6032,8 +6079,19 @@ pgstat_recv_garbage(PgStat_MsgGarbage *msg, int len)
 	if (!gentry->gmap)
 		return;
 
-	GarbageMapConstructMapByEnt(gentry->gmap, msg->garbages,
-								msg->n_garbages);
+	elog(NOTICE, "RECV MSG pages_p_range %d, n_garbages %d",
+		 msg->pages_per_range, msg->n_garbages);
+
+	if (msg->n_garbages < 0)
+	{
+		elog(WARNING, "   So, reset");
+		GarbageMapReset(gentry->gmap);
+	}
+	else
+	{
+		GarbageMapConstructMapByEnt(gentry->gmap, msg->garbages,
+									msg->n_garbages);
+	}
 }
 /* ----------
  * pgstat_recv_tabstat() -

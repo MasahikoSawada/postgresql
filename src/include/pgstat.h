@@ -1344,6 +1344,7 @@ extern void pgstat_count_heap_insert(Relation rel, BlockNumber blkno,
 extern void pgstat_count_heap_update(Relation rel, bool hot,
 									 BlockNumber old, BlockNumber newblkno);
 extern void pgstat_count_heap_delete(Relation rel, BlockNumber blkno);
+extern void pgstat_count_heap_vacuum(Relation rel, BlockNumber blkno, PgStat_Counter n);
 extern void pgstat_count_truncate(Relation rel);
 extern void pgstat_update_heap_dead_tuples(Relation rel, int delta);
 

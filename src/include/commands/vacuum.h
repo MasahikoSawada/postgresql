@@ -211,13 +211,14 @@ typedef struct GarbageMapSerializedHeaderData
 	Oid relid;
 	int	pages_per_range;
 	int nbanks;
+	int n_tuples;
 } GarbageMapSerializedHeaderData;
 
 /* Per bank information */
 typedef struct GarbageMapBankInfo
 {
-		int bankno;
-		GarbageMapSlot bank;
+	int bankno;
+	GarbageMapSlot bank;
 } GarbageMapBankInfo;
 
 /*
@@ -292,6 +293,7 @@ extern void GarbageMapCountInsert(Relation rel, BlockNumber blkno, int count);
 extern void GarbageMapCountDelete(Relation rel, BlockNumber blkno);
 extern void GarbageMapCountUpdate(Relation rel, BlockNumber old_blkno,
 								  BlockNumber new_blkno);
+extern void GarbageMapCountVacuum(Relation rel, BlockNumber blkno, int count);
 extern GarbageMap *GarbageMapInitMap(int pages_per_range);
 extern void AtEOXact_GarbageMap(GarbageMap *gmap, GarbageMapTran tran_gmap,
 								bool isCommit);
