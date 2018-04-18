@@ -147,6 +147,16 @@ typedef struct VacuumParams
 									 * to use default */
 } VacuumParams;
 
+typedef struct VacuumWorkItem
+{
+	Relation	wi_rel;
+	int			wi_options;
+	bool		wi_aggressive;
+	BlockNumber	wi_startblk;
+	BlockNumber	wi_endblk;
+	int			wi_parallel_workers;
+} VacuumWorkItem;
+
 /* GUC parameters */
 extern PGDLLIMPORT int default_statistics_target;	/* PGDLLIMPORT for PostGIS */
 extern int	vacuum_freeze_min_age;
@@ -200,5 +210,14 @@ extern bool std_typanalyze(VacAttrStats *stats);
 extern double anl_random_fract(void);
 extern double anl_init_selection_state(int n);
 extern double anl_get_next_S(double t, int n, double *stateptr);
+
+/* in commands/vacuummgr.c */
+typedef VacuumWorkItem *(*vacuum_get_workitem_hook_type) (Relation onerel,
+														  VacuumWorkItem *workitem,
+														  int optoins);
+extern PGDLLIMPORT vacuum_get_workitem_hook_type vacuum_get_workitem_hook;
+extern VacuumWorkItem *VacuumMgrGetWorkItem(Relation onerel, int options,
+											TransactionId xidFullScanLimit,
+											MultiXactId mxactFullScanLimit);
 
 #endif							/* VACUUM_H */
