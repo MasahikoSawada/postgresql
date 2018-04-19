@@ -152,8 +152,7 @@ typedef struct VacuumWorkItem
 	Relation	wi_rel;
 	int			wi_options;
 	bool		wi_aggressive;
-	BlockNumber	wi_startblk;
-	BlockNumber	wi_endblk;
+	BlockNumber	*wi_vacrange;	/* list of start/end blk terminated by InvalidBlockNumber */
 	int			wi_parallel_workers;
 } VacuumWorkItem;
 

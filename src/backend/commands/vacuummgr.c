@@ -74,8 +74,10 @@ VacuumMgrGetWorkItem(Relation onerel, int options,
 	workitem->wi_aggressive = aggressive;
 
 	/* Set start and end block */
-	workitem->wi_startblk = 0;
-	workitem->wi_endblk = RelationGetNumberOfBlocks(onerel);
+	workitem->wi_vacrange = palloc(sizeof(BlockNumber) * (2 + 1));
+	workitem->wi_vacrange[0] = 0; /* start */
+	workitem->wi_vacrange[1] = RelationGetNumberOfBlocks(onerel); /* end */
+	workitem->wi_vacrange[2] = InvalidBlockNumber; /* terminate */
 
 	/* Invoke hook */
 	if (vacuum_get_workitem_hook)
