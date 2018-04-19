@@ -467,7 +467,8 @@ lazy_scan_heap(Relation onerel, VacuumWorkItem *workitem, LVRelStats *vacrelstat
 		nkeep,			/* dead-but-not-removable tuples */
 		nunused;		/* unused item pointers */
 	IndexBulkDeleteResult **indstats;
-	int			i;
+	int			i,
+				rangeidx;
 	PGRUsage	ru0;
 	Buffer		vmbuffer = InvalidBuffer;
 	BlockNumber next_unskippable_block;
@@ -520,10 +521,12 @@ lazy_scan_heap(Relation onerel, VacuumWorkItem *workitem, LVRelStats *vacrelstat
 
 	initStringInfo(&strbuf);
 
-	for (i = 0; workitem->wi_vacrange[i] != InvalidBlockNumber; i = i + 2)
+	for (rangeidx = 0;
+		 workitem->wi_vacrange[rangeidx] != InvalidBlockNumber;
+		 rangeidx = rangeidx + 2)
 	{
-		BlockNumber startblk = workitem->wi_vacrange[i];
-		BlockNumber endblk = workitem->wi_vacrange[i+1];
+		BlockNumber startblk = workitem->wi_vacrange[rangeidx];
+		BlockNumber endblk = workitem->wi_vacrange[rangeidx + 1];
 
 		/*
 		 * Except when aggressive is set, we want to skip pages that are
@@ -1329,6 +1332,7 @@ lazy_scan_heap(Relation onerel, VacuumWorkItem *workitem, LVRelStats *vacrelstat
 		} /* End of vacuum range */
 
 		resetStringInfo(&strbuf);
+		/*
 		appendStringInfo(&strbuf,
 						 _("vacuumed %u - %u page for %d pages out of %u pages\n"),
 						 startblk, endblk, endblk - startblk, nblocks);
@@ -1356,6 +1360,10 @@ lazy_scan_heap(Relation onerel, VacuumWorkItem *workitem, LVRelStats *vacrelstat
 						tups_vacuumed, num_tuples,
 						vacrelstats->scanned_pages, nblocks),
 				 errdetail_internal("%s", strbuf.data)));
+		*/
+		elog(NOTICE, "rel \"%s\" vacuumed %u - %u page for %d pages out of %u pages",
+			 RelationGetRelationName(onerel),
+			 startblk, endblk, endblk - startblk, nblocks);
 	}
 
 	/* report that everything is scanned and vacuumed */
