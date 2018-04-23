@@ -1361,9 +1361,10 @@ lazy_scan_heap(Relation onerel, VacuumWorkItem *workitem, LVRelStats *vacrelstat
 						vacrelstats->scanned_pages, nblocks),
 				 errdetail_internal("%s", strbuf.data)));
 		*/
-		elog(NOTICE, "rel \"%s\" vacuumed %u - %u page for %d pages out of %u pages",
-			 RelationGetRelationName(onerel),
-			 startblk, endblk, endblk - startblk, nblocks);
+		ereport(INFO,
+				(errmsg("rel \"%s\" vacuumed %u - %u page for %d pages out of %u pages",
+						RelationGetRelationName(onerel),
+						startblk, endblk, endblk - startblk, nblocks)));
 	}
 
 	/* report that everything is scanned and vacuumed */
