@@ -7580,13 +7580,16 @@ HeapTupleHeaderAdvanceLatestRemovedXid(HeapTupleHeader tuple,
  * see comments for vacuum_log_cleanup_info().
  */
 XLogRecPtr
-log_heap_cleanup_info(RelFileNode rnode, TransactionId latestRemovedXid)
+log_heap_cleanup_info(RelFileNode rnode, TransactionId latestRemovedXid,
+					  BlockNumber startblk, double new_dead_tuples)
 {
 	xl_heap_cleanup_info xlrec;
 	XLogRecPtr	recptr;
 
 	xlrec.node = rnode;
 	xlrec.latestRemovedXid = latestRemovedXid;
+	xlrec.startblk = startblk;
+	xlrec.new_dead_tuples = new_dead_tuples;
 
 	XLogBeginInsert();
 	XLogRegisterData((char *) &xlrec, SizeOfHeapCleanupInfo);

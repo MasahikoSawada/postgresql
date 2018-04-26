@@ -331,7 +331,8 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	pgstat_report_vacuum(RelationGetRelid(onerel),
 						 onerel->rd_rel->relisshared,
 						 new_live_tuples,
-						 vacrelstats->new_dead_tuples);
+						 vacrelstats->new_dead_tuples,
+						 vacrelstats->tuples_deleted);
 	pgstat_progress_end_command();
 
 	/* and log the action if appropriate */
@@ -416,7 +417,7 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
  * which would be after the rows have become inaccessible.
  */
 static void
-vacuum_log_cleanup_info(Relation rel, LVRelStats *vacrelstats)
+vacuum_log_cleanup_info(Relation rel, LVRelStats *vacrelstats, double nkeep, BlockNumber startblk)
 {
 	/*
 	 * Skip this for relations for which no WAL is to be written, or if we're
@@ -428,8 +429,19 @@ vacuum_log_cleanup_info(Relation rel, LVRelStats *vacrelstats)
 	/*
 	 * No need to write the record at all unless it contains a valid value
 	 */
-	if (TransactionIdIsValid(vacrelstats->latestRemovedXid))
-		(void) log_heap_cleanup_info(rel->rd_node, vacrelstats->latestRemovedXid);
+	if (!BlockNumberIsValid(startblk))
+	{
+		if (TransactionIdIsValid(vacrelstats->latestRemovedXid))
+			(void) log_heap_cleanup_info(rel->rd_node, vacrelstats->latestRemovedXid,
+										 -1, -1);
+	}
+	else
+	{
+		/* Hacked for garbage map, use slotno and new_dead_tuples fields exclusively */
+		(void) log_heap_cleanup_info(rel->rd_node, vacrelstats->latestRemovedXid,
+									 startblk, nkeep);
+
+	}
 }
 
 /*
@@ -461,11 +473,11 @@ lazy_scan_heap(Relation onerel, VacuumWorkItem *workitem, LVRelStats *vacrelstat
 	BlockNumber empty_pages,
 		vacuumed_pages,
 		next_fsm_block_to_vacuum;
-	double		num_tuples,		/* total number of nonremovable tuples */
-		live_tuples,	/* live tuples (reltuples estimate) */
-		tups_vacuumed,	/* tuples cleaned up by vacuum */
-		nkeep,			/* dead-but-not-removable tuples */
-		nunused;		/* unused item pointers */
+	double		total_num_tuples,
+		total_live_tuples,
+		total_nunused,
+		total_nkeep,
+		total_tups_vacuumed;
 	IndexBulkDeleteResult **indstats;
 	int			i,
 				rangeidx;
@@ -498,8 +510,7 @@ lazy_scan_heap(Relation onerel, VacuumWorkItem *workitem, LVRelStats *vacrelstat
 
 	empty_pages = vacuumed_pages = 0;
 	next_fsm_block_to_vacuum = (BlockNumber) 0;
-	num_tuples = live_tuples = tups_vacuumed = nkeep = nunused = 0;
-
+	total_num_tuples = total_live_tuples = total_nunused = total_nkeep = total_tups_vacuumed = 0;
 	indstats = (IndexBulkDeleteResult **)
 		palloc0(nindexes * sizeof(IndexBulkDeleteResult *));
 
@@ -525,8 +536,15 @@ lazy_scan_heap(Relation onerel, VacuumWorkItem *workitem, LVRelStats *vacrelstat
 		 workitem->wi_vacrange[rangeidx] != InvalidBlockNumber;
 		 rangeidx = rangeidx + 2)
 	{
+		double		num_tuples,		/* total number of nonremovable tuples */
+			nkeep,			/* dead-but-not-removable tuples */
+			live_tuples,	/* live tuples (reltuples estimate) */
+			tups_vacuumed,	/* tuples cleaned up by vacuum */
+			nunused;		/* unused item pointers */
 		BlockNumber startblk = workitem->wi_vacrange[rangeidx];
 		BlockNumber endblk = workitem->wi_vacrange[rangeidx + 1];
+
+		num_tuples = live_tuples = tups_vacuumed = nkeep = nunused = 0;
 
 		/*
 		 * Except when aggressive is set, we want to skip pages that are
@@ -725,7 +743,7 @@ lazy_scan_heap(Relation onerel, VacuumWorkItem *workitem, LVRelStats *vacrelstat
 				}
 
 				/* Log cleanup info before we touch indexes */
-				vacuum_log_cleanup_info(onerel, vacrelstats);
+				vacuum_log_cleanup_info(onerel, vacrelstats, -1, InvalidBlockNumber);
 
 				/* Report that we are now vacuuming indexes */
 				pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
@@ -1361,10 +1379,23 @@ lazy_scan_heap(Relation onerel, VacuumWorkItem *workitem, LVRelStats *vacrelstat
 						vacrelstats->scanned_pages, nblocks),
 				 errdetail_internal("%s", strbuf.data)));
 		*/
-		ereport(INFO,
-				(errmsg("rel \"%s\" vacuumed %u - %u page for %d pages out of %u pages",
+		/* save stats for use later */
+		vacrelstats->tuples_deleted += tups_vacuumed;
+
+		total_tups_vacuumed += tups_vacuumed;
+		total_nkeep += nkeep;
+		total_num_tuples += num_tuples;
+		total_live_tuples += live_tuples;
+		total_nunused += nunused;
+
+		appendStringInfo(&strbuf, "rel \"%s\" vacuumed %u - %u page for %d pages out of %u pages, cannot removed %.0f",
 						RelationGetRelationName(onerel),
-						startblk, endblk, endblk - startblk, nblocks)));
+						 startblk, endblk, endblk - startblk, nblocks,
+						 nkeep);
+		ereport(INFO,
+				(errmsg("--- RANGE STATS [%u - %u] : %s", startblk, endblk,
+						strbuf.data)));
+		vacuum_log_cleanup_info(onerel, vacrelstats, nkeep, startblk);
 	}
 
 	/* report that everything is scanned and vacuumed */
@@ -1372,16 +1403,13 @@ lazy_scan_heap(Relation onerel, VacuumWorkItem *workitem, LVRelStats *vacrelstat
 
 	pfree(frozen);
 
-	/* save stats for use later */
-	vacrelstats->tuples_deleted = tups_vacuumed;
-	vacrelstats->new_dead_tuples = nkeep;
-
 	/* now we can compute the new value for pg_class.reltuples */
 	vacrelstats->new_live_tuples = vac_estimate_reltuples(onerel,
 														  nblocks,
 														  vacrelstats->tupcount_pages,
-														  live_tuples);
+														  total_live_tuples);
 
+	vacrelstats->new_dead_tuples = total_nkeep;
 	/* also compute total number of surviving heap entries */
 	vacrelstats->new_rel_tuples =
 		vacrelstats->new_live_tuples + vacrelstats->new_dead_tuples;
@@ -1406,7 +1434,7 @@ lazy_scan_heap(Relation onerel, VacuumWorkItem *workitem, LVRelStats *vacrelstat
 		int64		hvp_val[2];
 
 		/* Log cleanup info before we touch indexes */
-		vacuum_log_cleanup_info(onerel, vacrelstats);
+		vacuum_log_cleanup_info(onerel, vacrelstats, -1, InvalidBlockNumber);
 
 		/* Report that we are now vacuuming indexes */
 		pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
@@ -1454,7 +1482,7 @@ lazy_scan_heap(Relation onerel, VacuumWorkItem *workitem, LVRelStats *vacrelstat
 		ereport(elevel,
 				(errmsg("\"%s\": removed %.0f row versions in %u pages",
 						RelationGetRelationName(onerel),
-						tups_vacuumed, vacuumed_pages)));
+						total_tups_vacuumed, vacuumed_pages)));
 
 	/*
 	 * This is pretty messy, but we split it up so that we can skip emitting
@@ -1463,9 +1491,9 @@ lazy_scan_heap(Relation onerel, VacuumWorkItem *workitem, LVRelStats *vacrelstat
 	resetStringInfo(&strbuf);
 	appendStringInfo(&strbuf,
 					 _("%.0f dead row versions cannot be removed yet, oldest xmin: %u\n"),
-					 nkeep, OldestXmin);
+					 total_nkeep, OldestXmin);
 	appendStringInfo(&strbuf, _("There were %.0f unused item pointers.\n"),
-					 nunused);
+					 total_nunused);
 	appendStringInfo(&strbuf, ngettext("Skipped %u page due to buffer pins, ",
 									"Skipped %u pages due to buffer pins, ",
 									vacrelstats->pinskipped_pages),
@@ -1483,7 +1511,7 @@ lazy_scan_heap(Relation onerel, VacuumWorkItem *workitem, LVRelStats *vacrelstat
 	ereport(elevel,
 			(errmsg("\"%s\": found %.0f removable, %.0f nonremovable row versions in %u out of %u pages",
 					RelationGetRelationName(onerel),
-					tups_vacuumed, num_tuples,
+					total_tups_vacuumed, total_num_tuples,
 					vacrelstats->scanned_pages, nblocks),
 			 errdetail_internal("%s", strbuf.data)));
 	pfree(strbuf.data);

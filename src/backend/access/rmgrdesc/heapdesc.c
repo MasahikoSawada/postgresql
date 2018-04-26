@@ -133,7 +133,8 @@ heap2_desc(StringInfo buf, XLogReaderState *record)
 	{
 		xl_heap_cleanup_info *xlrec = (xl_heap_cleanup_info *) rec;
 
-		appendStringInfo(buf, "remxid %u", xlrec->latestRemovedXid);
+		appendStringInfo(buf, "remxid %u, startblk %u, new_dead_tuples %lf",
+						 xlrec->latestRemovedXid, xlrec->startblk, xlrec->new_dead_tuples);
 	}
 	else if (info == XLOG_HEAP2_VISIBLE)
 	{

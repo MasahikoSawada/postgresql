@@ -254,6 +254,8 @@ typedef struct xl_heap_cleanup_info
 {
 	RelFileNode node;
 	TransactionId latestRemovedXid;
+	BlockNumber	startblk;
+	double		new_dead_tuples;
 } xl_heap_cleanup_info;
 
 #define SizeOfHeapCleanupInfo (sizeof(xl_heap_cleanup_info))
@@ -396,7 +398,8 @@ extern const char *heap2_identify(uint8 info);
 extern void heap_xlog_logical_rewrite(XLogReaderState *r);
 
 extern XLogRecPtr log_heap_cleanup_info(RelFileNode rnode,
-					  TransactionId latestRemovedXid);
+										TransactionId latestRemovedXid,
+										BlockNumber startblk, double new_dead_tuples);
 extern XLogRecPtr log_heap_clean(Relation reln, Buffer buffer,
 			   OffsetNumber *redirected, int nredirected,
 			   OffsetNumber *nowdead, int ndead,
