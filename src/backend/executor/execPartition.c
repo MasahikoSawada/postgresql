@@ -13,6 +13,7 @@
  */
 #include "postgres.h"
 
+#include "access/fdwxact.h"
 #include "catalog/partition.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_type.h"
@@ -749,7 +750,10 @@ ExecInitRoutingInfo(ModifyTableState *mtstate,
 	 */
 	if (partRelInfo->ri_FdwRoutine != NULL &&
 		partRelInfo->ri_FdwRoutine->BeginForeignInsert != NULL)
+	{
 		partRelInfo->ri_FdwRoutine->BeginForeignInsert(mtstate, partRelInfo);
+		FdwXactMarkForeignTransactionModified(partRelInfo, 0);
+	}
 
 	MemoryContextSwitchTo(oldContext);
 

@@ -12,6 +12,7 @@
 #ifndef FDWAPI_H
 #define FDWAPI_H
 
+#include "access/fdwxact.h"
 #include "access/parallel.h"
 #include "nodes/execnodes.h"
 #include "nodes/relation.h"
@@ -168,6 +169,12 @@ typedef bool (*IsForeignScanParallelSafe_function) (PlannerInfo *root,
 typedef List *(*ReparameterizeForeignPathByChild_function) (PlannerInfo *root,
 															List *fdw_private,
 															RelOptInfo *child_rel);
+typedef bool (*PrepareForeignTransaction_function) (FdwXactResolveState *state);
+typedef bool (*CommitForeignTransaction_function) (FdwXactResolveState *state);
+typedef bool (*RollbackForeignTransaction_function) (FdwXactResolveState *state);
+typedef bool (*ResolveForeignTransaction_function) (FdwXactResolveState *state,
+													bool is_commit);
+typedef bool (*IsTwoPhaseCommitEnabled_function) (Oid serverid);
 
 /*
  * FdwRoutine is the struct returned by a foreign-data wrapper's handler
@@ -235,6 +242,13 @@ typedef struct FdwRoutine
 	/* Support functions for IMPORT FOREIGN SCHEMA */
 	ImportForeignSchema_function ImportForeignSchema;
 
+	/* Support functions for distributed transactions */
+	PrepareForeignTransaction_function PrepareForeignTransaction;
+	CommitForeignTransaction_function CommitForeignTransaction;
+	RollbackForeignTransaction_function RollbackForeignTransaction;
+	ResolveForeignTransaction_function ResolveForeignTransaction;
+	IsTwoPhaseCommitEnabled_function IsTwoPhaseCommitEnabled;
+
 	/* Support functions for parallelism under Gather node */
 	IsForeignScanParallelSafe_function IsForeignScanParallelSafe;
 	EstimateDSMForeignScan_function EstimateDSMForeignScan;
@@ -247,7 +261,6 @@ typedef struct FdwRoutine
 	ReparameterizeForeignPathByChild_function ReparameterizeForeignPathByChild;
 } FdwRoutine;
 
-
 /* Functions in foreign/foreign.c */
 extern FdwRoutine *GetFdwRoutine(Oid fdwhandler);
 extern Oid	GetForeignServerIdByRelId(Oid relid);
@@ -257,5 +270,8 @@ extern FdwRoutine *GetFdwRoutineForRelation(Relation relation, bool makecopy);
 extern bool IsImportableForeignTable(const char *tablename,
 						 ImportForeignSchemaStmt *stmt);
 extern Path *GetExistingLocalJoinPath(RelOptInfo *joinrel);
+
+/* Functions in foreign/fdwxact.c */
+extern void FdwXactRegisterForeignTransaction(Oid serverid, Oid userid, char *fdwxact_id);
 
 #endif							/* FDWAPI_H */
