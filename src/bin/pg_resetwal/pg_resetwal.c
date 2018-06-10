@@ -731,6 +731,7 @@ GuessControlValues(void)
 	ControlFile.max_wal_senders = 10;
 	ControlFile.max_worker_processes = 8;
 	ControlFile.max_prepared_xacts = 0;
+	ControlFile.max_prepared_foreign_xacts = 0;
 	ControlFile.max_locks_per_xact = 64;
 
 	ControlFile.maxAlign = MAXIMUM_ALIGNOF;
@@ -959,6 +960,7 @@ RewriteControlFile(void)
 	ControlFile.max_wal_senders = 10;
 	ControlFile.max_worker_processes = 8;
 	ControlFile.max_prepared_xacts = 0;
+	ControlFile.max_prepared_foreign_xacts = 0;
 	ControlFile.max_locks_per_xact = 64;
 
 	/* Contents are protected with a CRC */

@@ -1,0 +1,131 @@
+src/backend/access/fdwxact/README
+
+Atomic Commit for Distributed Transactions
+===========================================
+
+The atomic commit feature enables us to commit and rollback either all of foreign
+servers or nothing
+
+This ensures that the database data is always left in a conssitent state in term
+of federated database.
+
+Using Two-phase Commit Protocol
+--------------------------------
+
+We employee two-phase commit protocol to achieve commit among all foreign servers
+atomically. The sequence of distributed transaction is the following.
+
+1. Foriegn Server Registration
+During query execution, accessed foreign servers are registered to the list
+FdwXactAtomicCommitParticipants, which is maintained by PostgreSQL's the global
+transaction manager (GTM), as a distributed transaction participants. The registered
+foreign transactions are tracked until the end of transaction.
+
+2. Pre-Commit phase (1st phase of two-phase commit)
+Before prepare foreign transactions, we record the corresponding WAL indicating
+that a foreign transaction is involved with the current transaction. Thus in case
+we loose connectivity to the foreign server or crash ourselves, we will remember
+that we might have prepared tranascation on the foreign server, and try to resolve
+it when connectivity is restored or after crash recovery.
+
+Once we've prepared all of them go to the next step. If we failed on any of them
+we change to aborting, therefore at this time some participants might be prepared
+whereas some are not prepared.
+
+3. Post-Commit Phase (2nd phase of two-phase commit)
+The steps so far are done by the backend process but the resolution step(commit or
+rollback) is done by the foreign transaction resolver process. The backend process
+inserts itselft to the wait queue, and then wake up the resolver process (launch
+if necessary). The resolver process enqueue the waiter and fetch the distributed
+transaction information the backend is waiting. Once all foreign transaction are
+committed or rolbacked the resolver process wake the waiter up.
+
+The foreign transaction resolution by the resolver process are performed until all
+foreign transactions are resolved or removed manually.
+
+Transaction Resolution Retrying
+--------------------------------
+
+If failed to resolve foreign transaction for whatever reason, the foreign transaction
+resolve tries in the interval of foreign_transaction_resolver_timeout.
+
+In order to retry resolving distributed transactions while preserving the transaction
+order we use two queues: active queue and retry queue. All online distributed transactions
+are initialy inserted to the active queue. The foreign transaction resolver fetches an
+on-line distributed transaction to resovle from the queue and process it. If failed to h
+resolve, the foreign transaction will be moved to the retry queue. The moving between two
+queue is actually just changing the linked-list, so there is no possible of failure during
+these processes. The foreign transaction resolver checks the retry queue at the interval
+of foreign_transaction_resolver_timeout. If there is, fetches it and resolves it. If we
+failed to resolve again, the distributed transaction is inserted again to the tail of
+the retry queue.
+
+State Transition of Foreign Transactions
+----------------------------------------
+
+Every transactions on foreign servers are managed by GTM. Individual foreign transaction
+has its entry and status always starting from either FDW_XACT_STATUS_PREPARING when it's
+registered by a running transaction or FDW_XACT_STATUS_IN_DOUBT when it's registered during
+recovery.
+
+In online transaction cases, once the transaction preparation is done successfully, the
+status becomes FDW_XACT_STATUS_PREPARED which indicates we can ensure that the prepared
+transaction surely exists on the foreign server. Before committing or aborting the status
+will change to FDW_XACT_STATUS_COMMITING and FDW_XACT_STATUS_ABORTING.
+
+For in-doubt transaction cases, the fate of foreign transaction is determined according
+to the transaction result of the local transaction (by seeing the commit log), and then
+changes to either FDW_XACT_STATUS_COMMITTING or FDW_XACT_STATUS_ABORTING before being
+processed.
+
+The foreign transaction entry goes away after resolved. If fail to resolve, the status of
+foreign transaction backs to the previous status.
+
+The foreign transaction status trandition is illustrated by the following graph
+describing the FdwXact->status:
+
+             +---------+
+             | INITIAL |
+             +---------+
+                  |
+      +-----------+-------------+
+      |                         |
+ added by an               added during
+ online xact               recovery
+      |                         |
+      v                         v
+ +-----------+           +----------+
+ | PREPARING |           | IN_DOUBT |
+ +-----------+           +----------+
+     |                         ^
+  prepared                     |
+     |                         |
+     v                         |
+ +----------+                  |
+ | PREPARED |                  |
+ +----------+                  |
+     ^                         |
+     |    +--------------------+
+     |----|--------------+     |
+     |    |              |     |
+     |    |              |     |
+   committing.          aborting.
+   back to the          back to the
+   previous status      previous status
+   if failed.           if failed.
+     |    |              |     |
+     |    |              |     |
+     |    |              |     |
+     v    v              v     v
+ +------------+        +----------+
+ | COMMITTING |        | ABORTING |
+ +------------+        +----------+
+      |                     |
+      +----------+----------+
+                 |
+             resolved
+                 |
+                 v
+        +-------------------+
+        | RESOLVED(removed) |
+        +-------------------+
