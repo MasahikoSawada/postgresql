@@ -38,6 +38,7 @@
 #include "postgres.h"
 
 #include "access/heapam.h"
+#include "access/fdwxact.h"
 #include "access/htup_details.h"
 #include "access/tableam.h"
 #include "access/xact.h"
@@ -47,6 +48,7 @@
 #include "executor/executor.h"
 #include "executor/nodeModifyTable.h"
 #include "foreign/fdwapi.h"
+#include "foreign/foreign.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
 #include "rewrite/rewriteHandler.h"
@@ -544,6 +546,10 @@ ExecInsert(ModifyTableState *mtstate,
 									 NULL,
 									 specToken);
 
+			/* Make note that we've wrote on non-temprary relation */
+			if (RelationNeedsWAL(resultRelationDesc))
+				MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
+
 			/* insert index entries for tuple */
 			recheckIndexes = ExecInsertIndexTuples(slot, estate, true,
 												   &specConflict,
@@ -771,6 +777,10 @@ ldelete:;
 							  true /* wait for commit */ ,
 							  &tmfd,
 							  changingPart);
+
+		/* Make note that we've wrote on non-temprary relation */
+		if (RelationNeedsWAL(resultRelationDesc))
+			MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
 
 		switch (result)
 		{
@@ -1316,6 +1326,10 @@ lreplace:;
 							  estate->es_crosscheck_snapshot,
 							  true /* wait for commit */ ,
 							  &tmfd, &lockmode, &update_indexes);
+
+		/* Make note that we've wrote on non-temprary relation */
+		if (RelationNeedsWAL(resultRelationDesc))
+			MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
 
 		switch (result)
 		{
@@ -2375,6 +2389,10 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 			resultRelInfo->ri_FdwRoutine->BeginForeignModify != NULL)
 		{
 			List	   *fdw_private = (List *) list_nth(node->fdwPrivLists, i);
+			Oid			relid = RelationGetRelid(resultRelInfo->ri_RelationDesc);
+
+			/* Remember the transaction modifies data on a foreign server*/
+			RegisterFdwXactByRelId(relid, true);
 
 			resultRelInfo->ri_FdwRoutine->BeginForeignModify(mtstate,
 															 resultRelInfo,
