@@ -44,6 +44,8 @@ ScanKeyEntryInitialize(ScanKey entry,
 	entry->sk_subtype = subtype;
 	entry->sk_collation = collation;
 	entry->sk_argument = argument;
+	entry->sk_do_abbrev = false;
+	entry->sk_abbrev = 0x0000;
 	if (RegProcedureIsValid(procedure))
 	{
 		fmgr_info(procedure, &entry->sk_func);
@@ -61,8 +63,9 @@ ScanKeyEntryInitialize(ScanKey entry,
  *		are assumed to be zero (the usual value), and collation is defaulted.
  *
  * This is the recommended version for hardwired lookups in system catalogs.
- * It cannot handle NULL arguments, unary operators, or nondefault operators,
- * but we need none of those features for most hardwired lookups.
+ * It cannot handle NULL arguments, unary operators, nondefault operators, or
+ * abbreviated keys, but we need none of those features for most hardwired
+ * lookups.
  *
  * We set collation to DEFAULT_COLLATION_OID always.  This is appropriate
  * for textual columns in system catalogs, and it will be ignored for
@@ -85,6 +88,8 @@ ScanKeyInit(ScanKey entry,
 	entry->sk_subtype = InvalidOid;
 	entry->sk_collation = DEFAULT_COLLATION_OID;
 	entry->sk_argument = argument;
+	entry->sk_do_abbrev = false;
+	entry->sk_abbrev = 0x0000;
 	fmgr_info(procedure, &entry->sk_func);
 }
 
@@ -113,5 +118,7 @@ ScanKeyEntryInitializeWithInfo(ScanKey entry,
 	entry->sk_subtype = subtype;
 	entry->sk_collation = collation;
 	entry->sk_argument = argument;
+	entry->sk_do_abbrev = false;
+	entry->sk_abbrev = 0x0000;
 	fmgr_info_copy(&entry->sk_func, finfo, CurrentMemoryContext);
 }

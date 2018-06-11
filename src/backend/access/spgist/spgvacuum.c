@@ -451,7 +451,7 @@ vacuumLeafRoot(spgBulkDeleteState *bds, Relation index, Buffer buffer)
 	START_CRIT_SECTION();
 
 	/* The tuple numbers are in order, so we can use PageIndexMultiDelete */
-	PageIndexMultiDelete(page, toDelete, xlrec.nDelete);
+	PageIndexMultiDelete(page, toDelete, xlrec.nDelete, false);
 
 	MarkBufferDirty(buffer);
 
@@ -570,7 +570,7 @@ vacuumRedirectAndPlaceholder(Relation index, Buffer buffer)
 		opaque->nPlaceholder -= i;
 
 		/* The array is surely sorted, so can use PageIndexMultiDelete */
-		PageIndexMultiDelete(page, itemnos, i);
+		PageIndexMultiDelete(page, itemnos, i, false);
 
 		hasUpdate = true;
 	}

@@ -601,7 +601,7 @@ hash_xlog_move_page_contents(XLogReaderState *record)
 			unend = (OffsetNumber *) ((char *) ptr + len);
 
 			if ((unend - unused) > 0)
-				PageIndexMultiDelete(page, unused, unend - unused);
+				PageIndexMultiDelete(page, unused, unend - unused, false);
 		}
 
 		PageSetLSN(page, lsn);
@@ -892,7 +892,7 @@ hash_xlog_delete(XLogReaderState *record)
 			unend = (OffsetNumber *) ((char *) ptr + len);
 
 			if ((unend - unused) > 0)
-				PageIndexMultiDelete(page, unused, unend - unused);
+				PageIndexMultiDelete(page, unused, unend - unused, false);
 		}
 
 		/*
@@ -1169,7 +1169,7 @@ hash_xlog_vacuum_one_page(XLogReaderState *record)
 
 			unused = (OffsetNumber *) ((char *) xldata + SizeOfHashVacuumOnePage);
 
-			PageIndexMultiDelete(page, unused, xldata->ntuples);
+			PageIndexMultiDelete(page, unused, xldata->ntuples, false);
 		}
 
 		/*

@@ -957,7 +957,7 @@ _bt_delitems_vacuum(Relation rel, Buffer buf,
 
 	/* Fix the page */
 	if (nitems > 0)
-		PageIndexMultiDelete(page, itemnos, nitems);
+		PageIndexMultiDelete(page, itemnos, nitems, true);
 
 	/*
 	 * We can clear the vacuum cycle ID since this page has certainly been
@@ -1032,7 +1032,7 @@ _bt_delitems_delete(Relation rel, Buffer buf,
 	START_CRIT_SECTION();
 
 	/* Fix the page */
-	PageIndexMultiDelete(page, itemnos, nitems);
+	PageIndexMultiDelete(page, itemnos, nitems, true);
 
 	/*
 	 * Unlike _bt_delitems_vacuum, we *must not* clear the vacuum cycle ID,
@@ -1411,6 +1411,10 @@ _bt_pagedel(Relation rel, Buffer buf)
 					_bt_relbuf(rel, lbuf);
 				}
 
+				/*
+				 * XXX: Use abbreviated keys? Maybe "get abbreviator" logic
+				 * should live in _bt_search(), and not its various callers.
+				 */
 				/* we need an insertion scan key for the search, so build one */
 				itup_scankey = _bt_mkscankey(rel, targetkey);
 				/* find the leftmost leaf page containing this key */
@@ -1586,7 +1590,7 @@ _bt_mark_page_halfdead(Relation rel, Buffer leafbuf, BTStack stack)
 	BTreeInnerTupleSetDownLink(itup, rightsib);
 
 	nextoffset = OffsetNumberNext(topoff);
-	PageIndexTupleDelete(page, nextoffset);
+	PageIndexTupleDelete(page, nextoffset, true);
 
 	/*
 	 * Mark the leaf page as half-dead, and stamp it with a pointer to the
@@ -1597,7 +1601,7 @@ _bt_mark_page_halfdead(Relation rel, Buffer leafbuf, BTStack stack)
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 	opaque->btpo_flags |= BTP_HALF_DEAD;
 
-	PageIndexTupleDelete(page, P_HIKEY);
+	PageIndexTupleDelete(page, P_HIKEY, true);
 	Assert(PageGetMaxOffsetNumber(page) == 0);
 	MemSet(&trunctuple, 0, sizeof(IndexTupleData));
 	trunctuple.t_info = sizeof(IndexTupleData);
@@ -1606,8 +1610,8 @@ _bt_mark_page_halfdead(Relation rel, Buffer leafbuf, BTStack stack)
 	else
 		BTreeTupleSetTopParent(&trunctuple, InvalidBlockNumber);
 
-	if (PageAddItem(page, (Item) &trunctuple, sizeof(IndexTupleData), P_HIKEY,
-					false, false) == InvalidOffsetNumber)
+	if (PageAddItemAbbrev(page, (Item) &trunctuple, sizeof(IndexTupleData),
+						  0x00, P_HIKEY) == InvalidOffsetNumber)
 		elog(ERROR, "could not add dummy high key to half-dead page");
 
 	/* Must mark buffers dirty before XLogInsert */

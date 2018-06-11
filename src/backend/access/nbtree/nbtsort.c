@@ -281,7 +281,8 @@ static Page _bt_blnewpage(uint32 level);
 static BTPageState *_bt_pagestate(BTWriteState *wstate, uint32 level);
 static void _bt_slideleft(Page page);
 static void _bt_sortaddtup(Page page, Size itemsize,
-			   IndexTuple itup, OffsetNumber itup_off);
+			   IndexTuple itup, Relation rel, abbreviate_func abbreviator,
+			   OffsetNumber itup_off);
 static void _bt_buildadd(BTWriteState *wstate, BTPageState *state,
 			 IndexTuple itup);
 static void _bt_uppershutdown(BTWriteState *wstate, BTPageState *state);
@@ -743,11 +744,21 @@ static void
 _bt_sortaddtup(Page page,
 			   Size itemsize,
 			   IndexTuple itup,
+			   Relation rel,
+			   abbreviate_func abbreviator,
 			   OffsetNumber itup_off)
 {
 	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+	TupleDesc itupdesc = RelationGetDescr(rel);
 	IndexTupleData trunctuple;
+	ItemAbbrev	abbrev;
 
+	/*
+	 * XXX:  It would be nice if this didn't generate a new abbreviated key
+	 * when downlink points to other internal page.  That's not as performance
+	 * critical here as it is in other paths that do everything with an
+	 * exclusive buffer lock held, though.
+	 */
 	if (!P_ISLEAF(opaque) && itup_off == P_FIRSTKEY)
 	{
 		trunctuple = *itup;
@@ -755,10 +766,22 @@ _bt_sortaddtup(Page page,
 		BTreeTupleSetNAtts(&trunctuple, 0);
 		itup = &trunctuple;
 		itemsize = sizeof(IndexTupleData);
+		abbrev = 0;
 	}
+	else if (abbreviator && !P_ISLEAF(opaque))
+	{
+		Datum		datum;
+		bool		isNull;
 
-	if (PageAddItem(page, (Item) itup, itemsize, itup_off,
-					false, false) == InvalidOffsetNumber)
+		datum = index_getattr(itup, 1, itupdesc, &isNull);
+		abbrev = abbreviator(datum, isNull, false);
+ 	}
+	else
+		abbrev = itup_off;
+
+
+	if (PageAddItemAbbrev(page, (Item) itup, itemsize, abbrev,
+						  itup_off) == InvalidOffsetNumber)
 		elog(ERROR, "failed to add item to the index page");
 }
 
@@ -807,6 +830,7 @@ _bt_buildadd(BTWriteState *wstate, BTPageState *state, IndexTuple itup)
 	Size		itupsz;
 	int			indnatts = IndexRelationGetNumberOfAttributes(wstate->index);
 	int			indnkeyatts = IndexRelationGetNumberOfKeyAttributes(wstate->index);
+	abbreviate_func abbreviator = _bt_get_abbreviator(wstate->index);
 
 	/*
 	 * This is a handy place to check for cancel interrupts during the btree
@@ -879,7 +903,8 @@ _bt_buildadd(BTWriteState *wstate, BTPageState *state, IndexTuple itup)
 		Assert(last_off > P_FIRSTKEY);
 		ii = PageGetItemId(opage, last_off);
 		oitup = (IndexTuple) PageGetItem(opage, ii);
-		_bt_sortaddtup(npage, ItemIdGetLength(ii), oitup, P_FIRSTKEY);
+		_bt_sortaddtup(npage, IndexTupleSize(oitup), oitup, wstate->index,
+					   abbreviator, P_FIRSTKEY);
 
 		/*
 		 * Move 'last' into the high key position on opage
@@ -916,8 +941,9 @@ _bt_buildadd(BTWriteState *wstate, BTPageState *state, IndexTuple itup)
 			 */
 			truncated = _bt_nonkey_truncate(wstate->index, oitup);
 			truncsz = IndexTupleSize(truncated);
-			PageIndexTupleDelete(opage, P_HIKEY);
-			_bt_sortaddtup(opage, truncsz, truncated, P_HIKEY);
+			PageIndexTupleDelete(opage, P_HIKEY, true);
+			_bt_sortaddtup(opage, truncsz, truncated, wstate->index,
+						   abbreviator, P_HIKEY);
 			pfree(truncated);
 
 			/* oitup should continue to point to the page's high key */
@@ -993,7 +1019,7 @@ _bt_buildadd(BTWriteState *wstate, BTPageState *state, IndexTuple itup)
 	 * Add the new item into the current page.
 	 */
 	last_off = OffsetNumberNext(last_off);
-	_bt_sortaddtup(npage, itupsz, itup, last_off);
+	_bt_sortaddtup(npage, itupsz, itup, wstate->index, abbreviator, last_off);
 
 	state->btps_page = npage;
 	state->btps_blkno = nblkno;

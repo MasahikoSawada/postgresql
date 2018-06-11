@@ -118,7 +118,7 @@ ginRedoInsertEntry(Buffer buffer, bool isLeaf, BlockNumber rightblkno, void *rda
 	{
 		Assert(GinPageIsLeaf(page));
 		Assert(offset >= FirstOffsetNumber && offset <= PageGetMaxOffsetNumber(page));
-		PageIndexTupleDelete(page, offset);
+		PageIndexTupleDelete(page, offset, false);
 	}
 
 	itup = &data->tuple;
