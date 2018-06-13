@@ -147,6 +147,15 @@ static relopt_bool boolRelOpts[] =
 		},
 		false
 	},
+	{
+		{
+			"encryption",
+			"Encryption data transparently",
+			RELOPT_KIND_HEAP,
+			AccessExclusiveLock
+		},
+		false
+	},
 	/* list terminator */
 	{{NULL}}
 };
@@ -1064,7 +1073,7 @@ parseRelOptions(Datum options, bool validate, relopt_kind kind,
 
 	if (numoptions > 0)
 	{
-		reloptions = palloc(numoptions * sizeof(relopt_value));
+		reloptions = palloc0(numoptions * sizeof(relopt_value));
 
 		for (i = 0, j = 0; relOpts[i]; i++)
 		{
@@ -1382,7 +1391,8 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		{"parallel_workers", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, parallel_workers)},
 		{"vacuum_cleanup_index_scale_factor", RELOPT_TYPE_REAL,
-		offsetof(StdRdOptions, vacuum_cleanup_index_scale_factor)}
+		offsetof(StdRdOptions, vacuum_cleanup_index_scale_factor)},
+		{"encryption", RELOPT_TYPE_BOOL, offsetof(StdRdOptions, encryption)}
 	};
 
 	options = parseRelOptions(reloptions, validate, kind, &numoptions);

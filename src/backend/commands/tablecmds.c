@@ -41,6 +41,7 @@
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_tablespace.h"
+#include "catalog/pg_encryption_key.h"
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
 #include "catalog/storage.h"
@@ -307,6 +308,8 @@ static List *MergeAttributes(List *schema, List *supers, char relpersistence,
 static bool MergeCheckConstraint(List *constraints, char *name, Node *expr);
 static void MergeAttributesIntoExisting(Relation child_rel, Relation parent_rel);
 static void MergeConstraintsIntoExisting(Relation child_rel, Relation parent_rel);
+static void StoreCatalogEncryption(const char *relname, Oid relationId,
+								   char relkind, Datum reloptions);
 static void StoreCatalogInheritance(Oid relationId, List *supers,
 						bool child_is_partition);
 static void StoreCatalogInheritance1(Oid relationId, Oid parentOid,
@@ -772,6 +775,9 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 
 	/* Store inheritance information for new rel. */
 	StoreCatalogInheritance(relationId, inheritOids, stmt->partbound != NULL);
+
+	/* Store encryption informatoin for new rel. */
+	StoreCatalogEncryption(relname, relationId, relkind, reloptions);
 
 	/*
 	 * We must bump the command counter to make the newly-created relation
@@ -2501,6 +2507,60 @@ MergeCheckConstraint(List *constraints, char *name, Node *expr)
 	return false;
 }
 
+
+static void
+StoreCatalogEncryption(const char *relname, Oid relationId, char relkind,
+					   Datum reloptions)
+{
+	relopt_value *options;
+	int			numoptions;
+	int			i;
+	bool		enabled = false;
+	ObjectAddress relkeyObject;
+	ObjectAddress relObject;
+
+	options = parseRelOptions(reloptions, false,	/* no validation */
+							  RELOPT_KIND_HEAP,
+							  &numoptions);
+
+	for (i = 0; i < numoptions; i++)
+	{
+		relopt_value opt = options[i];
+
+		if (strncmp(opt.gen->name, "encryption", 10) == 0 &&
+			opt.values.bool_val)
+		{
+			enabled = true;
+			break;
+		}
+	}
+
+	if (!enabled)
+		return;
+
+	if (relkind != RELKIND_RELATION &&
+		relkind != RELKIND_INDEX &&
+		relkind != RELKIND_TOASTVALUE &&
+		relkind != RELKIND_MATVIEW)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+				 errmsg("\"%s\" is not table, index, toast table or materialized view",
+						relname)));
+
+	/* Make table key and insert into a system catalog */
+
+	/* Insert new table key */
+	StoreCatalogRelationEncryptionKey(relationId);
+
+	relObject.classId = RelationRelationId;
+	relObject.objectId = relationId;
+	relObject.objectSubId = 0;
+	relkeyObject.classId = EncryptionKeyRelationId;
+	relkeyObject.objectId = relationId;
+	relkeyObject.objectSubId = 0;
+
+	recordDependencyOn(&relObject, &relkeyObject, DEPENDENCY_AUTO);
+}
 
 /*
  * StoreCatalogInheritance
