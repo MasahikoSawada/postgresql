@@ -51,6 +51,7 @@
 #include "catalog/pg_auth_members.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_database.h"
+#include "catalog/pg_encryption_key.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_partitioned_table.h"
@@ -270,6 +271,7 @@ static void RelationParseRelOptions(Relation relation, HeapTuple tuple);
 static void RelationBuildTupleDesc(Relation relation);
 static Relation RelationBuildDesc(Oid targetRelId, bool insertIt);
 static void RelationInitPhysicalAddr(Relation relation);
+static void RelationInitEncryptionKey(Relation relation);
 static void load_critical_index(Oid indexoid, Oid heapoid);
 static TupleDesc GetPgClassDescriptor(void);
 static TupleDesc GetPgIndexDescriptor(void);
@@ -1221,6 +1223,12 @@ RelationBuildDesc(Oid targetRelId, bool insertIt)
 	relation->rd_smgr = NULL;
 
 	/*
+	 * initialize data encryption key (relation->rd_encryptoin_key)
+	 */
+	if (IsTransparentEncryptionSupported(relation->rd_rel->relkind))
+		RelationInitEncryptionKey(relation);
+
+	/*
 	 * now we can free the memory allocated for pg_class_tuple
 	 */
 	heap_freetuple(pg_class_tuple);
@@ -1337,6 +1345,65 @@ InitIndexAmRoutine(Relation relation)
 	pfree(tmp);
 }
 
+/*
+ * Fill in the data encryption key for an relation.
+ */
+static void
+RelationInitEncryptionKey(Relation relation)
+{
+	char *cached = NULL;
+	char *enckey;
+	Relation	enckeyRel;
+	ScanKeyData skey[1];
+	SysScanDesc	scan;
+	bool		found;
+	HeapTuple	htup;
+
+	Assert(IsTransparentEncryptionSupported(relation->rd_rel->relkind));
+
+	/* Quick return if encryption is disabled */
+	if (!relation->rd_options ||
+		!((StdRdOptions *)relation->rd_options)->encryption)
+		return;
+
+	ScanKeyInit(&skey[0],
+				Anum_pg_encryption_key_relid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(RelationGetRelid(relation)));
+
+	/* Open pg_encryption and begin a scan */
+	enckeyRel = heap_open(EncryptionKeyRelationId, AccessShareLock);
+	scan = systable_beginscan(enckeyRel, EncryptionKeyIndexId,
+							  true, NULL, 1, skey);
+	found = false;
+	while (HeapTupleIsValid(htup = systable_getnext(scan)))
+	{
+		Form_pg_encryption_key keyForm = (Form_pg_encryption_key) GETSTRUCT(htup);
+
+		if (found)
+			elog(ERROR, "unexpected data encryption key for rel %s",
+				 RelationGetRelationName(relation));
+		found = true;
+
+		enckey = text_to_cstring(&keyForm->relkey);
+	}
+
+	systable_endscan(scan);
+	heap_close(enckeyRel, AccessShareLock);
+
+	if (!found)
+	{
+		relation->rd_encryption_key = NULL;
+		return;
+	}
+
+	/* Found, copy key string into memory on CacheMemoryContext */
+	cached = (char *) MemoryContextAlloc(CacheMemoryContext,
+										 sizeof(char) * strlen(enckey));
+	memcpy(cached, enckey, strlen(enckey));
+
+	relation->rd_encryption_key = cached;
+}
 /*
  * Initialize index-access-method support data for an index relation
  */
@@ -1953,6 +2020,10 @@ RelationIdGetRelation(Oid relationId)
 	rd = RelationBuildDesc(relationId, true);
 	if (RelationIsValid(rd))
 		RelationIncrementReferenceCount(rd);
+	else
+	{
+		elog(WARNING, "ajd;jas;dfjal %d", MyProcPid);
+	}
 	return rd;
 }
 
@@ -2290,6 +2361,8 @@ RelationDestroyRelation(Relation relation, bool remember_tupdesc)
 		pfree(relation->rd_partcheck);
 	if (relation->rd_fdwroutine)
 		pfree(relation->rd_fdwroutine);
+	if (relation->rd_encryption_key)
+		pfree(relation->rd_encryption_key);
 	pfree(relation);
 }
 
@@ -5655,6 +5728,7 @@ load_relcache_init_file(bool shared)
 		rel->rd_exclprocs = NULL;
 		rel->rd_exclstrats = NULL;
 		rel->rd_fdwroutine = NULL;
+		rel->rd_encryption_key = NULL;
 
 		/*
 		 * Reset transient-state fields in the relcache entry

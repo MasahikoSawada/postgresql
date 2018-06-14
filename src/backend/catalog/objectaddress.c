@@ -27,6 +27,7 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_cast.h"
 #include "catalog/pg_default_acl.h"
+#include "catalog/pg_encryption_key.h"
 #include "catalog/pg_event_trigger.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
@@ -183,6 +184,18 @@ static const ObjectPropertyType ObjectProperty[] =
 		Anum_pg_database_datacl,
 		OBJECT_DATABASE,
 		true
+	},
+	{
+		EncryptionKeyRelationId,
+		EncryptionKeyIndexId,
+		-1,
+		-1,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		-1,
+		false
 	},
 	{
 		ExtensionRelationId,
@@ -714,6 +727,10 @@ static const struct object_type_map
 	/* OBJECT_STATISTIC_EXT */
 	{
 		"statistics object", OBJECT_STATISTIC_EXT
+	},
+	/* OBJECT_ENCRYPTION_KEY */
+	{
+		"encryption key", OBJECT_ENCRYPTION_KEY
 	}
 };
 
@@ -2145,6 +2162,7 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 		case OBJECT_SCHEMA:
 		case OBJECT_SUBSCRIPTION:
 		case OBJECT_TABLESPACE:
+		case OBJECT_ENCRYPTION_KEY:
 			if (list_length(name) != 1)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -3567,6 +3585,25 @@ getObjectDescription(const ObjectAddress *object)
 				break;
 			}
 
+		case OCLASS_ENCRYPTION_KEY:
+			{
+				HeapTuple enckeyTup;
+				Form_pg_encryption_key	enckeyForm;
+
+				enckeyTup = SearchSysCache1(ENCRYPTIONKEYOID,
+											ObjectIdGetDatum(object->objectId));
+
+				if (!HeapTupleIsValid(enckeyTup))
+					elog(ERROR, "cache lookup failed for encryption key for relation %u",
+						 object->objectId);
+
+				enckeyForm = (Form_pg_encryption_key) GETSTRUCT(enckeyTup);
+
+				appendStringInfo(&buffer, _("encryption key for relid %u"), enckeyForm->relid);
+
+				ReleaseSysCache(enckeyTup);
+				break;
+			}
 			/*
 			 * There's intentionally no default: case here; we want the
 			 * compiler to warn if a new OCLASS hasn't been handled above.
@@ -4070,6 +4107,8 @@ getObjectTypeDescription(const ObjectAddress *object)
 			appendStringInfoString(&buffer, "transform");
 			break;
 
+		case OCLASS_ENCRYPTION_KEY:
+			appendStringInfoString(&buffer, "encryption key");
 			/*
 			 * There's intentionally no default: case here; we want the
 			 * compiler to warn if a new OCLASS hasn't been handled above.
@@ -5120,6 +5159,32 @@ getObjectIdentityParts(const ObjectAddress *object,
 				heap_close(transformDesc, AccessShareLock);
 			}
 			break;
+
+		case OCLASS_ENCRYPTION_KEY:
+			{
+				Relation rel;
+				HeapTuple tuple;
+				Form_pg_encryption_key	enckeyForm;
+
+				rel = heap_open(EncryptionKeyRelationId, RowExclusiveLock);
+
+				tuple = SearchSysCache1(ENCRYPTIONKEYOID, ObjectIdGetDatum(object->objectId));
+
+				if (!HeapTupleIsValid(tuple))
+					elog(ERROR, "cache lookup failed for encryption key for relation %u",
+						 object->objectId);
+
+				enckeyForm = (Form_pg_encryption_key) GETSTRUCT(tuple);
+
+				appendStringInfo(&buffer, "encryption key for relid %u", enckeyForm->relid);
+
+				if (objname)
+					*objname = list_make1_int(enckeyForm->relid);
+
+				ReleaseSysCache(tuple);
+				heap_close(rel, RowExclusiveLock);
+				break;
+			}
 
 			/*
 			 * There's intentionally no default: case here; we want the

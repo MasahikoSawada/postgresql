@@ -38,6 +38,7 @@
 #include "catalog/pg_default_acl.h"
 #include "catalog/pg_depend.h"
 #include "catalog/pg_description.h"
+#include "catalog/pg_encryption_key.h"
 #include "catalog/pg_enum.h"
 #include "catalog/pg_event_trigger.h"
 #include "catalog/pg_foreign_data_wrapper.h"
@@ -371,6 +372,17 @@ static const struct cachedesc cacheinfo[] = {
 			Anum_pg_default_acl_defaclrole,
 			Anum_pg_default_acl_defaclnamespace,
 			Anum_pg_default_acl_defaclobjtype,
+			0
+		},
+		8
+	},
+	{EncryptionKeyRelationId,			/* ENCRYPTIONKEYOID */
+		EncryptionKeyIndexId,
+		1,
+		{
+			Anum_pg_encryption_key_relid,
+			0,
+			0,
 			0
 		},
 		8

@@ -32,6 +32,7 @@
 #include "catalog/pg_database.h"
 #include "catalog/pg_default_acl.h"
 #include "catalog/pg_depend.h"
+#include "catalog/pg_encryption_key.h"
 #include "catalog/pg_event_trigger.h"
 #include "catalog/pg_extension.h"
 #include "catalog/pg_foreign_data_wrapper.h"
@@ -170,7 +171,8 @@ static const Oid object_classes[] = {
 	PublicationRelationId,		/* OCLASS_PUBLICATION */
 	PublicationRelRelationId,	/* OCLASS_PUBLICATION_REL */
 	SubscriptionRelationId,		/* OCLASS_SUBSCRIPTION */
-	TransformRelationId			/* OCLASS_TRANSFORM */
+	TransformRelationId,		/* OCLASS_TRANSFORM */
+	EncryptionKeyRelationId		/* OCLASS_ENCRYPTION_EKY */
 };
 
 
@@ -1278,6 +1280,10 @@ doDeletion(const ObjectAddress *object, int flags)
 
 		case OCLASS_TRANSFORM:
 			DropTransformById(object->objectId);
+			break;
+
+	case OCLASS_ENCRYPTION_KEY:
+			DropEncryptionKeyById(object->objectId);
 			break;
 
 			/*
@@ -2537,6 +2543,9 @@ getObjectClass(const ObjectAddress *object)
 
 		case TransformRelationId:
 			return OCLASS_TRANSFORM;
+
+		case EncryptionKeyRelationId:
+			return OCLASS_ENCRYPTION_KEY;
 	}
 
 	/* shouldn't get here */

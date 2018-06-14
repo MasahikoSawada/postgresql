@@ -2508,6 +2508,10 @@ MergeCheckConstraint(List *constraints, char *name, Node *expr)
 }
 
 
+/*
+ * StoreCatalogEncryption
+ *		Updates the system catalogs with proper encryption information.
+ */
 static void
 StoreCatalogEncryption(const char *relname, Oid relationId, char relkind,
 					   Datum reloptions)
@@ -2538,10 +2542,7 @@ StoreCatalogEncryption(const char *relname, Oid relationId, char relkind,
 	if (!enabled)
 		return;
 
-	if (relkind != RELKIND_RELATION &&
-		relkind != RELKIND_INDEX &&
-		relkind != RELKIND_TOASTVALUE &&
-		relkind != RELKIND_MATVIEW)
+	if (!IsTransparentEncryptionSupported(relkind))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
 				 errmsg("\"%s\" is not table, index, toast table or materialized view",
@@ -2552,14 +2553,14 @@ StoreCatalogEncryption(const char *relname, Oid relationId, char relkind,
 	/* Insert new table key */
 	StoreCatalogRelationEncryptionKey(relationId);
 
+	/* Store dependency too */
 	relObject.classId = RelationRelationId;
 	relObject.objectId = relationId;
 	relObject.objectSubId = 0;
 	relkeyObject.classId = EncryptionKeyRelationId;
 	relkeyObject.objectId = relationId;
 	relkeyObject.objectSubId = 0;
-
-	recordDependencyOn(&relObject, &relkeyObject, DEPENDENCY_AUTO);
+	recordDependencyOn(&relkeyObject, &relObject, DEPENDENCY_AUTO);
 }
 
 /*
@@ -9670,6 +9671,7 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 			case OCLASS_PUBLICATION_REL:
 			case OCLASS_SUBSCRIPTION:
 			case OCLASS_TRANSFORM:
+			case OCLASS_ENCRYPTION_KEY:
 
 				/*
 				 * We don't expect any of these sorts of objects to depend on

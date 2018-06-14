@@ -1114,6 +1114,7 @@ EventTriggerSupportsObjectType(ObjectType obtype)
 		case OBJECT_DEFAULT:
 		case OBJECT_DOMAIN:
 		case OBJECT_DOMCONSTRAINT:
+		case OBJECT_ENCRYPTION_KEY:
 		case OBJECT_EXTENSION:
 		case OBJECT_FDW:
 		case OBJECT_FOREIGN_SERVER:
@@ -1209,6 +1210,7 @@ EventTriggerSupportsObjectClass(ObjectClass objclass)
 		case OCLASS_PUBLICATION_REL:
 		case OCLASS_SUBSCRIPTION:
 		case OCLASS_TRANSFORM:
+		case OCLASS_ENCRYPTION_KEY:
 			return true;
 
 			/*
@@ -2256,6 +2258,7 @@ stringify_grant_objtype(ObjectType objtype)
 		case OBJECT_DEFAULT:
 		case OBJECT_DEFACL:
 		case OBJECT_DOMCONSTRAINT:
+		case OBJECT_ENCRYPTION_KEY:
 		case OBJECT_EVENT_TRIGGER:
 		case OBJECT_EXTENSION:
 		case OBJECT_FOREIGN_TABLE:
@@ -2338,6 +2341,7 @@ stringify_adefprivs_objtype(ObjectType objtype)
 		case OBJECT_DEFAULT:
 		case OBJECT_DEFACL:
 		case OBJECT_DOMCONSTRAINT:
+		case OBJECT_ENCRYPTION_KEY:
 		case OBJECT_EVENT_TRIGGER:
 		case OBJECT_EXTENSION:
 		case OBJECT_FOREIGN_TABLE:

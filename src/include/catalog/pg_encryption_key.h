@@ -19,6 +19,13 @@
 #include "catalog/genbki.h"
 #include "catalog/pg_encryption_key_d.h"
 
+/* Does transparent data encryption support for this relation? */
+#define IsTransparentEncryptionSupported(relkind) \
+	(relkind == RELKIND_RELATION || \
+	 relkind == RELKIND_INDEX || \
+	 relkind == RELKIND_TOASTVALUE || \
+	 relkind == RELKIND_MATVIEW)
+
 /* ----------------
  *		pg_encryption_key definition.  cpp turns this into
  *		typedef struct FormData_pg_encryption_key
@@ -38,5 +45,7 @@ CATALOG(pg_encryption_key,3423,EncryptionKeyRelationId) BKI_WITHOUT_OIDS
 typedef FormData_pg_encryption_key *Form_pg_encryption_key;
 
 void StoreCatalogRelationEncryptionKey(Oid relationId);
+void DropEncryptionKeyById(Oid keyid);
+char *GetEncryptionKey(Oid relid);
 
 #endif							/* PG_ENCRYPTION_KEY_H */

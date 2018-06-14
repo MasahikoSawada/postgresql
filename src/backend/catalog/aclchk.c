@@ -3378,6 +3378,9 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 					case OBJECT_DOMAIN:
 						msg = gettext_noop("permission denied for domain %s");
 						break;
+					case OBJECT_ENCRYPTION_KEY:
+						msg = gettext_noop("permission denied for encryption key %s");
+						break;
 					case OBJECT_EVENT_TRIGGER:
 						msg = gettext_noop("permission denied for event trigger %s");
 						break;
@@ -3505,6 +3508,9 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 						break;
 					case OBJECT_DOMAIN:
 						msg = gettext_noop("must be owner of domain %s");
+						break;
+					case OBJECT_ENCRYPTION_KEY:
+						msg = gettext_noop("must be owner of encryption key %s");
 						break;
 					case OBJECT_EVENT_TRIGGER:
 						msg = gettext_noop("must be owner of event trigger %s");

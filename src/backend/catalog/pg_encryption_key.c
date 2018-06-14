@@ -31,9 +31,9 @@ StoreCatalogRelationEncryptionKey(Oid relationId)
 	Datum	values[Natts_pg_encryption_key];
 	bool	nulls[Natts_pg_encryption_key];
 	HeapTuple	tuple;
-	Relation	tabkeyRel;
+	Relation	enckeyRel;
 
-	tabkeyRel = heap_open(EncryptionKeyRelationId, RowExclusiveLock);
+	enckeyRel = heap_open(EncryptionKeyRelationId, RowExclusiveLock);
 
 	values[Anum_pg_encryption_key_relid - 1] =
 		ObjectIdGetDatum(relationId);
@@ -42,11 +42,67 @@ StoreCatalogRelationEncryptionKey(Oid relationId)
 
 	memset(nulls, 0, sizeof(nulls));
 
-	tuple = heap_form_tuple(RelationGetDescr(tabkeyRel), values, nulls);
+	tuple = heap_form_tuple(RelationGetDescr(enckeyRel), values, nulls);
 
-	CatalogTupleInsert(tabkeyRel, tuple);
+	CatalogTupleInsert(enckeyRel, tuple);
 
 	heap_freetuple(tuple);
 
-	heap_close(tabkeyRel, RowExclusiveLock);
+	heap_close(enckeyRel, RowExclusiveLock);
+}
+
+/*
+ * Drop encryption key by OID.
+ * Encryption key OID is the same as oid of the corresponding relation
+ */
+void
+DropEncryptionKeyById(Oid keyid)
+{
+	Relation rel;
+	HeapTuple tuple;
+
+	rel = heap_open(EncryptionKeyRelationId, RowExclusiveLock);
+
+	tuple = SearchSysCache1(ENCRYPTIONKEYOID, ObjectIdGetDatum(keyid));
+
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for encryption key for relation %u", keyid);
+
+	CatalogTupleDelete(rel, &tuple->t_self);
+
+	ReleaseSysCache(tuple);
+	heap_close(rel, RowExclusiveLock);
+}
+
+/*
+ * GetEncryptionKey
+ *
+ * Search data encryption key by relation id and returns encryption key
+ * string.
+ */
+char *
+GetEncryptionKey(Oid relid)
+{
+	Relation rel;
+	HeapTuple tuple;
+	Form_pg_encryption_key	enckeyForm;
+	char	*encKey = NULL;
+
+	rel = heap_open(EncryptionKeyRelationId, AccessShareLock);
+
+	tuple = SearchSysCache1(ENCRYPTIONKEYOID, ObjectIdGetDatum(relid));
+
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for encryption key for relation %u", relid);
+
+	enckeyForm = (Form_pg_encryption_key) GETSTRUCT(tuple);
+
+	Assert(OidIsValid(enckeyForm));
+
+	encKey = text_to_cstring(&enckeyForm->relkey);
+
+	ReleaseSysCache(tuple);
+	heap_close(rel, AccessShareLock);
+
+	return encKey;
 }

@@ -119,6 +119,7 @@ pg_db_role_setting|t
 pg_default_acl|t
 pg_depend|t
 pg_description|t
+pg_encryption_key|t
 pg_enum|t
 pg_event_trigger|t
 pg_extension|t

@@ -176,6 +176,14 @@ typedef struct RelationData
 	struct FdwRoutine *rd_fdwroutine;	/* cached function pointers, or NULL */
 
 	/*
+	 * Transparent data encryption support
+	 *
+	 * rd_encryption_key must be encrypted. NULL if relation doesn't enable
+	 * data encryption.
+	 */
+	char		*rd_encryption_key;
+
+	/*
 	 * Hack for CLUSTER, rewriting ALTER TABLE, etc: when writing a new
 	 * version of a table, we need to make any toast pointers inserted into it
 	 * have the existing toast table's OID, not the OID of the transient toast
