@@ -69,6 +69,7 @@
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
 #include "storage/dsm_impl.h"
+#include "storage/encryption.h"
 #include "storage/standby.h"
 #include "storage/fd.h"
 #include "storage/large_object.h"
@@ -3053,6 +3054,16 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&gin_pending_list_limit,
 		4096, 64, MAX_KILOBYTES,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_master_keys", PGC_POSTMASTER, RESOURCES_MEM,
+		    gettext_noop("Sets the maximum number of master key for transparent data encryption."),
+			NULL
+		},
+		&max_master_keys,
+		0, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 

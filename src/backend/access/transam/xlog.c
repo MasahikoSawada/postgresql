@@ -54,6 +54,7 @@
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
+#include "storage/encryption.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/large_object.h"
@@ -9069,6 +9070,7 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 	CheckPointPredicate();
 	CheckPointRelationMap();
 	CheckPointReplicationSlots();
+	CheckPointMasterKeys();
 	CheckPointSnapBuild();
 	CheckPointLogicalRewriteHeap();
 	CheckPointBuffers(flags);	/* performs all required fsyncs */

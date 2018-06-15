@@ -35,6 +35,7 @@
 #include "replication/origin.h"
 #include "storage/bufmgr.h"
 #include "storage/dsm.h"
+#include "storage/encryption.h"
 #include "storage/ipc.h"
 #include "storage/pg_shmem.h"
 #include "storage/pmsignal.h"
@@ -149,6 +150,7 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 		size = add_size(size, BTreeShmemSize());
 		size = add_size(size, SyncScanShmemSize());
 		size = add_size(size, AsyncShmemSize());
+		size = add_size(size, MasterKeyShmemSize());
 		size = add_size(size, BackendRandomShmemSize());
 #ifdef EXEC_BACKEND
 		size = add_size(size, ShmemBackendArraySize());
@@ -258,6 +260,7 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 	AutoVacuumShmemInit();
 	ReplicationSlotsShmemInit();
 	ReplicationOriginShmemInit();
+	MasterKeyShmemInit();
 	WalSndShmemInit();
 	WalRcvShmemInit();
 	ApplyLauncherShmemInit();
