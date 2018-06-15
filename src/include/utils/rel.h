@@ -181,6 +181,7 @@ typedef struct RelationData
 	 * rd_encryption_key must be encrypted. NULL if relation doesn't enable
 	 * data encryption.
 	 */
+	bool		rd_encrypted;
 	char		*rd_encryption_key;
 
 	/*
@@ -475,6 +476,8 @@ typedef struct ViewOptions
 	do { \
 		if ((relation)->rd_smgr == NULL) \
 			smgrsetowner(&((relation)->rd_smgr), smgropen((relation)->rd_node, (relation)->rd_backend)); \
+		if ((relation)->rd_encryption_key != NULL) \
+			((relation)->rd_smgr)->encryption_key = (relation)->rd_encryption_key; \
 	} while (0)
 
 /*

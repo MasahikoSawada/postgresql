@@ -614,6 +614,7 @@ mdopen(SMgrRelation reln, ForkNumber forknum, int behavior)
 	mdfd = &reln->md_seg_fds[forknum][0];
 	mdfd->mdfd_vfd = fd;
 	mdfd->mdfd_segno = 0;
+	reln->encryption_key = NULL;
 
 	Assert(_mdnblocks(reln, forknum, mdfd) <= ((BlockNumber) RELSEG_SIZE));
 

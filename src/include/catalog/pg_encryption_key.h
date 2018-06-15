@@ -18,6 +18,7 @@
 
 #include "catalog/genbki.h"
 #include "catalog/pg_encryption_key_d.h"
+#include "storage/encryption.h"
 
 /* Does transparent data encryption support for this relation? */
 #define IsTransparentEncryptionSupported(relkind) \

@@ -71,6 +71,11 @@ typedef struct SMgrRelationData
 	int			md_num_open_segs[MAX_FORKNUM + 1];
 	struct _MdfdVec *md_seg_fds[MAX_FORKNUM + 1];
 
+	/*
+	 * Data encryption key.
+	 */
+	char		*encryption_key;
+
 	/* if unowned, list link in list of all unowned SMgrRelations */
 	struct SMgrRelationData *next_unowned_reln;
 } SMgrRelationData;

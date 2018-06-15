@@ -20,6 +20,7 @@
 #include "storage/latch.h"
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
+#include "storage/encryption.h"
 #include "storage/smgr.h"
 #include "port/atomics.h"
 #include "storage/spin.h"
@@ -185,6 +186,8 @@ typedef struct BufferDesc
 
 	int			wait_backend_pid;	/* backend PID of pin-count waiter */
 	int			freeNext;		/* link in freelist chain */
+
+	char		encryption_key[MAX_ENCRYPTION_KEY_LEN];	/* encryption key */
 
 	LWLock		content_lock;	/* to lock access to buffer contents */
 } BufferDesc;

@@ -44,6 +44,7 @@
 #include "postmaster/bgwriter.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
+#include "storage/encryption.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
 #include "storage/smgr.h"
@@ -429,6 +430,7 @@ ForgetPrivateRefCountEntry(PrivateRefCountEntry *ref)
 
 
 static Buffer ReadBuffer_common(SMgrRelation reln, char relpersistence,
+								char *encryption_key,
 				  ForkNumber forkNum, BlockNumber blockNum,
 				  ReadBufferMode mode, BufferAccessStrategy strategy,
 				  bool *hit);
@@ -662,6 +664,8 @@ ReadBufferExtended(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
 	 */
 	pgstat_count_buffer_read(reln);
 	buf = ReadBuffer_common(reln->rd_smgr, reln->rd_rel->relpersistence,
+							reln->rd_encrypted ?
+							reln->rd_encryption_key : NULL,
 							forkNum, blockNum, mode, strategy, &hit);
 	if (hit)
 		pgstat_count_buffer_hit(reln);
@@ -689,7 +693,8 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
 
 	Assert(InRecovery);
 
-	return ReadBuffer_common(smgr, RELPERSISTENCE_PERMANENT, forkNum, blockNum,
+	return ReadBuffer_common(smgr, RELPERSISTENCE_PERMANENT, NULL,
+							 forkNum, blockNum,
 							 mode, strategy, &hit);
 }
 
@@ -700,8 +705,8 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
  * *hit is set to true if the request was satisfied from shared buffer cache.
  */
 static Buffer
-ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
-				  BlockNumber blockNum, ReadBufferMode mode,
+ReadBuffer_common(SMgrRelation smgr, char relpersistence, char *encryption_key,
+				  ForkNumber forkNum, BlockNumber blockNum, ReadBufferMode mode,
 				  BufferAccessStrategy strategy, bool *hit)
 {
 	BufferDesc *bufHdr;
@@ -897,6 +902,10 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				INSTR_TIME_ADD(pgBufferUsage.blk_read_time, io_time);
 			}
 
+			/* Decrypt data block */
+			if (encryption_key)
+				DecryptOneBuffer(bufBlock, bufHdr->encryption_key);
+
 			/* check for garbage data */
 			if (!PageIsVerified((Page) bufBlock, blockNum))
 			{
@@ -948,6 +957,10 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		/* Set BM_VALID, terminate IO, and wake up any waiters */
 		TerminateBufferIO(bufHdr, false, BM_VALID);
 	}
+
+	/* Copy data encryption key to buffer header */
+	if (encryption_key)
+		memcpy(bufHdr->encryption_key, encryption_key, MAX_ENCRYPTION_KEY_LEN);
 
 	VacuumPageMiss++;
 	if (VacuumCostActive)
@@ -2741,6 +2754,15 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 	 * copy the page to private storage if we do checksumming.
 	 */
 	bufToWrite = PageSetChecksumCopy((Page) bufBlock, buf->tag.blockNum);
+
+	/*
+	 * Encrypt buffer data if enabled.
+	 *
+	 * XXX: I don't know why but buf->encryption didn't become NULL but is
+	 * filled 7x7x7x. So I check its contains as well.
+	 */
+	if (buf->encryption_key && buf->encryption_key[0] != '\0')
+		bufToWrite = EncryptOneBuffer(bufToWrite, buf->encryption_key);
 
 	if (track_io_timing)
 		INSTR_TIME_SET_CURRENT(io_start);

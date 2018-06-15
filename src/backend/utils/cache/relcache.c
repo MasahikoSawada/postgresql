@@ -1223,7 +1223,8 @@ RelationBuildDesc(Oid targetRelId, bool insertIt)
 	relation->rd_smgr = NULL;
 
 	/*
-	 * initialize data encryption key (relation->rd_encryptoin_key)
+	 * initialize data encryption key.
+	 * (relation->rd_encryption_key and relation->rd_smgr->encryption_key)
 	 */
 	if (IsTransparentEncryptionSupported(relation->rd_rel->relkind))
 		RelationInitEncryptionKey(relation);
@@ -1362,9 +1363,14 @@ RelationInitEncryptionKey(Relation relation)
 	Assert(IsTransparentEncryptionSupported(relation->rd_rel->relkind));
 
 	/* Quick return if encryption is disabled */
-	if (!relation->rd_options ||
+	if (IsSharedRelation(RelationGetRelid(relation)) ||
+		!relation->rd_options ||
 		!((StdRdOptions *)relation->rd_options)->encryption)
+	{
+		relation->rd_encrypted = false;
+		relation->rd_encryption_key = NULL;
 		return;
+	}
 
 	ScanKeyInit(&skey[0],
 				Anum_pg_encryption_key_relid,
@@ -1402,6 +1408,7 @@ RelationInitEncryptionKey(Relation relation)
 										 sizeof(char) * strlen(enckey));
 	memcpy(cached, enckey, strlen(enckey));
 
+	relation->rd_encrypted = true;
 	relation->rd_encryption_key = cached;
 }
 /*
@@ -5728,6 +5735,7 @@ load_relcache_init_file(bool shared)
 		rel->rd_exclprocs = NULL;
 		rel->rd_exclstrats = NULL;
 		rel->rd_fdwroutine = NULL;
+		rel->rd_encrypted = false;
 		rel->rd_encryption_key = NULL;
 
 		/*

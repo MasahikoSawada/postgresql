@@ -18,13 +18,23 @@
 #include "access/htup_details.h"
 #include "catalog/indexing.h"
 #include "catalog/pg_encryption_key.h"
+#include "common/md5.h"
 #include "storage/lmgr.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
+#include "utils/timestamp.h"
 #include "utils/tqual.h"
 
+static char *generate_encryption_key(void);
+
+/*
+ * Insert data encryption key for given relation into system catalog.
+ * Generate random encryption key and then encrypts it with a database
+ * key. Note that stored encryption key must be encrypted with a
+ * database key for security.
+ */
 void
 StoreCatalogRelationEncryptionKey(Oid relationId)
 {
@@ -32,13 +42,13 @@ StoreCatalogRelationEncryptionKey(Oid relationId)
 	bool	nulls[Natts_pg_encryption_key];
 	HeapTuple	tuple;
 	Relation	enckeyRel;
+	char	*encKey = generate_encryption_key();
 
 	enckeyRel = heap_open(EncryptionKeyRelationId, RowExclusiveLock);
 
-	values[Anum_pg_encryption_key_relid - 1] =
-		ObjectIdGetDatum(relationId);
+	values[Anum_pg_encryption_key_relid - 1] = ObjectIdGetDatum(relationId);
 	values[Anum_pg_encryption_key_relkey - 1] =
-		CStringGetDatum("secret key");
+		PointerGetDatum(cstring_to_text(encKey));
 
 	memset(nulls, 0, sizeof(nulls));
 
@@ -105,4 +115,21 @@ GetEncryptionKey(Oid relid)
 	heap_close(rel, AccessShareLock);
 
 	return encKey;
+}
+
+/*
+ * Generate relation encryption key.
+ *
+ * FIXME: Everything!!
+ */
+static char *
+generate_encryption_key(void)
+{
+	TimestampTz now = GetCurrentTimestamp();
+	char		*key = palloc(sizeof(char) * MAX_ENCRYPTION_KEY_LEN);
+
+	if (pg_md5_hash((void *) &now, sizeof(TimestampTz), key) == false)
+		return NULL;
+
+	return key;
 }
