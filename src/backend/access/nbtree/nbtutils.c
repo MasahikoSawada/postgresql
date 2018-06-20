@@ -1580,9 +1580,7 @@ _bt_checkkeys(IndexScanDesc scan,
 		}
 		else
 		{
-			BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-
-			if (offnum > P_FIRSTDATAKEY(opaque))
+			if (offnum > P_FIRSTDATAKEY(page))
 				return NULL;
 		}
 
@@ -1977,7 +1975,7 @@ _bt_killitems(IndexScanDesc scan)
 	}
 
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-	minoff = P_FIRSTDATAKEY(opaque);
+	minoff = P_FIRSTDATAKEY(page);
 	maxoff = PageGetMaxOffsetNumber(page);
 
 	for (i = 0; i < numKilled; i++)
@@ -2317,14 +2315,13 @@ _bt_check_natts(Relation rel, Page page, OffsetNumber offnum)
 {
 	int16		natts = IndexRelationGetNumberOfAttributes(rel);
 	int16		nkeyatts = IndexRelationGetNumberOfKeyAttributes(rel);
-	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 	IndexTuple	itup;
 
 	/*
 	 * We cannot reliably test a deleted or half-deleted page, since they have
 	 * dummy high keys
 	 */
-	if (P_IGNORE(opaque))
+	if (P_IGNORE(page))
 		return true;
 
 	Assert(offnum >= FirstOffsetNumber &&
@@ -2339,9 +2336,9 @@ _bt_check_natts(Relation rel, Page page, OffsetNumber offnum)
 
 	itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, offnum));
 
-	if (P_ISLEAF(opaque))
+	if (P_ISLEAF(page))
 	{
-		if (offnum >= P_FIRSTDATAKEY(opaque))
+		if (offnum >= P_FIRSTDATAKEY(page))
 		{
 			/*
 			 * Leaf tuples that are not the page high key (non-pivot tuples)
@@ -2355,15 +2352,15 @@ _bt_check_natts(Relation rel, Page page, OffsetNumber offnum)
 			 * Rightmost page doesn't contain a page high key, so tuple was
 			 * checked above as ordinary leaf tuple
 			 */
-			Assert(!P_RIGHTMOST(opaque));
+			Assert(!P_RIGHTMOST(page));
 
 			/* Page high key tuple contains only key attributes */
 			return BTreeTupleGetNAtts(itup, rel) == nkeyatts;
 		}
 	}
-	else						/* !P_ISLEAF(opaque) */
+	else						/* !P_ISLEAF(page) */
 	{
-		if (offnum == P_FIRSTDATAKEY(opaque))
+		if (offnum == P_FIRSTDATAKEY(page))
 		{
 			/*
 			 * The first tuple on any internal page (possibly the first after

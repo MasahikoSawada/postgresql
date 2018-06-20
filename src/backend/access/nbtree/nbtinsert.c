@@ -186,18 +186,18 @@ top:
 			 * free space to accommodate the new tuple, and the insertion scan
 			 * key is strictly greater than the first key on the page.
 			 */
-			if (P_ISLEAF(lpageop) && P_RIGHTMOST(lpageop) &&
-				!P_IGNORE(lpageop) &&
+			if (P_ISLEAF(page) && P_RIGHTMOST(page) &&
+				!P_IGNORE(page) &&
 				(PageGetFreeSpace(page) > itemsz) &&
-				PageGetMaxOffsetNumber(page) >= P_FIRSTDATAKEY(lpageop) &&
+				PageGetMaxOffsetNumber(page) >= P_FIRSTDATAKEY(page) &&
 				_bt_compare(rel, indnkeyatts, itup_scankey, page,
-							P_FIRSTDATAKEY(lpageop)) > 0)
+							P_FIRSTDATAKEY(page)) > 0)
 			{
 				/*
 				 * The right-most block should never have an incomplete split.
 				 * But be paranoid and check for it anyway.
 				 */
-				Assert(!P_INCOMPLETE_SPLIT(lpageop));
+				Assert(!P_INCOMPLETE_SPLIT(page));
 				fastpath = true;
 			}
 			else
@@ -575,7 +575,7 @@ _bt_check_unique(Relation rel, IndexTuple itup, Relation heapRel,
 		else
 		{
 			/* If scankey == hikey we gotta check the next page too */
-			if (P_RIGHTMOST(opaque))
+			if (P_RIGHTMOST(page))
 				break;
 			if (!_bt_isequal(itupdesc, page, P_HIKEY,
 							 indnkeyatts, itup_scankey))
@@ -587,14 +587,14 @@ _bt_check_unique(Relation rel, IndexTuple itup, Relation heapRel,
 				nbuf = _bt_relandgetbuf(rel, nbuf, nblkno, BT_READ);
 				page = BufferGetPage(nbuf);
 				opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-				if (!P_IGNORE(opaque))
+				if (!P_IGNORE(page))
 					break;
-				if (P_RIGHTMOST(opaque))
+				if (P_RIGHTMOST(page))
 					elog(ERROR, "fell off the end of index \"%s\"",
 						 RelationGetRelationName(rel));
 			}
 			maxoff = PageGetMaxOffsetNumber(page);
-			offset = P_FIRSTDATAKEY(opaque);
+			offset = P_FIRSTDATAKEY(page);
 		}
 	}
 
@@ -723,7 +723,7 @@ _bt_findinsertloc(Relation rel,
 		 * before considering moving right, see if we can obtain enough space
 		 * by erasing LP_DEAD items
 		 */
-		if (P_ISLEAF(lpageop) && P_HAS_GARBAGE(lpageop))
+		if (P_ISLEAF(page) && P_HAS_GARBAGE(lpageop))
 		{
 			_bt_vacuum_one_page(rel, buf, heapRel);
 
@@ -740,7 +740,7 @@ _bt_findinsertloc(Relation rel,
 		/*
 		 * nope, so check conditions (b) and (c) enumerated above
 		 */
-		if (P_RIGHTMOST(lpageop) ||
+		if (P_RIGHTMOST(page) ||
 			_bt_compare(rel, keysz, scankey, page, P_HIKEY) != 0 ||
 			random() <= (MAX_RANDOM_VALUE / 100))
 			break;
@@ -768,16 +768,16 @@ _bt_findinsertloc(Relation rel,
 			 * good because finishing the split could be a fairly lengthy
 			 * operation.  But this should happen very seldom.
 			 */
-			if (P_INCOMPLETE_SPLIT(lpageop))
+			if (P_INCOMPLETE_SPLIT(page))
 			{
 				_bt_finish_split(rel, rbuf, stack);
 				rbuf = InvalidBuffer;
 				continue;
 			}
 
-			if (!P_IGNORE(lpageop))
+			if (!P_IGNORE(page))
 				break;
-			if (P_RIGHTMOST(lpageop))
+			if (P_RIGHTMOST(page))
 				elog(ERROR, "fell off the end of index \"%s\"",
 					 RelationGetRelationName(rel));
 
@@ -798,7 +798,7 @@ _bt_findinsertloc(Relation rel,
 	 * the hint, find the position by searching.
 	 */
 	if (movedright)
-		newitemoff = P_FIRSTDATAKEY(lpageop);
+		newitemoff = P_FIRSTDATAKEY(page);
 	else if (firstlegaloff != InvalidOffsetNumber && !vacuumed)
 		newitemoff = firstlegaloff;
 	else
@@ -860,17 +860,17 @@ _bt_insertonpg(Relation rel,
 	lpageop = (BTPageOpaque) PageGetSpecialPointer(page);
 
 	/* child buffer must be given iff inserting on an internal page */
-	Assert(P_ISLEAF(lpageop) == !BufferIsValid(cbuf));
+	Assert(P_ISLEAF(page) == !BufferIsValid(cbuf));
 	/* tuple must have appropriate number of attributes */
-	Assert(!P_ISLEAF(lpageop) ||
+	Assert(!P_ISLEAF(page) ||
 		   BTreeTupleGetNAtts(itup, rel) ==
 		   IndexRelationGetNumberOfAttributes(rel));
-	Assert(P_ISLEAF(lpageop) ||
+	Assert(P_ISLEAF(page) ||
 		   BTreeTupleGetNAtts(itup, rel) ==
 		   IndexRelationGetNumberOfKeyAttributes(rel));
 
 	/* The caller should've finished any incomplete splits already. */
-	if (P_INCOMPLETE_SPLIT(lpageop))
+	if (P_INCOMPLETE_SPLIT(page))
 		elog(ERROR, "cannot insert to incompletely split page %u",
 			 BufferGetBlockNumber(buf));
 
@@ -888,7 +888,7 @@ _bt_insertonpg(Relation rel,
 	if (PageGetFreeSpace(page) < itemsz)
 	{
 		bool		is_root = P_ISROOT(lpageop);
-		bool		is_only = P_LEFTMOST(lpageop) && P_RIGHTMOST(lpageop);
+		bool		is_only = P_LEFTMOST(lpageop) && P_RIGHTMOST(page);
 		bool		newitemonleft;
 		Buffer		rbuf;
 
@@ -907,7 +907,7 @@ _bt_insertonpg(Relation rel,
 		 * cached block. Checking for a valid cached block at this point is
 		 * enough to decide whether we're in a fastpath or not.
 		 */
-		Assert(!(P_ISLEAF(lpageop) &&
+		Assert(!(P_ISLEAF(page) &&
 				 BlockNumberIsValid(RelationGetTargetBlock(rel))));
 
 		/* Choose the split point */
@@ -961,7 +961,7 @@ _bt_insertonpg(Relation rel,
 		 */
 		if (split_only_page)
 		{
-			Assert(!P_ISLEAF(lpageop));
+			Assert(!P_ISLEAF(page));
 
 			metabuf = _bt_getbuf(rel, BTREE_METAPAGE, BT_WRITE);
 			metapg = BufferGetPage(metabuf);
@@ -983,7 +983,7 @@ _bt_insertonpg(Relation rel,
 		 * allow a retail insertion of a new item at the negative infinity
 		 * offset.
 		 */
-		if (!P_ISLEAF(lpageop) && newitemoff == P_FIRSTDATAKEY(lpageop))
+		if (!P_ISLEAF(page) && newitemoff == P_FIRSTDATAKEY(page))
 			elog(ERROR, "cannot insert second negative infinity item in block %u of index \"%s\"",
 				 itup_blkno, RelationGetRelationName(rel));
 
@@ -1010,10 +1010,9 @@ _bt_insertonpg(Relation rel,
 		if (BufferIsValid(cbuf))
 		{
 			Page		cpage = BufferGetPage(cbuf);
-			BTPageOpaque cpageop = (BTPageOpaque) PageGetSpecialPointer(cpage);
 
-			Assert(P_INCOMPLETE_SPLIT(cpageop));
-			cpageop->btpo_flags &= ~BTP_INCOMPLETE_SPLIT;
+			Assert(P_INCOMPLETE_SPLIT(cpage));
+			BTClearFlag(cpage, BTP_INCOMPLETE_SPLIT, BTP_RSVD_INCOMPLETE_SPLIT);
 			MarkBufferDirty(cbuf);
 		}
 
@@ -1023,7 +1022,7 @@ _bt_insertonpg(Relation rel,
 		 * index where root is also the leaf, there is no point trying for any
 		 * optimization.
 		 */
-		if (P_RIGHTMOST(lpageop) && P_ISLEAF(lpageop) && !P_ISROOT(lpageop))
+		if (P_RIGHTMOST(page) && P_ISLEAF(page) && !P_ISROOT(lpageop))
 			cachedBlock = BufferGetBlockNumber(buf);
 
 		/* XLOG stuff */
@@ -1039,7 +1038,7 @@ _bt_insertonpg(Relation rel,
 			XLogBeginInsert();
 			XLogRegisterData((char *) &xlrec, SizeOfBtreeInsert);
 
-			if (P_ISLEAF(lpageop))
+			if (P_ISLEAF(page))
 				xlinfo = XLOG_BTREE_INSERT_LEAF;
 			else
 			{
@@ -1196,19 +1195,19 @@ _bt_split(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 	lopaque = (BTPageOpaque) PageGetSpecialPointer(leftpage);
 	ropaque = (BTPageOpaque) PageGetSpecialPointer(rightpage);
 
-	isleaf = P_ISLEAF(oopaque);
+	isleaf = P_ISLEAF(origpage);
 
 	/* if we're splitting this page, it won't be the root when we're done */
 	/* also, clear the SPLIT_END and HAS_GARBAGE flags in both pages */
-	lopaque->btpo_flags = oopaque->btpo_flags;
+	BTCopyFlag(origpage, leftpage);
 	lopaque->btpo_flags &= ~(BTP_ROOT | BTP_SPLIT_END | BTP_HAS_GARBAGE);
-	ropaque->btpo_flags = lopaque->btpo_flags;
+	BTCopyFlag(leftpage, rightpage);
 	/* set flag in left page indicating that the right page has no downlink */
-	lopaque->btpo_flags |= BTP_INCOMPLETE_SPLIT;
+	BTAddFlag(leftpage, BTP_INCOMPLETE_SPLIT, BTP_RSVD_INCOMPLETE_SPLIT);
 	lopaque->btpo_prev = oopaque->btpo_prev;
-	lopaque->btpo_next = rightpagenumber;
+	BTSetNextBlock(leftpage, rightpagenumber);
 	ropaque->btpo_prev = origpagenumber;
-	ropaque->btpo_next = oopaque->btpo_next;
+	BTSetNextBlock(rightpage, oopaque->btpo_next);
 	lopaque->btpo.level = ropaque->btpo.level = oopaque->btpo.level;
 	/* Since we already have write-lock on both pages, ok to read cycleid */
 	lopaque->btpo_cycleid = _bt_vacuum_cycleid(rel);
@@ -1223,7 +1222,7 @@ _bt_split(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 	 */
 	rightoff = P_HIKEY;
 
-	if (!P_RIGHTMOST(oopaque))
+	if (!P_RIGHTMOST(origpage))
 	{
 		itemid = PageGetItemId(origpage, P_HIKEY);
 		item = (IndexTuple) PageGetItem(origpage, itemid);
@@ -1233,7 +1232,7 @@ _bt_split(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 		 * Put abbreviated key in new high key for right page iff this is not
 		 * leaf level
 		 */
-		if (abbreviator && !P_ISLEAF(oopaque))
+		if (abbreviator && !P_ISLEAF(origpage))
 			abbrev = ItemIdGetAbbrev(itemid);
 		else
 			abbrev = 0x7FFF;
@@ -1263,7 +1262,7 @@ _bt_split(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 		itemsz = newitemsz;
 		item = newitem;
 
-		if (abbreviator && !P_ISLEAF(oopaque))
+		if (abbreviator && !P_ISLEAF(origpage))
 		{
 			/*
 			 * We generate new abbreviated key, even though incoming tuple must
@@ -1291,7 +1290,7 @@ _bt_split(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 		item = (IndexTuple) PageGetItem(origpage, itemid);
 		itemsz = IndexTupleSize(item);
 		/* Reusing abbreviate key from item if available/needed */
-		if (abbreviator && !P_ISLEAF(oopaque))
+		if (abbreviator && !P_ISLEAF(origpage))
 			abbrev = ItemIdGetAbbrev(itemid);
 		else
 			abbrev = 0x7FFF;
@@ -1338,7 +1337,7 @@ _bt_split(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 	 */
 	maxoff = PageGetMaxOffsetNumber(origpage);
 
-	for (i = P_FIRSTDATAKEY(oopaque); i <= maxoff; i = OffsetNumberNext(i))
+	for (i = P_FIRSTDATAKEY(origpage); i <= maxoff; i = OffsetNumberNext(i))
 	{
 		itemid = PageGetItemId(origpage, i);
 		item = (IndexTuple) PageGetItem(origpage, itemid);
@@ -1428,7 +1427,7 @@ _bt_split(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 	 * neighbors.
 	 */
 
-	if (!P_RIGHTMOST(oopaque))
+	if (!P_RIGHTMOST(origpage))
 	{
 		sbuf = _bt_getbuf(rel, oopaque->btpo_next, BT_WRITE);
 		spage = BufferGetPage(sbuf);
@@ -1489,7 +1488,7 @@ _bt_split(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 	MarkBufferDirty(buf);
 	MarkBufferDirty(rbuf);
 
-	if (!P_RIGHTMOST(ropaque))
+	if (!P_RIGHTMOST(rightpage))
 	{
 		sopaque->btpo_prev = rightpagenumber;
 		MarkBufferDirty(sbuf);
@@ -1502,9 +1501,8 @@ _bt_split(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 	if (!isleaf)
 	{
 		Page		cpage = BufferGetPage(cbuf);
-		BTPageOpaque cpageop = (BTPageOpaque) PageGetSpecialPointer(cpage);
 
-		cpageop->btpo_flags &= ~BTP_INCOMPLETE_SPLIT;
+		BTClearFlag(cpage, BTP_INCOMPLETE_SPLIT, BTP_RSVD_INCOMPLETE_SPLIT);
 		MarkBufferDirty(cbuf);
 	}
 
@@ -1526,7 +1524,7 @@ _bt_split(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 		XLogRegisterBuffer(0, buf, REGBUF_STANDARD);
 		XLogRegisterBuffer(1, rbuf, REGBUF_WILL_INIT);
 		/* Log the right sibling, because we've changed its prev-pointer. */
-		if (!P_RIGHTMOST(ropaque))
+		if (!P_RIGHTMOST(rightpage))
 			XLogRegisterBuffer(2, sbuf, REGBUF_STANDARD);
 		if (BufferIsValid(cbuf))
 			XLogRegisterBuffer(3, cbuf, REGBUF_STANDARD);
@@ -1583,7 +1581,7 @@ _bt_split(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 
 		PageSetLSN(origpage, recptr);
 		PageSetLSN(rightpage, recptr);
-		if (!P_RIGHTMOST(ropaque))
+		if (!P_RIGHTMOST(rightpage))
 		{
 			PageSetLSN(spage, recptr);
 		}
@@ -1596,7 +1594,7 @@ _bt_split(Relation rel, Buffer buf, Buffer cbuf, OffsetNumber firstright,
 	END_CRIT_SECTION();
 
 	/* release the old right sibling */
-	if (!P_RIGHTMOST(ropaque))
+	if (!P_RIGHTMOST(rightpage))
 		_bt_relbuf(rel, sbuf);
 
 	/* release the child */
@@ -1662,7 +1660,7 @@ _bt_findsplitloc(Relation rel,
 		MAXALIGN(sizeof(BTPageOpaqueData));
 
 	/* The right page will have the same high key as the old page */
-	if (!P_RIGHTMOST(opaque))
+	if (!P_RIGHTMOST(page))
 	{
 		IndexTuple	hikey;
 
@@ -1676,8 +1674,8 @@ _bt_findsplitloc(Relation rel,
 	olddataitemstotal = rightspace - (int) PageGetExactFreeSpace(page);
 
 	state.newitemsz = newitemsz;
-	state.is_leaf = P_ISLEAF(opaque);
-	state.is_rightmost = P_RIGHTMOST(opaque);
+	state.is_leaf = P_ISLEAF(page);
+	state.is_rightmost = P_RIGHTMOST(page);
 	state.have_split = false;
 	if (state.is_leaf)
 		state.fillfactor = RelationGetFillFactor(rel,
@@ -1711,7 +1709,7 @@ _bt_findsplitloc(Relation rel,
 	goodenoughfound = false;
 	maxoff = PageGetMaxOffsetNumber(page);
 
-	for (offnum = P_FIRSTDATAKEY(opaque);
+	for (offnum = P_FIRSTDATAKEY(page);
 		 offnum <= maxoff;
 		 offnum = OffsetNumberNext(offnum))
 	{
@@ -2006,7 +2004,7 @@ _bt_finish_split(Relation rel, Buffer lbuf, BTStack stack)
 	bool		was_root;
 	bool		was_only;
 
-	Assert(P_INCOMPLETE_SPLIT(lpageop));
+	Assert(P_INCOMPLETE_SPLIT(lpage));
 
 	/* Lock right sibling, the one missing the downlink */
 	rbuf = _bt_getbuf(rel, lpageop->btpo_next, BT_WRITE);
@@ -2033,7 +2031,7 @@ _bt_finish_split(Relation rel, Buffer lbuf, BTStack stack)
 		was_root = false;
 
 	/* Was this the only page on the level before split? */
-	was_only = (P_LEFTMOST(lpageop) && P_RIGHTMOST(rpageop));
+	was_only = (P_LEFTMOST(lpageop) && P_RIGHTMOST(rpage));
 
 	elog(DEBUG1, "finishing incomplete split of %u/%u",
 		 BufferGetBlockNumber(lbuf), BufferGetBlockNumber(rbuf));
@@ -2073,13 +2071,13 @@ _bt_getstackbuf(Relation rel, BTStack stack, int access)
 		page = BufferGetPage(buf);
 		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 
-		if (access == BT_WRITE && P_INCOMPLETE_SPLIT(opaque))
+		if (access == BT_WRITE && P_INCOMPLETE_SPLIT(page))
 		{
 			_bt_finish_split(rel, buf, stack->bts_parent);
 			continue;
 		}
 
-		if (!P_IGNORE(opaque))
+		if (!P_IGNORE(page))
 		{
 			OffsetNumber offnum,
 						minoff,
@@ -2087,7 +2085,7 @@ _bt_getstackbuf(Relation rel, BTStack stack, int access)
 			ItemId		itemid;
 			IndexTuple	item;
 
-			minoff = P_FIRSTDATAKEY(opaque);
+			minoff = P_FIRSTDATAKEY(page);
 			maxoff = PageGetMaxOffsetNumber(page);
 
 			/*
@@ -2146,7 +2144,7 @@ _bt_getstackbuf(Relation rel, BTStack stack, int access)
 		/*
 		 * The item we're looking for moved right at least one page.
 		 */
-		if (P_RIGHTMOST(opaque))
+		if (P_RIGHTMOST(page))
 		{
 			_bt_relbuf(rel, buf);
 			return InvalidBuffer;
@@ -2244,7 +2242,9 @@ _bt_newroot(Relation rel, Buffer lbuf, Buffer rbuf)
 
 	/* set btree special data */
 	rootopaque = (BTPageOpaque) PageGetSpecialPointer(rootpage);
-	rootopaque->btpo_prev = rootopaque->btpo_next = P_NONE;
+	rootopaque->btpo_prev = P_NONE;
+	BTSetNextBlock(rootpage, P_NONE);
+	BTClearAllBtpFlag(rootpage);
 	rootopaque->btpo_flags = BTP_ROOT;
 	rootopaque->btpo.level =
 		((BTPageOpaque) PageGetSpecialPointer(lpage))->btpo.level + 1;
@@ -2276,7 +2276,7 @@ _bt_newroot(Relation rel, Buffer lbuf, Buffer rbuf)
 		Datum		datum;
 		bool		isNull;
 
-		if (P_ISLEAF(lopaque))
+		if (P_ISLEAF(lpage))
 		{
 			datum = index_getattr(right_item, 1, itupdesc, &isNull);
 			abbrev = abbreviator(datum, isNull, false);
@@ -2301,8 +2301,8 @@ _bt_newroot(Relation rel, Buffer lbuf, Buffer rbuf)
 			 BufferGetBlockNumber(lbuf), RelationGetRelationName(rel));
 
 	/* Clear the incomplete-split flag in the left child */
-	Assert(P_INCOMPLETE_SPLIT(lopaque));
-	lopaque->btpo_flags &= ~BTP_INCOMPLETE_SPLIT;
+	Assert(P_INCOMPLETE_SPLIT(lpage));
+	BTClearFlag(lpage, BTP_INCOMPLETE_SPLIT, BTP_RSVD_INCOMPLETE_SPLIT);
 	MarkBufferDirty(lbuf);
 
 	MarkBufferDirty(rootbuf);
@@ -2384,7 +2384,6 @@ _bt_pgaddtup(Page page,
 			 abbreviate_func abbreviator,
 			 OffsetNumber itup_off)
 {
-	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 	IndexTupleData trunctuple;
 	ItemAbbrev		abbrev;
 	TupleDesc		itupdesc = RelationGetDescr(rel);
@@ -2396,7 +2395,7 @@ _bt_pgaddtup(Page page,
 	 * Instead, use Offset number as the leaf page abbreviated key; it could be
 	 * useful during forensic investigation.
 	 */
-	if (!P_ISLEAF(opaque) && itup_off == P_FIRSTDATAKEY(opaque))
+	if (!P_ISLEAF(page) && itup_off == P_FIRSTDATAKEY(page))
 	{
 		trunctuple = *itup;
 		trunctuple.t_info = sizeof(IndexTupleData);
@@ -2405,7 +2404,7 @@ _bt_pgaddtup(Page page,
 		itemsize = sizeof(IndexTupleData);
 		abbrev = 0;
 	}
-	else if (abbreviator && !P_ISLEAF(opaque))
+	else if (abbreviator && !P_ISLEAF(page))
 	{
 		Datum		datum;
 		bool		isNull;
@@ -2437,7 +2436,7 @@ _bt_isequal(TupleDesc itupdesc, Page page, OffsetNumber offnum,
 	int			i;
 
 	/* Better be comparing to a leaf item */
-	Assert(P_ISLEAF((BTPageOpaque) PageGetSpecialPointer(page)));
+	Assert(P_ISLEAF(page));
 
 	itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, offnum));
 
@@ -2493,13 +2492,12 @@ _bt_vacuum_one_page(Relation rel, Buffer buffer, Relation heapRel)
 				minoff,
 				maxoff;
 	Page		page = BufferGetPage(buffer);
-	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 
 	/*
 	 * Scan over all items to see which ones need to be deleted according to
 	 * LP_DEAD flags.
 	 */
-	minoff = P_FIRSTDATAKEY(opaque);
+	minoff = P_FIRSTDATAKEY(page);
 	maxoff = PageGetMaxOffsetNumber(page);
 	for (offnum = minoff;
 		 offnum <= maxoff;

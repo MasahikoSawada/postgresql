@@ -77,6 +77,22 @@ typedef BTPageOpaqueData *BTPageOpaque;
 #define BTP_HAS_GARBAGE (1 << 6)	/* page has LP_DEAD tuples */
 #define BTP_INCOMPLETE_SPLIT (1 << 7)	/* right sibling's downlink is missing */
 
+#define BTP_VALID_FLAGS	(BTP_INCOMPLETE_SPLIT - 1)
+
+/* Bits defined in AM reserved bits in page header */
+#define BTP_RSVD_LEAF				(1 << (0 + PD_AM_RESERVED_SHIFT))
+#define BTP_RSVD_DELETED			(1 << (1 + PD_AM_RESERVED_SHIFT))
+#define BTP_RSVD_HALF_DEAD			(1 << (2 + PD_AM_RESERVED_SHIFT))
+#define BTP_RSVD_INCOMPLETE_SPLIT	(1 << (3 + PD_AM_RESERVED_SHIFT))
+#define BTP_RSVD_RIGHTMOST			(1 << (4 + PD_AM_RESERVED_SHIFT))
+
+#define BTP_VALID_RSVD_BTPFLAGS \
+	(BTP_RSVD_LEAF|BTP_RSVD_DELETED|BTP_RSVD_HALF_DEAD|BTP_RSVD_INCOMPLETE_SPLIT)
+
+/* Does page header cache any flags? */
+#define BTPageHasCachedFlag(page) \
+	((PageGetAmReservedFlag(page) & BTP_RSVD_CACHED) != 0)
+
 /*
  * The max allowed value of a cycle ID is a bit less than 64K.  This is
  * for convenience of pg_filedump and similar utilities: we want to use
@@ -154,15 +170,32 @@ typedef struct BTMetaPageData
  * as well as other state info kept in the opaque data.
  */
 #define P_LEFTMOST(opaque)		((opaque)->btpo_prev == P_NONE)
-#define P_RIGHTMOST(opaque)		((opaque)->btpo_next == P_NONE)
-#define P_ISLEAF(opaque)		(((opaque)->btpo_flags & BTP_LEAF) != 0)
 #define P_ISROOT(opaque)		(((opaque)->btpo_flags & BTP_ROOT) != 0)
-#define P_ISDELETED(opaque)		(((opaque)->btpo_flags & BTP_DELETED) != 0)
 #define P_ISMETA(opaque)		(((opaque)->btpo_flags & BTP_META) != 0)
+#define P_HAS_GARBAGE(opaque)	(((opaque)->btpo_flags & BTP_HAS_GARBAGE) != 0)
+
+/*
+#define P_RIGHTMOST(opaque)	   ((opaque)->btpo_next == P_NONE)
+#define P_ISLEAF(opaque)		(((opaque)->btpo_flags & BTP_LEAF) != 0)
+#define P_ISDELETED(opaque)		(((opaque)->btpo_flags & BTP_DELETED) != 0)
 #define P_ISHALFDEAD(opaque)	(((opaque)->btpo_flags & BTP_HALF_DEAD) != 0)
 #define P_IGNORE(opaque)		(((opaque)->btpo_flags & (BTP_DELETED|BTP_HALF_DEAD)) != 0)
-#define P_HAS_GARBAGE(opaque)	(((opaque)->btpo_flags & BTP_HAS_GARBAGE) != 0)
 #define P_INCOMPLETE_SPLIT(opaque)	(((opaque)->btpo_flags & BTP_INCOMPLETE_SPLIT) != 0)
+*/
+/* Macros check cached btree flags instead of in opaque data */
+#define P_RIGHTMOST(page)	_bt_check_flag(page, BTP_RSVD_RIGHTMOST)
+#define P_ISLEAF(page)		_bt_check_flag(page, BTP_RSVD_LEAF)
+#define P_ISDELETED(page)	_bt_check_flag(page, BTP_RSVD_DELETED)
+#define P_ISHALFDEAD(page)	_bt_check_flag(page, BTP_RSVD_HALF_DEAD)
+#define P_IGNORE(page)		_bt_check_flag(page, (BTP_RSVD_DELETED|BTP_RSVD_HALF_DEAD))
+#define P_INCOMPLETE_SPLIT(page)	_bt_check_flag(page, BTP_RSVD_INCOMPLETE_SPLIT)
+
+#define BTSetFlag(page, flag, cflag) _bt_set_flag((page), (flag), (cflag))
+#define BTAddFlag(page, flag, cflag) _bt_add_flag((page), (flag), (cflag))
+#define BTClearFlag(page, flag, cflag) _bt_clear_flag((page), (flag), (cflag))
+#define BTClearAllBtpFlag(page)	_bt_clear_flag(page, BTP_VALID_FLAGS, BTP_VALID_RSVD_BTPFLAGS)
+#define BTCopyFlag(src, dst) _bt_copy_flag((src), (dst))
+#define BTSetNextBlock(page, blkno) _bt_set_nextblk((page), (blkno))
 
 /*
  *	Lehman and Yao's algorithm requires a ``high key'' on every non-rightmost
@@ -184,7 +217,8 @@ typedef struct BTMetaPageData
 
 #define P_HIKEY				((OffsetNumber) 1)
 #define P_FIRSTKEY			((OffsetNumber) 2)
-#define P_FIRSTDATAKEY(opaque)	(P_RIGHTMOST(opaque) ? P_HIKEY : P_FIRSTKEY)
+//#define P_FIRSTDATAKEY(opaque)	(P_RIGHTMOST(opaque) ? P_HIKEY : P_FIRSTKEY)
+#define P_FIRSTDATAKEY(page)	(P_RIGHTMOST(page) ? P_HIKEY : P_FIRSTKEY)
 
 /*
  * INCLUDE B-Tree indexes have non-key attributes.  These are extra
@@ -555,6 +589,14 @@ extern void _bt_delitems_vacuum(Relation rel, Buffer buf,
 					OffsetNumber *itemnos, int nitems,
 					BlockNumber lastBlockVacuumed);
 extern int	_bt_pagedel(Relation rel, Buffer buf);
+extern inline void _bt_set_flag(Page page, uint16 btpo_flag, uint16 cached_flag);
+extern inline void _bt_add_flag(Page page, uint16 btpo_flag, uint16 cached_flag);
+extern inline void _bt_clear_flag(Page page, uint16 btpo_flag, uint16 cached_flag);
+extern inline void _bt_copy_flag(Page src, Page dst);
+extern inline void _bt_set_nextblk(Page page, BlockNumber blkno);
+extern inline bool _bt_check_flag(Page page, uint16 cached_flag);
+
+extern void _bt_verify_flag(Page page, const char *msg);
 
 /*
  * prototypes for functions in nbtsearch.c

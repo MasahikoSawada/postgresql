@@ -125,6 +125,7 @@ _bt_restore_meta(XLogReaderState *record, uint8 block_id)
 	md->btm_last_cleanup_num_heap_tuples = xlrec->last_cleanup_num_heap_tuples;
 
 	pageop = (BTPageOpaque) PageGetSpecialPointer(metapg);
+	BTClearAllBtpFlag(metapg);
 	pageop->btpo_flags = BTP_META;
 
 	/*
@@ -155,10 +156,9 @@ _bt_clear_incomplete_split(XLogReaderState *record, uint8 block_id)
 	if (XLogReadBufferForRedo(record, block_id, &buf) == BLK_NEEDS_REDO)
 	{
 		Page		page = (Page) BufferGetPage(buf);
-		BTPageOpaque pageop = (BTPageOpaque) PageGetSpecialPointer(page);
 
-		Assert(P_INCOMPLETE_SPLIT(pageop));
-		pageop->btpo_flags &= ~BTP_INCOMPLETE_SPLIT;
+		Assert(P_INCOMPLETE_SPLIT(page));
+		BTClearFlag(page, BTP_INCOMPLETE_SPLIT, BTP_RSVD_INCOMPLETE_SPLIT);
 
 		PageSetLSN(page, lsn);
 		MarkBufferDirty(buf);
@@ -254,9 +254,12 @@ btree_xlog_split(bool onleft, bool lhighkey, XLogReaderState *record)
 	ropaque = (BTPageOpaque) PageGetSpecialPointer(rpage);
 
 	ropaque->btpo_prev = leftsib;
-	ropaque->btpo_next = rnext;
+	BTSetNextBlock(rpage, rnext);
 	ropaque->btpo.level = xlrec->level;
-	ropaque->btpo_flags = isleaf ? BTP_LEAF : 0;
+	if (isleaf)
+		BTSetFlag(rpage, BTP_LEAF, BTP_RSVD_LEAF);
+	else
+		BTClearAllBtpFlag(rpage);
 	ropaque->btpo_cycleid = 0;
 
 	_bt_restore_page(rpage, datapos, datalen);
@@ -268,7 +271,7 @@ btree_xlog_split(bool onleft, bool lhighkey, XLogReaderState *record)
 	 */
 	if (!lhighkey)
 	{
-		ItemId		hiItemId = PageGetItemId(rpage, P_FIRSTDATAKEY(ropaque));
+		ItemId		hiItemId = PageGetItemId(rpage, P_FIRSTDATAKEY(rpage));
 		IndexTuple	lphit;
 
 		Assert(isleaf);
@@ -332,7 +335,7 @@ btree_xlog_split(bool onleft, bool lhighkey, XLogReaderState *record)
 			elog(PANIC, "failed to add high key to left page after split");
 		leftoff = OffsetNumberNext(leftoff);
 
-		for (off = P_FIRSTDATAKEY(lopaque); off < xlrec->firstright; off++)
+		for (off = P_FIRSTDATAKEY(lpage); off < xlrec->firstright; off++)
 		{
 			ItemId		itemid;
 			Size		itemsz;
@@ -368,10 +371,10 @@ btree_xlog_split(bool onleft, bool lhighkey, XLogReaderState *record)
 		PageRestoreTempPage(newlpage, lpage);
 
 		/* Fix opaque fields */
-		lopaque->btpo_flags = BTP_INCOMPLETE_SPLIT;
+		BTSetFlag(lpage, BTP_INCOMPLETE_SPLIT, BTP_RSVD_INCOMPLETE_SPLIT);
 		if (isleaf)
-			lopaque->btpo_flags |= BTP_LEAF;
-		lopaque->btpo_next = rightsib;
+			BTAddFlag(lpage, BTP_LEAF, BTP_RSVD_LEAF);
+		BTSetNextBlock(lpage, rightsib);
 		lopaque->btpo_cycleid = 0;
 
 		PageSetLSN(lpage, lsn);
@@ -804,9 +807,9 @@ btree_xlog_mark_page_halfdead(uint8 info, XLogReaderState *record)
 	pageop = (BTPageOpaque) PageGetSpecialPointer(page);
 
 	pageop->btpo_prev = xlrec->leftblk;
-	pageop->btpo_next = xlrec->rightblk;
+	BTSetNextBlock(page, xlrec->rightblk);
 	pageop->btpo.level = 0;
-	pageop->btpo_flags = BTP_HALF_DEAD | BTP_LEAF;
+	BTSetFlag(page, BTP_HALF_DEAD | BTP_LEAF, BTP_RSVD_HALF_DEAD | BTP_RSVD_LEAF);
 	pageop->btpo_cycleid = 0;
 
 	/*
@@ -868,8 +871,7 @@ btree_xlog_unlink_page(uint8 info, XLogReaderState *record)
 		if (XLogReadBufferForRedo(record, 1, &buffer) == BLK_NEEDS_REDO)
 		{
 			page = (Page) BufferGetPage(buffer);
-			pageop = (BTPageOpaque) PageGetSpecialPointer(page);
-			pageop->btpo_next = rightsib;
+			BTSetNextBlock(page, rightsib);
 
 			PageSetLSN(page, lsn);
 			MarkBufferDirty(buffer);
@@ -886,9 +888,9 @@ btree_xlog_unlink_page(uint8 info, XLogReaderState *record)
 	pageop = (BTPageOpaque) PageGetSpecialPointer(page);
 
 	pageop->btpo_prev = leftsib;
-	pageop->btpo_next = rightsib;
+	BTSetNextBlock(page, rightsib);
 	pageop->btpo.xact = xlrec->btpo_xact;
-	pageop->btpo_flags = BTP_DELETED;
+	BTSetFlag(page, BTP_DELETED, BTP_RSVD_DELETED);
 	pageop->btpo_cycleid = 0;
 
 	PageSetLSN(page, lsn);
@@ -914,9 +916,9 @@ btree_xlog_unlink_page(uint8 info, XLogReaderState *record)
 		_bt_pageinit(page, BufferGetPageSize(buffer));
 		pageop = (BTPageOpaque) PageGetSpecialPointer(page);
 
-		pageop->btpo_flags = BTP_HALF_DEAD | BTP_LEAF;
+		BTSetFlag(page, BTP_HALF_DEAD | BTP_LEAF, BTP_RSVD_HALF_DEAD | BTP_RSVD_LEAF);
 		pageop->btpo_prev = xlrec->leafleftsib;
-		pageop->btpo_next = xlrec->leafrightsib;
+		BTSetNextBlock(page, xlrec->leafrightsib);
 		pageop->btpo.level = 0;
 		pageop->btpo_cycleid = 0;
 
@@ -956,11 +958,13 @@ btree_xlog_newroot(XLogReaderState *record)
 	_bt_pageinit(page, BufferGetPageSize(buffer));
 	pageop = (BTPageOpaque) PageGetSpecialPointer(page);
 
+	BTClearAllBtpFlag(page);
 	pageop->btpo_flags = BTP_ROOT;
-	pageop->btpo_prev = pageop->btpo_next = P_NONE;
+	pageop->btpo_prev = P_NONE;
+	BTSetNextBlock(page, P_NONE);
 	pageop->btpo.level = xlrec->level;
 	if (xlrec->level == 0)
-		pageop->btpo_flags |= BTP_LEAF;
+		BTAddFlag(page, BTP_LEAF, BTP_RSVD_LEAF);
 	pageop->btpo_cycleid = 0;
 
 	if (xlrec->level > 0)
@@ -1072,7 +1076,7 @@ btree_mask(char *pagedata, BlockNumber blkno)
 
 	maskopaq = (BTPageOpaque) PageGetSpecialPointer(page);
 
-	if (P_ISDELETED(maskopaq))
+	if (P_ISDELETED(page))
 	{
 		/*
 		 * Mask page content on a DELETED page since it will be re-initialized
@@ -1080,7 +1084,7 @@ btree_mask(char *pagedata, BlockNumber blkno)
 		 */
 		mask_page_content(page);
 	}
-	else if (P_ISLEAF(maskopaq))
+	else if (P_ISLEAF(page))
 	{
 		/*
 		 * In btree leaf pages, it is possible to modify the LP_FLAGS without

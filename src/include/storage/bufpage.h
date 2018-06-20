@@ -178,7 +178,10 @@ typedef PageHeaderData *PageHeader;
 #define PD_ALL_VISIBLE		0x0004	/* all tuples on page are visible to
 									 * everyone */
 
-#define PD_VALID_FLAG_BITS	0x0007	/* OR of all valid pd_flags bits */
+#define PD_VALID_FLAG_BITS	0xFC07	/* OR of all valid pd_flags bits */
+
+#define PD_AM_RESERVED_SHIFT	11
+#define PD_AM_RESERVED_MASK	(0x1F << PD_AM_RESERVED_SHIFT)	/* 5 bits are reserved by AMs */
 
 /*
  * Page layout version number 0 is for pre-7.3 Postgres releases.
@@ -383,6 +386,17 @@ PageValidateSpecialPointer(Page page)
 	(((PageHeader) (page))->pd_flags |= PD_ALL_VISIBLE)
 #define PageClearAllVisible(page) \
 	(((PageHeader) (page))->pd_flags &= ~PD_ALL_VISIBLE)
+
+#define PageGetAmReservedFlag(page) \
+	(((PageHeader) (page))->pd_flags & PD_AM_RESERVED_MASK)
+#define PageSetAmReservedFlag(page, flag) \
+	((((PageHeader) (page))->pd_flags) = (flag & PD_AM_RESERVED_MASK))
+#define PageAddAmReservedFlag(page, flag) \
+	((((PageHeader) (page))->pd_flags) |= (flag & PD_AM_RESERVED_MASK))
+#define PageClearAmReservedFlag(page, flag) \
+	((((PageHeader) (page))->pd_flags) &= (~(flag & PD_AM_RESERVED_MASK)))
+#define PageClearAllAmReservedFlags(page) \
+	((((PageHeader) (page))->pd_flags) &= (~(PD_AM_RESERVED_MASK)))
 
 #define PageIsPrunable(page, oldestxmin) \
 ( \

@@ -65,6 +65,7 @@ _bt_initmetapage(Page page, BlockNumber rootbknum, uint32 level)
 	metad->btm_last_cleanup_num_heap_tuples = -1.0;
 
 	metaopaque = (BTPageOpaque) PageGetSpecialPointer(page);
+	BTClearAllBtpFlag(page);
 	metaopaque->btpo_flags = BTP_META;
 
 	/*
@@ -290,10 +291,10 @@ _bt_getroot(Relation rel, int access)
 		 * paranoid but better safe than sorry.  Note we don't check P_ISROOT,
 		 * because that's not set in a "fast root".
 		 */
-		if (!P_IGNORE(rootopaque) &&
+		if (!P_IGNORE(rootpage) &&
 			rootopaque->btpo.level == rootlevel &&
 			P_LEFTMOST(rootopaque) &&
-			P_RIGHTMOST(rootopaque))
+			P_RIGHTMOST(rootpage))
 		{
 			/* OK, accept cached page as the root */
 			return rootbuf;
@@ -367,8 +368,10 @@ _bt_getroot(Relation rel, int access)
 		rootblkno = BufferGetBlockNumber(rootbuf);
 		rootpage = BufferGetPage(rootbuf);
 		rootopaque = (BTPageOpaque) PageGetSpecialPointer(rootpage);
-		rootopaque->btpo_prev = rootopaque->btpo_next = P_NONE;
-		rootopaque->btpo_flags = (BTP_LEAF | BTP_ROOT);
+		rootopaque->btpo_prev = P_NONE;
+		BTSetNextBlock(rootpage, P_NONE);
+		BTSetFlag(rootpage, BTP_LEAF, BTP_RSVD_LEAF);
+		rootopaque->btpo_flags |= BTP_ROOT;
 		rootopaque->btpo.level = 0;
 		rootopaque->btpo_cycleid = 0;
 
@@ -456,11 +459,11 @@ _bt_getroot(Relation rel, int access)
 			rootpage = BufferGetPage(rootbuf);
 			rootopaque = (BTPageOpaque) PageGetSpecialPointer(rootpage);
 
-			if (!P_IGNORE(rootopaque))
+			if (!P_IGNORE(rootpage))
 				break;
 
 			/* it's dead, Jim.  step right one page */
-			if (P_RIGHTMOST(rootopaque))
+			if (P_RIGHTMOST(rootpage))
 				elog(ERROR, "no live root page found in index \"%s\"",
 					 RelationGetRelationName(rel));
 			rootblkno = rootopaque->btpo_next;
@@ -560,11 +563,11 @@ _bt_gettrueroot(Relation rel)
 		rootpage = BufferGetPage(rootbuf);
 		rootopaque = (BTPageOpaque) PageGetSpecialPointer(rootpage);
 
-		if (!P_IGNORE(rootopaque))
+		if (!P_IGNORE(rootpage))
 			break;
 
 		/* it's dead, Jim.  step right one page */
-		if (P_RIGHTMOST(rootopaque))
+		if (P_RIGHTMOST(rootpage))
 			elog(ERROR, "no live root page found in index \"%s\"",
 				 RelationGetRelationName(rel));
 		rootblkno = rootopaque->btpo_next;
@@ -891,6 +894,7 @@ void
 _bt_pageinit(Page page, Size size)
 {
 	PageInit(page, size, sizeof(BTPageOpaqueData));
+	BTSetNextBlock(page, P_NONE);
 }
 
 /*
@@ -918,7 +922,7 @@ _bt_page_recyclable(Page page)
 	 * interested in it.
 	 */
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-	if (P_ISDELETED(opaque) &&
+	if (P_ISDELETED(page) &&
 		TransactionIdPrecedes(opaque->btpo.xact, RecentGlobalXmin))
 		return true;
 	return false;
@@ -1094,7 +1098,7 @@ _bt_is_page_halfdead(Relation rel, BlockNumber blk)
 	page = BufferGetPage(buf);
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 
-	result = P_ISHALFDEAD(opaque);
+	result = P_ISHALFDEAD(page);
 	_bt_relbuf(rel, buf);
 
 	return result;
@@ -1162,15 +1166,15 @@ _bt_lock_branch_parent(Relation rel, BlockNumber child, BTStack stack,
 	if (poffset >= maxoff)
 	{
 		/* It's rightmost child... */
-		if (poffset == P_FIRSTDATAKEY(opaque))
+		if (poffset == P_FIRSTDATAKEY(page))
 		{
 			/*
 			 * It's only child, so safe if parent would itself be removable.
 			 * We have to check the parent itself, and then recurse to test
 			 * the conditions at the parent's parent.
 			 */
-			if (P_RIGHTMOST(opaque) || P_ISROOT(opaque) ||
-				P_INCOMPLETE_SPLIT(opaque))
+			if (P_RIGHTMOST(page) || P_ISROOT(opaque) ||
+				P_INCOMPLETE_SPLIT(page))
 			{
 				_bt_relbuf(rel, pbuf);
 				return false;
@@ -1206,7 +1210,7 @@ _bt_lock_branch_parent(Relation rel, BlockNumber child, BTStack stack,
 				 * until the previous split has been completed)
 				 */
 				if (lopaque->btpo_next == parent &&
-					P_INCOMPLETE_SPLIT(lopaque))
+					P_INCOMPLETE_SPLIT(lpage))
 				{
 					_bt_relbuf(rel, lbuf);
 					return false;
@@ -1293,7 +1297,7 @@ _bt_pagedel(Relation rel, Buffer buf)
 		 * Internal pages are never deleted directly, only as part of deleting
 		 * the whole branch all the way down to leaf level.
 		 */
-		if (!P_ISLEAF(opaque))
+		if (!P_ISLEAF(page))
 		{
 			/*
 			 * Pre-9.4 page deletion only marked internal pages as half-dead,
@@ -1306,7 +1310,7 @@ _bt_pagedel(Relation rel, Buffer buf)
 			 * the upper levels. Log a notice, hopefully the admin will notice
 			 * and reindex.
 			 */
-			if (P_ISHALFDEAD(opaque))
+			if (P_ISHALFDEAD(page))
 				ereport(LOG,
 						(errcode(ERRCODE_INDEX_CORRUPTED),
 						 errmsg("index \"%s\" contains a half-dead internal page",
@@ -1333,12 +1337,12 @@ _bt_pagedel(Relation rel, Buffer buf)
 		 * to.  On subsequent iterations, we know we stepped right from a page
 		 * that passed these tests, so it's OK.
 		 */
-		if (P_RIGHTMOST(opaque) || P_ISROOT(opaque) || P_ISDELETED(opaque) ||
-			P_FIRSTDATAKEY(opaque) <= PageGetMaxOffsetNumber(page) ||
-			P_INCOMPLETE_SPLIT(opaque))
+		if (P_RIGHTMOST(page) || P_ISROOT(opaque) || P_ISDELETED(page) ||
+			P_FIRSTDATAKEY(page) <= PageGetMaxOffsetNumber(page) ||
+			P_INCOMPLETE_SPLIT(page))
 		{
 			/* Should never fail to delete a half-dead page */
-			Assert(!P_ISHALFDEAD(opaque));
+			Assert(!P_ISHALFDEAD(page));
 
 			_bt_relbuf(rel, buf);
 			return ndeleted;
@@ -1349,7 +1353,7 @@ _bt_pagedel(Relation rel, Buffer buf)
 		 * page, if we are going to delete a taller branch), and mark the page
 		 * as half-dead.
 		 */
-		if (!P_ISHALFDEAD(opaque))
+		if (!P_ISHALFDEAD(page))
 		{
 			/*
 			 * We need an approximate pointer to the page's parent page.  We
@@ -1402,7 +1406,7 @@ _bt_pagedel(Relation rel, Buffer buf)
 					 * need to walk right here.
 					 */
 					if (lopaque->btpo_next == BufferGetBlockNumber(buf) &&
-						P_INCOMPLETE_SPLIT(lopaque))
+						P_INCOMPLETE_SPLIT(lpage))
 					{
 						ReleaseBuffer(buf);
 						_bt_relbuf(rel, lbuf);
@@ -1445,7 +1449,7 @@ _bt_pagedel(Relation rel, Buffer buf)
 		 * making it shallower.  Iterate until the leaf page is gone.
 		 */
 		rightsib_empty = false;
-		while (P_ISHALFDEAD(opaque))
+		while (P_ISHALFDEAD(page))
 		{
 			if (!_bt_unlink_halfdead_page(rel, buf, &rightsib_empty))
 			{
@@ -1500,9 +1504,9 @@ _bt_mark_page_halfdead(Relation rel, Buffer leafbuf, BTStack stack)
 	page = BufferGetPage(leafbuf);
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 
-	Assert(!P_RIGHTMOST(opaque) && !P_ISROOT(opaque) && !P_ISDELETED(opaque) &&
-		   !P_ISHALFDEAD(opaque) && P_ISLEAF(opaque) &&
-		   P_FIRSTDATAKEY(opaque) > PageGetMaxOffsetNumber(page));
+	Assert(!P_RIGHTMOST(page) && !P_ISROOT(opaque) && !P_ISDELETED(page) &&
+		   !P_ISHALFDEAD(page) && P_ISLEAF(page) &&
+		   P_FIRSTDATAKEY(page) > PageGetMaxOffsetNumber(page));
 
 	/*
 	 * Save info about the leaf page.
@@ -1599,7 +1603,7 @@ _bt_mark_page_halfdead(Relation rel, Buffer leafbuf, BTStack stack)
 	 */
 	page = BufferGetPage(leafbuf);
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-	opaque->btpo_flags |= BTP_HALF_DEAD;
+	BTAddFlag(page, BTP_HALF_DEAD, BTP_RSVD_HALF_DEAD);
 
 	PageIndexTupleDelete(page, P_HIKEY, true);
 	Assert(PageGetMaxOffsetNumber(page) == 0);
@@ -1699,7 +1703,7 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, bool *rightsib_empty)
 	page = BufferGetPage(leafbuf);
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 
-	Assert(P_ISLEAF(opaque) && P_ISHALFDEAD(opaque));
+	Assert(P_ISLEAF(page) && P_ISHALFDEAD(page));
 
 	/*
 	 * Remember some information about the leaf page.
@@ -1765,7 +1769,7 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, bool *rightsib_empty)
 		lbuf = _bt_getbuf(rel, leftsib, BT_WRITE);
 		page = BufferGetPage(lbuf);
 		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-		while (P_ISDELETED(opaque) || opaque->btpo_next != target)
+		while (P_ISDELETED(page) || opaque->btpo_next != target)
 		{
 			/* step right one page */
 			leftsib = opaque->btpo_next;
@@ -1810,7 +1814,7 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, bool *rightsib_empty)
 	 * paranoia's sake; a half-dead page cannot resurrect because there can be
 	 * only one vacuum process running at a time.
 	 */
-	if (P_RIGHTMOST(opaque) || P_ISROOT(opaque) || P_ISDELETED(opaque))
+	if (P_RIGHTMOST(page) || P_ISROOT(opaque) || P_ISDELETED(page))
 	{
 		elog(ERROR, "half-dead page changed status unexpectedly in block %u of index \"%s\"",
 			 target, RelationGetRelationName(rel));
@@ -1821,21 +1825,21 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, bool *rightsib_empty)
 
 	if (target == leafblkno)
 	{
-		if (P_FIRSTDATAKEY(opaque) <= PageGetMaxOffsetNumber(page) ||
-			!P_ISLEAF(opaque) || !P_ISHALFDEAD(opaque))
+		if (P_FIRSTDATAKEY(page) <= PageGetMaxOffsetNumber(page) ||
+			!P_ISLEAF(page) || !P_ISHALFDEAD(page))
 			elog(ERROR, "half-dead page changed status unexpectedly in block %u of index \"%s\"",
 				 target, RelationGetRelationName(rel));
 		nextchild = InvalidBlockNumber;
 	}
 	else
 	{
-		if (P_FIRSTDATAKEY(opaque) != PageGetMaxOffsetNumber(page) ||
-			P_ISLEAF(opaque))
+		if (P_FIRSTDATAKEY(page) != PageGetMaxOffsetNumber(page) ||
+			P_ISLEAF(page))
 			elog(ERROR, "half-dead page changed status unexpectedly in block %u of index \"%s\"",
 				 target, RelationGetRelationName(rel));
 
 		/* remember the next non-leaf child down in the branch. */
-		itemid = PageGetItemId(page, P_FIRSTDATAKEY(opaque));
+		itemid = PageGetItemId(page, P_FIRSTDATAKEY(page));
 		nextchild = BTreeInnerTupleGetDownLink((IndexTuple) PageGetItem(page, itemid));
 		if (nextchild == leafblkno)
 			nextchild = InvalidBlockNumber;
@@ -1853,8 +1857,8 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, bool *rightsib_empty)
 			 "block %u links to %u instead of expected %u in index \"%s\"",
 			 rightsib, opaque->btpo_prev, target,
 			 RelationGetRelationName(rel));
-	rightsib_is_rightmost = P_RIGHTMOST(opaque);
-	*rightsib_empty = (P_FIRSTDATAKEY(opaque) > PageGetMaxOffsetNumber(page));
+	rightsib_is_rightmost = P_RIGHTMOST(page);
+	*rightsib_empty = (P_FIRSTDATAKEY(page) > PageGetMaxOffsetNumber(page));
 
 	/*
 	 * If we are deleting the next-to-last page on the target's level, then
@@ -1872,7 +1876,7 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, bool *rightsib_empty)
 	{
 		page = BufferGetPage(rbuf);
 		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-		if (P_RIGHTMOST(opaque))
+		if (P_RIGHTMOST(page))
 		{
 			/* rightsib will be the only one left on the level */
 			metabuf = _bt_getbuf(rel, BTREE_METAPAGE, BT_WRITE);
@@ -1910,7 +1914,7 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, bool *rightsib_empty)
 		page = BufferGetPage(lbuf);
 		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 		Assert(opaque->btpo_next == target);
-		opaque->btpo_next = rightsib;
+		BTSetNextBlock(page, rightsib);
 	}
 	page = BufferGetPage(rbuf);
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
@@ -1937,8 +1941,8 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, bool *rightsib_empty)
 	 */
 	page = BufferGetPage(buf);
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-	opaque->btpo_flags &= ~BTP_HALF_DEAD;
-	opaque->btpo_flags |= BTP_DELETED;
+	BTClearFlag(page, BTP_HALF_DEAD, BTP_RSVD_HALF_DEAD);
+	BTAddFlag(page, BTP_DELETED, BTP_RSVD_DELETED);
 	opaque->btpo.xact = ReadNewTransactionId();
 
 	/* And update the metapage, if needed */
@@ -2047,4 +2051,132 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, bool *rightsib_empty)
 		_bt_relbuf(rel, buf);
 
 	return true;
+}
+
+void
+_bt_verify_flag(Page page, const char *msg)
+{
+#define ELEVEL ERROR
+
+	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+	uint16 flag_opaque = opaque->btpo_flags;
+	uint16 flag_cached = PageGetAmReservedFlag(page);
+
+	if (((flag_opaque & BTP_LEAF) && !(flag_cached & BTP_RSVD_LEAF)) ||
+		((!(flag_opaque & BTP_LEAF)) && (flag_cached & BTP_RSVD_LEAF)))
+	{
+		ereport(ELEVEL,
+				(errcode(ERRCODE_INDEX_CORRUPTED),
+				 errmsg("btpo BTP_LEAF flags and cached BTP_RSVD_LEAF flag invariant violated for index"),
+				 errdetail_internal("flag opaque=%04x, flag cached=%04x",
+									flag_opaque, flag_cached)));
+	}
+
+	if (((flag_opaque & BTP_DELETED) && !(flag_cached & BTP_RSVD_DELETED)) ||
+		((!(flag_opaque & BTP_DELETED)) && (flag_cached & BTP_RSVD_DELETED)))
+	{
+		ereport(ELEVEL,
+				(errcode(ERRCODE_INDEX_CORRUPTED),
+				 errmsg("btpo BTP_DELETED flags and cached BTP_RSVD_DELETED flag invariant violated for index"),
+				 errdetail_internal("flag opaque=%04x, flag cached=%04x",
+										flag_opaque, flag_cached)));
+	}
+
+	if (((flag_opaque & BTP_HALF_DEAD) && !(flag_cached & BTP_RSVD_HALF_DEAD)) ||
+		((!(flag_opaque & BTP_HALF_DEAD)) && (flag_cached & BTP_RSVD_HALF_DEAD)))
+	{
+		ereport(ELEVEL,
+				(errcode(ERRCODE_INDEX_CORRUPTED),
+				 errmsg("btpo BTP_HALF_DEAD flags and cached BTP_RSVD_HALF_DEAD flag invariant violated for index"),
+				 errdetail_internal("flag opaque=%04x, flag cached=%04x",
+									flag_opaque, flag_cached)));
+	}
+
+	if (((flag_opaque & BTP_INCOMPLETE_SPLIT) && !(flag_cached & BTP_RSVD_INCOMPLETE_SPLIT)) ||
+		((!(flag_opaque & BTP_INCOMPLETE_SPLIT)) && (flag_cached & BTP_RSVD_INCOMPLETE_SPLIT)))
+	{
+		ereport(ELEVEL,
+				(errcode(ERRCODE_INDEX_CORRUPTED),
+				 errmsg("btpo BTP_INCOMPLETE_SPLIT flags and cached BTP_RSVD_INCOMPLETE_SPLIT flag invariant violated for index"),
+				 errdetail_internal("flag opaque=%04x, flag cached=%04x",
+									flag_opaque, flag_cached)));
+	}
+
+	if (((opaque->btpo_next == P_NONE) && !(flag_cached & BTP_RSVD_RIGHTMOST)) ||
+		((opaque->btpo_next != P_NONE) && (flag_cached & BTP_RSVD_RIGHTMOST)))
+	{
+		if (!P_ISMETA(opaque) &&
+			!((PageGetAmReservedFlag(page) & BTP_RSVD_INCOMPLETE_SPLIT) != 0))
+		{
+			elog(WARNING, "hgehoeg %s %d", msg, MyProcPid);
+			pg_usleep(30000000);
+			ereport(ELEVEL,
+					(errcode(ERRCODE_INDEX_CORRUPTED),
+					 errmsg("btpo right most and cached BTP_RSVD_RIGHTMOST flag invariant violated for index"),
+					 errdetail_internal("btpo_next=%u, flag opaque=%04x, flag cached=%04x",
+										opaque->btpo_next, opaque->btpo_flags, flag_cached)));
+		}
+	}
+}
+
+inline void
+_bt_set_flag(Page page, uint16 btpo_flag, uint16 cached_flag)
+{
+	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+
+	opaque->btpo_flags = btpo_flag;
+	BTClearAllBtpFlag(page);
+	_bt_add_flag(page, btpo_flag, cached_flag);
+}
+inline void
+_bt_add_flag(Page page, uint16 btpo_flag, uint16 cached_flag)
+{
+	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+
+	PageAddAmReservedFlag(page, cached_flag);
+	opaque->btpo_flags |= btpo_flag;
+
+	_bt_verify_flag(page, NULL);
+}
+inline void
+_bt_clear_flag(Page page, uint16 btpo_flag, uint16 cached_flag)
+{
+	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+
+	PageClearAmReservedFlag(page, cached_flag);
+	opaque->btpo_flags &= ~(btpo_flag);
+	_bt_verify_flag(page, NULL);
+}
+inline void
+_bt_copy_flag(Page src, Page dst)
+{
+	BTPageOpaque sopaque = (BTPageOpaque) PageGetSpecialPointer(src);
+	BTPageOpaque dopaque = (BTPageOpaque) PageGetSpecialPointer(dst);
+	uint16 btpo_flags = PageGetAmReservedFlag(src) & BTP_VALID_RSVD_BTPFLAGS;
+
+	dopaque->btpo_flags = sopaque->btpo_flags;
+	PageAddAmReservedFlag(dst, btpo_flags);
+
+	_bt_verify_flag(src, NULL);
+	_bt_verify_flag(dst, NULL);
+}
+inline void
+_bt_set_nextblk(Page page, BlockNumber blkno)
+{
+	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+
+	if (blkno == P_NONE)
+		PageAddAmReservedFlag(page, BTP_RSVD_RIGHTMOST);
+	else
+		PageClearAmReservedFlag(page, BTP_RSVD_RIGHTMOST);
+
+	opaque->btpo_next = blkno;
+
+	_bt_verify_flag(page, NULL);
+}
+inline bool
+_bt_check_flag(Page page, uint16 cached_flag)
+{
+	_bt_verify_flag(page, NULL);
+	return (PageGetAmReservedFlag(page) & cached_flag) != 0;
 }
