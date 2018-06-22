@@ -133,6 +133,12 @@ int			Log_autovacuum_min_duration = -1;
 #define MIN_AUTOVAC_SLEEPTIME 100.0 /* milliseconds */
 #define MAX_AUTOVAC_SLEEPTIME 300	/* seconds */
 
+/*
+ * update datfrozenxid whenever we have become possible to update
+ * it more than this value.
+ */
+#define UPDATE_DATFROZENXID_EVERY_XACT	10000000L	/* 10 million xacts */
+
 /* Flags to tell if we are in an autovacuum process */
 static bool am_autovacuum_launcher = false;
 static bool am_autovacuum_worker = false;
@@ -171,17 +177,30 @@ typedef struct avw_dbase
 	char	   *adw_name;
 	TransactionId adw_frozenxid;
 	MultiXactId adw_minmulti;
+	TransactionId adw_next_frozenxid;	/* new datfrozenxid we will get
+										   after vacuumed */
+	MultiXactId adw_next_minmulti;	/* new datminmulti we will get after
+									   vacuumed */
 	PgStat_StatDBEntry *adw_entry;
 } avw_dbase;
 
-/* struct to keep track of tables to vacuum and/or analyze, in 1st pass */
-typedef struct av_relation
+/* hash entry for mapping between relation and toast relation */
+typedef struct av_relation_hash_entry
 {
 	Oid			ar_toastrelid;	/* hash key - must be first */
 	Oid			ar_relid;
 	bool		ar_hasrelopts;
 	AutoVacOpts ar_reloptions;	/* copy of AutoVacOpts from the main table's
 								 * reloptions, or NULL if none */
+} av_relation_hash_entry;
+
+/* struct to keep track of tables to vacuum and/or analyze, in 1st pass */
+typedef struct av_relation
+{
+	Oid				relid;
+	TransactionId	relfrozenxid;
+	MultiXactId		relminmxid;
+	bool			for_anti_wrap;
 } av_relation;
 
 /* struct to keep track of tables to vacuum and/or analyze, after rechecking */
@@ -229,6 +248,9 @@ typedef struct WorkerInfoData
 	int			wi_cost_delay;
 	int			wi_cost_limit;
 	int			wi_cost_limit_base;
+	bool		wi_for_anti_wrap;
+	TransactionId	wi_next_frozenxid;
+	TransactionId	wi_next_minmulti;
 } WorkerInfoData;
 
 typedef struct WorkerInfoData *WorkerInfo;
@@ -319,6 +341,12 @@ static List *get_database_list(void);
 static void rebuild_database_list(Oid newdb);
 static int	db_comparator(const void *a, const void *b);
 static void autovac_balance_cost(void);
+static void get_next_xid_bounds(avw_dbase *avdb,
+								TransactionId *datfrozenxid,
+								MultiXactId	*datminmxid);
+static void get_oldest_xid_bounds(Oid relid,
+								  TransactionId *relfrozenxid,
+								  MultiXactId	*relminmxid);
 
 static void do_autovacuum(void);
 static void FreeWorkerInfo(int code, Datum arg);
@@ -1194,6 +1222,13 @@ do_start_worker(void)
 	 * if any is in MultiXactId wraparound.  Note that those in Xid wraparound
 	 * danger are given more priority than those in multi wraparound danger.
 	 *
+	 * For Xid wraparound purposes, we choose a database to connect to with
+	 * consideration for updating oldest relfrozenxid and relminmxid by
+	 * concurrent autovacuum workers.  That way, we can choose a database
+	 * that has the table that is at greatest risk of wraparound.  This can
+	 * avoid continuously choosing one database if the database has a big
+	 * table that is at risk of wraparound and takes a long time to vacuum.
+	 *
 	 * Note that a database with no stats entry is not considered, except for
 	 * Xid wraparound purposes.  The theory is that if no one has ever
 	 * connected to it since the stats were last initialized, it doesn't need
@@ -1215,22 +1250,30 @@ do_start_worker(void)
 		avw_dbase  *tmp = lfirst(cell);
 		dlist_iter	iter;
 
+		/*
+		 * Get the next oldest both relfrozenxid and relminmxid value that
+		 * we will have if available. If not available, these value are set
+		 * the current ids.
+		 */
+		get_next_xid_bounds(tmp, &tmp->adw_next_frozenxid, &tmp->adw_next_minmulti);
+
 		/* Check to see if this one is at risk of wraparound */
-		if (TransactionIdPrecedes(tmp->adw_frozenxid, xidForceLimit))
+		if (TransactionIdPrecedes(tmp->adw_next_frozenxid, xidForceLimit))
 		{
 			if (avdb == NULL ||
-				TransactionIdPrecedes(tmp->adw_frozenxid,
-									  avdb->adw_frozenxid))
+				TransactionIdPrecedes(tmp->adw_next_frozenxid,
+									  avdb->adw_next_frozenxid))
 				avdb = tmp;
 			for_xid_wrap = true;
 			continue;
 		}
 		else if (for_xid_wrap)
 			continue;			/* ignore not-at-risk DBs */
-		else if (MultiXactIdPrecedes(tmp->adw_minmulti, multiForceLimit))
+		else if (MultiXactIdPrecedes(tmp->adw_next_frozenxid, multiForceLimit))
 		{
 			if (avdb == NULL ||
-				MultiXactIdPrecedes(tmp->adw_minmulti, avdb->adw_minmulti))
+				MultiXactIdPrecedes(tmp->adw_next_minmulti,
+									avdb->adw_next_minmulti))
 				avdb = tmp;
 			for_multi_wrap = true;
 			continue;
@@ -1307,6 +1350,7 @@ do_start_worker(void)
 		worker->wi_dboid = avdb->adw_datid;
 		worker->wi_proc = NULL;
 		worker->wi_launchtime = GetCurrentTimestamp();
+		worker->wi_for_anti_wrap = for_xid_wrap | for_multi_wrap;
 
 		AutoVacuumShmem->av_startingWorker = worker;
 
@@ -1751,6 +1795,8 @@ FreeWorkerInfo(int code, Datum arg)
 		MyWorkerInfo->wi_cost_delay = 0;
 		MyWorkerInfo->wi_cost_limit = 0;
 		MyWorkerInfo->wi_cost_limit_base = 0;
+		MyWorkerInfo->wi_next_frozenxid = InvalidTransactionId;
+		MyWorkerInfo->wi_next_minmulti = InvalidMultiXactId;
 		dlist_push_head(&AutoVacuumShmem->av_freeWorkers,
 						&MyWorkerInfo->wi_links);
 		/* not mine anymore */
@@ -1862,6 +1908,116 @@ autovac_balance_cost(void)
 }
 
 /*
+ * get_next_xid_bounds
+ *
+ * Get both datfrozenxid and datminmxid in a given database with
+ * consideration for updating these values by concurrent running
+ * autovacuum worker. If workers are running on a database, they are
+ * advertising the next xid lower bounds that we will have after the
+ * tables being vacuumed are finished.  If the next xid bounds are
+ * set, we use them rather than actual current xid bounds as a
+ * datfrozenxid and a datminmxid.
+ */
+static void
+get_next_xid_bounds(avw_dbase *avdb, TransactionId *datfrozenxid,
+					MultiXactId	*datminmxid)
+{
+	TransactionId	frozenxid = avdb->adw_frozenxid;
+	MultiXactId		minmulti = avdb->adw_minmulti;
+	dlist_iter 		iter;
+
+	LWLockAcquire(AutovacuumLock, LW_EXCLUSIVE);
+
+	dlist_foreach(iter, &AutoVacuumShmem->av_runningWorkers)
+	{
+		WorkerInfo	worker = dlist_container(WorkerInfoData, wi_links, iter.cur);
+
+		if (worker->wi_dboid != avdb->adw_datid)
+			continue;
+
+		/* Get oldest lower bounds */
+		if (TransactionIdIsValid(worker->wi_next_frozenxid) &&
+			TransactionIdPrecedes(frozenxid, worker->wi_next_frozenxid))
+			frozenxid = worker->wi_next_frozenxid;
+		if (MultiXactIdIsValid(worker->wi_next_minmulti) &&
+			MultiXactIdPrecedes(minmulti, worker->wi_next_minmulti))
+			minmulti = worker->wi_next_minmulti;
+	}
+
+	LWLockRelease(AutovacuumLock);
+
+	Assert(TransactionIdIsValid(frozenxid));
+	Assert(MultiXactIdIsValid(minmulti));
+
+	*datfrozenxid = frozenxid;
+	*datminmxid = minmulti;
+}
+
+/*
+ * get_oldest_xid_bounds
+ *
+ * Get oldest relfrozenxid and relminmxid in the database excluding a
+ * given relation.
+ */
+static void
+get_oldest_xid_bounds(Oid relid, TransactionId *relfrozenxid,
+					  MultiXactId *relminmxid)
+{
+	Relation		rel;
+	HeapScanDesc	relScan;
+	HeapTuple		tuple;
+	TransactionId	oldest_xid  = InvalidTransactionId;
+	MultiXactId		oldest_mxid = InvalidMultiXactId;
+
+	rel = heap_open(RelationRelationId, AccessShareLock);
+	relScan = heap_beginscan_catalog(rel, 0, NULL);
+
+	while ((tuple = heap_getnext(relScan, ForwardScanDirection)) != NULL)
+	{
+		Form_pg_class classForm = (Form_pg_class) GETSTRUCT(tuple);
+
+		if (classForm->relkind != RELKIND_RELATION &&
+			classForm->relkind != RELKIND_MATVIEW)
+			continue;
+
+		if (classForm->relpersistence == RELPERSISTENCE_TEMP)
+			continue;
+
+		/* Exclude the given relation */
+		if (HeapTupleGetOid(tuple) == relid)
+			continue;
+
+		/* Must have valid both xid and mxid */
+		if (!TransactionIdIsNormal(classForm->relfrozenxid) ||
+			!MultiXactIdIsValid(classForm->relminmxid))
+			continue;
+
+		/* Set the first enties */
+		if (!TransactionIdIsValid(oldest_xid) && !MultiXactIdIsValid(oldest_mxid))
+		{
+			oldest_xid = classForm->relfrozenxid;
+			oldest_mxid = classForm->relminmxid;
+			continue;
+		}
+
+		/* Update oldest xid bounds */
+		if (TransactionIdPrecedes(classForm->relfrozenxid, oldest_xid))
+			oldest_xid = classForm->relfrozenxid;
+		if (MultiXactIdPrecedes(classForm->relminmxid, oldest_mxid))
+			oldest_mxid = classForm->relminmxid;
+	}
+
+	heap_endscan(relScan);
+	heap_close(rel, AccessShareLock);
+
+	Assert(TransactionIdIsValid(oldest_xid));
+	Assert(MultiXactIdIsValid(oldest_mxid));
+
+	*relfrozenxid = oldest_xid;
+	*relminmxid = oldest_mxid;
+}
+
+/*
  * get_database_list
  *		Return a list of all databases found in pg_database.
  *
@@ -1918,6 +2074,9 @@ get_database_list(void)
 		avdb->adw_name = pstrdup(NameStr(pgdatabase->datname));
 		avdb->adw_frozenxid = pgdatabase->datfrozenxid;
 		avdb->adw_minmulti = pgdatabase->datminmxid;
+		/* set the same value for now */
+		avdb->adw_next_frozenxid = pgdatabase->datfrozenxid;
+		avdb->adw_next_minmulti = pgdatabase->datminmxid;
 		/* this gets set later: */
 		avdb->adw_entry = NULL;
 
@@ -1946,7 +2105,7 @@ do_autovacuum(void)
 	HeapTuple	tuple;
 	HeapScanDesc relScan;
 	Form_pg_database dbForm;
-	List	   *table_oids = NIL;
+	List	   *av_relation_list = NIL;
 	List	   *orphan_oids = NIL;
 	HASHCTL		ctl;
 	HTAB	   *table_toast_map;
@@ -1954,6 +2113,8 @@ do_autovacuum(void)
 	PgStat_StatDBEntry *shared;
 	PgStat_StatDBEntry *dbentry;
 	BufferAccessStrategy bstrategy;
+	TransactionId	cur_frozenxid;
+	MultiXactId		cur_minmulti;
 	ScanKeyData key;
 	TupleDesc	pg_class_desc;
 	int			effective_multixact_freeze_max_age;
@@ -2035,7 +2196,7 @@ do_autovacuum(void)
 	/* create hash table for toast <-> main relid mapping */
 	MemSet(&ctl, 0, sizeof(ctl));
 	ctl.keysize = sizeof(Oid);
-	ctl.entrysize = sizeof(av_relation);
+	ctl.entrysize = sizeof(av_relation_hash_entry);
 
 	table_toast_map = hash_create("TOAST to main relid map",
 								  100,
@@ -2115,9 +2276,18 @@ do_autovacuum(void)
 								  effective_multixact_freeze_max_age,
 								  &dovacuum, &doanalyze, &wraparound);
 
-		/* Relations that need work are added to table_oids */
+		/* Relations that need work are added to av_relation_list */
 		if (dovacuum || doanalyze)
-			table_oids = lappend_oid(table_oids, relid);
+		{
+			av_relation *avrel = (av_relation *) palloc(sizeof(av_relation));
+
+			avrel->relid = relid;
+			avrel->relfrozenxid = classForm->relfrozenxid;
+			avrel->relminmxid = classForm->relminmxid;
+			avrel->for_anti_wrap = wraparound;
+
+			av_relation_list = lappend(av_relation_list, avrel);
+		}
 
 		/*
 		 * Remember TOAST associations for the second pass.  Note: we must do
@@ -2126,7 +2296,7 @@ do_autovacuum(void)
 		 */
 		if (OidIsValid(classForm->reltoastrelid))
 		{
-			av_relation *hentry;
+			av_relation_hash_entry *hentry;
 			bool		found;
 
 			hentry = hash_search(table_toast_map,
@@ -2182,7 +2352,7 @@ do_autovacuum(void)
 		relopts = extract_autovac_opts(tuple, pg_class_desc);
 		if (relopts == NULL)
 		{
-			av_relation *hentry;
+			av_relation_hash_entry *hentry;
 			bool		found;
 
 			hentry = hash_search(table_toast_map, &relid, HASH_FIND, &found);
@@ -2200,7 +2370,16 @@ do_autovacuum(void)
 
 		/* ignore analyze for toast tables */
 		if (dovacuum)
-			table_oids = lappend_oid(table_oids, relid);
+		{
+			av_relation *avrel = (av_relation *) palloc(sizeof(av_relation));
+
+			avrel->relid = relid;
+			avrel->relfrozenxid = classForm->relfrozenxid;
+			avrel->relminmxid = classForm->relminmxid;
+			avrel->for_anti_wrap = wraparound;
+
+			av_relation_list = lappend(av_relation_list, avrel);
+		}
 	}
 
 	heap_endscan(relScan);
@@ -2304,6 +2483,21 @@ do_autovacuum(void)
 	bstrategy = GetAccessStrategy(BAS_VACUUM);
 
 	/*
+	 * In anti-wraparound case, the table that has the oldest relfrozenxid and
+	 * relminmxid in the database is vacuumed first. Sort the list by relfrozenxid
+	 * and relminmxid in older order.
+	 */
+	if (MyWorkerInfo->wi_for_anti_wrap)
+	{
+		av_relation	*avrel;
+
+		/* Get current head(oldest) xids */
+		avrel = (av_relation *) linitial(av_relation_list);
+		cur_frozenxid = avrel->relfrozenxid;
+		cur_minmulti = avrel->relminmxid;
+	}
+
+	/*
 	 * create a memory context to act as fake PortalContext, so that the
 	 * contexts created in the vacuum code are cleaned up for each table.
 	 */
@@ -2314,9 +2508,10 @@ do_autovacuum(void)
 	/*
 	 * Perform operations on collected tables.
 	 */
-	foreach(cell, table_oids)
+	foreach(cell, av_relation_list)
 	{
-		Oid			relid = lfirst_oid(cell);
+		av_relation	*avrel = (av_relation *) lfirst(cell);
+		Oid			relid = avrel->relid;
 		HeapTuple	classTup;
 		autovac_table *tab;
 		bool		isshared;
@@ -2356,6 +2551,53 @@ do_autovacuum(void)
 			continue;			/* somebody deleted the rel, forget it */
 		isshared = ((Form_pg_class) GETSTRUCT(classTup))->relisshared;
 		ReleaseSysCache(classTup);
+
+ 		/*
+		 * For anti-wraparound purposes, the frequently updating datfrozenxid
+		 * is effective for increasing lower bounds in the database cluster.
+		 */
+		if (MyWorkerInfo->wi_for_anti_wrap)
+		{
+			if (TransactionIdPrecedes(cur_frozenxid + UPDATE_DATFROZENXID_EVERY_XACT,
+									  avrel->relfrozenxid) ||
+				MultiXactIdPrecedes(cur_minmulti + UPDATE_DATFROZENXID_EVERY_XACT,
+									avrel->relminmxid))
+			{
+				vac_update_datfrozenxid();
+				cur_frozenxid = avrel->relfrozenxid;
+				cur_minmulti = avrel->relminmxid;
+			}
+
+			/*
+			 * Calculate the next higher lower bound that we will have after the
+			 * avrel being vacuumed are finished, and advertise them on shmem.
+			 */
+			if (lnext(cell) != NULL)
+			{
+				/*
+				 * If the current list cell is not the last cell, we use values
+				 * of the next cell.
+				 */
+				av_relation *next_avrel = (av_relation *) lfirst(lnext(cell));
+
+				MyWorkerInfo->wi_next_frozenxid = next_avrel->relfrozenxid;
+				MyWorkerInfo->wi_next_minmulti = next_avrel->relminmxid;
+			}
+			else
+			{
+				/*
+				 * The last table in the av_relation_list can be null if all tables
+				 * on the database are listed. We find the next-higher xid bounds
+				 * excluding the current relation.
+				 */
+				TransactionId next_frozenxid;
+				MultiXactId	next_minmxid;
+
+				get_oldest_xid_bounds(avrel->relid, &next_frozenxid, &next_minmxid);
+				MyWorkerInfo->wi_next_frozenxid = next_frozenxid;
+				MyWorkerInfo->wi_next_minmulti = next_minmxid;
+			}
+		}
 
 		/*
 		 * Hold schedule lock from here until we've claimed the table.  We
@@ -2426,6 +2668,16 @@ do_autovacuum(void)
 			MyWorkerInfo->wi_tableoid = InvalidOid;
 			MyWorkerInfo->wi_sharedrel = false;
 			LWLockRelease(AutovacuumScheduleLock);
+
+			/*
+			 * If we are focusing on anti-wraparound, the av_relation_list
+			 * should have been chronological ordered by relfrozenxid and
+			 * relminmxid. Since we are not interested in tables that don't
+			 * require vacuum we no longer vacuum the rest.
+			 */
+			if (MyWorkerInfo->wi_for_anti_wrap && !avrel->for_anti_wrap)
+				break;
+
 			continue;
 		}
 
@@ -2822,7 +3074,7 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 	if (classForm->relkind == RELKIND_TOASTVALUE &&
 		avopts == NULL && table_toast_map != NULL)
 	{
-		av_relation *hentry;
+		av_relation_hash_entry *hentry;
 		bool		found;
 
 		hentry = hash_search(table_toast_map, &relid, HASH_FIND, &found);
