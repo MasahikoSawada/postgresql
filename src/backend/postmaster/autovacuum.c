@@ -340,6 +340,7 @@ static void launch_worker(TimestampTz now);
 static List *get_database_list(void);
 static void rebuild_database_list(Oid newdb);
 static int	db_comparator(const void *a, const void *b);
+static int	av_relation_comparator(const void *a, const void *b);
 static void autovac_balance_cost(void);
 static void get_next_xid_bounds(avw_dbase *avdb,
 								TransactionId *datfrozenxid,
@@ -1142,6 +1143,35 @@ db_comparator(const void *a, const void *b)
 		return 0;
 	else
 		return (((const avl_dbase *) a)->adl_score < ((const avl_dbase *) b)->adl_score) ? 1 : -1;
+}
+
+/*
+ * qsort comparator for sorting av_relation by chronological order of
+ * relfrozenxid and relminmxid. Note that xid wraparound danger are
+ * more priority than multi wraparound danger.
+ */
+static int
+av_relation_comparator(const void *a, const void *b)
+{
+	av_relation *av_a = (av_relation *) lfirst(*(ListCell **) a);
+	av_relation *av_b = (av_relation *) lfirst(*(ListCell **) b);
+	int32	diff = (int32) (av_a->relfrozenxid - av_b->relfrozenxid);
+
+	/* Compare relfrozenxid first */
+	if (diff > 0)
+		return 1;
+	if (diff < 0)
+		return -1;
+
+	/* If relfrozenxid is the same, compare relminmxid */
+	diff = (int32) (av_a->relminmxid - av_b->relminmxid);
+
+	if (diff > 0)
+		return 1;
+	if (diff < 0)
+		return -1;
+
+	return 0;
 }
 
 /*
@@ -2490,6 +2520,9 @@ do_autovacuum(void)
 	if (MyWorkerInfo->wi_for_anti_wrap)
 	{
 		av_relation	*avrel;
+
+		/* Sort */
+		av_relation_list = list_qsort(av_relation_list, av_relation_comparator);
 
 		/* Get current head(oldest) xids */
 		avrel = (av_relation *) linitial(av_relation_list);
