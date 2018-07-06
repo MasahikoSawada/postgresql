@@ -525,7 +525,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <str>		Sconst comment_text notify_payload
 %type <str>		RoleId opt_boolean_or_string
 %type <list>	var_list
-%type <str>		ColId ColLabel var_name type_function_name param_name
+%type <str>		ColId ColLabel var_name type_function_name param_name a_regexpr
 %type <str>		NonReservedWord NonReservedWord_or_Sconst
 %type <str>		createdb_opt_name
 %type <node>	var_value zone_value
@@ -14280,8 +14280,13 @@ a_define:
 ;
 
 pattern_regexpr:
-IDENT {}
-| pattern_regexpr IDENT {}
+a_regexpr {}
+| pattern_regexpr a_regexpr {}
+;
+
+a_regexpr:
+REGEXPR_IDENT {}
+| IDENT {}
 ;
 
 /*

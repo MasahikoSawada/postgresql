@@ -334,6 +334,7 @@ ident_start		[A-Za-z\200-\377_]
 ident_cont		[A-Za-z\200-\377_0-9\$]
 
 identifier		{ident_start}{ident_cont}*
+regexpr_ident		{identifier}[\+\*\?]
 
 /* Assorted special-case operators and operator-like tokens */
 typecast		"::"
@@ -978,6 +979,29 @@ other			.
 				}
 
 
+{regexpr_ident} { 					const ScanKeyword *keyword;
+					char	   *ident;
+
+					SET_YYLLOC();
+
+					/* Is it a keyword? */
+					keyword = ScanKeywordLookup(yytext,
+												yyextra->keywords,
+												yyextra->num_keywords);
+					if (keyword != NULL)
+					{
+						yylval->keyword = keyword->name;
+						return keyword->value;
+					}
+
+					/*
+					 * No.  Convert the identifier to lower case, and truncate
+					 * if necessary.
+					 */
+					ident = downcase_truncate_identifier(yytext, yyleng, true);
+					yylval->str = ident;
+					printf("\"%s\" \"%s\" \n", yytext, ident);
+ return REGEXPR_IDENT; }
 {identifier}	{
 					const ScanKeyword *keyword;
 					char	   *ident;
@@ -1000,6 +1024,7 @@ other			.
 					 */
 					ident = downcase_truncate_identifier(yytext, yyleng, true);
 					yylval->str = ident;
+printf("\"%s\" \"%s\" \n", yytext, ident);
 					return IDENT;
 				}
 
