@@ -470,13 +470,14 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <node>	def_arg columnElem where_clause where_or_current_clause
 				a_expr b_expr c_expr AexprConst indirection_el opt_slice_bound
 				columnref in_expr having_clause func_table xmltable array_expr
-				ExclusionWhereClause operator_def_arg
+				ExclusionWhereClause operator_def_arg a_define
 %type <list>	rowsfrom_item rowsfrom_list opt_col_def_list
 %type <boolean> opt_ordinality
 %type <list>	ExclusionConstraintList ExclusionConstraintElem
 %type <list>	func_arg_list
 %type <node>	func_arg_expr
 %type <list>	row explicit_row implicit_row type_list array_expr_list
+%type <list>	define_list pattern_regexpr
 %type <node>	case_expr case_arg when_clause case_default
 %type <list>	when_clause_list
 %type <ival>	sub_type
@@ -571,7 +572,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <node>	filter_clause
 %type <list>	window_clause window_definition_list opt_partition_clause
 %type <windef>	window_definition over_clause window_specification
-				opt_frame_clause frame_extent frame_bound
+				opt_frame_clause frame_clause frame_extent frame_bound opt_measures_clause
+				pattern_clause define_clause
 %type <ival>	opt_window_exclusion_clause
 %type <str>		opt_existing_window_name
 %type <boolean> opt_if_not_exists
@@ -624,7 +626,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER CURSOR CYCLE
 
 	DATA_P DATABASE DAY_P DEALLOCATE DEC DECIMAL_P DECLARE DEFAULT DEFAULTS
-	DEFERRABLE DEFERRED DEFINER DELETE_P DELIMITER DELIMITERS DEPENDS DESC
+	DEFERRABLE DEFERRED DEFINE DEFINER DELETE_P DELIMITER DELIMITERS DEPENDS DESC
 	DETACH DICTIONARY DISABLE_P DISCARD DISTINCT DO DOCUMENT_P DOMAIN_P
 	DOUBLE_P DROP
 
@@ -652,7 +654,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	LEADING LEAKPROOF LEAST LEFT LEVEL LIKE LIMIT LISTEN LOAD LOCAL
 	LOCALTIME LOCALTIMESTAMP LOCATION LOCK_P LOCKED LOGGED
 
-	MAPPING MATCH MATERIALIZED MAXVALUE METHOD MINUTE_P MINVALUE MODE MONTH_P MOVE
+	MAPPING MATCH MATERIALIZED MAXVALUE MEASURES METHOD MINUTE_P MINVALUE MODE MONTH_P MOVE
 
 	NAME_P NAMES NATIONAL NATURAL NCHAR NEW NEXT NO NONE
 	NOT NOTHING NOTIFY NOTNULL NOWAIT NULL_P NULLIF
@@ -662,7 +664,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	ORDER ORDINALITY OTHERS OUT_P OUTER_P
 	OVER OVERLAPS OVERLAY OVERRIDING OWNED OWNER
 
-	PARALLEL PARSER PARTIAL PARTITION PASSING PASSWORD PLACING PLANS POLICY
+	PARALLEL PARSER PARTIAL PARTITION PASSING PASSWORD PATTERN PLACING PLANS POLICY
 	POSITION PRECEDING PRECISION PRESERVE PREPARE PREPARED PRIMARY
 	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROCEDURES PROGRAM PUBLICATION
 
@@ -753,6 +755,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
  */
 %nonassoc	UNBOUNDED		/* ideally should have same precedence as IDENT */
 %nonassoc	IDENT GENERATED NULL_P PARTITION RANGE ROWS GROUPS PRECEDING FOLLOWING CUBE ROLLUP
+			REGEXPR_IDENT MEASURES DEFINE PATTERN
 %left		Op OPERATOR		/* multi-character ops and user-defined operators */
 %left		'+' '-'
 %left		'*' '/' '%'
@@ -14058,6 +14061,21 @@ window_specification: '(' opt_existing_window_name opt_partition_clause
 					n->location = @1;
 					$$ = n;
 				}
+	| '(' opt_existing_window_name opt_partition_clause
+	opt_sort_clause opt_measures_clause frame_clause pattern_clause define_clause ')'
+	{
+					WindowDef *n = makeNode(WindowDef);
+					n->name = NULL;
+					n->refname = $2;
+					n->partitionClause = $3;
+					n->orderClause = $4;
+					/* copy relevant fields of opt_frame_clause */
+					n->frameOptions = $6->frameOptions;
+					n->startOffset = $6->startOffset;
+					n->endOffset = $6->endOffset;
+					n->location = @1;
+					$$ = n;
+	}
 		;
 
 /*
@@ -14083,6 +14101,21 @@ opt_partition_clause: PARTITION BY expr_list		{ $$ = $3; }
  * frameOptions, startOffset, and endOffset.
  */
 opt_frame_clause:
+			frame_clause
+				{
+					$$ = $1;
+				}
+			| /*EMPTY*/
+				{
+					WindowDef *n = makeNode(WindowDef);
+					n->frameOptions = FRAMEOPTION_DEFAULTS;
+					n->startOffset = NULL;
+					n->endOffset = NULL;
+					$$ = n;
+				}
+		;
+
+frame_clause:
 			RANGE frame_extent opt_window_exclusion_clause
 				{
 					WindowDef *n = $2;
@@ -14102,14 +14135,6 @@ opt_frame_clause:
 					WindowDef *n = $2;
 					n->frameOptions |= FRAMEOPTION_NONDEFAULT | FRAMEOPTION_GROUPS;
 					n->frameOptions |= $3;
-					$$ = n;
-				}
-			| /*EMPTY*/
-				{
-					WindowDef *n = makeNode(WindowDef);
-					n->frameOptions = FRAMEOPTION_DEFAULTS;
-					n->startOffset = NULL;
-					n->endOffset = NULL;
 					$$ = n;
 				}
 		;
@@ -14226,6 +14251,38 @@ opt_window_exclusion_clause:
 			| /*EMPTY*/				{ $$ = 0; }
 		;
 
+opt_measures_clause:
+MEASURES target_list { $$ = NULL; }
+| %prec Op { $$ = NULL; }
+;
+
+pattern_clause:
+PATTERN '(' pattern_regexpr ')' { $$ = NULL; }
+;
+
+define_clause:
+DEFINE define_list { $$ = NULL; }
+;
+
+define_list:
+	a_define
+	{
+		$$ = list_make1($1);
+	}
+	| define_list ',' a_define
+	{
+		$$ = lappend($1, $3);
+	}
+;
+
+a_define:
+	ColLabel AS a_expr { $$ = NULL; }
+;
+
+pattern_regexpr:
+IDENT {}
+| pattern_regexpr IDENT {}
+;
 
 /*
  * Supporting nonterminals for expressions.
@@ -15052,6 +15109,7 @@ unreserved_keyword:
 			| DECLARE
 			| DEFAULTS
 			| DEFERRED
+			| DEFINE
 			| DEFINER
 			| DELETE_P
 			| DELIMITER
@@ -15133,6 +15191,7 @@ unreserved_keyword:
 			| MATCH
 			| MATERIALIZED
 			| MAXVALUE
+			| MEASURES
 			| METHOD
 			| MINUTE_P
 			| MINVALUE
@@ -15168,6 +15227,7 @@ unreserved_keyword:
 			| PARTITION
 			| PASSING
 			| PASSWORD
+			| PATTERN
 			| PLANS
 			| POLICY
 			| PRECEDING
