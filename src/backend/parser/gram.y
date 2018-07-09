@@ -477,7 +477,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>	func_arg_list
 %type <node>	func_arg_expr
 %type <list>	row explicit_row implicit_row type_list array_expr_list
-%type <list>	define_list pattern_regexpr
+%type <list>	define_list
 %type <node>	case_expr case_arg when_clause case_default
 %type <list>	when_clause_list
 %type <ival>	sub_type
@@ -525,7 +525,9 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <str>		Sconst comment_text notify_payload
 %type <str>		RoleId opt_boolean_or_string
 %type <list>	var_list
-%type <str>		ColId ColLabel var_name type_function_name param_name a_regexpr
+%type <str>		ColId ColLabel var_name type_function_name param_name
+%type <list>	row_pattern row_pattern_term row_pattern_factor row_pattern_primary
+				row_pattern_quantifier
 %type <str>		NonReservedWord NonReservedWord_or_Sconst
 %type <str>		createdb_opt_name
 %type <node>	var_value zone_value
@@ -756,7 +758,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %nonassoc	UNBOUNDED		/* ideally should have same precedence as IDENT */
 %nonassoc	IDENT GENERATED NULL_P PARTITION RANGE ROWS GROUPS PRECEDING FOLLOWING CUBE ROLLUP
 			REGEXPR_IDENT MEASURES DEFINE PATTERN
-%left		Op OPERATOR		/* multi-character ops and user-defined operators */
+%left		Op OPERATOR	/* multi-character ops and user-defined operators */
 %left		'+' '-'
 %left		'*' '/' '%'
 %left		'^'
@@ -14257,7 +14259,7 @@ MEASURES target_list { $$ = NULL; }
 ;
 
 pattern_clause:
-PATTERN '(' pattern_regexpr ')' { $$ = NULL; }
+PATTERN '(' row_pattern ')' { $$ = NULL; }
 ;
 
 define_clause:
@@ -14279,14 +14281,42 @@ a_define:
 	ColLabel AS a_expr { $$ = NULL; }
 ;
 
-pattern_regexpr:
-a_regexpr {}
-| pattern_regexpr a_regexpr {}
+row_pattern:
+row_pattern_term {	printf("row_pattern\n");
+}
+| row_pattern '|' row_pattern_term {
+	printf("row_pattern (|)\n");
+}
 ;
 
-a_regexpr:
-REGEXPR_IDENT {}
-| IDENT {}
+row_pattern_term:
+row_pattern_factor {	printf("row_pattern_term\n");
+}
+| row_pattern_term row_pattern_factor {	printf("row_pattern_term row_pattern_factor\n");
+}
+;
+
+row_pattern_factor:
+row_pattern_primary {
+	printf("row_pattern_factor\n");
+	$$ = NULL
+		}
+| row_pattern_primary row_pattern_quantifier {	printf("row_pattern_primary quantifier\n");
+}
+;
+
+row_pattern_quantifier:
+'*' {printf("row_pattern_quantifier * \n");}
+| '+' {printf("row_pattern_quantifier + \n");}
+| '?' {	printf("row_pattern_quantifier ? \n");}
+| '{' ICONST ',' ICONST '}' {printf("row_pattern_quantifier {n,m} \n");}
+| '{' ICONST '}' {printf("row_pattern_quantifier {n} \n");}
+;
+
+row_pattern_primary:
+IDENT {printf("IDENT\n");}
+| '^' {}
+| '(' row_pattern ')' {}
 ;
 
 /*
