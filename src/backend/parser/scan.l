@@ -852,6 +852,7 @@ other			.
 
 {self}			{
 					SET_YYLLOC();
+printf("self: \"%s\" \n", yytext);
 					return yytext[0];
 				}
 
@@ -990,6 +991,7 @@ other			.
 					if (keyword != NULL)
 					{
 						yylval->keyword = keyword->name;
+printf("identifier no keyword: \"%s\" %d\n", yytext, keyword->value);
 						return keyword->value;
 					}
 
@@ -999,7 +1001,7 @@ other			.
 					 */
 					ident = downcase_truncate_identifier(yytext, yyleng, true);
 					yylval->str = ident;
-printf("\"%s\" \"%s\" \n", yytext, ident);
+printf("identifier: \"%s\" \"%s\" \n", yytext, ident);
 					return IDENT;
 				}
 

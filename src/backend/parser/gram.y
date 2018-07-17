@@ -527,7 +527,6 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>	var_list
 %type <str>		ColId ColLabel var_name type_function_name param_name
 %type <list>	row_pattern row_pattern_term row_pattern_factor row_pattern_primary
-				row_pattern_quantifier
 %type <str>		NonReservedWord NonReservedWord_or_Sconst
 %type <str>		createdb_opt_name
 %type <node>	var_value zone_value
@@ -575,6 +574,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>	window_clause window_definition_list opt_partition_clause
 %type <windef>	window_definition over_clause window_specification
 				opt_frame_clause frame_clause frame_extent frame_bound opt_measures_clause
+				opt_row_pattern_skip_to opt_row_pattern_initial_seek opt_row_pattern_subset
 				pattern_clause define_clause
 %type <ival>	opt_window_exclusion_clause
 %type <str>		opt_existing_window_name
@@ -644,7 +644,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	HANDLER HAVING HEADER_P HOLD HOUR_P
 
 	IDENTITY_P IF_P ILIKE IMMEDIATE IMMUTABLE IMPLICIT_P IMPORT_P IN_P INCLUDE
-	INCLUDING INCREMENT INDEX INDEXES INHERIT INHERITS INITIALLY INLINE_P
+	INCLUDING INCREMENT INDEX INDEXES INHERIT INHERITS INITIAL INITIALLY INLINE_P
 	INNER_P INOUT INPUT_P INSENSITIVE INSERT INSTEAD INT_P INTEGER
 	INTERSECT INTERVAL INTO INVOKER IS ISNULL ISOLATION
 
@@ -666,7 +666,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	ORDER ORDINALITY OTHERS OUT_P OUTER_P
 	OVER OVERLAPS OVERLAY OVERRIDING OWNED OWNER
 
-	PARALLEL PARSER PARTIAL PARTITION PASSING PASSWORD PATTERN PLACING PLANS POLICY
+	PARALLEL PARSER PARTIAL PARTITION PASSING PASSWORD PAST_P PATTERN PLACING PLANS POLICY
 	POSITION PRECEDING PRECISION PRESERVE PREPARE PREPARED PRIMARY
 	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROCEDURES PROGRAM PUBLICATION
 
@@ -677,11 +677,11 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	RESET RESTART RESTRICT RETURNING RETURNS REVOKE RIGHT ROLE ROLLBACK ROLLUP
 	ROUTINE ROUTINES ROW ROWS RULE
 
-	SAVEPOINT SCHEMA SCHEMAS SCROLL SEARCH SECOND_P SECURITY SELECT SEQUENCE SEQUENCES
+	SAVEPOINT SCHEMA SCHEMAS SCROLL SEARCH SECOND_P SECURITY SEEK SELECT SEQUENCE SEQUENCES
 	SERIALIZABLE SERVER SESSION SESSION_USER SET SETS SETOF SHARE SHOW
 	SIMILAR SIMPLE SKIP SMALLINT SNAPSHOT SOME SQL_P STABLE STANDALONE_P
 	START STATEMENT STATISTICS STDIN STDOUT STORAGE STRICT_P STRIP_P
-	SUBSCRIPTION SUBSTRING SYMMETRIC SYSID SYSTEM_P
+	SUBSET SUBSCRIPTION SUBSTRING SYMMETRIC SYSID SYSTEM_P
 
 	TABLE TABLES TABLESAMPLE TABLESPACE TEMP TEMPLATE TEMPORARY TEXT_P THEN
 	TIES TIME TIMESTAMP TO TRAILING TRANSACTION TRANSFORM
@@ -14064,7 +14064,9 @@ window_specification: '(' opt_existing_window_name opt_partition_clause
 					$$ = n;
 				}
 	| '(' opt_existing_window_name opt_partition_clause
-	opt_sort_clause opt_measures_clause frame_clause pattern_clause define_clause ')'
+	opt_sort_clause opt_measures_clause frame_clause opt_row_pattern_skip_to
+	opt_row_pattern_initial_seek pattern_clause
+	opt_row_pattern_subset define_clause ')'
 	{
 					WindowDef *n = makeNode(WindowDef);
 					n->name = NULL;
@@ -14254,8 +14256,28 @@ opt_window_exclusion_clause:
 		;
 
 opt_measures_clause:
-MEASURES target_list { $$ = NULL; }
+MEASURES target_list { printf("MEASURES clause \n"); $$ = NULL; }
 | %prec Op { $$ = NULL; }
+;
+
+opt_row_pattern_skip_to:
+AFTER MATCH SKIP TO NEXT ROW {}
+| AFTER MATCH SKIP PAST_P LAST_P ROW {}
+| AFTER MATCH SKIP TO FIRST_P IDENT {}
+| AFTER MATCH SKIP TO LAST_P IDENT {}
+| AFTER MATCH SKIP TO IDENT {}
+| {printf("EMPTY SKIP TO clause \n");}
+;
+
+opt_row_pattern_initial_seek:
+INITIAL {}
+| SEEK {}
+| {}
+;
+
+opt_row_pattern_subset:
+SUBSET IDENT '=' '(' target_list ')' {}
+| {}
 ;
 
 pattern_clause:
@@ -14284,7 +14306,11 @@ a_define:
 row_pattern:
 row_pattern_term {	printf("row_pattern\n");
 }
-| row_pattern '|' row_pattern_term {
+| row_pattern Op row_pattern_term {
+	char *op = $2;
+	if (strlen(op) != 1 || *op == '|')
+		ereport(ERROR,
+				(errmsg("syntax error")));
 	printf("row_pattern (|)\n");
 }
 ;
@@ -14301,16 +14327,11 @@ row_pattern_primary {
 	printf("row_pattern_factor\n");
 	$$ = NULL
 		}
-| row_pattern_primary row_pattern_quantifier {	printf("row_pattern_primary quantifier\n");
-}
-;
-
-row_pattern_quantifier:
-'*' {printf("row_pattern_quantifier * \n");}
-| '+' {printf("row_pattern_quantifier + \n");}
-| '?' {	printf("row_pattern_quantifier ? \n");}
-| '{' ICONST ',' ICONST '}' {printf("row_pattern_quantifier {n,m} \n");}
-| '{' ICONST '}' {printf("row_pattern_quantifier {n} \n");}
+| row_pattern_primary '+' {	printf("row_pattern_primary + \n");}
+| row_pattern_primary '*' {printf("row_pattern_primary * \n");}
+| row_pattern_primary '?' {printf("row_pattern_primary ? \n");}
+| row_pattern_primary '{' ICONST ',' ICONST '}' {printf("row_pattern_primary {m,n} \n");}
+| row_pattern_primary '{' ICONST '}' {printf("row_pattern_primary {m} \n");}
 ;
 
 row_pattern_primary:
@@ -14348,7 +14369,7 @@ sub_type:	ANY										{ $$ = ANY_SUBLINK; }
 
 all_Op:		Op										{ $$ = $1; }
 			| MathOp								{ $$ = $1; }
-		;
+;
 
 MathOp:		 '+'									{ $$ = "+"; }
 			| '-'									{ $$ = "-"; }
@@ -15201,6 +15222,7 @@ unreserved_keyword:
 			| INDEXES
 			| INHERIT
 			| INHERITS
+			| INITIAL
 			| INLINE_P
 			| INPUT_P
 			| INSENSITIVE
@@ -15262,6 +15284,7 @@ unreserved_keyword:
 			| PARTITION
 			| PASSING
 			| PASSWORD
+			| PAST_P
 			| PATTERN
 			| PLANS
 			| POLICY
@@ -15311,6 +15334,7 @@ unreserved_keyword:
 			| SEARCH
 			| SECOND_P
 			| SECURITY
+			| SEEK
 			| SEQUENCE
 			| SEQUENCES
 			| SERIALIZABLE
@@ -15335,6 +15359,7 @@ unreserved_keyword:
 			| STRICT_P
 			| STRIP_P
 			| SUBSCRIPTION
+			| SUBSET
 			| SYSID
 			| SYSTEM_P
 			| TABLES
