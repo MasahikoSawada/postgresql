@@ -355,7 +355,7 @@ not_equals		"!="
  * If you change either set, adjust the character lists appearing in the
  * rule for "operator"!
  */
-self			[,()\[\].;\:\+\-\*\/\%\^\<\>\=]
+self			[,()\[\].;\:\+\-\*\/\%\^\<\>\=\?\|]
 op_chars		[\~\!\@\#\^\&\|\`\?\+\-\*\/\%\<\>\=]
 operator		{op_chars}+
 
@@ -852,7 +852,7 @@ other			.
 
 {self}			{
 					SET_YYLLOC();
-printf("self: \"%s\" \n", yytext);
+//printf("self: \"%s\" \n", yytext);
 					return yytext[0];
 				}
 
@@ -915,7 +915,7 @@ printf("self: \"%s\" \n", yytext);
 						 * that the "self" rule would have.
 						 */
 						if (nchars == 1 &&
-							strchr(",()[].;:+-*/%^<>=", yytext[0]))
+							strchr(",()[].;:+-*/%^<>=?", yytext[0]))
 							return yytext[0];
 					}
 
@@ -927,6 +927,8 @@ printf("self: \"%s\" \n", yytext);
 					 */
 					if (nchars >= NAMEDATALEN)
 						yyerror("operator too long");
+
+//printf("Op: \"%s\" \n", yytext);
 
 					yylval->str = pstrdup(yytext);
 					return Op;
@@ -991,7 +993,7 @@ printf("self: \"%s\" \n", yytext);
 					if (keyword != NULL)
 					{
 						yylval->keyword = keyword->name;
-printf("identifier no keyword: \"%s\" %d\n", yytext, keyword->value);
+//printf("identifier no keyword: \"%s\" %d\n", yytext, keyword->value);
 						return keyword->value;
 					}
 
@@ -1001,7 +1003,7 @@ printf("identifier no keyword: \"%s\" %d\n", yytext, keyword->value);
 					 */
 					ident = downcase_truncate_identifier(yytext, yyleng, true);
 					yylval->str = ident;
-printf("identifier: \"%s\" \"%s\" \n", yytext, ident);
+//printf("identifier: \"%s\" \"%s\" \n", yytext, ident);
 					return IDENT;
 				}
 

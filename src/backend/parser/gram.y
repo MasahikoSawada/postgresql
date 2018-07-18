@@ -574,7 +574,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>	window_clause window_definition_list opt_partition_clause
 %type <windef>	window_definition over_clause window_specification
 				opt_frame_clause frame_clause frame_extent frame_bound opt_measures_clause
-				opt_row_pattern_skip_to opt_row_pattern_initial_seek opt_row_pattern_subset
+				opt_row_pattern_skip_to opt_row_pattern_initial_seek row_pattern_subset_term
+				row_pattern_subset_list opt_row_pattern_subset
 				pattern_clause define_clause
 %type <ival>	opt_window_exclusion_clause
 %type <str>		opt_existing_window_name
@@ -759,6 +760,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %nonassoc	IDENT GENERATED NULL_P PARTITION RANGE ROWS GROUPS PRECEDING FOLLOWING CUBE ROLLUP
 			REGEXPR_IDENT MEASURES DEFINE PATTERN
 %left		Op OPERATOR	/* multi-character ops and user-defined operators */
+%left		'|'
+%left		'?'
 %left		'+' '-'
 %left		'*' '/' '%'
 %left		'^'
@@ -14276,8 +14279,17 @@ INITIAL {}
 ;
 
 opt_row_pattern_subset:
-SUBSET IDENT '=' '(' target_list ')' {}
+SUBSET row_pattern_subset_list {}
 | {}
+;
+
+row_pattern_subset_list:
+row_pattern_subset_term {}
+| row_pattern_subset_list ',' row_pattern_subset_term {}
+;
+
+row_pattern_subset_term:
+IDENT '=' '(' target_list ')' {}
 ;
 
 pattern_clause:
@@ -14306,11 +14318,7 @@ a_define:
 row_pattern:
 row_pattern_term {	printf("row_pattern\n");
 }
-| row_pattern Op row_pattern_term {
-	char *op = $2;
-	if (strlen(op) != 1 || *op == '|')
-		ereport(ERROR,
-				(errmsg("syntax error")));
+| row_pattern '|' row_pattern_term {
 	printf("row_pattern (|)\n");
 }
 ;
@@ -14389,6 +14397,10 @@ qual_Op:	Op
 					{ $$ = list_make1(makeString($1)); }
 			| OPERATOR '(' any_operator ')'
 					{ $$ = $3; }
+| '?'
+					{ $$ = list_make1(makeString("?")); }
+| '|'
+					{ $$ = list_make1(makeString("|")); }
 		;
 
 qual_all_Op:
@@ -14396,6 +14408,10 @@ qual_all_Op:
 					{ $$ = list_make1(makeString($1)); }
 			| OPERATOR '(' any_operator ')'
 					{ $$ = $3; }
+| '?'
+					{ $$ = list_make1(makeString("?")); }
+| '|'
+					{ $$ = list_make1(makeString("|")); }
 		;
 
 subquery_Op:
