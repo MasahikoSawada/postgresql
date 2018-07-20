@@ -133,6 +133,11 @@ int			Log_autovacuum_min_duration = -1;
 #define MIN_AUTOVAC_SLEEPTIME 100.0 /* milliseconds */
 #define MAX_AUTOVAC_SLEEPTIME 300	/* seconds */
 
+/* the database status that are advertised by autovacuum workers */
+#define AVW_DB_STATUS_INVALID		0x00
+#define AVW_DB_STATUS_NEED_VACUUM	0x01
+#define AVW_DB_STATUS_COMPLETED		0x02
+
 /* Flags to tell if we are in an autovacuum process */
 static bool am_autovacuum_launcher = false;
 static bool am_autovacuum_worker = false;
@@ -229,6 +234,10 @@ typedef struct WorkerInfoData
 	int			wi_cost_delay;
 	int			wi_cost_limit;
 	int			wi_cost_limit_base;
+
+	int			wi_db_status;
+	int			wi_db_status_dboid;
+	TimestampTz	wi_last_updated;
 } WorkerInfoData;
 
 typedef struct WorkerInfoData *WorkerInfo;
@@ -343,10 +352,14 @@ static void perform_work_item(AutoVacuumWorkItem *workitem);
 static void autovac_report_activity(autovac_table *tab);
 static void autovac_report_workitem(AutoVacuumWorkItem *workitem,
 						const char *nspname, const char *relname);
+static void avw_update_db_status(int n_tables, int n_vacuumed,
+								 int n_skipped, int n_failed);
 static void av_sighup_handler(SIGNAL_ARGS);
 static void avl_sigusr2_handler(SIGNAL_ARGS);
 static void avl_sigterm_handler(SIGNAL_ARGS);
 static void autovac_refresh_stats(void);
+static void avw_reset_db_status(void);
+static int avw_get_db_recent_status(Oid dboid);
 
 
 
@@ -1273,6 +1286,26 @@ do_start_worker(void)
 				break;
 			}
 		}
+
+		/*
+		 * Second change to skip this database. If this database has only
+		 * tables that are being vacuumed by other worker according to
+		 * the status we can skip it.
+		 */
+		if (!skipit)
+		{
+			int db_status = avw_get_db_recent_status(tmp->adw_datid);
+
+			ereport(LOG,
+					(errmsg("status of db %d is %d, so %s",
+							tmp->adw_datid, db_status,
+							db_status == AVW_DB_STATUS_COMPLETED ?
+							"SKIPPED!" : "PROCESS!")));
+
+			if (db_status == AVW_DB_STATUS_COMPLETED)
+				skipit = true;
+		}
+
 		if (skipit)
 			continue;
 
@@ -1955,6 +1988,10 @@ do_autovacuum(void)
 	int			effective_multixact_freeze_max_age;
 	bool		did_vacuum = false;
 	bool		found_concurrent_worker = false;
+	int			n_tables;
+	int			n_vacuumed;
+	int			n_skipped;
+	int			n_failed;
 	int			i;
 
 	/*
@@ -2307,6 +2344,12 @@ do_autovacuum(void)
 										  "Autovacuum Portal",
 										  ALLOCSET_DEFAULT_SIZES);
 
+	avw_reset_db_status();
+	n_tables = list_length(table_oids);
+	n_vacuumed = 0;
+	n_skipped = 0;
+	n_failed = 0;
+
 	/*
 	 * Perform operations on collected tables.
 	 */
@@ -2349,7 +2392,10 @@ do_autovacuum(void)
 		 */
 		classTup = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
 		if (!HeapTupleIsValid(classTup))
+		{
+			n_skipped++;
 			continue;			/* somebody deleted the rel, forget it */
+		}
 		isshared = ((Form_pg_class) GETSTRUCT(classTup))->relisshared;
 		ReleaseSysCache(classTup);
 
@@ -2389,6 +2435,7 @@ do_autovacuum(void)
 		if (skipit)
 		{
 			LWLockRelease(AutovacuumScheduleLock);
+			n_skipped++;
 			continue;
 		}
 
@@ -2422,6 +2469,7 @@ do_autovacuum(void)
 			MyWorkerInfo->wi_tableoid = InvalidOid;
 			MyWorkerInfo->wi_sharedrel = false;
 			LWLockRelease(AutovacuumScheduleLock);
+			n_skipped++;
 			continue;
 		}
 
@@ -2480,6 +2528,7 @@ do_autovacuum(void)
 
 			/* have at it */
 			autovacuum_do_vac_analyze(tab, bstrategy);
+			n_vacuumed++;
 
 			/*
 			 * Clear a possible query-cancel signal, to avoid a late reaction
@@ -2512,6 +2561,8 @@ do_autovacuum(void)
 			/* restart our transaction for the following operations */
 			StartTransactionCommand();
 			RESUME_INTERRUPTS();
+
+			n_failed++;
 		}
 		PG_END_TRY();
 
@@ -2548,6 +2599,9 @@ deleted:
 		VacuumCostDelay = stdVacuumCostDelay;
 		VacuumCostLimit = stdVacuumCostLimit;
 	}
+
+	/* Update database status according to the result of autovacuum */
+	avw_update_db_status(n_tables, n_vacuumed, n_skipped, n_failed);
 
 	/*
 	 * Perform additional work items, as requested by backends.
@@ -3383,4 +3437,76 @@ autovac_refresh_stats(void)
 	}
 
 	pgstat_clear_snapshot();
+}
+
+static void
+avw_update_db_status(int n_tables, int n_vacuumed, int n_skipped, int n_failed)
+{
+	int		status;
+
+	Assert(n_tables == (n_vacuumed + n_skipped + n_failed));
+
+	if (n_tables == (n_vacuumed + n_skipped))
+	{
+		Assert(n_failed == 0);
+
+		/*
+		 * If we did't fail any one but skipped someone for whatever reason,
+		 * since this database no longer has tables requiring begin vacuumed
+		 * we can this database regards as completed.
+		 */
+		status = AVW_DB_STATUS_COMPLETED;
+	}
+	else
+	{
+		/*
+		 * In other cases, this database still require beign vacuumed.
+		 */
+		status = AVW_DB_STATUS_NEED_VACUUM;
+	}
+
+	ereport(LOG,
+			(errmsg("update db %d, status = %d, n_tables %d, n_vacuumed %d, n_skipped %d, n_failed %d",
+					MyWorkerInfo->wi_dboid, status, n_tables, n_vacuumed, n_skipped, n_failed)));
+
+	/* Advertise the status of database */
+	LWLockAcquire(AutovacuumLock, LW_EXCLUSIVE);
+	MyWorkerInfo->wi_db_status = status;
+	MyWorkerInfo->wi_db_status_dboid = MyWorkerInfo->wi_dboid;
+	MyWorkerInfo->wi_last_updated = GetCurrentTimestamp();
+	LWLockRelease(AutovacuumLock);
+}
+
+static void
+avw_reset_db_status(void)
+{
+	/* Reset the status of database */
+	LWLockAcquire(AutovacuumLock, LW_EXCLUSIVE);
+	MyWorkerInfo->wi_db_status = AVW_DB_STATUS_INVALID;
+	MyWorkerInfo->wi_db_status_dboid = InvalidOid;
+	MyWorkerInfo->wi_last_updated = 0;
+	LWLockRelease(AutovacuumLock);
+}
+
+static int
+avw_get_db_recent_status(Oid dboid)
+{
+	int status = AVW_DB_STATUS_INVALID;
+	TimestampTz	last_updated = 0;
+	dlist_iter	iter;
+
+	LWLockAcquire(AutovacuumLock, LW_SHARED);
+	dlist_foreach(iter, &AutoVacuumShmem->av_runningWorkers)
+	{
+		WorkerInfo	worker = dlist_container(WorkerInfoData, wi_links, iter.cur);
+
+		if (worker->wi_db_status_dboid != dboid)
+			continue;
+
+		if (last_updated < worker->wi_last_updated)
+			status = worker->wi_db_status;
+	}
+	LWLockRelease(AutovacuumLock);
+
+	return status;
 }
