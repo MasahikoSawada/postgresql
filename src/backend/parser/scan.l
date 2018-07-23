@@ -552,6 +552,7 @@ other			.
 									   yyextra->literallen,
 									   false);
 					yylval->str = litbufdup(yyscanner);
+printf("SCONST \"%s\"\n", yylval->str); 
 					return SCONST;
 				}
 <xus>{quotestop} |
@@ -852,7 +853,7 @@ other			.
 
 {self}			{
 					SET_YYLLOC();
-//printf("self: \"%s\" \n", yytext);
+printf("self: \"%s\" \n", yytext);
 					return yytext[0];
 				}
 
@@ -928,7 +929,7 @@ other			.
 					if (nchars >= NAMEDATALEN)
 						yyerror("operator too long");
 
-//printf("Op: \"%s\" \n", yytext);
+printf("Op: \"%s\" \n", yytext);
 
 					yylval->str = pstrdup(yytext);
 					return Op;
@@ -993,7 +994,7 @@ other			.
 					if (keyword != NULL)
 					{
 						yylval->keyword = keyword->name;
-//printf("identifier no keyword: \"%s\" %d\n", yytext, keyword->value);
+printf("identifier no keyword: \"%s\" %d\n", yytext, keyword->value);
 						return keyword->value;
 					}
 
@@ -1003,7 +1004,7 @@ other			.
 					 */
 					ident = downcase_truncate_identifier(yytext, yyleng, true);
 					yylval->str = ident;
-//printf("identifier: \"%s\" \"%s\" \n", yytext, ident);
+printf("identifier: \"%s\" \"%s\" \n", yytext, ident);
 					return IDENT;
 				}
 

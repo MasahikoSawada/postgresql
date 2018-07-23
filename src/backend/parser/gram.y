@@ -1,6 +1,6 @@
 %{
 
-/*#define YYDEBUG 1*/
+#define YYDEBUG 1
 /*-------------------------------------------------------------------------
  *
  * gram.y
@@ -574,7 +574,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>	window_clause window_definition_list opt_partition_clause
 %type <windef>	window_definition over_clause window_specification
 				opt_frame_clause frame_clause frame_extent frame_bound opt_measures_clause
-				opt_row_pattern_skip_to opt_row_match row_pattern_subset_term
+				  row_pattern_subset_term opt_row_pattern_skip_to after_match_skip_option
 				row_pattern_subset_list opt_row_pattern_subset
 				pattern_clause define_clause
 %type <ival>	opt_window_exclusion_clause
@@ -759,9 +759,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %nonassoc	UNBOUNDED		/* ideally should have same precedence as IDENT */
 %nonassoc	IDENT GENERATED NULL_P PARTITION RANGE ROWS GROUPS PRECEDING FOLLOWING CUBE ROLLUP
 			REGEXPR_IDENT MEASURES DEFINE PATTERN
-%left		Op OPERATOR	/* multi-character ops and user-defined operators */
-%left		'|'
-%left		'?'
+%left		'?' '|' Op OPERATOR	/* multi-character ops and user-defined operators */
 %left		'+' '-'
 %left		'*' '/' '%'
 %left		'^'
@@ -12169,7 +12167,7 @@ relation_expr_opt_alias: relation_expr					%prec UMINUS
 
 match_recognize_clause:
 	MATCH_RECOGNIZE '(' opt_partition_clause
-	opt_sort_clause opt_measures_clause opt_row_match opt_row_pattern_skip_to
+	opt_sort_clause opt_measures_clause opt_row_pattern_skip_to
 	pattern_clause opt_row_pattern_subset define_clause ')'
 	{
 		RangeTableSample *n = makeNode(RangeTableSample);
@@ -12957,7 +12955,7 @@ interval_second:
  * of the first terminal instead; otherwise you will not get the behavior
  * you expect!  So we use %prec annotations freely to set precedences.
  */
-a_expr:		c_expr									{ $$ = $1; }
+a_expr:		c_expr									{ $$ = $1; printf("c_expr -> a_expr\n");}
 			| a_expr TYPECAST Typename
 					{ $$ = makeTypeCast($1, $3, @2); }
 			| a_expr COLLATE any_name
@@ -13013,7 +13011,7 @@ a_expr:		c_expr									{ $$ = $1; }
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "<>", $1, $3, @2); }
 
 			| a_expr qual_Op a_expr				%prec Op
-				{ $$ = (Node *) makeA_Expr(AEXPR_OP, $2, $1, $3, @2); }
+			{ $$ = (Node *) makeA_Expr(AEXPR_OP, $2, $1, $3, @2); printf("a_expr qual_op a_expr\n");}
 			| qual_Op a_expr					%prec Op
 				{ $$ = (Node *) makeA_Expr(AEXPR_OP, $1, NULL, $2, @1); }
 			| a_expr qual_Op					%prec POSTFIXOP
@@ -14268,18 +14266,26 @@ MEASURES target_list { printf("MEASURES clause \n"); $$ = NULL; }
 ;
 
 opt_row_pattern_skip_to:
-AFTER MATCH SKIP TO NEXT ROW {}
-| AFTER MATCH SKIP PAST_P LAST_P ROW {}
-| AFTER MATCH SKIP TO FIRST_P IDENT {}
-| AFTER MATCH SKIP TO LAST_P IDENT {}
-| AFTER MATCH SKIP TO IDENT {}
-| {printf("EMPTY SKIP TO clause \n");}
+AFTER MATCH SKIP after_match_skip_option {}
+| {}
 ;
 
+after_match_skip_option:
+ TO NEXT ROW {}
+| PAST_P LAST_P ROW {}
+| TO FIRST_P IDENT {}
+| TO LAST_P IDENT {}
+| TO IDENT {}
+| /* empty */ {printf("EMPTY SKIP TO clause \n");}
+;
+
+
+/*
 opt_row_match:
 ONE_P ROW PER MATCH {}
 | ALL ROWS PER MATCH {}
 ;
+*/
 
 opt_row_pattern_subset:
 SUBSET row_pattern_subset_list {}
@@ -14397,11 +14403,11 @@ MathOp:		 '+'									{ $$ = "+"; }
 		;
 
 qual_Op:	Op
-					{ $$ = list_make1(makeString($1)); }
+{ $$ = list_make1(makeString($1)); printf("qual_op \"%s\"\n", $1);}
 			| OPERATOR '(' any_operator ')'
 					{ $$ = $3; }
 | '?'
-					{ $$ = list_make1(makeString("?")); }
+{ $$ = list_make1(makeString("?")); printf("qual_Op \"?\"\n");}
 | '|'
 					{ $$ = list_make1(makeString("|")); }
 		;
@@ -15132,7 +15138,6 @@ unreserved_keyword:
 			| ACTION
 			| ADD_P
 			| ADMIN
-			| AFTER
 			| AGGREGATE
 			| ALSO
 			| ALTER
@@ -15534,7 +15539,8 @@ type_func_name_keyword:
  * forced to.
  */
 reserved_keyword:
-			  ALL
+			AFTER
+			|  ALL
 			| ANALYSE
 			| ANALYZE
 			| AND
