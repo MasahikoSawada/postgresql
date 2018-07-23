@@ -491,7 +491,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <jexpr>	joined_table
 %type <range>	relation_expr
 %type <range>	relation_expr_opt_alias
-%type <node>	tablesample_clause opt_repeatable_clause
+%type <node>	tablesample_clause opt_repeatable_clause match_recognize_clause
 %type <target>	target_el set_target insert_column_item
 
 %type <str>		generic_option_name
@@ -574,7 +574,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>	window_clause window_definition_list opt_partition_clause
 %type <windef>	window_definition over_clause window_specification
 				opt_frame_clause frame_clause frame_extent frame_bound opt_measures_clause
-				opt_row_pattern_skip_to opt_row_pattern_initial_seek row_pattern_subset_term
+				opt_row_pattern_skip_to opt_row_match row_pattern_subset_term
 				row_pattern_subset_list opt_row_pattern_subset
 				pattern_clause define_clause
 %type <ival>	opt_window_exclusion_clause
@@ -657,17 +657,17 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	LEADING LEAKPROOF LEAST LEFT LEVEL LIKE LIMIT LISTEN LOAD LOCAL
 	LOCALTIME LOCALTIMESTAMP LOCATION LOCK_P LOCKED LOGGED
 
-	MAPPING MATCH MATERIALIZED MAXVALUE MEASURES METHOD MINUTE_P MINVALUE MODE MONTH_P MOVE
+	MAPPING MATCH MATCH_RECOGNIZE MATERIALIZED MAXVALUE MEASURES METHOD MINUTE_P MINVALUE MODE MONTH_P MOVE
 
 	NAME_P NAMES NATIONAL NATURAL NCHAR NEW NEXT NO NONE
 	NOT NOTHING NOTIFY NOTNULL NOWAIT NULL_P NULLIF
 	NULLS_P NUMERIC
 
-	OBJECT_P OF OFF OFFSET OIDS OLD ON ONLY OPERATOR OPTION OPTIONS OR
+	OBJECT_P OF OFF OFFSET OIDS OLD ON ONE_P ONLY OPERATOR OPTION OPTIONS OR
 	ORDER ORDINALITY OTHERS OUT_P OUTER_P
 	OVER OVERLAPS OVERLAY OVERRIDING OWNED OWNER
 
-	PARALLEL PARSER PARTIAL PARTITION PASSING PASSWORD PAST_P PATTERN PLACING PLANS POLICY
+	PARALLEL PARSER PARTIAL PARTITION PASSING PASSWORD PAST_P PATTERN PER PLACING PLANS POLICY
 	POSITION PRECEDING PRECISION PRESERVE PREPARE PREPARED PRIMARY
 	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROCEDURES PROGRAM PUBLICATION
 
@@ -11821,6 +11821,14 @@ table_ref:	relation_expr opt_alias_clause
 					n->relation = (Node *) $1;
 					$$ = (Node *) n;
 				}
+			| relation_expr opt_alias_clause match_recognize_clause
+				{
+					RangeTableSample *n = (RangeTableSample *) $3;
+					$1->alias = $2;
+					/* relation_expr goes inside the RangeTableSample node */
+					n->relation = (Node *) $1;
+					$$ = (Node *) n;
+				}
 			| func_table func_alias_clause
 				{
 					RangeFunction *n = (RangeFunction *) $1;
@@ -12158,6 +12166,19 @@ relation_expr_opt_alias: relation_expr					%prec UMINUS
 					$$ = $1;
 				}
 		;
+
+match_recognize_clause:
+	MATCH_RECOGNIZE '(' opt_partition_clause
+	opt_sort_clause opt_measures_clause opt_row_match opt_row_pattern_skip_to
+	pattern_clause opt_row_pattern_subset define_clause ')'
+	{
+		RangeTableSample *n = makeNode(RangeTableSample);
+
+		n->method = list_make1("SYSTEM");
+		n->args = NULL;
+		$$ = (Node *) n;
+	}
+;
 
 /*
  * TABLESAMPLE decoration in a FROM item
@@ -14066,23 +14087,6 @@ window_specification: '(' opt_existing_window_name opt_partition_clause
 					n->location = @1;
 					$$ = n;
 				}
-	| '(' opt_existing_window_name opt_partition_clause
-	opt_sort_clause opt_measures_clause frame_clause opt_row_pattern_skip_to
-	opt_row_pattern_initial_seek pattern_clause
-	opt_row_pattern_subset define_clause ')'
-	{
-					WindowDef *n = makeNode(WindowDef);
-					n->name = NULL;
-					n->refname = $2;
-					n->partitionClause = $3;
-					n->orderClause = $4;
-					/* copy relevant fields of opt_frame_clause */
-					n->frameOptions = $6->frameOptions;
-					n->startOffset = $6->startOffset;
-					n->endOffset = $6->endOffset;
-					n->location = @1;
-					$$ = n;
-	}
 		;
 
 /*
@@ -14272,10 +14276,9 @@ AFTER MATCH SKIP TO NEXT ROW {}
 | {printf("EMPTY SKIP TO clause \n");}
 ;
 
-opt_row_pattern_initial_seek:
-INITIAL {}
-| SEEK {}
-| {}
+opt_row_match:
+ONE_P ROW PER MATCH {}
+| ALL ROWS PER MATCH {}
 ;
 
 opt_row_pattern_subset:
@@ -15285,6 +15288,7 @@ unreserved_keyword:
 			| OFF
 			| OIDS
 			| OLD
+			| ONE_P
 			| OPERATOR
 			| OPTION
 			| OPTIONS
@@ -15302,6 +15306,7 @@ unreserved_keyword:
 			| PASSWORD
 			| PAST_P
 			| PATTERN
+			| PER
 			| PLANS
 			| POLICY
 			| PRECEDING
@@ -15511,6 +15516,7 @@ type_func_name_keyword:
 			| JOIN
 			| LEFT
 			| LIKE
+			| MATCH_RECOGNIZE
 			| NATURAL
 			| NOTNULL
 			| OUTER_P
