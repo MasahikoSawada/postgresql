@@ -468,7 +468,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <node>	columnDef columnOptions
 %type <defelt>	def_elem reloption_elem old_aggr_elem operator_def_elem
 %type <node>	def_arg columnElem where_clause where_or_current_clause
-				a_expr b_expr c_expr AexprConst indirection_el opt_slice_bound
+				a_expr b_expr c_expr d_expr AexprConst indirection_el opt_slice_bound
 				columnref in_expr having_clause func_table xmltable array_expr
 				ExclusionWhereClause operator_def_arg a_define
 %type <list>	rowsfrom_item rowsfrom_list opt_col_def_list
@@ -527,6 +527,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>	var_list
 %type <str>		ColId ColLabel var_name type_function_name param_name
 %type <list>	row_pattern row_pattern_term row_pattern_factor row_pattern_primary
+				row_pattern_measure_list row_pattern_measure_definition
 %type <str>		NonReservedWord NonReservedWord_or_Sconst
 %type <str>		createdb_opt_name
 %type <node>	var_value zone_value
@@ -663,7 +664,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	NOT NOTHING NOTIFY NOTNULL NOWAIT NULL_P NULLIF
 	NULLS_P NUMERIC
 
-	OBJECT_P OF OFF OFFSET OIDS OLD ON ONE_P ONLY OPERATOR OPTION OPTIONS OR
+	OBJECT_P OF OFF OFFSET OIDS OLD ON ONE ONLY OPERATOR OPTION OPTIONS OR
 	ORDER ORDINALITY OTHERS OUT_P OUTER_P
 	OVER OVERLAPS OVERLAY OVERRIDING OWNED OWNER
 
@@ -12167,7 +12168,7 @@ relation_expr_opt_alias: relation_expr					%prec UMINUS
 
 match_recognize_clause:
 	MATCH_RECOGNIZE '(' opt_partition_clause
-	opt_sort_clause opt_measures_clause opt_row_pattern_skip_to
+	opt_sort_clause opt_measures_clause opt_row_pattern_per_match opt_row_pattern_skip_to
 	pattern_clause opt_row_pattern_subset define_clause ')'
 	{
 		RangeTableSample *n = makeNode(RangeTableSample);
@@ -13600,6 +13601,16 @@ c_expr:		columnref								{ $$ = $1; }
 			  }
 		;
 
+d_expr: columnref {}
+| AexprConst {}
+| PARAM opt_indirection {}
+| case_expr {}
+| func_expr {}
+| explicit_row {}
+| implicit_row {}
+;
+
+
 func_application: func_name '(' ')'
 				{
 					$$ = (Node *) makeFuncCall($1, NIL, @1);
@@ -14261,8 +14272,23 @@ opt_window_exclusion_clause:
 		;
 
 opt_measures_clause:
-MEASURES target_list { printf("MEASURES clause \n"); $$ = NULL; }
+MEASURES row_pattern_measure_list { printf("MEASURES clause \n"); $$ = NULL; }
 | %prec Op { $$ = NULL; }
+;
+
+row_pattern_measure_list:
+row_pattern_measure_definition {}
+| row_pattern_measure_list ',' row_pattern_measure_definition {}
+;
+
+row_pattern_measure_definition:
+d_expr AS ColId {}
+;
+
+opt_row_pattern_per_match:
+ONE ROW PER MATCH {}
+| ALL ROWS PER MATCH {}
+| {}
 ;
 
 opt_row_pattern_skip_to:
@@ -15138,6 +15164,7 @@ unreserved_keyword:
 			| ACTION
 			| ADD_P
 			| ADMIN
+			| AFTER
 			| AGGREGATE
 			| ALSO
 			| ALTER
@@ -15293,7 +15320,6 @@ unreserved_keyword:
 			| OFF
 			| OIDS
 			| OLD
-			| ONE_P
 			| OPERATOR
 			| OPTION
 			| OPTIONS
@@ -15539,8 +15565,7 @@ type_func_name_keyword:
  * forced to.
  */
 reserved_keyword:
-			AFTER
-			|  ALL
+			ALL
 			| ANALYSE
 			| ANALYZE
 			| AND
@@ -15592,6 +15617,7 @@ reserved_keyword:
 			| NULL_P
 			| OFFSET
 			| ON
+			| ONE
 			| ONLY
 			| OR
 			| ORDER
