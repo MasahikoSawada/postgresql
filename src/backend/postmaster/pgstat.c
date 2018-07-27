@@ -2487,7 +2487,6 @@ pgstat_fetch_stat_funcentry(Oid func_id)
 	return funcentry;
 }
 
-
 /* ----------
  * pgstat_fetch_stat_beentry() -
  *
@@ -3058,6 +3057,25 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 		beentry->st_activity_start_timestamp = start_timestamp;
 	}
 
+	pgstat_increment_changecount_after(beentry);
+}
+
+/*-----------
+ * pgstat_report_leader_pid() -
+ *
+ * Report process id of the leader process that this backend is involved
+ * with.
+ */
+void
+pgstat_report_leader_pid(int pid)
+{
+	volatile PgBackendStatus *beentry = MyBEEntry;
+
+	if (!beentry)
+		return;
+
+	pgstat_increment_changecount_before(beentry);
+	beentry->st_leader_pid = pid;
 	pgstat_increment_changecount_after(beentry);
 }
 
@@ -3664,6 +3682,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 			break;
 		case WAIT_EVENT_PARALLEL_CREATE_INDEX_SCAN:
 			event_name = "ParallelCreateIndexScan";
+			break;
+		case WAIT_EVENT_PARALLEL_VACUUM:
+			event_name = "ParallelVacuum";
 			break;
 		case WAIT_EVENT_PROCARRAY_GROUP_UPDATE:
 			event_name = "ProcArrayGroupUpdate";

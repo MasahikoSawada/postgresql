@@ -22,6 +22,7 @@
 #include "catalog/index.h"
 #include "catalog/namespace.h"
 #include "commands/async.h"
+#include "commands/vacuum.h"
 #include "executor/execParallel.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
@@ -132,6 +133,9 @@ static const struct
 	},
 	{
 		"_bt_parallel_build_main", _bt_parallel_build_main
+	},
+	{
+		"lazy_parallel_vacuum_main", lazy_parallel_vacuum_main
 	}
 };
 
@@ -1252,6 +1256,9 @@ ParallelWorkerMain(Datum main_arg)
 	ParallelMasterPid = fps->parallel_master_pid;
 	ParallelMasterBackendId = fps->parallel_master_backend_id;
 	on_shmem_exit(ParallelWorkerShutdown, (Datum) 0);
+
+	/* Report pid of master process for progress information */
+	pgstat_report_leader_pid(fps->parallel_master_pid);
 
 	/*
 	 * Now we can find and attach to the error queue provided for us.  That's
