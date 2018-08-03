@@ -81,6 +81,7 @@
 #include "utils/bytea.h"
 #include "utils/guc_tables.h"
 #include "utils/float.h"
+#include "utils/kmgr.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
 #include "utils/plancache.h"
@@ -3902,6 +3903,17 @@ static struct config_string ConfigureNamesString[] =
 		},
 		&jit_provider,
 		"llvmjit",
+		NULL, NULL, NULL
+	},
+
+	{
+		{"key_management_provider", PGC_POSTMASTER, FILE_LOCATIONS,
+			gettext_noop("Key management provider to use."),
+			NULL,
+			GUC_SUPERUSER_ONLY
+		},
+		&key_management_provider,
+		"",
 		NULL, NULL, NULL
 	},
 

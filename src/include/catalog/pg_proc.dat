@@ -10141,6 +10141,20 @@
   proargmodes => '{o,o}', proargnames => '{name,setting}',
   prosrc => 'pg_config' },
 
+# key management functions
+{ oid => '5017', descr => 'get key from key manager',
+  proname => 'pg_get_key', prorettype => 'text', proargtypes => 'text',
+  prosrc => 'pg_get_key' },
+{ oid => '5018', descr => 'generate key and store it to key manager',
+  proname => 'pg_generate_key', prorettype => 'bool', proargtypes => 'text text',
+  prosrc => 'pg_generate_key' },
+{ oid => '5019', descr => 'remove key from the key manager',
+  proname => 'pg_remove_key', prorettype => 'bool', proargtypes => 'text',
+  prosrc => 'pg_remove_key' },
+{ oid => '5020', descr => 'rotate key',
+  proname => 'pg_rotate_key', prorettype => 'bool', proargtypes => 'text',
+  prosrc => 'pg_rotate_key' },
+
 # pg_controldata related functions
 { oid => '3441',
   descr => 'pg_controldata general state information as a function',

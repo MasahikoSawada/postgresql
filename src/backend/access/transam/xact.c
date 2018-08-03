@@ -59,6 +59,7 @@
 #include "utils/guc.h"
 #include "utils/inval.h"
 #include "utils/memutils.h"
+#include "utils/kmgr.h"
 #include "utils/relmapper.h"
 #include "utils/snapmgr.h"
 #include "utils/timeout.h"
@@ -2129,6 +2130,7 @@ CommitTransaction(void)
 	AtEOXact_PgStat(true);
 	AtEOXact_Snapshot(true, false);
 	AtEOXact_ApplyLauncher(true);
+	AtEOXact_KMgr(true);
 	pgstat_report_xact_timestamp(0);
 
 	CurrentResourceOwner = NULL;
@@ -2406,6 +2408,7 @@ PrepareTransaction(void)
 	AtEOXact_HashTables(true);
 	/* don't call AtEOXact_PgStat here; we fixed pgstat state above */
 	AtEOXact_Snapshot(true, true);
+	AtEOXact_KMgr(true);
 	pgstat_report_xact_timestamp(0);
 
 	CurrentResourceOwner = NULL;
@@ -2608,6 +2611,7 @@ AbortTransaction(void)
 		AtEOXact_HashTables(false);
 		AtEOXact_PgStat(false);
 		AtEOXact_ApplyLauncher(false);
+		AtEOXact_KMgr(false);
 		pgstat_report_xact_timestamp(0);
 	}
 
