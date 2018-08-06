@@ -1,22 +1,22 @@
 /*-------------------------------------------------------------------------
  *
- * kmgrapi.h
- *	  API for key management
+ * keyring_api.h
+ *	  API for key ring plugins
  *
  * Portions Copyright (c) 1996-2018, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
- *	  src/include/utils/kmgrapi.h
+ *	  src/include/utils/keyring_api.h
  *-------------------------------------------------------------------------
  */
 
-#ifndef KMGRAPI_H
-#define KMGRAPI_H
+#ifndef KEYRING_API_H
+#define KEYRING_API_H
 
-struct KeyMgrPluginCallbacks;
+struct KeyringPluginCallbacks;
 
-typedef void (*KeyMgrPluginInit) (struct KeyMgrPluginCallbacks *cb);
+typedef void (*KeyringPluginInit) (struct KeyringPluginCallbacks *cb);
 typedef void (*StartupKey_function) (void);
 typedef bool (*GetKey_function) (char *keyid, Oid userid,
 								 char **key, int *keylen);
@@ -26,12 +26,12 @@ typedef bool (*RemoveKey_function) (char *keyid, Oid userid);
 /*
  * Key management plugin callbacks
  */
-typedef struct KeyMgrPluginCallbacks
+typedef struct KeyringPluginCallbacks
 {
 	StartupKey_function startup_cb;
 	GetKey_function getkey_cb;
 	GenerateKey_function generatekey_cb;
 	RemoveKey_function removekey_cb;
-} KeyMgrPluginCallbacks;
+} KeyringPluginCallbacks;
 
-#endif /* KMGRAPI_H */
+#endif /* KEYRING_API_H */

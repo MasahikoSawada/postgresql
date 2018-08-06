@@ -17,8 +17,11 @@
 #include "fmgr.h"
 
 #include "utils/kmgr.h"
-#include "utils/kmgrapi.h"
+#include "utils/keyring_api.h"
 #include "utils/memutils.h"
+
+#define ConstructKeyId(keyid, gen, dst) \
+	sprintf((dst), "%s-%u", (keyid), (gen))
 
 typedef struct Key
 {
@@ -30,8 +33,10 @@ typedef struct Key
 
 typedef struct KeyMgrContext
 {
-	KeyMgrPluginCallbacks callbacks;
+	KeyringPluginCallbacks callbacks;
 	bool isReady;
+
+	Key keys;
 } KeyMgrContext;
 
 /* GUC parameter */
@@ -48,15 +53,25 @@ static void KeyMgrProviderStartup(void);
 void
 KeyMgrInit(void)
 {
+	MemoryContext old_cxt;
+
 	if (key_management_provider == NULL || key_management_provider[0] == '\0')
 		elog(ERROR, "cannot initialize key manager without key_management_provider");
 
+
+	/* Quick exit, if already loaded */
+	if (KmgrContext)
+		return;
+
+	/* Load the plugin and initialize key management context */
+	old_cxt = MemoryContextSwitchTo(TopMemoryContext);
 	KmgrContext = (KeyMgrContext *) MemoryContextAlloc(TopMemoryContext,
 													   sizeof(KeyMgrContext));
 	KmgrContext->isReady = false;
 	TDECurrentKeyGeneration = 0;
-
 	LoadKeyMgrPlugin();
+
+	MemoryContextSwitchTo(old_cxt);
 }
 
 static void
@@ -74,13 +89,17 @@ KeyMgrProviderStartup(void)
 bool
 GenerateKey(char *keyid, char *keytype)
 {
+	char *key_with_gen = palloc(sizeof(char) * MAX_KEY_ID_LEN);
+
 	Assert(KmgrContext);
 
 	if (!KmgrContext->isReady)
 		KeyMgrProviderStartup();
 
-	elog(NOTICE, "generate key : keyid = %s, keytype = %s",keyid, keytype);
-	KmgrContext->callbacks.generatekey_cb(keyid, GetUserId());
+	elog(NOTICE, "generate key : keyid = %s(gen = 0), keytype = %s",
+		 keyid, keytype);
+	ConstructKeyId(keyid, 0, key_with_gen);
+	KmgrContext->callbacks.generatekey_cb(key_with_gen, GetUserId());
 
 	return true;
 }
@@ -88,14 +107,23 @@ GenerateKey(char *keyid, char *keytype)
 bool
 GetKey(char *keyid, KeyGeneration generation, char **key, int *keylen)
 {
+	char *key_with_gen = palloc(sizeof(char) * MAX_KEY_ID_LEN);
+	bool ret;
+
 	Assert(KmgrContext);
+	Assert(*key && keylen);
 
 	if (!KmgrContext->isReady)
 		KeyMgrProviderStartup();
 
-	elog(NOTICE, "get key : keyid = %s, generation = %u", keyid, generation);
-	KmgrContext->callbacks.getkey_cb(keyid, GetUserId(), NULL, NULL);
-	return true;
+	elog(NOTICE, "get key : keyid = %s, generation = %u",
+		 keyid, generation);
+	ConstructKeyId(keyid, generation, key_with_gen);
+	ret = KmgrContext->callbacks.getkey_cb(key_with_gen,
+										   GetUserId(),
+										   key,
+										   keylen);
+	return ret;
 }
 
 bool
@@ -138,12 +166,12 @@ TDEGetCurrentKeyGeneration(void)
 static void
 LoadKeyMgrPlugin(void)
 {
-	KeyMgrPluginInit plugin_init;
+	KeyringPluginInit plugin_init;
 
 	if (provider_successfully_loaded)
 		return;
 
-	plugin_init = (KeyMgrPluginInit)
+	plugin_init = (KeyringPluginInit)
 		load_external_function(key_management_provider,
 							   "_PG_key_management_plugin_init", false, NULL);
 

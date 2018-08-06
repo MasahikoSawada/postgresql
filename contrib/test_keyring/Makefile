@@ -1,7 +1,7 @@
-# contrib/test_kmgr/Makefile
+# contrib/test_keyring/Makefile
 
-MODULES = test_kmgr
-PGFILEDESC = "test_kmgr - example of a key management provider plugin"
+MODULES = test_keyring
+PGFILEDESC = "test_keyring - example of a key ring plugin"
 
 OBJS = test_kgmr.o
 
@@ -10,7 +10,7 @@ PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 else
-subdir = contrib/test_kmgr
+subdir = contrib/test_keyring
 top_builddir = ../..
 include $(top_builddir)/src/Makefile.global
 include $(top_srcdir)/contrib/contrib-global.mk

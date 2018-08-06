@@ -14,8 +14,6 @@
 #ifndef KMGR_H
 #define KMGR_H
 
-#include "utils/kmgrapi.h"
-
 #define MAX_KEY_LEN 128
 #define MAX_KEY_ID_LEN NAMEDATALEN
 

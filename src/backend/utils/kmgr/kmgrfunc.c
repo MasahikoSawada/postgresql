@@ -23,15 +23,20 @@
 Datum
 pg_get_key(PG_FUNCTION_ARGS)
 {
-	text	*keyid = PG_GETARG_TEXT_P(0);
-	bool ret;
-	char *key;
-	int keylen;
+	char	*keyid = text_to_cstring(PG_GETARG_TEXT_P(0));
+	char	*key = palloc(sizeof(char) * MAX_KEY_ID_LEN);
+	bool	ret;
+	int		keylen;
 
+	if (strlen(keyid) > MAX_KEY_ID_LEN)
+		ereport(ERROR, (errmsg("key identifier must be less than %d",
+							   MAX_KEY_ID_LEN)));
 	KeyMgrInit();
-	ret = GetKey(text_to_cstring(keyid),
+	ret = GetKey(keyid,
 				 TDEGetCurrentKeyGeneration(),
 				 &key, &keylen);
+	if (!ret)
+		ereport(ERROR, (errmsg("could not get key: \"%s\"", keyid)));
 
 	PG_RETURN_TEXT_P(cstring_to_text(key));
 }
@@ -39,13 +44,16 @@ pg_get_key(PG_FUNCTION_ARGS)
 Datum
 pg_generate_key(PG_FUNCTION_ARGS)
 {
-	text	*keyid = PG_GETARG_TEXT_P(0);
-	text	*keytype = PG_GETARG_TEXT_P(1);
+	char 	*keyid = text_to_cstring(PG_GETARG_TEXT_P(0));
+	char	*keytype = text_to_cstring(PG_GETARG_TEXT_P(1));
 	bool ret;
 
+	if (strlen(keyid) > MAX_KEY_ID_LEN)
+		ereport(ERROR, (errmsg("key identifier must be less than %d",
+							   MAX_KEY_ID_LEN)));
+
 	KeyMgrInit();
-	ret = GenerateKey(text_to_cstring(keyid),
-					  text_to_cstring(keytype));
+	ret = GenerateKey(keyid, keytype);
 
 	PG_RETURN_BOOL(ret);
 }
