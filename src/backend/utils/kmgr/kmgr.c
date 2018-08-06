@@ -69,7 +69,12 @@ KeyMgrInit(void)
 													   sizeof(KeyMgrContext));
 	KmgrContext->isReady = false;
 	TDECurrentKeyGeneration = 0;
+
+	/* Load theplugin */
 	LoadKeyMgrPlugin();
+
+	/* Invoke startup callback if provided */
+	KeyMgrProviderStartup();
 
 	MemoryContextSwitchTo(old_cxt);
 }
@@ -79,8 +84,14 @@ KeyMgrProviderStartup(void)
 {
 	Assert(KmgrContext);
 
+	if (!provider_successfully_loaded)
+	{
+		KmgrContext->isReady = false;
+		return;
+	}
+
 	/* Startup key management API */
-	if (provider_successfully_loaded && KmgrContext->callbacks.startup_cb)
+	if (KmgrContext->callbacks.startup_cb)
 		KmgrContext->callbacks.startup_cb();
 
 	KmgrContext->isReady = true;
@@ -92,9 +103,6 @@ GenerateKey(char *keyid, char *keytype)
 	char *key_with_gen = palloc(sizeof(char) * MAX_KEY_ID_LEN);
 
 	Assert(KmgrContext);
-
-	if (!KmgrContext->isReady)
-		KeyMgrProviderStartup();
 
 	ConstructKeyId(keyid, 0, key_with_gen);
 	KmgrContext->callbacks.generatekey_cb(key_with_gen, GetUserId());
@@ -111,9 +119,6 @@ GetKey(char *keyid, KeyGeneration generation, char **key, int *keylen)
 	Assert(KmgrContext);
 	Assert(*key && keylen);
 
-	if (!KmgrContext->isReady)
-		KeyMgrProviderStartup();
-
 	ConstructKeyId(keyid, generation, key_with_gen);
 	ret = KmgrContext->callbacks.getkey_cb(key_with_gen,
 										   GetUserId(),
@@ -127,9 +132,6 @@ RemoveKey(char *keyid, KeyGeneration generation)
 {
 	Assert(KmgrContext);
 
-	if (!KmgrContext->isReady)
-		KeyMgrProviderStartup();
-
 	KmgrContext->callbacks.removekey_cb(keyid, GetUserId());
 	return true;
 }
@@ -138,9 +140,6 @@ KeyGeneration
 RotateKey(char *keyid)
 {
 	Assert(KmgrContext);
-
-	if (!KmgrContext->isReady)
-		KeyMgrProviderStartup();
 
 	return 0;
 }
