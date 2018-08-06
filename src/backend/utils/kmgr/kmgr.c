@@ -79,6 +79,9 @@ KeyMgrInit(void)
 	MemoryContextSwitchTo(old_cxt);
 }
 
+/*
+ * Invoke startup callback if defined.
+ */
 static void
 KeyMgrProviderStartup(void)
 {
@@ -97,6 +100,11 @@ KeyMgrProviderStartup(void)
 	KmgrContext->isReady = true;
 }
 
+/*
+ * Generat key from the keyring.
+ *
+ * The initial key generation is always 0.
+ */
 bool
 GenerateKey(char *keyid, char *keytype)
 {
@@ -105,11 +113,27 @@ GenerateKey(char *keyid, char *keytype)
 	Assert(KmgrContext);
 
 	ConstructKeyId(keyid, 0, key_with_gen);
-	KmgrContext->callbacks.generatekey_cb(key_with_gen, GetUserId());
+	PG_TRY();
+	{
+		KmgrContext->callbacks.generatekey_cb(key_with_gen, GetUserId());
+	}
+	PG_CATCH();
+	{
+		errcontext("generating the new key in \"%s\" plugin",
+				   key_management_provider);
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
 
 	return true;
 }
 
+/*
+ * Get key from the keyring.
+ *
+ * Since the given keyid is a raw key identifier we construct
+ * an key id combine with its generation for searching.
+ */
 bool
 GetKey(char *keyid, KeyGeneration generation, char **key, int *keylen)
 {
@@ -120,13 +144,37 @@ GetKey(char *keyid, KeyGeneration generation, char **key, int *keylen)
 	Assert(*key && keylen);
 
 	ConstructKeyId(keyid, generation, key_with_gen);
-	ret = KmgrContext->callbacks.getkey_cb(key_with_gen,
-										   GetUserId(),
-										   key,
-										   keylen);
+
+	PG_TRY();
+	{
+		ret = KmgrContext->callbacks.getkey_cb(key_with_gen,
+											   GetUserId(),
+											   key,
+											   keylen);
+	}
+	PG_CATCH();
+	{
+		errcontext("getting the key from \"%s\" plugin",
+				   key_management_provider);
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+
+	/* Key not found, emit an error */
+	if (!ret)
+		ereport(ERROR,
+				(errmsg("key \"%s\" does not exist", keyid),
+				 errdetail("key generation is %d", generation)));
+
 	return ret;
 }
 
+/*
+ * Remove key from the keyring.
+ *
+ * Since the given keyid is a raw key identifier we construct
+ * an key id combine with its generation for searching.
+ */
 bool
 RemoveKey(char *keyid, KeyGeneration generation)
 {
@@ -136,6 +184,12 @@ RemoveKey(char *keyid, KeyGeneration generation)
 	return true;
 }
 
+/*
+ * Rotate key in the keyring.
+ *
+ * Since the given keyid is a raw key identifier we construct
+ * an key id combine with its generation for searching.
+ */
 KeyGeneration
 RotateKey(char *keyid)
 {

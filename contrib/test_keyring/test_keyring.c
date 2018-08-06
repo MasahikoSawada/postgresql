@@ -101,9 +101,9 @@ test_getkey(char *keyid, Oid userid, char **key, int *keylen)
 						HASH_FIND,
 						&found);
 
+	/* Not found */
 	if (!found)
-		ereport(ERROR, (errmsg("key \"%s\" does not exist", keyid)));
-
+		return false;
 
 	/* Set to output parameter */
 	memcpy(*key, mykey->key, MAX_KEY_ID_LEN);
