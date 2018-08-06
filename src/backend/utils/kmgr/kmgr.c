@@ -96,8 +96,6 @@ GenerateKey(char *keyid, char *keytype)
 	if (!KmgrContext->isReady)
 		KeyMgrProviderStartup();
 
-	elog(NOTICE, "generate key : keyid = %s(gen = 0), keytype = %s",
-		 keyid, keytype);
 	ConstructKeyId(keyid, 0, key_with_gen);
 	KmgrContext->callbacks.generatekey_cb(key_with_gen, GetUserId());
 
@@ -116,8 +114,6 @@ GetKey(char *keyid, KeyGeneration generation, char **key, int *keylen)
 	if (!KmgrContext->isReady)
 		KeyMgrProviderStartup();
 
-	elog(NOTICE, "get key : keyid = %s, generation = %u",
-		 keyid, generation);
 	ConstructKeyId(keyid, generation, key_with_gen);
 	ret = KmgrContext->callbacks.getkey_cb(key_with_gen,
 										   GetUserId(),
@@ -134,7 +130,6 @@ RemoveKey(char *keyid, KeyGeneration generation)
 	if (!KmgrContext->isReady)
 		KeyMgrProviderStartup();
 
-	elog(NOTICE, "remove key : keyid = %s, generation = %u", keyid, generation);
 	KmgrContext->callbacks.removekey_cb(keyid, GetUserId());
 	return true;
 }
@@ -147,7 +142,6 @@ RotateKey(char *keyid)
 	if (!KmgrContext->isReady)
 		KeyMgrProviderStartup();
 
-	elog(NOTICE, "rotate key : keyid = %s", keyid);
 	return 0;
 }
 

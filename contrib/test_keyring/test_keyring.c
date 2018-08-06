@@ -68,8 +68,6 @@ test_startupkey(void)
 	HASHCTL ctl;
 	MemoryContext old_cxt;
 
-	elog(NOTICE, "test_key: startup");
-
 	old_cxt = MemoryContextSwitchTo(TopMemoryContext);
 	MyKeyCtl = (KeyCtl) palloc(sizeof(KeyCtlData));
 
@@ -98,7 +96,6 @@ test_getkey(char *keyid, Oid userid, char **key, int *keylen)
 	MemSet(id, 0, sizeof(id));
 	strncpy(id, keyid, strlen(keyid));
 
-	elog(NOTICE, "test_key: getkey by %s", id);
 	mykey = hash_search(MyKeyCtl->keys,
 						&id,
 						HASH_FIND,
@@ -127,7 +124,6 @@ test_generatekey(char *keyid, Oid userid)
 	/* Construct search key id */
 	MemSet(id, 0, sizeof(id));
 	strncpy(id, keyid, strlen(keyid));
-	elog(NOTICE, "test_key: generatekey %s", id);
 
 	/* Check if the key duplication */
 	mykey = hash_search(MyKeyCtl->keys,
@@ -152,7 +148,6 @@ test_generatekey(char *keyid, Oid userid)
 static bool
 test_removekey(char *keyid, Oid userid)
 {
-	elog(NOTICE, "test_key: removekey");
 	return true;
 }
 
