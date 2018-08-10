@@ -93,6 +93,9 @@ ANALYZE vactst (i), vacparted (does_not_exist);
 ANALYZE (VERBOSE) does_not_exist;
 ANALYZE (nonexistant-arg) does_not_exist;
 
+-- parallel option
+VACUUM (PARALLEL 1) vactst;
+
 DROP TABLE vaccluster;
 DROP TABLE vactst;
 DROP TABLE vacparted;

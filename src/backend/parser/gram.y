@@ -187,6 +187,7 @@ static void processCASbits(int cas_bits, int location, const char *constrType,
 			   bool *deferrable, bool *initdeferred, bool *not_valid,
 			   bool *no_inherit, core_yyscan_t yyscanner);
 static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
+static VacuumOption *makeVacOpt(VacuumOptionFlag flag, int nworkers);
 
 %}
 
@@ -237,6 +238,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	struct ImportQual	*importqual;
 	InsertStmt			*istmt;
 	VariableSetStmt		*vsetstmt;
+	VacuumOption		*vacopt;
 	PartitionElem		*partelem;
 	PartitionSpec		*partspec;
 	PartitionBoundSpec	*partboundspec;
@@ -305,8 +307,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				create_extension_opt_item alter_extension_opt_item
 
 %type <ival>	opt_lock lock_type cast_context
-%type <ival>	vacuum_option_list vacuum_option_elem
-				analyze_option_list analyze_option_elem
+%type <vacopt>	vacuum_option_list vacuum_option_elem
+%type <ival>	analyze_option_list analyze_option_elem
 %type <boolean>	opt_or_replace
 				opt_grant_grant_option opt_grant_admin_option
 				opt_nowait opt_if_exists opt_with_data
@@ -10528,22 +10530,29 @@ cluster_index_specification:
 VacuumStmt: VACUUM opt_full opt_freeze opt_verbose opt_analyze opt_vacuum_relation_list
 				{
 					VacuumStmt *n = makeNode(VacuumStmt);
-					n->options = VACOPT_VACUUM;
+					VacuumOption *vacopt = makeVacOpt(VACOPT_VACUUM, 0);
 					if ($2)
-						n->options |= VACOPT_FULL;
+						vacopt->flags |= VACOPT_FULL;
 					if ($3)
-						n->options |= VACOPT_FREEZE;
+						vacopt->flags |= VACOPT_FREEZE;
 					if ($4)
-						n->options |= VACOPT_VERBOSE;
+						vacopt->flags |= VACOPT_VERBOSE;
 					if ($5)
-						n->options |= VACOPT_ANALYZE;
+						vacopt->flags |= VACOPT_ANALYZE;
+
+					n->options.flags = vacopt->flags;
+					n->options.nworkers = 0;
 					n->rels = $6;
 					$$ = (Node *)n;
+					pfree(vacopt);
 				}
 			| VACUUM '(' vacuum_option_list ')' opt_vacuum_relation_list
 				{
-					VacuumStmt *n = makeNode(VacuumStmt);
-					n->options = VACOPT_VACUUM | $3;
+					VacuumStmt 		*n = makeNode(VacuumStmt);
+					VacuumOption 	*vacopt = $3;
+
+					n->options.flags = vacopt->flags | VACOPT_VACUUM;
+					n->options.nworkers = vacopt->nworkers;
 					n->rels = $5;
 					$$ = (Node *) n;
 				}
@@ -10551,18 +10560,42 @@ VacuumStmt: VACUUM opt_full opt_freeze opt_verbose opt_analyze opt_vacuum_relati
 
 vacuum_option_list:
 			vacuum_option_elem								{ $$ = $1; }
-			| vacuum_option_list ',' vacuum_option_elem		{ $$ = $1 | $3; }
+			| vacuum_option_list ',' vacuum_option_elem
+				{
+					VacuumOption *vacopt1 = (VacuumOption *) $1;
+					VacuumOption *vacopt2 = (VacuumOption *) $3;
+
+					/* OR flags */
+					vacopt1->flags |= vacopt2->flags;
+
+					/* Set requested parallel worker number */
+					if (vacopt2->flags == VACOPT_PARALLEL)
+						vacopt1->nworkers = vacopt2->nworkers;
+
+					$$ = vacopt1;
+					pfree(vacopt2);
+				}
 		;
 
 vacuum_option_elem:
-			analyze_keyword		{ $$ = VACOPT_ANALYZE; }
-			| VERBOSE			{ $$ = VACOPT_VERBOSE; }
-			| FREEZE			{ $$ = VACOPT_FREEZE; }
-			| FULL				{ $$ = VACOPT_FULL; }
+			analyze_keyword		{ $$ = makeVacOpt(VACOPT_ANALYZE, 0); }
+			| VERBOSE			{ $$ = makeVacOpt(VACOPT_VERBOSE, 0); }
+			| FREEZE			{ $$ = makeVacOpt(VACOPT_FREEZE, 0); }
+			| FULL				{ $$ = makeVacOpt(VACOPT_FULL, 0); }
+			| PARALLEL			{ $$ = makeVacOpt(VACOPT_PARALLEL, 0); }
+			| PARALLEL ICONST
+				{
+					if ($2 < 1)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("parallel vacuum degree must be more than 1"),
+								 parser_errposition(@1)));
+					$$ = makeVacOpt(VACOPT_PARALLEL, $2);
+				}
 			| IDENT
 				{
 					if (strcmp($1, "disable_page_skipping") == 0)
-						$$ = VACOPT_DISABLE_PAGE_SKIPPING;
+						$$ = makeVacOpt(VACOPT_DISABLE_PAGE_SKIPPING, 0);
 					else
 						ereport(ERROR,
 								(errcode(ERRCODE_SYNTAX_ERROR),
@@ -10574,16 +10607,23 @@ vacuum_option_elem:
 AnalyzeStmt: analyze_keyword opt_verbose opt_vacuum_relation_list
 				{
 					VacuumStmt *n = makeNode(VacuumStmt);
-					n->options = VACOPT_ANALYZE;
+					VacuumOption *vacopt = makeVacOpt(VACOPT_ANALYZE, 0);
+
 					if ($2)
-						n->options |= VACOPT_VERBOSE;
+						vacopt->flags |= VACOPT_VERBOSE;
+
+					n->options.flags = vacopt->flags;
+					n->options.nworkers = 0;
 					n->rels = $3;
 					$$ = (Node *)n;
+					pfree(vacopt);
 				}
 			| analyze_keyword '(' analyze_option_list ')' opt_vacuum_relation_list
 				{
-					VacuumStmt *n = makeNode(VacuumStmt);
-					n->options = VACOPT_ANALYZE | $3;
+					VacuumStmt 		*n = makeNode(VacuumStmt);
+
+					n->options.flags = $3 | VACOPT_ANALYZE;
+					n->options.nworkers = 0;
 					n->rels = $5;
 					$$ = (Node *) n;
 				}
@@ -16330,6 +16370,16 @@ makeRecursiveViewSelect(char *relname, List *aliases, Node *query)
 	s->fromClause = list_make1(makeRangeVar(NULL, relname, -1));
 
 	return (Node *) s;
+}
+
+static VacuumOption *
+makeVacOpt(VacuumOptionFlag flag, int nworkers)
+{
+	VacuumOption *vacopt = palloc(sizeof(VacuumOption));
+
+	vacopt->flags = flag;
+	vacopt->nworkers = nworkers;
+	return vacopt;
 }
 
 /* parser_init()

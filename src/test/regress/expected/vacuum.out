@@ -119,6 +119,8 @@ ANALYZE (nonexistant-arg) does_not_exist;
 ERROR:  syntax error at or near "nonexistant"
 LINE 1: ANALYZE (nonexistant-arg) does_not_exist;
                  ^
+-- parallel option
+VACUUM (PARALLEL 1) vactst;
 DROP TABLE vaccluster;
 DROP TABLE vactst;
 DROP TABLE vacparted;
