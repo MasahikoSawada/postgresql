@@ -528,6 +528,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <str>		ColId ColLabel var_name type_function_name param_name
 %type <list>	row_pattern row_pattern_term row_pattern_factor row_pattern_primary
 				row_pattern_measure_list row_pattern_measure_definition
+			    
 %type <str>		NonReservedWord NonReservedWord_or_Sconst
 %type <str>		createdb_opt_name
 %type <node>	var_value zone_value
@@ -575,9 +576,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>	window_clause window_definition_list opt_partition_clause
 %type <windef>	window_definition over_clause window_specification
 				opt_frame_clause frame_clause frame_extent frame_bound opt_measures_clause
-				  row_pattern_subset_term opt_row_pattern_skip_to after_match_skip_option
-				row_pattern_subset_list opt_row_pattern_subset
-				pattern_clause define_clause
+				  row_pattern_subset_term opt_row_pattern_after_match row_pattern_skip_to
+				row_pattern_subset_list opt_row_pattern_subset_clause
 %type <ival>	opt_window_exclusion_clause
 %type <str>		opt_existing_window_name
 %type <boolean> opt_if_not_exists
@@ -634,7 +634,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	DETACH DICTIONARY DISABLE_P DISCARD DISTINCT DO DOCUMENT_P DOMAIN_P
 	DOUBLE_P DROP
 
-	EACH ELSE ENABLE_P ENCODING ENCRYPTED END_P ENUM_P ESCAPE EVENT EXCEPT
+	EACH ELSE EMPTY ENABLE_P ENCODING ENCRYPTED END_P ENUM_P ESCAPE EVENT EXCEPT
 	EXCLUDE EXCLUDING EXCLUSIVE EXECUTE EXISTS EXPLAIN
 	EXTENSION EXTERNAL EXTRACT
 
@@ -658,7 +658,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	LEADING LEAKPROOF LEAST LEFT LEVEL LIKE LIMIT LISTEN LOAD LOCAL
 	LOCALTIME LOCALTIMESTAMP LOCATION LOCK_P LOCKED LOGGED
 
-	MAPPING MATCH MATCH_RECOGNIZE MATERIALIZED MAXVALUE MEASURES METHOD MINUTE_P MINVALUE MODE MONTH_P MOVE
+	MAPPING MATCH MATCHES MATCH_RECOGNIZE MATERIALIZED MAXVALUE MEASURES METHOD MINUTE_P MINVALUE MODE MONTH_P MOVE
 
 	NAME_P NAMES NATIONAL NATURAL NCHAR NEW NEXT NO NONE
 	NOT NOTHING NOTIFY NOTNULL NOWAIT NULL_P NULLIF
@@ -690,7 +690,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	TREAT TRIGGER TRIM TRUE_P
 	TRUNCATE TRUSTED TYPE_P TYPES_P
 
-	UNBOUNDED UNCOMMITTED UNENCRYPTED UNION UNIQUE UNKNOWN UNLISTEN UNLOGGED
+	UNBOUNDED UNCOMMITTED UNENCRYPTED UNION UNIQUE UNKNOWN UNLISTEN UNMATCHED UNLOGGED
 	UNTIL UPDATE USER USING
 
 	VACUUM VALID VALIDATE VALIDATOR VALUE_P VALUES VARCHAR VARIADIC VARYING
@@ -12167,9 +12167,13 @@ relation_expr_opt_alias: relation_expr					%prec UMINUS
 		;
 
 match_recognize_clause:
-	MATCH_RECOGNIZE '(' opt_partition_clause
-	opt_sort_clause opt_measures_clause opt_row_pattern_per_match opt_row_pattern_skip_to
-	pattern_clause opt_row_pattern_subset define_clause ')'
+	MATCH_RECOGNIZE '('
+	opt_partition_clause
+	opt_sort_clause
+	opt_measures_clause
+	//	opt_row_pattern_per_match
+	row_pattern_common_syntax
+	')'
 	{
 		RangeTableSample *n = makeNode(RangeTableSample);
 
@@ -13602,12 +13606,12 @@ c_expr:		columnref								{ $$ = $1; }
 		;
 
 d_expr: columnref {}
-| AexprConst {}
-| PARAM opt_indirection {}
-| case_expr {}
-| func_expr {}
-| explicit_row {}
-| implicit_row {}
+		| AexprConst {}
+		| PARAM opt_indirection {}
+		| case_expr {}
+		| func_expr {}
+		| explicit_row {}
+		| implicit_row {}
 ;
 
 
@@ -14272,8 +14276,10 @@ opt_window_exclusion_clause:
 		;
 
 opt_measures_clause:
-MEASURES row_pattern_measure_list { printf("MEASURES clause \n"); $$ = NULL; }
-| %prec Op { $$ = NULL; }
+	MEASURES row_pattern_measure_list ONE ROW PER MATCH { printf("MEASURES clause \n"); $$ = NULL; }
+	| MEASURES row_pattern_measure_list ALL ROWS PER MATCH { printf("MEASURES clause \n"); $$ = NULL; }
+	| MEASURES row_pattern_measure_list { printf("MEASURES clause \n"); $$ = NULL; }
+	| %prec Op { $$ = NULL; }
 ;
 
 row_pattern_measure_list:
@@ -14282,38 +14288,34 @@ row_pattern_measure_definition {}
 ;
 
 row_pattern_measure_definition:
-d_expr AS ColId {}
+d_expr AS IDENT {}
 ;
-
-opt_row_pattern_per_match:
-ONE ROW PER MATCH {}
-| ALL ROWS PER MATCH {}
+row_pattern_common_syntax:
+	opt_row_pattern_after_match
+	opt_row_pattern_initial_or_seek
+	PATTERN '(' row_pattern ')'
+	opt_row_pattern_subset_clause
+	DEFINE define_list {}
+;
+opt_row_pattern_after_match:
+AFTER MATCH row_pattern_skip_to {}
 | {}
 ;
 
-opt_row_pattern_skip_to:
-AFTER MATCH SKIP after_match_skip_option {}
-| {}
+row_pattern_skip_to:
+SKIP TO NEXT ROW {}
+| SKIP PAST_P LAST_P ROW {}
+| SKIP TO FIRST_P IDENT {}
+| SKIP TO LAST_P IDENT {}
+| SKIP TO IDENT {}
 ;
 
-after_match_skip_option:
- TO NEXT ROW {}
-| PAST_P LAST_P ROW {}
-| TO FIRST_P IDENT {}
-| TO LAST_P IDENT {}
-| TO IDENT {}
-| /* empty */ {printf("EMPTY SKIP TO clause \n");}
+opt_row_pattern_initial_or_seek:
+INITIAL {}
+| SEEK {}
 ;
 
-
-/*
-opt_row_match:
-ONE_P ROW PER MATCH {}
-| ALL ROWS PER MATCH {}
-;
-*/
-
-opt_row_pattern_subset:
+opt_row_pattern_subset_clause:
 SUBSET row_pattern_subset_list {}
 | {}
 ;
@@ -14325,14 +14327,6 @@ row_pattern_subset_term {}
 
 row_pattern_subset_term:
 IDENT '=' '(' target_list ')' {}
-;
-
-pattern_clause:
-PATTERN '(' row_pattern ')' { $$ = NULL; }
-;
-
-define_clause:
-DEFINE define_list { $$ = NULL; }
 ;
 
 define_list:
@@ -14372,7 +14366,7 @@ row_pattern_primary {
 		}
 | row_pattern_primary '+' {	printf("row_pattern_primary + \n");}
 | row_pattern_primary '*' {printf("row_pattern_primary * \n");}
-| row_pattern_primary '?' {printf("row_pattern_primary ? \n");}
+| row_pattern_primary '?' {printf("row_pattern_primary ? \n");}
 | row_pattern_primary '{' ICONST ',' ICONST '}' {printf("row_pattern_primary {m,n} \n");}
 | row_pattern_primary '{' ICONST '}' {printf("row_pattern_primary {m} \n");}
 ;
@@ -15164,7 +15158,6 @@ unreserved_keyword:
 			| ACTION
 			| ADD_P
 			| ADMIN
-			| AFTER
 			| AGGREGATE
 			| ALSO
 			| ALTER
@@ -15231,6 +15224,7 @@ unreserved_keyword:
 			| DOUBLE_P
 			| DROP
 			| EACH
+			| EMPTY
 			| ENABLE_P
 			| ENCODING
 			| ENCRYPTED
@@ -15273,7 +15267,6 @@ unreserved_keyword:
 			| INDEXES
 			| INHERIT
 			| INHERITS
-			| INITIAL
 			| INLINE_P
 			| INPUT_P
 			| INSENSITIVE
@@ -15297,6 +15290,7 @@ unreserved_keyword:
 			| LOGGED
 			| MAPPING
 			| MATCH
+			| MATCHES
 			| MATERIALIZED
 			| MAXVALUE
 			| MEASURES
@@ -15337,7 +15331,6 @@ unreserved_keyword:
 			| PASSWORD
 			| PAST_P
 			| PATTERN
-			| PER
 			| PLANS
 			| POLICY
 			| PRECEDING
@@ -15377,7 +15370,6 @@ unreserved_keyword:
 			| ROLLUP
 			| ROUTINE
 			| ROUTINES
-			| ROWS
 			| RULE
 			| SAVEPOINT
 			| SCHEMA
@@ -15386,7 +15378,6 @@ unreserved_keyword:
 			| SEARCH
 			| SECOND_P
 			| SECURITY
-			| SEEK
 			| SEQUENCE
 			| SEQUENCES
 			| SERIALIZABLE
@@ -15411,7 +15402,6 @@ unreserved_keyword:
 			| STRICT_P
 			| STRIP_P
 			| SUBSCRIPTION
-			| SUBSET
 			| SYSID
 			| SYSTEM_P
 			| TABLES
@@ -15565,7 +15555,8 @@ type_func_name_keyword:
  * forced to.
  */
 reserved_keyword:
-			ALL
+			AFTER
+			| ALL
 			| ANALYSE
 			| ANALYZE
 			| AND
@@ -15605,6 +15596,7 @@ reserved_keyword:
 			| GROUP_P
 			| HAVING
 			| IN_P
+			| INITIAL
 			| INITIALLY
 			| INTERSECT
 			| INTO
@@ -15624,10 +15616,14 @@ reserved_keyword:
 			| PLACING
 			| PRIMARY
 			| REFERENCES
+			| PER
 			| RETURNING
+			| ROWS
+			| SEEK
 			| SELECT
 			| SESSION_USER
 			| SOME
+			| SUBSET
 			| SYMMETRIC
 			| TABLE
 			| THEN
@@ -15636,6 +15632,7 @@ reserved_keyword:
 			| TRUE_P
 			| UNION
 			| UNIQUE
+			| UNMATCHED
 			| USER
 			| USING
 			| VARIADIC
