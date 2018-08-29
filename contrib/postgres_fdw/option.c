@@ -17,6 +17,7 @@
 #include "access/reloptions.h"
 #include "catalog/pg_foreign_server.h"
 #include "catalog/pg_foreign_table.h"
+#include "catalog/pg_routine_mapping.h"
 #include "catalog/pg_user_mapping.h"
 #include "commands/defrem.h"
 #include "commands/extension.h"
@@ -177,6 +178,9 @@ InitPgFdwOptions(void)
 		/* fetch_size is available on both server and table */
 		{"fetch_size", ForeignServerRelationId, false},
 		{"fetch_size", ForeignTableRelationId, false},
+		/* Routine mapping */
+		{"remote_func_name", RoutineMappingRelationId, false},
+		{"remote_func_schema", RoutineMappingRelationId, false},
 		{NULL, InvalidOid, false}
 	};
 

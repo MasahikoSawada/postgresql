@@ -211,6 +211,9 @@ check_xact_readonly(Node *parsetree)
 		case T_CreateUserMappingStmt:
 		case T_AlterUserMappingStmt:
 		case T_DropUserMappingStmt:
+		case T_CreateRoutineMappingStmt:
+		case T_AlterRoutineMappingStmt:
+		case T_DropRoutineMappingStmt:
 		case T_AlterTableSpaceOptionsStmt:
 		case T_CreateForeignTableStmt:
 		case T_ImportForeignSchemaStmt:
@@ -1421,6 +1424,20 @@ ProcessUtilitySlow(ParseState *pstate,
 				commandCollected = true;
 				break;
 
+			case T_CreateRoutineMappingStmt:
+				address = CreateRoutineMapping((CreateRoutineMappingStmt *) parsetree);
+				break;
+
+			case T_AlterRoutineMappingStmt:
+				address = AlterRoutineMapping((AlterRoutineMappingStmt *) parsetree);
+				break;
+
+			case T_DropRoutineMappingStmt:
+				RemoveRoutineMapping((DropRoutineMappingStmt *) parsetree);
+				/* no commands stashed for DROP */
+				commandCollected = true;
+				break;
+
 			case T_CompositeTypeStmt:	/* CREATE TYPE (composite) */
 				{
 					CompositeTypeStmt *stmt = (CompositeTypeStmt *) parsetree;
@@ -2250,6 +2267,18 @@ CreateCommandTag(Node *parsetree)
 			tag = "IMPORT FOREIGN SCHEMA";
 			break;
 
+		case T_CreateRoutineMappingStmt:
+			tag = "CREATE ROUTINE MAPPING";
+			break;
+
+		case T_AlterRoutineMappingStmt:
+			tag = "ALTER ROUTINE MAPPING";
+			break;
+
+		case T_DropRoutineMappingStmt:
+			tag = "DROP ROUTINE MAPPING";
+			break;
+
 		case T_DropStmt:
 			switch (((DropStmt *) parsetree)->removeType)
 			{
@@ -3006,6 +3035,9 @@ GetCommandLogLevel(Node *parsetree)
 		case T_CreateUserMappingStmt:
 		case T_AlterUserMappingStmt:
 		case T_DropUserMappingStmt:
+		case T_CreateRoutineMappingStmt:
+		case T_AlterRoutineMappingStmt:
+		case T_DropRoutineMappingStmt:
 		case T_ImportForeignSchemaStmt:
 			lev = LOGSTMT_DDL;
 			break;

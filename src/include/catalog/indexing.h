@@ -299,6 +299,13 @@ DECLARE_UNIQUE_INDEX(pg_user_mapping_oid_index, 174, on pg_user_mapping using bt
 DECLARE_UNIQUE_INDEX(pg_user_mapping_user_server_index, 175, on pg_user_mapping using btree(umuser oid_ops, umserver oid_ops));
 #define UserMappingUserServerIndexId	175
 
+DECLARE_UNIQUE_INDEX(pg_routine_mapping_oid_index, 6021, on pg_routine_mapping using btree(oid oid_ops));
+#define RoutineMappingOidIndexId	6021
+DECLARE_UNIQUE_INDEX(pg_routine_mapping_proc_server_index, 6022, on pg_routine_mapping using btree(rmproc oid_ops, rmserver oid_ops));
+#define RoutineMappingProcServerIndexId	6022
+DECLARE_UNIQUE_INDEX(pg_routine_mapping_name_index, 6023, on pg_routine_mapping using btree(rmname name_ops));
+#define RoutineMappingNameIndexId	6023
+
 DECLARE_UNIQUE_INDEX(pg_foreign_table_relid_index, 3119, on pg_foreign_table using btree(ftrelid oid_ops));
 #define ForeignTableRelidIndexId 3119
 

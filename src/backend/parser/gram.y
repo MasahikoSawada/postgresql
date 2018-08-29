@@ -250,7 +250,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		AlterObjectDependsStmt AlterObjectSchemaStmt AlterOwnerStmt
 		AlterOperatorStmt AlterSeqStmt AlterSystemStmt AlterTableStmt
 		AlterTblSpcStmt AlterExtensionStmt AlterExtensionContentsStmt AlterForeignTableStmt
-		AlterCompositeTypeStmt AlterUserMappingStmt
+		AlterCompositeTypeStmt AlterUserMappingStmt AlterRoutineMappingStmt
 		AlterRoleStmt AlterRoleSetStmt AlterPolicyStmt
 		AlterDefaultPrivilegesStmt DefACLAction
 		AnalyzeStmt CallStmt ClosePortalStmt ClusterStmt CommentStmt
@@ -260,10 +260,11 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		CreateSchemaStmt CreateSeqStmt CreateStmt CreateStatsStmt CreateTableSpaceStmt
 		CreateFdwStmt CreateForeignServerStmt CreateForeignTableStmt
 		CreateAssertStmt CreateTransformStmt CreateTrigStmt CreateEventTrigStmt
-		CreateUserStmt CreateUserMappingStmt CreateRoleStmt CreatePolicyStmt
-		CreatedbStmt DeclareCursorStmt DefineStmt DeleteStmt DiscardStmt DoStmt
+		CreateUserStmt CreateUserMappingStmt CreateRoutineMappingStmt CreateRoleStmt
+		CreatePolicyStmt CreatedbStmt
+		DeclareCursorStmt DefineStmt DeleteStmt DiscardStmt DoStmt
 		DropOpClassStmt DropOpFamilyStmt DropPLangStmt DropStmt
-		DropAssertStmt DropCastStmt DropRoleStmt
+		DropAssertStmt DropCastStmt DropRoleStmt DropRoutineMappingStmt
 		DropdbStmt DropTableSpaceStmt
 		DropTransformStmt
 		DropUserMappingStmt ExplainStmt FetchStmt
@@ -846,6 +847,7 @@ stmt :
 			| AlterPublicationStmt
 			| AlterRoleSetStmt
 			| AlterRoleStmt
+			| AlterRoutineMappingStmt
 			| AlterSubscriptionStmt
 			| AlterTSConfigurationStmt
 			| AlterTSDictionaryStmt
@@ -886,6 +888,7 @@ stmt :
 			| CreateTransformStmt
 			| CreateTrigStmt
 			| CreateEventTrigStmt
+			| CreateRoutineMappingStmt
 			| CreateRoleStmt
 			| CreateUserStmt
 			| CreateUserMappingStmt
@@ -907,6 +910,7 @@ stmt :
 			| DropTableSpaceStmt
 			| DropTransformStmt
 			| DropRoleStmt
+			| DropRoutineMappingStmt
 			| DropUserMappingStmt
 			| DropdbStmt
 			| ExecuteStmt
@@ -5221,6 +5225,107 @@ AlterUserMappingStmt: ALTER USER MAPPING FOR auth_ident SERVER name alter_generi
 					$$ = (Node *) n;
 				}
 		;
+
+/*****************************************************************************
+ *
+ *		QUERY:
+ *             CREATE ROUTINE MAPPING [IF NOT EXISTS] name
+ *			   		FOR [FUNCTION|PROCEDUER] <function_with_args>
+ *					SERVER name [OPTIONS]
+ *
+ *****************************************************************************/
+
+CreateRoutineMappingStmt: CREATE ROUTINE MAPPING name
+							FOR FUNCTION function_with_argtypes
+							SERVER name create_generic_options
+			{
+				CreateRoutineMappingStmt *n = makeNode(CreateRoutineMappingStmt);
+				n->name = $4;
+				n->objtype = OBJECT_FUNCTION;
+				n->func = $7;
+				n->servername = $9;
+				n->options = $10;
+				n->if_not_exists = false;
+				$$ = (Node *) n;
+			}
+						|  CREATE ROUTINE MAPPING IF_P NOT EXISTS name
+							FOR FUNCTION function_with_argtypes
+							SERVER name create_generic_options
+			{
+				CreateRoutineMappingStmt *n = makeNode(CreateRoutineMappingStmt);
+				n->name = $7;
+				n->objtype = OBJECT_FUNCTION;
+				n->func = $10;
+				n->servername = $12;
+				n->options = $13;
+				n->if_not_exists = true;
+				$$ = (Node *) n;
+			}
+						| CREATE ROUTINE MAPPING name
+							FOR PROCEDURE function_with_argtypes
+							SERVER name create_generic_options
+			{
+				CreateRoutineMappingStmt *n = makeNode(CreateRoutineMappingStmt);
+				n->name = $4;
+				n->objtype = OBJECT_PROCEDURE;
+				n->func = $7;
+				n->servername = $9;
+				n->options = $10;
+				n->if_not_exists = false;
+				$$ = (Node *) n;
+			}
+						| CREATE ROUTINE MAPPING IF_P NOT EXISTS name
+							FOR PROCEDURE function_with_argtypes
+							SERVER name create_generic_options
+			{
+				CreateRoutineMappingStmt *n = makeNode(CreateRoutineMappingStmt);
+				n->name = $7;
+				n->objtype = OBJECT_PROCEDURE;
+				n->func = $10;
+				n->servername = $12;
+				n->options = $13;
+				n->if_not_exists = true;
+				$$ = (Node *) n;
+			}
+	;
+
+/*****************************************************************************
+ *
+ *		QUERY:
+ *             ALTER ROUTINE MAPPING name OPTION
+
+ *****************************************************************************/
+AlterRoutineMappingStmt: ALTER ROUTINE MAPPING name alter_generic_options
+			{
+				AlterRoutineMappingStmt *n = makeNode(AlterRoutineMappingStmt);
+				n->name = $4;
+				n->options = $5;
+				$$ = (Node *) n;
+			}
+	;
+
+/*****************************************************************************
+ *
+ *		QUERY:
+ *             DROP ROUTINE MAPPING name
+
+ *****************************************************************************/
+
+DropRoutineMappingStmt: DROP ROUTINE MAPPING name
+			{
+				DropRoutineMappingStmt *n = makeNode(DropRoutineMappingStmt);
+				n->name = $4;
+				n->missing_ok = false;
+				$$ = (Node *) n;
+			}
+						| DROP ROUTINE MAPPING IF_P EXISTS name
+			{
+				DropRoutineMappingStmt *n = makeNode(DropRoutineMappingStmt);
+				n->name = $6;
+				n->missing_ok = true;
+				$$ = (Node *) n;
+			}
+	;
 
 /*****************************************************************************
  *
@@ -15140,7 +15245,6 @@ unreserved_keyword:
 			| LOCK_P
 			| LOCKED
 			| LOGGED
-			| MAPPING
 			| MATCH
 			| MATERIALIZED
 			| MAXVALUE
@@ -15451,6 +15555,7 @@ reserved_keyword:
 			| LIMIT
 			| LOCALTIME
 			| LOCALTIMESTAMP
+			| MAPPING
 			| NOT
 			| NULL_P
 			| OFFSET

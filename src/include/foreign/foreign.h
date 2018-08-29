@@ -68,6 +68,13 @@ typedef struct ForeignTable
 	List	   *options;		/* ftoptions as DefElem list */
 } ForeignTable;
 
+typedef struct RoutineMapping
+{
+	Oid			rmid;			/* Oid of routine mapping */
+	Oid			procid;			/* local function oid */
+	Oid			serverid;		/* server oid */
+	List		*options;		/* rmoptions as DefElem list */
+} RoutineMapping;
 
 extern ForeignServer *GetForeignServer(Oid serverid);
 extern ForeignServer *GetForeignServerByName(const char *name, bool missing_ok);
@@ -76,6 +83,8 @@ extern ForeignDataWrapper *GetForeignDataWrapper(Oid fdwid);
 extern ForeignDataWrapper *GetForeignDataWrapperByName(const char *name,
 							bool missing_ok);
 extern ForeignTable *GetForeignTable(Oid relid);
+extern RoutineMapping *GetRoutineMapping(Oid rmid);
+extern RoutineMapping *GetRoutineMappingByName(const char *rmname, bool missing_ok);
 
 extern List *GetForeignColumnOptions(Oid relid, AttrNumber attnum);
 

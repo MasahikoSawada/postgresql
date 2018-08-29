@@ -419,6 +419,9 @@ typedef enum NodeTag
 	T_CreateStatsStmt,
 	T_AlterCollationStmt,
 	T_CallStmt,
+	T_CreateRoutineMappingStmt,
+	T_AlterRoutineMappingStmt,
+	T_DropRoutineMappingStmt,
 
 	/*
 	 * TAGS FOR PARSE TREE NODES (parsenodes.h)

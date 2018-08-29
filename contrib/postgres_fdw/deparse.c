@@ -185,6 +185,8 @@ static void appendAggOrderBy(List *orderList, List *targetList,
 static void appendFunctionName(Oid funcid, deparse_expr_cxt *context);
 static Node *deparseSortGroupClause(Index ref, List *tlist, bool force_colno,
 					   deparse_expr_cxt *context);
+static void ExtractRoutineMappingOptions(List *defelems, char **remote_func_schema,
+										 char **remote_func_name);
 
 /*
  * Helper functions
@@ -3177,30 +3179,51 @@ appendOrderByClause(List *pathkeys, deparse_expr_cxt *context)
 static void
 appendFunctionName(Oid funcid, deparse_expr_cxt *context)
 {
+	PgFdwRelationInfo *fpinfo = (PgFdwRelationInfo *) context->foreignrel->fdw_private;
+	ForeignServer	*server = fpinfo->server;
 	StringInfo	buf = context->buf;
-	HeapTuple	proctup;
+	HeapTuple	proctup = NULL;
 	Form_pg_proc procform;
-	const char *proname;
+	char *proname = NULL;
+	char *schemaname = NULL;
+	Oid			rmId;
 
-	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
-	if (!HeapTupleIsValid(proctup))
-		elog(ERROR, "cache lookup failed for function %u", funcid);
-	procform = (Form_pg_proc) GETSTRUCT(proctup);
+	rmId = GetSysCacheOid2(ROUTINEMAPPINGPROCSERVER,
+						   ObjectIdGetDatum(funcid),
+						   ObjectIdGetDatum(server->serverid));
 
-	/* Print schema name only if it's not pg_catalog */
-	if (procform->pronamespace != PG_CATALOG_NAMESPACE)
+	/* This function is mapped, get remote schema and function name */
+	if (OidIsValid(rmId))
 	{
-		const char *schemaname;
+		RoutineMapping *rm;
 
-		schemaname = get_namespace_name(procform->pronamespace);
-		appendStringInfo(buf, "%s.", quote_identifier(schemaname));
+		rm = GetRoutineMapping(rmId);
+		ExtractRoutineMappingOptions(rm->options, &schemaname, &proname);
 	}
 
-	/* Always print the function name */
-	proname = NameStr(procform->proname);
-	appendStringInfoString(buf, quote_identifier(proname));
+	if (!schemaname || !proname)
+	{
+		proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+		if (!HeapTupleIsValid(proctup))
+			elog(ERROR, "cache lookup failed for function %u", funcid);
+		procform = (Form_pg_proc) GETSTRUCT(proctup);
 
-	ReleaseSysCache(proctup);
+		/* Print schema name only if it's not pg_catalog */
+		if (!schemaname && procform->pronamespace != PG_CATALOG_NAMESPACE)
+			schemaname = get_namespace_name(procform->pronamespace);
+
+		if (!proname)
+			proname = NameStr(procform->proname);
+	}
+
+	if (schemaname)
+		appendStringInfo(buf, "%s.", quote_identifier(schemaname));
+
+	/* Always print the function name */
+	appendStringInfo(buf, "%s", quote_identifier(proname));
+
+	if (HeapTupleIsValid(proctup))
+		ReleaseSysCache(proctup);
 }
 
 /*
@@ -3341,4 +3364,21 @@ get_relation_column_alias_ids(Var *node, RelOptInfo *foreignrel,
 
 	/* Shouldn't get here */
 	elog(ERROR, "unexpected expression in subquery output");
+}
+
+static void
+ExtractRoutineMappingOptions(List *defelems, char **remote_func_schema,
+							 char **remote_func_name)
+{
+	ListCell *lc;
+
+	foreach(lc, defelems)
+	{
+		DefElem *d = (DefElem *) lfirst(lc);
+
+		if (strcmp(d->defname, "remote_func_schema") == 0)
+			*remote_func_schema = defGetString(d);
+		else if (strcmp(d->defname, "remote_func_name") == 0)
+			*remote_func_name = defGetString(d);
+	}
 }

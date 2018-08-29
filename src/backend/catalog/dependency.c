@@ -48,6 +48,7 @@
 #include "catalog/pg_publication.h"
 #include "catalog/pg_publication_rel.h"
 #include "catalog/pg_rewrite.h"
+#include "catalog/pg_routine_mapping.h"
 #include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_tablespace.h"
@@ -163,6 +164,7 @@ static const Oid object_classes[] = {
 	ForeignDataWrapperRelationId,	/* OCLASS_FDW */
 	ForeignServerRelationId,	/* OCLASS_FOREIGN_SERVER */
 	UserMappingRelationId,		/* OCLASS_USER_MAPPING */
+	RoutineMappingRelationId,	/* OCLASS_ROUTINE_MAPPING */
 	DefaultAclRelationId,		/* OCLASS_DEFACL */
 	ExtensionRelationId,		/* OCLASS_EXTENSION */
 	EventTriggerRelationId,		/* OCLASS_EVENT_TRIGGER */
@@ -1250,6 +1252,10 @@ doDeletion(const ObjectAddress *object, int flags)
 
 		case OCLASS_USER_MAPPING:
 			RemoveUserMappingById(object->objectId);
+			break;
+
+		case OCLASS_ROUTINE_MAPPING:
+			RemoveRoutineMappingById(object->objectId);
 			break;
 
 		case OCLASS_DEFACL:
@@ -2513,6 +2519,9 @@ getObjectClass(const ObjectAddress *object)
 
 		case UserMappingRelationId:
 			return OCLASS_USER_MAPPING;
+
+		case RoutineMappingRelationId:
+			return OCLASS_ROUTINE_MAPPING;
 
 		case DefaultAclRelationId:
 			return OCLASS_DEFACL;

@@ -3339,6 +3339,12 @@ getObjectDescription(const ObjectAddress *object)
 				break;
 			}
 
+		case OCLASS_ROUTINE_MAPPING:
+			{
+				
+				break;
+			}
+
 		case OCLASS_DEFACL:
 			{
 				Relation	defaclrel;
@@ -4036,6 +4042,10 @@ getObjectTypeDescription(const ObjectAddress *object)
 
 		case OCLASS_USER_MAPPING:
 			appendStringInfoString(&buffer, "user mapping");
+			break;
+
+		case OCLASS_ROUTINE_MAPPING:
+			appendStringInfoString(&buffer, "routine mapping");
 			break;
 
 		case OCLASS_DEFACL:
@@ -4894,6 +4904,11 @@ getObjectIdentityParts(const ObjectAddress *object,
 				appendStringInfo(&buffer, "%s on server %s",
 								 quote_identifier(usename),
 								 srv->servername);
+				break;
+			}
+
+		case OCLASS_ROUTINE_MAPPING:
+			{
 				break;
 			}
 
