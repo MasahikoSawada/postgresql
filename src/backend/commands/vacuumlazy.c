@@ -168,7 +168,8 @@ static bool should_attempt_truncation(LVRelStats *vacrelstats);
 static void lazy_truncate_heap(Relation onerel, LVRelStats *vacrelstats);
 static BlockNumber count_nondeletable_pages(Relation onerel,
 						 LVRelStats *vacrelstats);
-static void lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks);
+static void lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks,
+							 bool collect_deadtuples);
 static void lazy_record_dead_tuple(LVRelStats *vacrelstats,
 					   ItemPointer itemptr);
 static bool lazy_tid_reaped(ItemPointer itemptr, void *state);
@@ -286,7 +287,7 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	/*
 	 * Optionally truncate the relation.
 	 */
-	if (should_attempt_truncation(vacrelstats))
+	if (should_attempt_truncation(vacrelstats) && (options & VACOPT_FREEZE_ONLY) == 0)
 		lazy_truncate_heap(onerel, vacrelstats);
 
 	/* Report that we are now doing final cleanup */
@@ -468,6 +469,11 @@ vacuum_log_cleanup_info(Relation rel, LVRelStats *vacrelstats)
  *		If there are no indexes then we can reclaim line pointers on the fly;
  *		dead line pointers need only be retained until all index pointers that
  *		reference them have been killed.
+ *
+ *		If FREEE_ONLY option is specified, we do only freezing live tuples,
+ *		HOT pruning and maintaining both the freespace map and the visibility
+ *		map, but don't collect dead tuple pointers and invoke both vacuuming
+ *		of indexes and heap.
  */
 static void
 lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
@@ -495,6 +501,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	bool		skipping_blocks;
 	xl_heap_freeze_tuple *frozen;
 	StringInfoData buf;
+	bool		freeze_only = (options & VACOPT_FREEZE_ONLY) != 0;
+	int			total_nfrozen = 0;
 	const int	initprog_index[] = {
 		PROGRESS_VACUUM_PHASE,
 		PROGRESS_VACUUM_TOTAL_HEAP_BLKS,
@@ -530,7 +538,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	vacrelstats->nonempty_pages = 0;
 	vacrelstats->latestRemovedXid = InvalidTransactionId;
 
-	lazy_space_alloc(vacrelstats, nblocks);
+	lazy_space_alloc(vacrelstats, nblocks, !freeze_only);
 	frozen = palloc(sizeof(xl_heap_freeze_tuple) * MaxHeapTuplesPerPage);
 
 	/* Report that we're scanning the heap, advertising total # of blocks */
@@ -722,6 +730,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 				PROGRESS_VACUUM_NUM_INDEX_VACUUMS
 			};
 			int64		hvp_val[2];
+
+			Assert(!freeze_only);
 
 			/*
 			 * Before beginning index vacuuming, we release any pin we may
@@ -946,7 +956,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		 * We count tuples removed by the pruning step as removed by VACUUM.
 		 */
 		tups_vacuumed += heap_page_prune(onerel, buf, OldestXmin, false,
-										 &vacrelstats->latestRemovedXid);
+										 &vacrelstats->latestRemovedXid,
+										 !freeze_only);
 
 		/*
 		 * Now scan the page to collect vacuumable items and check for tuples
@@ -995,7 +1006,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			 */
 			if (ItemIdIsDead(itemid))
 			{
-				lazy_record_dead_tuple(vacrelstats, &(tuple.t_self));
+				if (!freeze_only)
+					lazy_record_dead_tuple(vacrelstats, &(tuple.t_self));
 				all_visible = false;
 				continue;
 			}
@@ -1024,11 +1036,11 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 				case HEAPTUPLE_DEAD:
 
 					/*
-					 * Ordinarily, DEAD tuples would have been removed by
-					 * heap_page_prune(), but it's possible that the tuple
-					 * state changed since heap_page_prune() looked.  In
-					 * particular an INSERT_IN_PROGRESS tuple could have
-					 * changed to DEAD if the inserter aborted.  So this
+					 * If reclaiming tuples is enabled, DEAD tuples would have
+					 * been removed by heap_page_prune(), but it's possible
+					 * that the tuple state changed since heap_page_prune()
+					 * looked. In particular an INSERT_IN_PROGRESS tuple could
+					 * have changed to DEAD if the inserter aborted.  So this
 					 * cannot be considered an error condition.
 					 *
 					 * If the tuple is HOT-updated then it must only be
@@ -1045,6 +1057,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 					 * to detect that case and abort the transaction,
 					 * preventing corruption.
 					 */
+					if (freeze_only)
+						tupgone = true;
 					if (HeapTupleIsHotUpdated(&tuple) ||
 						HeapTupleIsHeapOnly(&tuple))
 						nkeep += 1;
@@ -1141,10 +1155,13 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 
 			if (tupgone)
 			{
-				lazy_record_dead_tuple(vacrelstats, &(tuple.t_self));
-				HeapTupleHeaderAdvanceLatestRemovedXid(tuple.t_data,
-													   &vacrelstats->latestRemovedXid);
-				tups_vacuumed += 1;
+				if (!freeze_only)
+				{
+					lazy_record_dead_tuple(vacrelstats, &(tuple.t_self));
+					HeapTupleHeaderAdvanceLatestRemovedXid(tuple.t_data,
+														   &vacrelstats->latestRemovedXid);
+					tups_vacuumed += 1;
+				}
 				has_dead_tuples = true;
 			}
 			else
@@ -1204,6 +1221,9 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			}
 
 			END_CRIT_SECTION();
+
+			/* Remember nfrozen in total */
+			total_nfrozen += nfrozen;
 		}
 
 		/*
@@ -1213,6 +1233,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		if (nindexes == 0 &&
 			vacrelstats->num_dead_tuples > 0)
 		{
+			Assert(!freeze_only);
+
 			/* Remove tuples from heap */
 			lazy_vacuum_page(onerel, blkno, buf, 0, vacrelstats, &vmbuffer);
 			has_dead_tuples = false;
@@ -1380,6 +1402,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		};
 		int64		hvp_val[2];
 
+		Assert(!freeze_only);
+
 		/* Log cleanup info before we touch indexes */
 		vacuum_log_cleanup_info(onerel, vacrelstats);
 
@@ -1418,8 +1442,11 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 								 PROGRESS_VACUUM_PHASE_INDEX_CLEANUP);
 
 	/* Do post-vacuum cleanup and statistics update for each index */
-	for (i = 0; i < nindexes; i++)
-		lazy_cleanup_index(Irel[i], indstats[i], vacrelstats);
+	if (!freeze_only)
+	{
+		for (i = 0; i < nindexes; i++)
+			lazy_cleanup_index(Irel[i], indstats[i], vacrelstats);
+	}
 
 	/* If no indexes, make log report that lazy_vacuum_heap would've made */
 	if (vacuumed_pages)
@@ -1433,9 +1460,16 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	 * individual parts of the message when not applicable.
 	 */
 	initStringInfo(&buf);
-	appendStringInfo(&buf,
-					 _("%.0f dead row versions cannot be removed yet, oldest xmin: %u\n"),
-					 nkeep, OldestXmin);
+	if (!freeze_only)
+		appendStringInfo(&buf,
+						 _("%.0f dead row versions cannot be removed yet, oldest xmin: %u\n"),
+						 nkeep, OldestXmin);
+	else
+		appendStringInfo(&buf, ngettext("freeze %d row\n",
+										"freeze %d rows\n",
+										total_nfrozen),
+						 total_nfrozen);
+
 	appendStringInfo(&buf, _("There were %.0f unused item pointers.\n"),
 					 nunused);
 	appendStringInfo(&buf, ngettext("Skipped %u page due to buffer pins, ",
@@ -2085,12 +2119,22 @@ count_nondeletable_pages(Relation onerel, LVRelStats *vacrelstats)
  * See the comments at the head of this file for rationale.
  */
 static void
-lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks)
+lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks,
+				 bool collect_deadtuples)
 {
 	long		maxtuples;
 	int			vac_work_mem = IsAutoVacuumWorkerProcess() &&
 	autovacuum_work_mem != -1 ?
 	autovacuum_work_mem : maintenance_work_mem;
+
+	/* Don't prepare dead tuple space if we don't collect them */
+	if (!collect_deadtuples)
+	{
+		vacrelstats->num_dead_tuples = 0;
+		vacrelstats->max_dead_tuples = 0;
+		vacrelstats->dead_tuples = NULL;
+		return;
+	}
 
 	if (vacrelstats->hasindex)
 	{

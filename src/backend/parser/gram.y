@@ -10537,6 +10537,8 @@ vacuum_option_elem:
 						$$ = VACOPT_DISABLE_PAGE_SKIPPING;
 					else if (strcmp($1, "skip_locked") == 0)
 						$$ = VACOPT_SKIP_LOCKED;
+					else if (strcmp($1, "freeze_only") == 0)
+						$$ = VACOPT_FREEZE_ONLY;
 					else
 						ereport(ERROR,
 								(errcode(ERRCODE_SYNTAX_ERROR),
