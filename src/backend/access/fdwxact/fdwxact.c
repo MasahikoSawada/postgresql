@@ -145,7 +145,7 @@ typedef struct FdwXactParticipant
  * FDWs to register foreign server anyway, which breaks the backward
  * compatibility.
  */
-List *FdwXactParticipantsForAC = NIL;
+List *FdwXactAtomicCommitParticipants = NIL;
 
 /* Directory where the foreign prepared transaction files will reside */
 #define FDW_XACTS_DIR "pg_fdw_xact"
@@ -252,7 +252,7 @@ FdwXactRegisterForeignTransaction(Oid serverid, Oid userid, char *fdwxact_id)
 				 errhint("Set max_foreign_transaction_resolvers to a nonzero value.")));
 
 	/* Duplication check */
-	foreach(lc, FdwXactParticipantsForAC)
+	foreach(lc, FdwXactAtomicCommitParticipants)
 	{
 		fdw_part = lfirst(lc);
 
@@ -306,7 +306,7 @@ FdwXactRegisterForeignTransaction(Oid serverid, Oid userid, char *fdwxact_id)
 	fdw_part->rollback_foreign_xact = fdw_routine->RollbackForeignTransaction;
 
 	/* Add this foreign transaction to the participants list */
-	FdwXactParticipantsForAC = lappend(FdwXactParticipantsForAC, fdw_part);
+	FdwXactAtomicCommitParticipants = lappend(FdwXactAtomicCommitParticipants, fdw_part);
 
 	/* Revert back the context */
 	MemoryContextSwitchTo(old_ctx);
@@ -363,7 +363,7 @@ FdwXactMarkForeignTransactionModified(ResultRelInfo *resultRelInfo, int flags)
 	 */
 	userid = rel->rd_rel->relowner ? rel->rd_rel->relowner : GetUserId();
 	serverid = ftable->serverid;
-	foreach(lc, FdwXactParticipantsForAC)
+	foreach(lc, FdwXactAtomicCommitParticipants)
 	{
 		fdw_part = lfirst(lc);
 
@@ -460,7 +460,7 @@ void
 PreCommit_FdwXacts(void)
 {
 	/* If there are no foreign servers involved, we have no business here */
-	if (FdwXactParticipantsForAC == NIL)
+	if (FdwXactAtomicCommitParticipants == NIL)
 		return;
 
 	/*
@@ -489,7 +489,7 @@ PreCommit_FdwXacts(void)
 		ListCell   *lc;
 
 		/* Two-phase commit is not required, commit them */
-		foreach(lc, FdwXactParticipantsForAC)
+		foreach(lc, FdwXactAtomicCommitParticipants)
 		{
 			FdwXactResolveState *state;
 			FdwXactParticipant	*fdw_part = (FdwXactParticipant *) lfirst(lc);
@@ -507,7 +507,7 @@ PreCommit_FdwXacts(void)
 		}
 
 		/* Forget all participants */
-		FdwXactParticipantsForAC = NIL;
+		FdwXactAtomicCommitParticipants = NIL;
 	}
 }
 
@@ -529,7 +529,7 @@ FdwXactPrepareForeignTransactions(void)
 	state = create_fdw_xact_resovle_state();
 
 	/* Loop over the foreign connections */
-	foreach(lcell, FdwXactParticipantsForAC)
+	foreach(lcell, FdwXactAtomicCommitParticipants)
 	{
 		FdwXactParticipant *fdw_part = (FdwXactParticipant *) lfirst(lcell);
 		FdwXact		fdwxact;
@@ -827,7 +827,7 @@ remove_fdw_xact(FdwXact fdw_xact)
 bool
 ForeignTwophaseCommitRequired(void)
 {
-	int	nserverswritten = list_length(FdwXactParticipantsForAC);
+	int	nserverswritten = list_length(FdwXactAtomicCommitParticipants);
 	ListCell*	lc;
 	bool		modified = false;
 
@@ -836,7 +836,7 @@ ForeignTwophaseCommitRequired(void)
 		return false;
 
 	/* Check if we modified data on any foreign server */
-	foreach(lc, FdwXactParticipantsForAC)
+	foreach(lc, FdwXactAtomicCommitParticipants)
 	{
 		FdwXactParticipant *fdw_part = (FdwXactParticipant *) lfirst(lc);
 
@@ -905,12 +905,12 @@ ForgetAllFdwXactParticipants(void)
 	ListCell *cell;
 	int		n_lefts = 0;
 
-	if (FdwXactParticipantsForAC == NIL)
+	if (FdwXactAtomicCommitParticipants == NIL)
 		return;
 
 	LWLockAcquire(FdwXactLock, LW_EXCLUSIVE);
 
-	foreach(cell, FdwXactParticipantsForAC)
+	foreach(cell, FdwXactAtomicCommitParticipants)
 	{
 		FdwXactParticipant	*fdw_part = (FdwXactParticipant *) lfirst(cell);
 
@@ -920,7 +920,7 @@ ForgetAllFdwXactParticipants(void)
 
 		/*
 		 * There is a race condition; the FdwXact entries in
-		 * FdwXactParticipantsForAC could be used by other backend before we
+		 * FdwXactAtomicCommitParticipants could be used by other backend before we
 		 * forget in case where the resolver process removes the FdwXact entry
 		 * and other backend reuses it before we forget. So we need to check
 		 * if the entries are still associated with the transaction.
@@ -941,7 +941,7 @@ ForgetAllFdwXactParticipants(void)
 	if (n_lefts > 0)
 		FdwXactComputeRequiredXmin();
 
-	FdwXactParticipantsForAC = NIL;
+	FdwXactAtomicCommitParticipants = NIL;
 }
 
 /*
@@ -985,14 +985,14 @@ FdwXactWaitToBeResolved(TransactionId wait_xid, bool is_commit)
 	Assert(SHMQueueIsDetached(&(MyProc->fdwXactLinks)));
 	Assert(MyProc->fdwXactState == FDW_XACT_NOT_WAITING);
 
-	if (FdwXactParticipantsForAC != NIL)
+	if (FdwXactAtomicCommitParticipants != NIL)
 	{
 		/*
 		 * If we're waiting for foreign transactions to be resolved that
 		 * we've prepared just before, use the participants list.
 		 */
 		Assert(MyPgXact->xid == wait_xid);
-		fdwxact_participants = FdwXactParticipantsForAC;
+		fdwxact_participants = FdwXactAtomicCommitParticipants;
 	}
 	else
 	{
@@ -1386,7 +1386,7 @@ AtEOXact_FdwXacts(bool is_commit)
 		int left_fdwxacts = 0;
 		FdwXactResolveState *state = create_fdw_xact_resovle_state();
 
-		foreach (lcell, FdwXactParticipantsForAC)
+		foreach (lcell, FdwXactAtomicCommitParticipants)
 		{
 			FdwXactParticipant	*fdw_part = lfirst(lcell);
 
@@ -1449,14 +1449,14 @@ AtEOXact_FdwXacts(bool is_commit)
  *
  * Note that it can happen that the transaction aborts after we prepared part
  * of participants. In this case since we can change to abort we cannot forget
- * FdwXactParticipantsForAC here. These are processed by the resolver process
+ * FdwXactAtomicCommitParticipants here. These are processed by the resolver process
  * during aborting, or at EOXact_FdwXacts.
  */
 void
 AtPrepare_FdwXacts(void)
 {
 	/* If there are no foreign servers involved, we have no business here */
-	if (FdwXactParticipantsForAC == NIL)
+	if (FdwXactAtomicCommitParticipants == NIL)
 		return;
 
 	/*

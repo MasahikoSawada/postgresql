@@ -487,6 +487,10 @@ ExecInsert(ModifyTableState *mtstate,
 								HEAP_INSERT_SPECULATIVE,
 								NULL);
 
+			/* Make note that we've wrote on non-temprary relation */
+			if (RelationNeedsWAL(resultRelationDesc))
+				MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
+
 			/* insert index entries for tuple */
 			recheckIndexes = ExecInsertIndexTuples(slot, &(tuple->t_self),
 												   estate, true, &specConflict,
@@ -724,6 +728,11 @@ ldelete:;
 							 true /* wait for commit */ ,
 							 &hufd,
 							 changingPart);
+
+		/* Make note that we've wrote on non-temprary relation */
+		if (RelationNeedsWAL(resultRelationDesc))
+			MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
+
 		switch (result)
 		{
 			case HeapTupleSelfUpdated:
@@ -1212,6 +1221,11 @@ lreplace:;
 							 estate->es_crosscheck_snapshot,
 							 true /* wait for commit */ ,
 							 &hufd, &lockmode);
+
+		/* Make note that we've wrote on non-temprary relation */
+		if (RelationNeedsWAL(resultRelationDesc))
+			MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
+
 		switch (result)
 		{
 			case HeapTupleSelfUpdated:
