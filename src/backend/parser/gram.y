@@ -14259,7 +14259,7 @@ row_pattern_measures_list:
 ;
 
 row_pattern_measures_definition:
-			xpr AS IDENT {}
+			d_expr AS IDENT {}
 ;
 
 row_pattern_common_syntax:
@@ -15243,6 +15243,7 @@ unreserved_keyword:
 			| OFF
 			| OIDS
 			| OLD
+			| ONE
 			| OPERATOR
 			| OPTION
 			| OPTIONS
@@ -15538,7 +15539,6 @@ reserved_keyword:
 			| NULL_P
 			| OFFSET
 			| ON
-			| ONE
 			| ONLY
 			| OR
 			| ORDER
