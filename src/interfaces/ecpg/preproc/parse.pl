@@ -160,9 +160,9 @@ sub main
 
 		my $prec = 0;
 
-		# Make sure any braces are split
-		s/{/ { /g;
-		s/}/ } /g;
+		# Make sure any braces are split except for '{' and '}'
+		s/[^']{/ { /g;
+		s/[^']}/ } /g;
 
 		# Any comments are split
 		s|\/\*| /* |g;
@@ -533,7 +533,7 @@ sub dump_fields
 			my $str;
 			for (my $z = 0; $z < $len; $z++)
 			{
-				if (substr($flds->[$z], 0, 1) eq '$')
+				if (substr($flds->[$z], 0, 1) eq '$' && $len != 1)
 				{
 					push(@flds_new, $flds->[$z]);
 					next;

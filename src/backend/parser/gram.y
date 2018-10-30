@@ -471,7 +471,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <node>	columnDef columnOptions
 %type <defelt>	def_elem reloption_elem old_aggr_elem operator_def_elem
 %type <node>	def_arg columnElem where_clause where_or_current_clause
-				a_expr b_expr c_expr AexprConst indirection_el opt_slice_bound
+				a_expr b_expr c_expr d_expr AexprConst indirection_el opt_slice_bound
 				columnref in_expr having_clause func_table xmltable array_expr
 				ExclusionWhereClause operator_def_arg
 %type <list>	rowsfrom_item rowsfrom_list opt_col_def_list
@@ -587,6 +587,12 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>		hash_partbound
 %type <defelt>		hash_partbound_elem
 
+%type <list>	row_pattern row_pattern_term row_pattern_factor row_pattern_primary
+%type <list>	row_pattern_measures_list row_pattern_measures_definition
+%type <list>	define_list
+%type <ival>	row_pattern_rows_per_match row_pattern_quantifier
+%type <node>	match_recognize_clause opt_measures_clause row_pattern_common_syntax
+
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
  * They must be listed first so that their numeric codes do not depend on
@@ -628,7 +634,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	DATA_P DATABASE DAY_P DEALLOCATE DEC DECIMAL_P DECLARE DEFAULT DEFAULTS
 	DEFERRABLE DEFERRED DEFINER DELETE_P DELIMITER DELIMITERS DEPENDS DESC
 	DETACH DICTIONARY DISABLE_P DISCARD DISTINCT DO DOCUMENT_P DOMAIN_P
-	DOUBLE_P DROP
+	DOUBLE_P DROP DEFINE
 
 	EACH ELSE ENABLE_P ENCODING ENCRYPTED END_P ENUM_P ESCAPE EVENT EXCEPT
 	EXCLUDE EXCLUDING EXCLUSIVE EXECUTE EXISTS EXPLAIN
@@ -655,6 +661,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	LOCALTIME LOCALTIMESTAMP LOCATION LOCK_P LOCKED LOGGED
 
 	MAPPING MATCH MATERIALIZED MAXVALUE METHOD MINUTE_P MINVALUE MODE MONTH_P MOVE
+	MATCH_RECOGNIZE MEASURES
 
 	NAME_P NAMES NATIONAL NATURAL NCHAR NEW NEXT NO NONE
 	NOT NOTHING NOTIFY NOTNULL NOWAIT NULL_P NULLIF
@@ -663,10 +670,12 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	OBJECT_P OF OFF OFFSET OIDS OLD ON ONLY OPERATOR OPTION OPTIONS OR
 	ORDER ORDINALITY OTHERS OUT_P OUTER_P
 	OVER OVERLAPS OVERLAY OVERRIDING OWNED OWNER
+	ONE
 
 	PARALLEL PARSER PARTIAL PARTITION PASSING PASSWORD PLACING PLANS POLICY
 	POSITION PRECEDING PRECISION PRESERVE PREPARE PREPARED PRIMARY
 	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROCEDURES PROGRAM PUBLICATION
+	PATTERN PER
 
 	QUOTE
 
@@ -755,7 +764,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
  */
 %nonassoc	UNBOUNDED		/* ideally should have same precedence as IDENT */
 %nonassoc	IDENT GENERATED NULL_P PARTITION RANGE ROWS GROUPS PRECEDING FOLLOWING CUBE ROLLUP
-%left		Op OPERATOR		/* multi-character ops and user-defined operators */
+		MEASURES DEFINE PATTERN
+%left		'?' '|' Op OPERATOR
 %left		'+' '-'
 %left		'*' '/' '%'
 %left		'^'
@@ -11793,6 +11803,10 @@ table_ref:	relation_expr opt_alias_clause
 					n->relation = (Node *) $1;
 					$$ = (Node *) n;
 				}
+			| relation_expr match_recognize_clause opt_alias_clause
+				{
+					$$ = (Node *) $1;
+				}
 			| func_table func_alias_clause
 				{
 					RangeFunction *n = (RangeFunction *) $1;
@@ -13552,6 +13566,15 @@ c_expr:		columnref								{ $$ = $1; }
 			  }
 		;
 
+d_expr: columnref {}
+| AexprConst {}
+| PARAM opt_indirection {}
+| case_expr {}
+| func_expr {}
+| explicit_row {}
+| implicit_row {}
+;
+
 func_application: func_name '(' ')'
 				{
 					$$ = (Node *) makeFuncCall($1, NIL, @1);
@@ -14211,6 +14234,85 @@ opt_window_exclusion_clause:
 		;
 
 
+match_recognize_clause:
+			MATCH_RECOGNIZE '('
+			opt_partition_clause
+			opt_sort_clause
+			opt_measures_clause
+			row_pattern_common_syntax ')' { };
+;
+
+opt_measures_clause:
+			MEASURES row_pattern_measures_list row_pattern_rows_per_match {}
+			| /* EMPTY */ {}
+;
+
+row_pattern_rows_per_match:
+			ONE ROW PER MATCH {}
+			| ALL ROWS PER MATCH {}
+			| /* EMPTY */ {}
+;
+
+row_pattern_measures_list:
+			row_pattern_measures_definition {}
+			| row_pattern_measures_list ',' row_pattern_measures_definition {}
+;
+
+row_pattern_measures_definition:
+			xpr AS IDENT {}
+;
+
+row_pattern_common_syntax:
+		       PATTERN '(' row_pattern ')'  DEFINE define_list {}
+;
+
+define_list:
+			a_define {}
+			| define_list ',' a_define {}
+;
+
+a_define:
+			ColLabel AS a_expr {}
+;
+
+row_pattern:
+			row_pattern_term {
+						printf("row_pattern\n");
+					}
+			| row_pattern '|' row_pattern_term {
+						printf("row_pattern (|)\n");
+					}
+;
+
+row_pattern_term:
+			row_pattern_factor {
+						printf("row_pattern_term\n");
+						}
+			| row_pattern_term row_pattern_factor {
+						printf("row_pattern_term row_pattern_factor\n");
+						}
+;
+
+row_pattern_factor:
+			row_pattern_primary {}
+			| row_pattern_primary row_pattern_quantifier {}
+;
+
+row_pattern_quantifier:
+			'*' {}
+			| '+' {}
+			| '?' {}
+			| '{' Iconst '}' {}
+			| '{' Iconst ',' Iconst '}' {}
+;
+
+row_pattern_primary:
+			IDENT {printf("IDENT\n");}
+			| '^' {}
+			| '$' {}
+			| '(' row_pattern ')' {}
+;
+
 /*
  * Supporting nonterminals for expressions.
  */
@@ -14260,6 +14362,8 @@ qual_Op:	Op
 					{ $$ = list_make1(makeString($1)); }
 			| OPERATOR '(' any_operator ')'
 					{ $$ = $3; }
+			| '?'		{ $$ = list_make1(makeString("?")); }
+			| '|'		{ $$ = list_make1(makeString("|")); }
 		;
 
 qual_all_Op:
@@ -14267,6 +14371,8 @@ qual_all_Op:
 					{ $$ = list_make1(makeString($1)); }
 			| OPERATOR '(' any_operator ')'
 					{ $$ = $3; }
+			| '?'		{ $$ = list_make1(makeString("?")); }
+			| '|'		{ $$ = list_make1(makeString("|")); }
 		;
 
 subquery_Op:
@@ -15402,6 +15508,7 @@ reserved_keyword:
 			| CURRENT_USER
 			| DEFAULT
 			| DEFERRABLE
+			| DEFINE
 			| DESC
 			| DISTINCT
 			| DO
@@ -15425,13 +15532,18 @@ reserved_keyword:
 			| LIMIT
 			| LOCALTIME
 			| LOCALTIMESTAMP
+			| MATCH_RECOGNIZE
+			| MEASURES
 			| NOT
 			| NULL_P
 			| OFFSET
 			| ON
+			| ONE
 			| ONLY
 			| OR
 			| ORDER
+			| PATTERN
+			| PER
 			| PLACING
 			| PRIMARY
 			| REFERENCES
