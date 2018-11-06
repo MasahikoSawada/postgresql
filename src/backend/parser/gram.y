@@ -586,10 +586,11 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <defelt>		hash_partbound_elem
 
 %type <list>	row_pattern row_pattern_term row_pattern_factor row_pattern_primary
-%type <list>	row_pattern_measures_list row_pattern_measures_definition
-%type <list>	define_list
+%type <list>	row_pattern_measures_list
+%type <list>	row_pattern_define_list
 %type <ival>	row_pattern_rows_per_match row_pattern_quantifier
-%type <node>	match_recognize_clause opt_measures_clause row_pattern_common_syntax
+%type <target>	row_pattern_measures_definition row_pattern_define
+%type <node>	match_recognize_clause opt_measures_clause
 
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
@@ -11823,7 +11824,10 @@ table_ref:	relation_expr opt_alias_clause
 				}
 			| relation_expr match_recognize_clause opt_alias_clause
 				{
-					$$ = (Node *) $1;
+					RangeMatchRecognize *n = (RangeMatchRecognize *) $2;
+					$1->alias = $3;
+					n->relation = (Node *) $1;
+					$$ = (Node *) n;
 				}
 			| func_table func_alias_clause
 				{
@@ -14253,40 +14257,74 @@ match_recognize_clause:
 			opt_partition_clause
 			opt_sort_clause
 			opt_measures_clause
-			row_pattern_common_syntax ')' { };
+			PATTERN '(' row_pattern ')'
+			DEFINE row_pattern_define_list ')'
+				{
+					RangeMatchRecognize *n = makeNode(RangeMatchRecognize);
+					RangeMatchRecognize *m = (RangeMatchRecognize *) $5;
+					n->partitionClause = $3;
+					n->orderClause = $4;
+					n->measuresClause = m->measuresClause;
+					n->permatchOption = m->permatchOption;
+					n->patternClause = $8;
+					n->defineClause = $11;
+					$$ = (Node *) n;
+				};
 ;
 
 opt_measures_clause:
-			MEASURES row_pattern_measures_list row_pattern_rows_per_match {}
-			| /* EMPTY */ {}
+			MEASURES row_pattern_measures_list row_pattern_rows_per_match
+				{
+					RangeMatchRecognize *n = makeNode(RangeMatchRecognize);
+					n->measuresClause = $2;
+					n->permatchOption = $3;
+					$$ = n;
+				}
+| /* EMPTY */ { $$ = NULL;}
 ;
 
 row_pattern_rows_per_match:
-			ONE ROW PER MATCH {}
-			| ALL ROWS PER MATCH {}
-			| /* EMPTY */ {}
+			ONE ROW PER MATCH
+				{
+					$$ = 1;
+				}
+			| ALL ROWS PER MATCH
+				{
+					$$ = 2;
+				}
+| /* EMPTY */ { $$ = 0;}
 ;
 
 row_pattern_measures_list:
-			row_pattern_measures_definition {}
-			| row_pattern_measures_list ',' row_pattern_measures_definition {}
+row_pattern_measures_definition { $$ = list_make1($1); printf("measures_definion\n");}
+| row_pattern_measures_list ',' row_pattern_measures_definition { $$ = lappend($1, $3); printf("measures_list ',' measures_definition\n");}
 ;
 
 row_pattern_measures_definition:
-			d_expr AS IDENT {}
+			d_expr AS IDENT
+				{
+					$$ = makeNode(ResTarget);
+					$$->name = $3;
+					$$->indirection = NIL;
+					$$->val = (Node *)$1;
+					$$->location = @1;
+				}
 ;
 
-row_pattern_common_syntax:
-		       PATTERN '(' row_pattern ')'  DEFINE define_list {}
+row_pattern_define_list:
+			row_pattern_define	{ $$ = list_make1($1); printf("define\n"); }
+			| row_pattern_define_list ',' row_pattern_define { $$ = lappend($1, $3); printf("define_list ',', define\n");}
 ;
 
-define_list:
-			a_define {}
-			| define_list ',' a_define {}
-;
-
-a_define:
-			ColLabel AS a_expr {}
+row_pattern_define:
+			ColLabel AS a_expr
+				{
+					$$ = makeNode(ResTarget);
+					$$->name = $1;
+					$$->indirection = NIL;
+					$$->val = (Node *)$3;
+					$$->location = @1;
+				}
 ;
 
 row_pattern:

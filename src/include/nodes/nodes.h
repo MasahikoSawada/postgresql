@@ -443,6 +443,7 @@ typedef enum NodeTag
 	T_RangeTableSample,
 	T_RangeTableFunc,
 	T_RangeTableFuncCol,
+	T_RangeMatchRecognize,
 	T_TypeName,
 	T_ColumnDef,
 	T_IndexElem,

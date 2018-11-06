@@ -1213,6 +1213,17 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		rte->tablesample = transformRangeTableSample(pstate, rts);
 		return (Node *) rtr;
 	}
+	else if (IsA(n, RangeMatchRecognize))
+	{
+		RangeMatchRecognize *rmc = (RangeMatchRecognize *) n;
+
+		elog(ERROR, "Ok, In transformFromClauseItem");
+		/*
+		Node	*rel;
+		RangeTblEntry	*rte;
+		rte->matchrecognize = transformMatchRecognize();
+		*/
+	}
 	else if (IsA(n, JoinExpr))
 	{
 		/* A newfangled join expression */

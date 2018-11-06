@@ -533,6 +533,22 @@ typedef struct WindowDef
 	 FRAMEOPTION_END_CURRENT_ROW)
 
 /*
+ * MATCH_RECOGNIZE in a raw FROM clause
+ */
+typedef struct RangeMatchRecognize
+{
+	NodeTag		type;
+	Node		*relation;
+	List		*partitionClause;
+	List		*orderClause;
+	List		*measuresClause;
+	int			permatchOption;
+	List		*patternClause;
+	List		*defineClause;
+	int			location;
+} RangeMatchRecognize;
+
+/*
  * RangeSubselect - subquery appearing in a FROM clause
  */
 typedef struct RangeSubselect
@@ -989,6 +1005,7 @@ typedef struct RangeTblEntry
 	char		relkind;		/* relation kind (see pg_class.relkind) */
 	int			rellockmode;	/* lock level that query requires on the rel */
 	struct TableSampleClause *tablesample;	/* sampling info, or NULL */
+	struct MatchRecognizeClause *matchrecognize;
 
 	/*
 	 * Fields valid for a subquery RTE (else NULL):
@@ -1131,6 +1148,20 @@ typedef struct TableSampleClause
 	List	   *args;			/* tablesample argument expression(s) */
 	Expr	   *repeatable;		/* REPEATABLE expression, or NULL if none */
 } TableSampleClause;
+
+/*
+ * MatchRecognizeClause - MATCH_RECOGNIZE appearing in a transformed FROM clause
+ */
+typedef struct MatchRecognizeClause
+{
+	NodeTag		type;
+	List		*partitionClause;
+	List		*orderClause;
+	List		*measuresClause;
+	int			permatchOption;
+	List		*patternClause;
+	List		*defineClause;
+} MatchRecognizeClause;
 
 /*
  * WithCheckOption -
