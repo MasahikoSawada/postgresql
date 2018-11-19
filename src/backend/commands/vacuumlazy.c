@@ -1155,7 +1155,19 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 
 			if (tupgone)
 			{
-				if (!freeze_only)
+				bool	dummy;
+
+				if (freeze_only)
+				{
+					if (heap_prepare_freeze_tuple(tuple.t_data,
+												  relfrozenxid, relminmxid,
+												  FreezeLimit, MultiXactCutoff,
+												  &frozen[nfrozen],
+												  &dummy,
+												  false))
+						frozen[nfrozen++].offset = offnum;
+				}
+				else
 				{
 					lazy_record_dead_tuple(vacrelstats, &(tuple.t_self));
 					HeapTupleHeaderAdvanceLatestRemovedXid(tuple.t_data,
@@ -1179,7 +1191,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 											  relfrozenxid, relminmxid,
 											  FreezeLimit, MultiXactCutoff,
 											  &frozen[nfrozen],
-											  &tuple_totally_frozen))
+											  &tuple_totally_frozen,
+											  true))
 					frozen[nfrozen++].offset = offnum;
 
 				if (!tuple_totally_frozen)

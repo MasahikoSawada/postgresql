@@ -6792,6 +6792,11 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
  *
  * Caller is responsible for setting the offset field, if appropriate.
  *
+ * If is_live_tuple is false, it means we're checking XID fields of a dead
+ * tuple (i.g HeapTupleSatisfiesVacuum() returned HEAPTUPLE_DEAD). The freezing
+ * already-dead tuples happens if in freezing tuples without removing dead tuples.
+ * We check the xmax field and freeze it as well as xmin.
+ *
  * It is assumed that the caller has checked the tuple with
  * HeapTupleSatisfiesVacuum() and determined that it is not HEAPTUPLE_DEAD
  * (else we should be removing the tuple, not freezing it).
@@ -6814,10 +6819,12 @@ bool
 heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 						  TransactionId relfrozenxid, TransactionId relminmxid,
 						  TransactionId cutoff_xid, TransactionId cutoff_multi,
-						  xl_heap_freeze_tuple *frz, bool *totally_frozen_p)
+						  xl_heap_freeze_tuple *frz, bool *totally_frozen_p,
+						  bool is_live_tuple)
 {
 	bool		changed = false;
-	bool		xmax_already_frozen = false;
+	bool		xmax_already_invalid = false;
+	bool		xmax_already_frozen;
 	bool		xmin_frozen;
 	bool		freeze_xmax;
 	TransactionId xid;
@@ -6863,6 +6870,7 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 	 * Make sure to keep heap_tuple_needs_freeze in sync with this.
 	 */
 	xid = HeapTupleHeaderGetRawXmax(tuple);
+	xmax_already_frozen = HeapTupleHeaderXmaxFrozen(tuple);
 
 	if (tuple->t_infomask & HEAP_XMAX_IS_MULTI)
 	{
@@ -6929,7 +6937,8 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 			 * released the lock).
 			 */
 			if (!HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask) &&
-				TransactionIdDidCommit(xid))
+				TransactionIdDidCommit(xid) &&
+				is_live_tuple)
 				ereport(ERROR,
 						(errcode(ERRCODE_DATA_CORRUPTED),
 						 errmsg_internal("cannot freeze committed xmax %u",
@@ -6943,7 +6952,7 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 			 !TransactionIdIsValid(HeapTupleHeaderGetRawXmax(tuple)))
 	{
 		freeze_xmax = false;
-		xmax_already_frozen = true;
+		xmax_already_invalid = true;
 	}
 	else
 		ereport(ERROR,
@@ -6953,19 +6962,27 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 
 	if (freeze_xmax)
 	{
-		Assert(!xmax_already_frozen);
+		if (!is_live_tuple)
+		{
+			Assert(!xmax_already_frozen);
+			frz->t_infomask |= HEAP_XMAX_FROZEN;
+		}
+		else
+		{
+			Assert(!xmax_already_invalid);
+			frz->xmax = InvalidTransactionId;
 
-		frz->xmax = InvalidTransactionId;
+			/*
+			 * The tuple might be marked either XMAX_INVALID or XMAX_COMMITTED +
+			 * LOCKED.  Normalize to INVALID just to be sure no one gets confused.
+			 * Also get rid of the HEAP_KEYS_UPDATED bit.
+			 */
+			frz->t_infomask &= ~HEAP_XMAX_BITS;
+			frz->t_infomask |= HEAP_XMAX_INVALID;
+			frz->t_infomask2 &= ~HEAP_HOT_UPDATED;
+			frz->t_infomask2 &= ~HEAP_KEYS_UPDATED;
+		}
 
-		/*
-		 * The tuple might be marked either XMAX_INVALID or XMAX_COMMITTED +
-		 * LOCKED.  Normalize to INVALID just to be sure no one gets confused.
-		 * Also get rid of the HEAP_KEYS_UPDATED bit.
-		 */
-		frz->t_infomask &= ~HEAP_XMAX_BITS;
-		frz->t_infomask |= HEAP_XMAX_INVALID;
-		frz->t_infomask2 &= ~HEAP_HOT_UPDATED;
-		frz->t_infomask2 &= ~HEAP_KEYS_UPDATED;
 		changed = true;
 	}
 
@@ -7008,6 +7025,7 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 	}
 
 	*totally_frozen_p = (xmin_frozen &&
+						 is_live_tuple &&
 						 (freeze_xmax || xmax_already_frozen));
 	return changed;
 }
@@ -7065,7 +7083,7 @@ heap_freeze_tuple(HeapTupleHeader tuple,
 	do_freeze = heap_prepare_freeze_tuple(tuple,
 										  relfrozenxid, relminmxid,
 										  cutoff_xid, cutoff_multi,
-										  &frz, &tuple_totally_frozen);
+										  &frz, &tuple_totally_frozen, true);
 
 	/*
 	 * Note that because this is not a WAL-logged operation, we don't need to

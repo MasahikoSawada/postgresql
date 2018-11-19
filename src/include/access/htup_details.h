@@ -204,6 +204,7 @@ struct HeapTupleHeaderData
 #define HEAP_XMIN_FROZEN		(HEAP_XMIN_COMMITTED|HEAP_XMIN_INVALID)
 #define HEAP_XMAX_COMMITTED		0x0400	/* t_xmax committed */
 #define HEAP_XMAX_INVALID		0x0800	/* t_xmax invalid/aborted */
+#define HEAP_XMAX_FROZEN		(HEAP_XMAX_COMMITTED|HEAP_XMAX_INVALID)
 #define HEAP_XMAX_IS_MULTI		0x1000	/* t_xmax is a MultiXactId */
 #define HEAP_UPDATED			0x2000	/* this is UPDATEd version of row */
 #define HEAP_MOVED_OFF			0x4000	/* moved to another place by pre-9.0
@@ -369,6 +370,11 @@ struct HeapTupleHeaderData
 		HeapTupleGetUpdateXid(tup) \
 	: \
 		HeapTupleHeaderGetRawXmax(tup) \
+)
+
+#define HeapTupleHeaderXmaxFrozen(tup) \
+( \
+	((tup)->t_infomask & (HEAP_XMAX_FROZEN)) == HEAP_XMAX_FROZEN \
 )
 
 #define HeapTupleHeaderGetRawXmax(tup) \
