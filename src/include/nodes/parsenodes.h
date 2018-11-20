@@ -543,7 +543,7 @@ typedef struct RangeMatchRecognize
 	List		*orderClause;
 	List		*measuresClause;
 	int			permatchOption;
-	List		*patternClause;
+	char		*patternClause;
 	List		*defineClause;
 	int			location;
 } RangeMatchRecognize;

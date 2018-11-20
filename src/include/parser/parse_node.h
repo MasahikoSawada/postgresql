@@ -46,6 +46,8 @@ typedef enum ParseExprKind
 	EXPR_KIND_WINDOW_FRAME_RANGE,	/* window frame clause with RANGE */
 	EXPR_KIND_WINDOW_FRAME_ROWS,	/* window frame clause with ROWS */
 	EXPR_KIND_WINDOW_FRAME_GROUPS,	/* window frame clause with GROUPS */
+	EXPR_KIND_MATCH_RECOGNIZE_PARTITION,
+	EXPR_KIND_MATCH_RECOGNIZE_ORDER,
 	EXPR_KIND_SELECT_TARGET,	/* SELECT target list item */
 	EXPR_KIND_INSERT_TARGET,	/* INSERT target list item */
 	EXPR_KIND_UPDATE_SOURCE,	/* UPDATE assignment source item */
