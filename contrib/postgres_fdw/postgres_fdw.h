@@ -126,11 +126,9 @@ extern PGresult *pgfdw_get_result(PGconn *conn, const char *query);
 extern PGresult *pgfdw_exec_query(PGconn *conn, const char *query);
 extern void pgfdw_report_error(int elevel, PGresult *res, PGconn *conn,
 				   bool clear, const char *sql);
-extern bool postgresPrepareForeignTransaction(FdwXactState *state);
-extern bool postgresCommitForeignTransaction(FdwXactState *state);
-extern bool postgresRollbackForeignTransaction(FdwXactState *state);
-extern bool postgresResolveForeignTransaction(FdwXactState *state,
-											  bool is_commit);
+extern FdwXactResult postgresPrepareForeignTransaction(FdwXactState *state, int flags);
+extern FdwXactResult postgresCommitForeignTransaction(FdwXactState *state, int flags);
+extern FdwXactResult postgresRollbackForeignTransaction(FdwXactState *state, int flags);
 
 /* in option.c */
 extern int ExtractConnectionOptions(List *defelems,

@@ -164,11 +164,6 @@ CREATE FOREIGN TABLE ft8_twophase (
        c1 int NOT NULL
 ) SERVER loopback2 OPTIONS (schema_name 'S 1', table_name 'T 5');
 
-CREATE FOREIGN TABLE ft9_not_twophase (
-       c1 int NOT NULL
-) SERVER loopback3 OPTIONS (schema_name 'S 1', table_name 'T 5');
-
-
 -- A table with oids. CREATE FOREIGN TABLE doesn't support the
 -- WITH OIDS option, but ALTER does.
 CREATE FOREIGN TABLE ft_pg_type (
@@ -2383,22 +2378,13 @@ SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b HAVING sum(a) < 700 
 RESET enable_partitionwise_aggregate;
 
 -- ===================================================================
--- test atomic commit across foreign servers
+-- test distributed atomic commit across foreign servers
 -- ===================================================================
-
-ALTER SERVER loopback OPTIONS(ADD two_phase_commit 'on');
-ALTER SERVER loopback2 OPTIONS(ADD two_phase_commit 'on');
-ALTER SERVER loopback3 OPTIONS(ADD two_phase_commit 'off');
-
-\det+
-
--- Check two_phase_commit setting
-SELECT srvname FROM pg_foreign_server WHERE 'two_phase_commit=on' = ANY(srvoptions) or 'two_phase_commit=off' = ANY(srvoptions);
 
 -- Enable atomic commit
 SET distributed_atomic_commit TO 'required';
 
--- Modify one 2PC-capable server then commit and rollback.
+-- Modify single foreign server and then commit and rollback.
 BEGIN;
 INSERT INTO ft7_twophase VALUES(1);
 COMMIT;
@@ -2409,8 +2395,7 @@ INSERT INTO ft7_twophase VALUES(1);
 ROLLBACK;
 SELECT * FROM ft7_twophase;
 
--- Modify two 2PC-capable servers then commit and rollback.
--- This requires to use 2PC when commit.
+-- Modify two servers then commit and rollback. This requires to use 2PC.
 BEGIN;
 INSERT INTO ft7_twophase VALUES(2);
 INSERT INTO ft8_twophase VALUES(2);
@@ -2424,6 +2409,7 @@ ROLLBACK;
 SELECT * FROM ft8_twophase;
 
 -- Modify both local data and 2PC-capable server then commit and rollback.
+-- This also requires to use 2PC.
 BEGIN;
 INSERT INTO ft7_twophase VALUES(3);
 INSERT INTO "S 1"."T 6" VALUES (3);
@@ -2438,59 +2424,20 @@ ROLLBACK;
 SELECT * FROM ft7_twophase;
 SELECT * FROM "S 1"."T 6";
 
--- Modify foreign server and raise an error
+-- Modify foreign server and raise an error. No data changed.
 BEGIN;
 INSERT INTO ft7_twophase VALUES(4);
 INSERT INTO ft8_twophase VALUES(NULL); -- violation
 ROLLBACK;
 SELECT * FROM ft8_twophase;
 
--- Rollback foreign transaction that involves both 2PC-capable
--- and 2PC-non-capable foreign servers.
-BEGIN;
-INSERT INTO ft8_twophase VALUES(5);
-INSERT INTO ft9_not_twophase VALUES(5);
-ROLLBACK;
-SELECT * FROM ft8_twophase;
-
--- Check differences between configuration when a transaction mofieid
--- data on both 2pc-capable and non-2pc-capable servers.
-
--- When set to 'required' it fails.
-BEGIN;
-INSERT INTO ft8_twophase VALUES(6);
-INSERT INTO ft9_not_twophase VALUES(6);
-COMMIT; -- error
-SELECT * FROM ft8_twophase;
-
--- When set to 'prefer', we can commit it
-SET distributed_atomic_commit TO 'prefer';
-BEGIN;
-INSERT INTO ft8_twophase VALUES(7);
-INSERT INTO ft9_not_twophase VALUES(7);
-COMMIT; -- success
-SELECT * FROM ft8_twophase;
-
--- But cannot prepare the local transaction
-BEGIN;
-INSERT INTO ft8_twophase VALUES(7);
-INSERT INTO ft9_not_twophase VALUES(7);
-PREPARE TRANSACTION 'gx1'; -- error
-SELECT * FROM ft8_twophase;
-
 -- When set to 'disabled', we can commit it
 SET distributed_atomic_commit TO 'disabled';
 BEGIN;
+INSERT INTO ft7_twophase VALUES(8);
 INSERT INTO ft8_twophase VALUES(8);
-INSERT INTO ft9_not_twophase VALUES(8);
 COMMIT; -- success
-SELECT * FROM ft8_twophase;
-
--- Similary, but cannot prepare the local transaction
-BEGIN;
-INSERT INTO ft8_twophase VALUES(8);
-INSERT INTO ft9_not_twophase VALUES(8);
-PREPARE TRANSACTION 'gx1'; -- error
+SELECT * FROM ft7_twophase;
 SELECT * FROM ft8_twophase;
 
 SET distributed_atomic_commit TO 'required';

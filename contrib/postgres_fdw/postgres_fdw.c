@@ -360,7 +360,6 @@ static void postgresGetForeignUpperPaths(PlannerInfo *root,
 							 RelOptInfo *input_rel,
 							 RelOptInfo *output_rel,
 							 void *extra);
-static bool postgresIsTwoPhaseCommitEnabled(Oid serverid);
 
 /*
  * Helper functions
@@ -511,21 +510,8 @@ postgres_fdw_handler(PG_FUNCTION_ARGS)
 	routine->PrepareForeignTransaction = postgresPrepareForeignTransaction;
 	routine->CommitForeignTransaction = postgresCommitForeignTransaction;
 	routine->RollbackForeignTransaction = postgresRollbackForeignTransaction;
-	routine->ResolveForeignTransaction = postgresResolveForeignTransaction;
-	routine->IsTwoPhaseCommitEnabled = postgresIsTwoPhaseCommitEnabled;
 
 	PG_RETURN_POINTER(routine);
-}
-
-/*
- * postgresIsTwoPhaseCommitEnabled
- */
-static bool
-postgresIsTwoPhaseCommitEnabled(Oid serverid)
-{
-	ForeignServer	*server = GetForeignServer(serverid);
-
-	return server_uses_twophase_commit(server);
 }
 
 /*
@@ -5822,27 +5808,4 @@ find_em_expr_for_rel(EquivalenceClass *ec, RelOptInfo *rel)
 
 	/* We didn't find any suitable equivalence class expression */
 	return NULL;
-}
-
-/*
- * server_uses_twophase_commit
- * Returns true if the foreign server is configured to support 2PC.
- */
-bool
-server_uses_twophase_commit(ForeignServer *server)
-{
-	ListCell		*lc;
-
-	/* Check the options for two phase compliance */
-	foreach(lc, server->options)
-	{
-		DefElem    *d = (DefElem *) lfirst(lc);
-
-		if (strcmp(d->defname, "two_phase_commit") == 0)
-		{
-			return defGetBoolean(d);
-		}
-	}
-	/* By default a server is not 2PC compliant */
-	return false;
 }

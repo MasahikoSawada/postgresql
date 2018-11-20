@@ -100,6 +100,8 @@ static void pgfdw_reject_incomplete_xact_state_change(ConnCacheEntry *entry);
 static bool pgfdw_cancel_query(PGconn *conn);
 static bool pgfdw_exec_cleanup_query(PGconn *conn, const char *query,
 						 bool ignore_errors);
+static FdwXactResult pgfdw_end_prepared_xact(ConnCacheEntry *entry, char *fdwxact_id,
+											 bool is_commit);
 static bool pgfdw_get_cleanup_result(PGconn *conn, TimestampTz endtime,
 						 PGresult **result);
 static void pgfdw_cleanup_after_transaction(ConnCacheEntry *entry);
@@ -1063,12 +1065,11 @@ exit:	;
  *
  * This function is called only at the pre-commit phase of the local transaction.
  */
-bool
-postgresPrepareForeignTransaction(FdwXactState *state)
+FdwXactResult
+postgresPrepareForeignTransaction(FdwXactState *state, int flags)
 {
 	PgFdwXactState *rstate;
 	ConnCacheEntry *entry = NULL;
-	bool		result = false;
 	PGresult	*res;
 	StringInfo	command;
 
@@ -1094,12 +1095,12 @@ postgresPrepareForeignTransaction(FdwXactState *state)
 	res = pgfdw_exec_query(entry->conn, command->data);
 	entry->changing_xact_state = false;
 
-	if (PQresultStatus(res) == PGRES_COMMAND_OK)
-	{
-		result = true;
-		elog(DEBUG1, "prepared foreign transaction on server %u with ID %s",
-			 state->serverid, state->fdwxact_id);
-	}
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		ereport(ERROR, (errmsg("could not prepare transaction on server %u with ID %s",
+							   state->serverid, state->fdwxact_id)));
+
+	elog(DEBUG1, "prepared foreign transaction on server %u with ID %s",
+		 state->serverid, state->fdwxact_id);
 
 	if (entry->have_prep_stmt && entry->have_error)
 	{
@@ -1109,7 +1110,7 @@ postgresPrepareForeignTransaction(FdwXactState *state)
 
 	pgfdw_cleanup_after_transaction(entry);
 
-	return result;
+	return FDW_XACT_OK;
 }
 
 /*
@@ -1117,25 +1118,45 @@ postgresPrepareForeignTransaction(FdwXactState *state)
  *
  * This function is called both at the pre-commit phase of the local transaction.
  */
-bool
-postgresCommitForeignTransaction(FdwXactState *state)
+FdwXactResult
+postgresCommitForeignTransaction(FdwXactState *state, int flags)
 {
-	PgFdwXactState *rstate;
+	PgFdwXactState *rstate = (PgFdwXactState *) state->fdw_state;
 	ConnCacheEntry *entry = NULL;
-	bool		result = false;
-	PGresult	*res;
+	bool			is_onephase = (flags & FDW_XACT_FLAG_ONEPHASE) != 0;
+	PGresult		*res;
 
-	entry = GetConnectionCacheEntry(state->umid);
+	/*
+	 * In one-phase commit case, get the connection entry either from the state
+	 * or the conneciton hash. Note that as we're in out of valid transaction state
+	 * we cannot lookup any system caches.
+	 *
+	 * If two-phase, get connection state and establish a connection if not yet.
+	 */
+	if (rstate != NULL)
+		entry = rstate->conn;
+	else if (is_onephase)
+		entry = GetConnectionCacheEntry(state->umid);
+	else
+		entry = GetConnectionState(state->umid, false, false);
 
-	if (!entry || !entry->conn || !entry->xact_got_connection)
-		return true;
+	if (!entry)
+	{
+		Assert(is_onephase);
+		return FDW_XACT_OK;
+	}
 
-	rstate = (PgFdwXactState *) palloc0(sizeof(PgFdwXactState));
-	rstate->serverid = state->serverid;
-	rstate->userid = state->userid;
-	rstate->umid = state->umid;
-	rstate->conn = entry;
-	state->fdw_state = (void *)rstate;
+	/*
+	 * In one-phase commit case, we should have had a connection and started a transaction
+	 * to commit before.
+	 */
+	if (is_onephase &&
+		(!entry->conn || !entry->xact_got_connection))
+		return FDW_XACT_OK;
+
+	/* Two-phase commit case */
+	if (!is_onephase)
+		return pgfdw_end_prepared_xact(entry, state->fdwxact_id, true);
 
 	/*
 	 * If abort cleanup previously failed for this connection,
@@ -1147,8 +1168,9 @@ postgresCommitForeignTransaction(FdwXactState *state)
 	res = pgfdw_exec_query(entry->conn, "COMMIT TRANSACTION");
 	entry->changing_xact_state = false;
 
-	if (PQresultStatus(res) == PGRES_COMMAND_OK)
-		result = true;
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		ereport(ERROR, (errmsg("could not commit transaction on server %u",
+							   state->serverid)));
 
 	/*
 	 * If there were any errors in subtransactions, and we ma
@@ -1174,7 +1196,7 @@ postgresCommitForeignTransaction(FdwXactState *state)
 	/* Cleanup transaction status */
 	pgfdw_cleanup_after_transaction(entry);
 
-	return result;
+	return FDW_XACT_OK;
 }
 
 /*
@@ -1182,20 +1204,48 @@ postgresCommitForeignTransaction(FdwXactState *state)
  *
  * This function is called each time when aborting.
  */
-bool
-postgresRollbackForeignTransaction(FdwXactState *state)
+FdwXactResult
+postgresRollbackForeignTransaction(FdwXactState *state, int flags)
 {
 	PgFdwXactState *rstate = (PgFdwXactState *) state->fdw_state;
+	bool			is_onephase = (flags & FDW_XACT_FLAG_ONEPHASE) != 0;
 	ConnCacheEntry *entry = NULL;
 	bool abort_cleanup_failure = false;
 
-	if (rstate)
+	/*
+	 * In one-phase rollback case, get the connection entry either from the state
+	 * or the conneciton hash. Note that as we're in out of valid transaction state
+	 * we cannot lookup any system caches.
+	 *
+	 * If two-phase, get connection state and establish a connection if not yet.
+	 */
+	if (rstate != NULL)
 		entry = rstate->conn;
-	else
+	else if (is_onephase)
 		entry = GetConnectionCacheEntry(state->umid);
+	else
+		entry = GetConnectionState(state->umid, false, false);
 
-	if (!entry || !entry->conn)
-		return true;
+	if (!entry)
+	{
+		Assert(is_onephase);
+		return FDW_XACT_OK;
+	}
+
+	/*
+	 * In one-phase commit case, we should have had a connection and started a transaction
+	 * to rollback before.
+	 */
+	if (is_onephase &&
+		(!entry->conn || !entry->xact_got_connection))
+	{
+		pgfdw_cleanup_after_transaction(entry);
+		return FDW_XACT_OK;
+	}
+
+	/* Two-phase commit case */
+	if (!is_onephase)
+		return pgfdw_end_prepared_xact(entry, state->fdwxact_id, false);
 
 	/*
 	 * Don't try to clean up the connection if we're already
@@ -1211,7 +1261,7 @@ postgresRollbackForeignTransaction(FdwXactState *state)
 	if (entry->changing_xact_state || !entry->xact_got_connection)
 	{
 		pgfdw_cleanup_after_transaction(entry);
-		return true;
+		return FDW_XACT_OK;;
 	}
 
 	/*
@@ -1258,32 +1308,21 @@ postgresRollbackForeignTransaction(FdwXactState *state)
 	/* Cleanup transaction status */
 	pgfdw_cleanup_after_transaction(entry);
 
-	return !abort_cleanup_failure;
+	return abort_cleanup_failure ? FDW_XACT_FAIL : FDW_XACT_OK;
 }
 
-/*
- * Resolve a prepared transaction on foreign server.
- *
- * This function is called after committed locally by either a foreign transaction
- * resolver or pg_resolve_fdw_xact.
- */
-bool
-postgresResolveForeignTransaction(FdwXactState *state, bool is_commit)
+/* Commit or rollback prepared transaction on given foreign server */
+static FdwXactResult
+pgfdw_end_prepared_xact(ConnCacheEntry *entry, char *fdwxact_id, bool is_commit)
 {
-	ConnCacheEntry *entry = NULL;
 	StringInfo	command;
-	bool result = true;
 	PGresult	*res;
-
-	entry = GetConnectionState(state->umid, false, false);
-
-	if (!entry->conn)
-		return false;
+	FdwXactResult result = FDW_XACT_OK;
 
 	command = makeStringInfo();
 	appendStringInfo(command, "%s PREPARED '%s'",
 					 is_commit ? "COMMIT" : "ROLLBACK",
-					 state->fdwxact_id);
+					 fdwxact_id);
 
 	res = pgfdw_exec_query(entry->conn, command->data);
 
@@ -1308,20 +1347,16 @@ postgresResolveForeignTransaction(FdwXactState *state, bool is_commit)
 		 * transaction was missing on the foreign server, it was probably
 		 * resolved by some other means. Anyway, it should be considered as resolved.
 		 */
-		result = (sqlstate == ERRCODE_UNDEFINED_OBJECT);
+		if (sqlstate != ERRCODE_UNDEFINED_OBJECT)
+			result = FDW_XACT_FAIL;
 
-		/*
-		 * The command failed, raise a warning to log the reason of failure.
-		 * We may not be in a transaction here, so raising error doesn't
-		 * help.
-		 */
-		pgfdw_report_error(WARNING, res, entry->conn, false, command->data);
+		pgfdw_report_error(result == FDW_XACT_FAIL ? ERROR : WARNING,
+						   res, entry->conn, false, command->data);
 	}
 
-	elog(DEBUG1, "%s prepared foreign transaction on server %u with ID %s",
+	elog(DEBUG1, "%s prepared foreign transaction with ID %s",
 		 is_commit ? "commit" : "rollback",
-		 state->serverid,
-		 state->fdwxact_id);
+		 fdwxact_id);
 
 	/* Cleanup transaction status */
 	pgfdw_cleanup_after_transaction(entry);
