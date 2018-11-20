@@ -47,11 +47,11 @@ CREATE EXTENSION postgres_fdw
 ));
 $node_master->safe_psql('postgres', qq(
 CREATE SERVER fs1 FOREIGN DATA WRAPPER postgres_fdw
-OPTIONS (dbname 'postgres', port '$fs1_port', two_phase_commit 'on');
+OPTIONS (dbname 'postgres', port '$fs1_port');
 ));
 $node_master->safe_psql('postgres', qq(
 CREATE SERVER fs2 FOREIGN DATA WRAPPER postgres_fdw
-OPTIONS (dbname 'postgres', port '$fs2_port', two_phase_commit 'on');
+OPTIONS (dbname 'postgres', port '$fs2_port');
 ));
 
 # Create user mapping on the master node
