@@ -24,12 +24,15 @@
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
 
+/* fdwXactState */
 #define	FDW_XACT_NOT_WAITING		0
 #define	FDW_XACT_WAITING			1
 #define	FDW_XACT_WAITING_RETRY		2
 #define	FDW_XACT_WAIT_COMPLETE		3
 
-#define FdwXactEnabled() (max_prepared_foreign_xacts > 0)
+/* Flag passed to FDW transaction management APIs */
+#define FDW_XACT_FLAG_ONEPHASE		0x1000	/* transaction can commit/rollback without
+											 * preparation */
 
 /* Maximum length of the prepared transaction id, borrowed from twophase.c */
 #define FDW_XACT_ID_MAX_LEN 200
@@ -46,7 +49,6 @@ typedef enum
 								 * aborted */
 } FdwXactStatus;
 
-
 /* Enum for distributed_atomic_commit parameter */
 typedef enum
 {
@@ -55,6 +57,12 @@ typedef enum
 	DISTRIBUTED_ATOMIC_COMMIT_REQUIRED	/* all foreign servers have to support twophase
 										 * commit */
 } DistributedAtomicCommitLevel;
+
+typedef enum
+{
+	FDW_XACT_FAIL = 0,
+	FDW_XACT_OK,
+} FdwXactResult;
 
 /* Shared memory entry for a prepared or being prepared foreign transaction */
 typedef struct FdwXactData *FdwXact;

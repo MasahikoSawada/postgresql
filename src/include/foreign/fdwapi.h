@@ -169,12 +169,12 @@ typedef bool (*IsForeignScanParallelSafe_function) (PlannerInfo *root,
 typedef List *(*ReparameterizeForeignPathByChild_function) (PlannerInfo *root,
 															List *fdw_private,
 															RelOptInfo *child_rel);
-typedef bool (*PrepareForeignTransaction_function) (FdwXactState *state);
-typedef bool (*CommitForeignTransaction_function) (FdwXactState *state);
-typedef bool (*RollbackForeignTransaction_function) (FdwXactState *state);
-typedef bool (*ResolveForeignTransaction_function) (FdwXactState *state,
-													bool is_commit);
-typedef bool (*IsTwoPhaseCommitEnabled_function) (Oid serverid);
+typedef FdwXactResult (*PrepareForeignTransaction_function) (FdwXactState *state,
+															 int flags);
+typedef FdwXactResult (*CommitForeignTransaction_function) (FdwXactState *state,
+															int flags);
+typedef FdwXactResult (*RollbackForeignTransaction_function) (FdwXactState *state,
+															  int flags);
 typedef char *(*GetPrepareId_function) (TransactionId xid, Oid serverid,
 										Oid userid, int *prep_id_len);
 
@@ -248,8 +248,6 @@ typedef struct FdwRoutine
 	PrepareForeignTransaction_function PrepareForeignTransaction;
 	CommitForeignTransaction_function CommitForeignTransaction;
 	RollbackForeignTransaction_function RollbackForeignTransaction;
-	ResolveForeignTransaction_function ResolveForeignTransaction;
-	IsTwoPhaseCommitEnabled_function IsTwoPhaseCommitEnabled;
 	GetPrepareId_function GetPrepareId;
 
 	/* Support functions for parallelism under Gather node */

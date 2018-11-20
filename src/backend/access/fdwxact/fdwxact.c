@@ -127,9 +127,7 @@ typedef struct FdwXactParticipant
 
 	ForeignServer	*server;
 	UserMapping		*usermapping;
-	bool		modified;					/* true if modified the data on server */
-	bool		twophase_commit_enabled;	/* true if the server can execute
-											 * two-phase commit protocol */
+	bool			modified;					/* true if modified the data on server */
 	void			*fdw_state;				/* fdw-private state */
 
 	/* Callbacks for foreign transaction */
@@ -137,7 +135,6 @@ typedef struct FdwXactParticipant
 	CommitForeignTransaction_function	commit_foreign_xact;
 	RollbackForeignTransaction_function	rollback_foreign_xact;
 	GetPrepareId_function				get_prepareid;
-	IsTwoPhaseCommitEnabled_function	is_twophase_commit_enabled;
 } FdwXactParticipant;
 
 /*
@@ -262,18 +259,6 @@ register_fdw_xact(Oid serverid, Oid userid, bool modified)
 
 	routine = GetFdwRoutineByServerId(serverid);
 
-	/*
-	 * If the being modified foreign server doesn't have the atomic commit API
-	 * we don't manage the foreign transaction in the distributed transaction
-	 * manager.
-	 */
-	if (routine->IsTwoPhaseCommitEnabled == NULL)
-	{
-		MyXactFlags |= XACT_FLAGS_FDWNOPREPARE;
-		pfree(routine);
-		return;
-	}
-
 	foreach(lc, FdwXactAtomicCommitParticipants)
 	{
 		FdwXactParticipant	*fp = (FdwXactParticipant *) lfirst(lc);
@@ -292,19 +277,14 @@ register_fdw_xact(Oid serverid, Oid userid, bool modified)
 	fdw = GetForeignDataWrapper(foreign_server->fdwid);
 	user_mapping = GetUserMapping(userid, serverid);
 
-	/* Make sure that the FDW has transaction handlers */
+	if (!routine->CommitForeignTransaction || !routine->RollbackForeignTransaction)
+	{
+		pfree(routine);
+		return;
+	}
+
 	if (!routine->PrepareForeignTransaction)
-		ereport(ERROR,
-				(errmsg("no function provided for preparing foreign transaction for FDW %s",
-						fdw->fdwname)));
-	if (!routine->CommitForeignTransaction)
-		ereport(ERROR,
-				(errmsg("no function to commit a foreign transaction provided for FDW %s",
-						fdw->fdwname)));
-	if (!routine->RollbackForeignTransaction)
-		ereport(ERROR,
-				(errmsg("no function to rollback a foreign transaction provided for FDW %s",
-						fdw->fdwname)));
+		MyXactFlags |= XACT_FLAGS_FDWNOPREPARE;
 
 	fdw_part = (FdwXactParticipant *) palloc(sizeof(FdwXactParticipant));
 
@@ -313,12 +293,10 @@ register_fdw_xact(Oid serverid, Oid userid, bool modified)
 	fdw_part->usermapping = user_mapping;
 	fdw_part->fdw_xact = NULL;
 	fdw_part->modified = modified;
-	fdw_part->twophase_commit_enabled = true; /* by default, will be changed at pre-commit phase */
 	fdw_part->fdw_state = NULL;
 	fdw_part->prepare_foreign_xact = routine->PrepareForeignTransaction;
 	fdw_part->commit_foreign_xact = routine->CommitForeignTransaction;
 	fdw_part->rollback_foreign_xact = routine->RollbackForeignTransaction;
-	fdw_part->is_twophase_commit_enabled = routine->IsTwoPhaseCommitEnabled;
 	fdw_part->get_prepareid = routine->GetPrepareId;
 
 	/* Add this foreign transaction to the participants list */
@@ -449,9 +427,9 @@ PreCommit_FdwXacts(void)
 			can_commit = true;
 		}
 		else if (distributed_atomic_commit == DISTRIBUTED_ATOMIC_COMMIT_PREFER &&
-				 !fdw_part->twophase_commit_enabled)
+				 !fdw_part->prepare_foreign_xact)
 		{
-			/* Also in 'prefer' case, non-2pc-capable servers can be committed */
+			/* In 'prefer' case, non-2pc-capable servers can also be committed */
 			can_commit = true;
 		}
 
@@ -482,11 +460,12 @@ PreCommit_FdwXacts(void)
 		Assert(distributed_atomic_commit == DISTRIBUTED_ATOMIC_COMMIT_PREFER);
 		FdwXactCommitForeignTransaction(linitial(FdwXactAtomicCommitParticipants));
 		list_free(FdwXactAtomicCommitParticipants);
-		return;
 	}
-
-	FdwXactPrepareForeignTransactions();
-	/* keep FdwXactparticipantsForAC until the end of transaction */
+	else
+	{
+		/* keep FdwXactparticipantsForAC until the end of transaction */
+		FdwXactPrepareForeignTransactions();
+	}
 }
 
 /*
@@ -558,9 +537,10 @@ FdwXactPrepareForeignTransactions(void)
 			fdw_part->fdw_xact_id = pstrdup(id);
 		}
 		else
-			fdw_part->fdw_xact_id = generate_fdw_xact_identifier(txid,
-																 fdw_part->server->serverid,
-																 fdw_part->usermapping->userid);
+			fdw_part->fdw_xact_id =
+				generate_fdw_xact_identifier(txid,
+											 fdw_part->server->serverid,
+											 fdw_part->usermapping->userid);
 
 		/*
 		 * Insert the foreign transaction entry. Registration persists this
@@ -591,7 +571,7 @@ FdwXactPrepareForeignTransactions(void)
 		 * This is fine as long as the FDW provides us unique prepared transaction
 		 * identifiers.
 		 */
-		if (!fdw_part->prepare_foreign_xact(state))
+		if (fdw_part->prepare_foreign_xact(state, 0) != FDW_XACT_OK)
 		{
 			/* Failed to prepare, change over aborts */
 			ereport(ERROR,
@@ -635,7 +615,7 @@ FdwXactCommitForeignTransaction(FdwXactParticipant *fdw_part)
 	state->umid = fdw_part->usermapping->umid;
 	fdw_part->fdw_state = (void *) state;
 
-	if (!fdw_part->commit_foreign_xact(state))
+	if (fdw_part->commit_foreign_xact(state, FDW_XACT_FLAG_ONEPHASE) != FDW_XACT_OK)
 		ereport(ERROR,
 				(errmsg("could not commit foreign transaction on server %s",
 						fdw_part->server->servername)));
@@ -886,12 +866,6 @@ FdwXactAtomicCommitRequired(void)
 	foreach(lc, FdwXactAtomicCommitParticipants)
 	{
 		FdwXactParticipant *fdw_part = (FdwXactParticipant *) lfirst(lc);
-
-		/* Check if the foreign server is capable of two-phase commit protocol */
-		if (fdw_part->is_twophase_commit_enabled(fdw_part->server->serverid))
-			fdw_part->twophase_commit_enabled = true;
-		else if (fdw_part->modified)
-			MyXactFlags |= XACT_FLAGS_FDWNOPREPARE;
 
 		if (fdw_part->modified)
 			nserverswritten++;
@@ -1478,7 +1452,7 @@ AtEOXact_FdwXacts(bool is_commit)
 			 * the transaction it's too late even if we raise an error here.
 			 * So we log it as warning.
 			 */
-			if (!fdw_part->rollback_foreign_xact(state))
+			if (fdw_part->rollback_foreign_xact(state, FDW_XACT_FLAG_ONEPHASE) != FDW_XACT_OK)
 				ereport(WARNING,
 						(errmsg("could not abort transaction on server \"%s\"",
 								fdw_part->server->servername)));
@@ -1555,8 +1529,8 @@ FdwXactResolveForeignTransaction(FdwXactState *state, FdwXact fdwxact,
 	ForeignServer		*server;
 	ForeignDataWrapper	*fdw;
 	FdwRoutine			*fdw_routine;
-	bool		is_commit;
-	bool		ret;
+	bool				is_commit;
+	FdwXactResult		ret;
 
 	Assert(fdwxact);
 
@@ -1614,12 +1588,12 @@ FdwXactResolveForeignTransaction(FdwXactState *state, FdwXact fdwxact,
 	fdw = GetForeignDataWrapper(server->fdwid);
 	fdw_routine = GetFdwRoutine(fdw->fdwhandler);
 
-	/* Resolve the foreign transaction */
-	Assert(fdw_routine->ResolveForeignTransaction);
+	if (is_commit)
+		ret = fdw_routine->CommitForeignTransaction(state, 0);
+	else
+		ret = fdw_routine->RollbackForeignTransaction(state, 0);
 
-	ret = fdw_routine->ResolveForeignTransaction(state, is_commit);
-
-	if (!ret)
+	if (ret != FDW_XACT_OK)
 	{
 		ereport(elevel,
 				(errmsg("could not %s a prepared foreign transaction on server \"%s\"",
@@ -2616,7 +2590,7 @@ pg_resolve_fdw_xact(PG_FUNCTION_ARGS)
 	TransactionId	xid = DatumGetTransactionId(PG_GETARG_DATUM(0));
 	Oid				serverid = PG_GETARG_OID(1);
 	Oid				userid = PG_GETARG_OID(2);
-	FdwXactState *state;
+	FdwXactState	*state;
 	UserMapping		*usermapping;
 	FdwXact			fdwxact;
 	bool			ret;
