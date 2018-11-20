@@ -53,6 +53,8 @@
 #include "utils/syscache.h"
 #include "utils/rel.h"
 
+#include "regex/regexport.h"
+
 
 /* Convenience macro for the most common makeNamespaceItem() case */
 #define makeDefaultNSItem(rte)	makeNamespaceItem(rte, true, true, false, true)
@@ -76,6 +78,8 @@ static RangeTblEntry *transformRangeTableFunc(ParseState *pstate,
 						RangeTableFunc *t);
 static TableSampleClause *transformRangeTableSample(ParseState *pstate,
 						  RangeTableSample *rts);
+static MatchRecognizeClause *transformRangeMatchRecognize(ParseState *pstate,
+							 RangeMatchRecognize *rmc);
 static Node *transformFromClauseItem(ParseState *pstate, Node *n,
 						RangeTblEntry **top_rte, int *top_rti,
 						List **namespace);
@@ -1051,6 +1055,84 @@ transformRangeTableSample(ParseState *pstate, RangeTableSample *rts)
 	return tablesample;
 }
 
+static void
+color(regex_t *regex)
+{
+	int colorsCount = pg_reg_getnumcolors(regex);
+
+	for (int i = 0; i < colorsCount; i++)
+	{
+		int charsCount = pg_reg_getnumcharacters(regex, i);
+		pg_wchar	*chars;
+		char buf[8192] = {'\0'};
+
+		if (charsCount < 0)
+			continue;
+
+		chars = (pg_wchar *) palloc(sizeof(pg_wchar) * charsCount);
+		pg_reg_getcharacters(regex, i, chars, charsCount);
+
+		pg_wchar2mb(chars, buf);
+		elog(NOTICE, "%s", buf);
+	}
+}
+
+static MatchRecognizeClause *
+transformRangeMatchRecognize(ParseState *pstate, RangeMatchRecognize *rmc)
+{
+	MatchRecognizeClause *match_recognize;
+	List	*orderClause;
+	List	*partitionClause;
+	List	*targetlist = NIL;
+
+	orderClause = transformSortClause(pstate,
+									  rmc->orderClause,
+									  &targetlist,
+									  EXPR_KIND_MATCH_RECOGNIZE_ORDER,
+									  true);
+	partitionClause = transformGroupClause(pstate,
+										   rmc->orderClause,
+										   NULL,
+										   &targetlist,
+										   orderClause,
+										   EXPR_KIND_MATCH_RECOGNIZE_PARTITION,
+										   true);
+
+	/* TESTING REGEXPR */
+	{
+		regex_t regex;
+		int		regcomp_result;
+		char	errMsg[100];
+		pg_wchar	*pattern;
+		int			pattern_len;
+
+		pattern = (pg_wchar *) palloc(strlen(rmc->patternClause) * sizeof(pg_wchar));
+		pattern_len = pg_mb2wchar_with_len(rmc->patternClause,
+										   pattern,
+										   strlen(rmc->patternClause));
+
+		regcomp_result = pg_regcomp(&regex,
+									pattern,
+									pattern_len,
+									REG_BASIC,
+									DEFAULT_COLLATION_OID);
+
+		if (regcomp_result != REG_OKAY)
+		{
+			pg_regerror(regcomp_result, &regex, errMsg, sizeof(errMsg));
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_REGULAR_EXPRESSION),
+					 errmsg("invalid regular expression: %s", errMsg)));
+		}
+
+		color(&regex);
+	}
+
+	match_recognize = makeNode(MatchRecognizeClause);
+
+	return match_recognize;
+}
+
 /*
  * getRTEForSpecialRelationTypes
  *
@@ -1216,6 +1298,9 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 	else if (IsA(n, RangeMatchRecognize))
 	{
 		RangeMatchRecognize *rmc = (RangeMatchRecognize *) n;
+		MatchRecognizeClause *match_recognize;
+
+		match_recognize = transformRangeMatchRecognize(pstate, rmc);
 
 		elog(ERROR, "Ok, In transformFromClauseItem");
 		/*

@@ -240,6 +240,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	PartitionElem		*partelem;
 	PartitionSpec		*partspec;
 	PartitionBoundSpec	*partboundspec;
+	char				*row_pattern;
 	RoleSpec			*rolespec;
 }
 
@@ -585,10 +586,11 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>		hash_partbound partbound_datum_list range_datum_list
 %type <defelt>		hash_partbound_elem
 
-%type <list>	row_pattern row_pattern_term row_pattern_factor row_pattern_primary
+%type <row_pattern>	row_pattern row_pattern_term row_pattern_factor row_pattern_primary
+					row_pattern_quantifier
 %type <list>	row_pattern_measures_list
 %type <list>	row_pattern_define_list
-%type <ival>	row_pattern_rows_per_match row_pattern_quantifier
+%type <ival>	row_pattern_rows_per_match
 %type <target>	row_pattern_measures_definition row_pattern_define
 %type <node>	match_recognize_clause opt_measures_clause
 
@@ -14278,7 +14280,7 @@ opt_measures_clause:
 					RangeMatchRecognize *n = makeNode(RangeMatchRecognize);
 					n->measuresClause = $2;
 					n->permatchOption = $3;
-					$$ = n;
+					$$ = (Node *)n;
 				}
 | /* EMPTY */ { $$ = NULL;}
 ;
@@ -14329,40 +14331,79 @@ row_pattern_define:
 
 row_pattern:
 			row_pattern_term {
-						printf("row_pattern\n");
-					}
-			| row_pattern '|' row_pattern_term {
-						printf("row_pattern (|)\n");
-					}
+				$$ = $1;
+			}
+			| row_pattern '|' row_pattern_term
+			{
+				StringInfo str = makeStringInfo();
+				appendStringInfo(str, "((%s)|(%s))", $1, $3);
+				$$ = str->data;
+			}
 ;
 
 row_pattern_term:
-			row_pattern_factor {
-						printf("row_pattern_term\n");
-						}
-			| row_pattern_term row_pattern_factor {
-						printf("row_pattern_term row_pattern_factor\n");
-						}
+			row_pattern_factor
+			{
+				$$ = $1;
+			}
+			| row_pattern_term row_pattern_factor
+			{
+				StringInfo str = makeStringInfo();
+				appendStringInfo(str, "((%s)(%s))", $1, $2);
+				$$ = str->data;
+			}
 ;
 
 row_pattern_factor:
-			row_pattern_primary {}
-			| row_pattern_primary row_pattern_quantifier {}
+			row_pattern_primary
+			{
+				$$ = $1;
+			}
+			| row_pattern_primary row_pattern_quantifier
+			{
+				StringInfo str = makeStringInfo();
+				appendStringInfo(str, "(%s)%s", $1, $2);
+				$$ = str->data;
+			}
 ;
 
 row_pattern_quantifier:
-			'*' {}
-			| '+' {}
-			| '?' {}
-			| '{' Iconst '}' {}
-			| '{' Iconst ',' Iconst '}' {}
+			'*'
+			{
+				$$ = "*";
+			}
+			| '+'
+			{
+				$$ = "+";
+			}
+			| '?'
+			{
+				$$ = "?";
+			}
+			| '{' Iconst '}'
+			{
+				StringInfo str = makeStringInfo();
+				appendStringInfo(str, "{%d}", $2);
+				$$ = str->data;
+			}
+			| '{' Iconst ',' Iconst '}'
+			{
+				StringInfo str = makeStringInfo();
+				appendStringInfo(str, "{%d,%d}", $2, $4);
+				$$ = str->data;
+			}
 ;
 
 row_pattern_primary:
-			IDENT {printf("IDENT\n");}
-			| '^' {}
-			| '$' {}
-			| '(' row_pattern ')' {}
+IDENT {
+	$$ = $1;
+}
+			| '(' row_pattern ')'
+			{
+				StringInfo str = makeStringInfo();
+				appendStringInfo(str, "(%s)", $2);
+				$$ = str->data;
+			}
 ;
 
 /*
