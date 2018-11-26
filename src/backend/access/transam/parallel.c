@@ -23,6 +23,7 @@
 #include "catalog/index.h"
 #include "catalog/namespace.h"
 #include "commands/async.h"
+#include "commands/vacuum.h"
 #include "executor/execParallel.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
@@ -138,6 +139,9 @@ static const struct
 	},
 	{
 		"_bt_parallel_build_main", _bt_parallel_build_main
+	},
+	{
+		"lazy_parallel_vacuum_main", lazy_parallel_vacuum_main
 	}
 };
 
