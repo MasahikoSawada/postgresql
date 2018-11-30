@@ -3661,6 +3661,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_PARALLEL_CREATE_INDEX_SCAN:
 			event_name = "ParallelCreateIndexScan";
 			break;
+		case WAIT_EVENT_PARALLEL_VACUUM_INDEX:
+			event_name = "ParallelVacuumIndex";
+			break;
 		case WAIT_EVENT_PARALLEL_FINISH:
 			event_name = "ParallelFinish";
 			break;

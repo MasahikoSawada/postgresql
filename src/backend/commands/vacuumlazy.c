@@ -55,6 +55,7 @@
 #include "portability/instr_time.h"
 #include "postmaster/autovacuum.h"
 #include "storage/bufmgr.h"
+#include "storage/condition_variable.h"
 #include "storage/freespace.h"
 #include "storage/lmgr.h"
 #include "storage/spin.h"
@@ -117,7 +118,6 @@
 
 /* DSM key for parallel lazy vacuum */
 #define VACUUM_KEY_SHARED			UINT64CONST(0xFFFFFFFFFFF00001)
-#define VACUUM_KEY_INDEX_STATS		UINT64CONST(0xFFFFFFFFFFF00002)
 #define VACUUM_KEY_DEAD_TUPLES		UINT64CONST(0xFFFFFFFFFFF00003)
 #define VACUUM_KEY_QUERY_TEXT		UINT64CONST(0xFFFFFFFFFFF00004)
 
@@ -152,7 +152,7 @@ typedef struct LVTidMap
 typedef struct LVShared
 {
 	Oid		relid;
-	bool	for_cleanup;	/* Do index vacuum for cleanup? */
+	bool	for_cleanup;
 
 	/* options and settings */
 	bool	is_wraparound;
@@ -2297,10 +2297,12 @@ lazy_space_alloc(LVState *lvstate, BlockNumber relblocks)
 								   max_parallel_maintenance_workers);
 		}
 		else
-			parallel_workers = Min(lvstate->nindexes,
+			parallel_workers = Min(lvstate->nindexes - 1,
 								  max_parallel_maintenance_workers);
 
-		lazy_prepare_parallel(lvstate, maxtuples, parallel_workers, &dead_tuples);
+		if (parallel_workers > 0)
+			lazy_prepare_parallel(lvstate, maxtuples, parallel_workers, &dead_tuples);
+
 		Assert(dead_tuples);
 	}
 	else
@@ -2663,6 +2665,8 @@ lazy_end_parallel_vacuum_index(LVState *lvstate, bool for_cleanup)
 
 	/* Reset process count for the next index vacuum */
 	pg_atomic_write_u32(&(lvstate->lvshared->nprocessed), 0);
+
+	ReinitializeParallelDSM(lvstate->lvleader->pcxt);
 }
 
 /*
@@ -2675,7 +2679,6 @@ lazy_parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 	Relation	*indrels;
 	LVShared	*lvshared;
 	LVTidMap	*dead_tuples;
-	IndexBulkDeleteResult *indstats;
 	int			nindexes;
 	char		*sharedquery;
 
@@ -2709,10 +2712,10 @@ lazy_parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 							   "autovacuum: parallel worker");
 
 	dead_tuples = (LVTidMap *) shm_toc_lookup(toc, VACUUM_KEY_DEAD_TUPLES, false);
-	indstats = (IndexBulkDeleteResult *) shm_toc_lookup(toc, VACUUM_KEY_INDEX_STATS, false);
 
 	lazy_vacuum_all_indexes_for_worker(indrels, nindexes, lvshared,
-									   dead_tuples, lvshared->for_cleanup);
+									   dead_tuples,
+									   lvshared->for_cleanup);
 
 	vac_close_indexes(nindexes, indrels, RowExclusiveLock);
 	heap_close(onerel, ShareUpdateExclusiveLock);
@@ -2754,4 +2757,6 @@ lazy_vacuum_all_indexes_for_worker(Relation *indrels, int nindexes,
 			memcpy(&(lvshared->indstats[idx].stats), stats, sizeof(IndexBulkDeleteResult));
 		}
 	}
+
+	elog(WARNING, "Worker DONE %d", ParallelWorkerNumber);
 }
