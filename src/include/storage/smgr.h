@@ -137,6 +137,8 @@ extern void mdimmedsync(SMgrRelation reln, ForkNumber forknum);
 extern void mdpreckpt(void);
 extern void mdsync(void);
 extern void mdpostckpt(void);
+extern void mdencrypt(SMgrRelation reln, char *buffer_plain, char **buffer_enc);
+extern void mddecrypt(SMgrRelation reln, char *buffer_enc, char **buffer_plain);
 
 extern void SetForwardFsyncRequests(void);
 extern void RememberFsyncRequest(RelFileNode rnode, ForkNumber forknum,

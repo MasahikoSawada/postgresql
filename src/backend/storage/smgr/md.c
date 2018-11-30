@@ -1402,6 +1402,18 @@ mdpostckpt(void)
 	}
 }
 
+void
+mdencrypt(SMgrRelation reln, char *buffer_plain, char **buffer_enc)
+{
+
+}
+
+void
+mddecrypt(SMgrRelation reln, char *buffer_enc, char **buffer_plain)
+{
+
+}
+
 /*
  * register_dirty_segment() -- Mark a relation segment as needing fsync
  *

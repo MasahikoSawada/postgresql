@@ -62,6 +62,8 @@ typedef struct f_smgr
 	void		(*smgr_pre_ckpt) (void);	/* may be NULL */
 	void		(*smgr_sync) (void);	/* may be NULL */
 	void		(*smgr_post_ckpt) (void);	/* may be NULL */
+	void		(*smgr_encrypt) (SMgrRelation reln, char *buffer_plain, char **buffer_enc);
+	void		(*smgr_decrypt) (SMgrRelation reln, char *buffer_enc, char **buffer_plain);
 } f_smgr;
 
 
@@ -84,7 +86,9 @@ static const f_smgr smgrsw[] = {
 		.smgr_immedsync = mdimmedsync,
 		.smgr_pre_ckpt = mdpreckpt,
 		.smgr_sync = mdsync,
-		.smgr_post_ckpt = mdpostckpt
+		.smgr_post_ckpt = mdpostckpt,
+		.smgr_encrypt = mdencrypt,
+		.smgr_decrypt = mddecrypt
 	}
 };
 
