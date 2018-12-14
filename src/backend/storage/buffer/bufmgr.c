@@ -48,6 +48,7 @@
 #include "storage/proc.h"
 #include "storage/smgr.h"
 #include "storage/standby.h"
+#include "storage/kmgr.h"
 #include "utils/rel.h"
 #include "utils/resowner_private.h"
 #include "utils/timestamp.h"
@@ -865,10 +866,43 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 	if (isExtend)
 	{
+		char	*key;
+		Block	blockToWrite = bufBlock;
+		bool	encrypted = false;
+
 		/* new buffers are zero-filled */
 		MemSet((char *) bufBlock, 0, BLCKSZ);
+
+		if (forkNum == MAIN_FORKNUM &&
+			(key = GetTablespaceKey(smgr->smgr_rnode.node.spcNode)) != NULL)
+		{
+			/*
+			 * Copy an empty page to encrypt and write. Note that since the page header of the
+			 * bufBlock in invalid we cannot use PageGetTempPageCopy() here.
+			 */
+			blockToWrite = palloc(BLCKSZ);
+			MemSet((char *) blockToWrite, 0, BLCKSZ);
+			smgrencrypt(smgr, forkNum, blockNum,
+						(char *) blockToWrite, (char *) blockToWrite, key);
+			encrypted = true;
+		}
+
 		/* don't set checksum for all-zero page */
-		smgrextend(smgr, forkNum, blockNum, (char *) bufBlock, false);
+		smgrextend(smgr, forkNum, blockNum, (char *) blockToWrite, false);
+
+		if (encrypted)
+		{
+			uint32	buf_state = LockBufHdr(bufHdr);
+
+			/* Mark this buffer so that it will be encrypted when flushes */
+			buf_state |= BM_ENCRYPTION_NEEDED;
+			UnlockBufHdr(bufHdr, buf_state);
+
+#ifdef DEBUG_TDE
+			ereport(LOG, (errmsg("rel %d blk %d page mark encryption in extension",
+								 smgr->smgr_rnode.node.relNode, blockNum)));
+#endif
+		}
 
 		/*
 		 * NB: we're *not* doing a ScheduleBufferTagForWriteback here;
@@ -889,11 +923,31 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		{
 			instr_time	io_start,
 						io_time;
+			char		*key;
 
 			if (track_io_timing)
 				INSTR_TIME_SET_CURRENT(io_start);
 
 			smgrread(smgr, forkNum, blockNum, (char *) bufBlock);
+
+			/* Decryption support */
+			if (forkNum == MAIN_FORKNUM &&
+				(key = GetTablespaceKey(smgr->smgr_rnode.node.spcNode)) != NULL)
+			{
+				uint32	buf_state;
+
+#ifdef DEBUG_TDE
+				elog(NOTICE, "rel %d blk %d decrypted", smgr->smgr_rnode.node.relNode, blockNum);
+#endif
+				smgrdecrypt(smgr, forkNum, blockNum, bufBlock, bufBlock, key);
+				buf_state = LockBufHdr(bufHdr);
+				buf_state |= BM_ENCRYPTION_NEEDED;
+				UnlockBufHdr(bufHdr, buf_state);
+#ifdef DEBUG_TDE
+				ereport(LOG, (errmsg("rel %d blk %d page mark encryption",
+									 smgr->smgr_rnode.node.relNode, blockNum)));
+#endif
+			}
 
 			if (track_io_timing)
 			{
@@ -1307,7 +1361,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	buf->tag = newTag;
 	buf_state &= ~(BM_VALID | BM_DIRTY | BM_JUST_DIRTIED |
 				   BM_CHECKPOINT_NEEDED | BM_IO_ERROR | BM_PERMANENT |
-				   BUF_USAGECOUNT_MASK);
+				   BUF_USAGECOUNT_MASK | BM_ENCRYPTION_NEEDED);
 	if (relpersistence == RELPERSISTENCE_PERMANENT || forkNum == INIT_FORKNUM)
 		buf_state |= BM_TAG_VALID | BM_PERMANENT | BUF_USAGECOUNT_ONE;
 	else
@@ -2747,6 +2801,27 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 	 * copy the page to private storage if we do checksumming.
 	 */
 	bufToWrite = PageSetChecksumCopy((Page) bufBlock, buf->tag.blockNum);
+
+	/* Encryption support */
+	if (buf->tag.forkNum == MAIN_FORKNUM &&
+		buf_state & BM_ENCRYPTION_NEEDED)
+	{
+		Page encryptedPage = PageGetTempPageCopy((Page) bufToWrite);
+
+#ifdef DEBUG_TDE
+		elog(WARNING, "rel %d blk %d encrypted",
+			 buf->tag.rnode.relNode,
+			 buf->tag.blockNum);
+#endif
+		char *key = GetTablespaceKey(reln->smgr_rnode.node.spcNode);
+
+		Assert(key);
+		smgrencrypt(reln,
+					buf->tag.forkNum, buf->tag.blockNum,
+					bufToWrite, encryptedPage, key);
+
+		bufToWrite = encryptedPage;
+	}
 
 	if (track_io_timing)
 		INSTR_TIME_SET_CURRENT(io_start);

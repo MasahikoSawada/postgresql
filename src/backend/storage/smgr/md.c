@@ -33,6 +33,7 @@
 #include "postmaster/bgwriter.h"
 #include "storage/fd.h"
 #include "storage/bufmgr.h"
+#include "storage/encryption.h"
 #include "storage/relfilenode.h"
 #include "storage/smgr.h"
 #include "utils/hsearch.h"
@@ -1403,15 +1404,21 @@ mdpostckpt(void)
 }
 
 void
-mdencrypt(SMgrRelation reln, char *buffer_plain, char **buffer_enc)
+mdencrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+		  char *bin, char *bout, const char *key)
 {
-
+	char tweak[TWEAK_SIZE];
+	BufferEncryptionTweak(tweak, &(reln->smgr_rnode.node), forknum, blocknum);
+	encrypt_data(bin, bout, BLCKSZ, key, tweak);
 }
 
 void
-mddecrypt(SMgrRelation reln, char *buffer_enc, char **buffer_plain)
+mddecrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+		  char *bin, char *bout, const char *key)
 {
-
+	char tweak[TWEAK_SIZE];
+	BufferEncryptionTweak(tweak, &(reln->smgr_rnode.node), forknum, blocknum);
+	decrypt_data(bin, bout, BLCKSZ, key, tweak);
 }
 
 /*

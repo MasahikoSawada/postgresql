@@ -66,6 +66,7 @@
 #include "catalog/index.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "storage/kmgr.h"
 #include "storage/smgr.h"
 #include "tcop/tcopprot.h"		/* pgrminclude ignore */
 #include "utils/rel.h"
@@ -607,6 +608,9 @@ _bt_blnewpage(uint32 level)
 static void
 _bt_blwritepage(BTWriteState *wstate, Page page, BlockNumber blkno)
 {
+	char *key;
+	Page  pageToWrite;
+
 	/* Ensure rd_smgr is open (could have been closed by relcache flush!) */
 	RelationOpenSmgr(wstate->index);
 
@@ -637,6 +641,15 @@ _bt_blwritepage(BTWriteState *wstate, Page page, BlockNumber blkno)
 
 	PageSetChecksumInplace(page, blkno);
 
+	pageToWrite = page;
+	if ((key = GetTablespaceKey(wstate->index->rd_node.spcNode)) != NULL)
+	{
+		/* replace page to be written to the encrypted temporary page */
+		pageToWrite = PageGetTempPageCopy(page);
+		smgrencrypt(wstate->index->rd_smgr, MAIN_FORKNUM, blkno,
+					(char *) pageToWrite,(char *) pageToWrite, key);
+	}
+
 	/*
 	 * Now write the page.  There's no need for smgr to schedule an fsync for
 	 * this write; we'll do it ourselves before ending the build.
@@ -645,14 +658,14 @@ _bt_blwritepage(BTWriteState *wstate, Page page, BlockNumber blkno)
 	{
 		/* extending the file... */
 		smgrextend(wstate->index->rd_smgr, MAIN_FORKNUM, blkno,
-				   (char *) page, true);
+				   (char *) pageToWrite, true);
 		wstate->btws_pages_written++;
 	}
 	else
 	{
 		/* overwriting a block we zero-filled before */
 		smgrwrite(wstate->index->rd_smgr, MAIN_FORKNUM, blkno,
-				  (char *) page, true);
+				  (char *) pageToWrite, true);
 	}
 
 	pfree(page);

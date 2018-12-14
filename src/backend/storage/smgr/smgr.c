@@ -62,8 +62,10 @@ typedef struct f_smgr
 	void		(*smgr_pre_ckpt) (void);	/* may be NULL */
 	void		(*smgr_sync) (void);	/* may be NULL */
 	void		(*smgr_post_ckpt) (void);	/* may be NULL */
-	void		(*smgr_encrypt) (SMgrRelation reln, char *buffer_plain, char **buffer_enc);
-	void		(*smgr_decrypt) (SMgrRelation reln, char *buffer_enc, char **buffer_plain);
+	void		(*smgr_encrypt) (SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+								 char *bin, char *bout, const char *key);
+	void		(*smgr_decrypt) (SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+								 char *bin, char *bout, const char *key);
 } f_smgr;
 
 
@@ -799,6 +801,20 @@ smgrpostckpt(void)
 		if (smgrsw[i].smgr_post_ckpt)
 			smgrsw[i].smgr_post_ckpt();
 	}
+}
+
+void
+smgrencrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+			char *bin, char *bout, const char *key)
+{
+	smgrsw[reln->smgr_which].smgr_encrypt(reln, forknum, blocknum, bin, bout, key);
+}
+
+void
+smgrdecrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+			char *bin, char *bout, const char *key)
+{
+	smgrsw[reln->smgr_which].smgr_decrypt(reln, forknum, blocknum, bin, bout, key);
 }
 
 /*

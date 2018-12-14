@@ -73,6 +73,7 @@
 #include "postmaster/bgwriter.h"
 #include "storage/fd.h"
 #include "storage/lmgr.h"
+#include "storage/kmgr.h"
 #include "storage/standby.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
@@ -242,6 +243,7 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	char	   *location;
 	Oid			ownerId;
 	Datum		newOptions;
+	TableSpaceOpts *tsopts;
 
 	/* Must be super user */
 	if (!superuser())
@@ -340,7 +342,7 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	newOptions = transformRelOptions((Datum) 0,
 									 stmt->options,
 									 NULL, NULL, false, false);
-	(void) tablespace_reloptions(newOptions, true);
+	tsopts = (TableSpaceOpts *) tablespace_reloptions(newOptions, true);
 	if (newOptions != (Datum) 0)
 		values[Anum_pg_tablespace_spcoptions - 1] = newOptions;
 	else
@@ -359,6 +361,10 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	InvokeObjectPostCreateHook(TableSpaceRelationId, tablespaceoid, 0);
 
 	create_tablespace_directories(location, tablespaceoid);
+
+	/* Create encryption key as well */
+	if (tsopts->encryption)
+		CreateTablespaceKey(tablespaceoid);
 
 	/* Record the filesystem change in XLOG */
 	{
@@ -412,6 +418,9 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 	Form_pg_tablespace spcform;
 	ScanKeyData entry[1];
 	Oid			tablespaceoid;
+	TableSpaceOpts *tsopts;
+	Datum datum;
+	bool isnull;
 
 	/*
 	 * Find the target tuple
@@ -449,6 +458,10 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 	spcform = (Form_pg_tablespace) GETSTRUCT(tuple);
 	tablespaceoid = spcform->oid;
 
+	datum = heap_getattr(tuple, Anum_pg_tablespace_spcoptions,
+						 RelationGetDescr(rel), &isnull);
+	tsopts = (TableSpaceOpts *) tablespace_reloptions(datum, false);
+
 	/* Must be tablespace owner */
 	if (!pg_tablespace_ownercheck(tablespaceoid, GetUserId()))
 		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_TABLESPACE,
@@ -462,6 +475,9 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 
 	/* DROP hook for the tablespace being removed */
 	InvokeObjectDropHook(TableSpaceRelationId, tablespaceoid, 0);
+
+	if (tsopts->encryption)
+		DropTablespaceKey(tablespaceoid);
 
 	/*
 	 * Remove the pg_tablespace tuple (this will roll back if we fail below)

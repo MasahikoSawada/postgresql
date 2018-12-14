@@ -119,6 +119,7 @@
 #include "replication/walsender.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
+#include "storage/kmgr.h"
 #include "storage/pg_shmem.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
@@ -1371,6 +1372,11 @@ PostmasterMain(int argc, char *argv[])
 	 * see what's happening.
 	 */
 	AddToDataDirLockFile(LOCK_FILE_LINE_PM_STATUS, PM_STATUS_STARTING);
+
+	/*
+	 * Get encryption master key.
+	 */
+	StartupKmgr(GetControlFileKeyGeneration());
 
 	/*
 	 * We're ready to rock and roll...

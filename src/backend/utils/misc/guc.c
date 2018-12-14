@@ -70,6 +70,7 @@
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
 #include "storage/dsm_impl.h"
+#include "storage/kmgr.h"
 #include "storage/standby.h"
 #include "storage/fd.h"
 #include "storage/large_object.h"
@@ -3349,6 +3350,16 @@ static struct config_string ConfigureNamesString[] =
 		&XLogArchiveCommand,
 		"",
 		NULL, NULL, show_archive_command
+	},
+
+	{
+		{"get_masterkey_command", PGC_POSTMASTER, KEY_MANAGEMENT,
+			gettext_noop("Sets the shell command to get the encryption master key."),
+			NULL
+		},
+		&MasterKeyGetCommand,
+		"",
+		NULL, NULL, NULL
 	},
 
 	{

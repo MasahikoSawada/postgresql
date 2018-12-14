@@ -10048,4 +10048,8 @@
   proargnames => '{rootrelid,relid,parentrelid,isleaf,level}',
   prosrc => 'pg_partition_tree' },
 
+# transparent data encryption
+{ oid => '4004', descr => 'rotate encryption key',
+  proname => 'pg_rotate_encryption_key', prorettype => 'bool',
+  proargtypes => '', prosrc => 'pg_rotate_encryption_key'},
 ]

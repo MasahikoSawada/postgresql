@@ -28,6 +28,7 @@
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
 #include "storage/condition_variable.h"
+#include "storage/kmgr.h"
 #include "storage/indexfsm.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
@@ -155,6 +156,8 @@ void
 btbuildempty(Relation index)
 {
 	Page		metapage;
+	char		*key;
+	Page		pageToWrite;
 
 	/* Construct metapage. */
 	metapage = (Page) palloc(BLCKSZ);
@@ -168,8 +171,17 @@ btbuildempty(Relation index)
 	 * this even when wal_level=minimal.
 	 */
 	PageSetChecksumInplace(metapage, BTREE_METAPAGE);
+
+	pageToWrite = metapage;
+	if ((key = GetTablespaceKey(index->rd_node.relNode)) != NULL)
+	{
+		pageToWrite = PageGetTempPageCopy(metapage);
+		smgrencrypt(index->rd_smgr, INIT_FORKNUM, BTREE_METAPAGE,
+					(char *) pageToWrite, (char *) pageToWrite, key);
+	}
+
 	smgrwrite(index->rd_smgr, INIT_FORKNUM, BTREE_METAPAGE,
-			  (char *) metapage, true);
+			  (char *) pageToWrite, true);
 	log_newpage(&index->rd_smgr->smgr_rnode.node, INIT_FORKNUM,
 				BTREE_METAPAGE, metapage, true);
 

@@ -105,6 +105,10 @@ extern void smgrwriteback(SMgrRelation reln, ForkNumber forknum,
 extern BlockNumber smgrnblocks(SMgrRelation reln, ForkNumber forknum);
 extern void smgrtruncate(SMgrRelation reln, ForkNumber forknum,
 			 BlockNumber nblocks);
+extern void smgrencrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+						char *bin, char *bout, const char *key);
+extern void smgrdecrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+						char *bin, char *bout, const char *key);
 extern void smgrimmedsync(SMgrRelation reln, ForkNumber forknum);
 extern void smgrpreckpt(void);
 extern void smgrsync(void);
@@ -137,8 +141,10 @@ extern void mdimmedsync(SMgrRelation reln, ForkNumber forknum);
 extern void mdpreckpt(void);
 extern void mdsync(void);
 extern void mdpostckpt(void);
-extern void mdencrypt(SMgrRelation reln, char *buffer_plain, char **buffer_enc);
-extern void mddecrypt(SMgrRelation reln, char *buffer_enc, char **buffer_plain);
+extern void mdencrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+					  char *bin, char *bout, const char *key);
+extern void mddecrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+					  char *bin, char *bout, const char *key);
 
 extern void SetForwardFsyncRequests(void);
 extern void RememberFsyncRequest(RelFileNode rnode, ForkNumber forknum,

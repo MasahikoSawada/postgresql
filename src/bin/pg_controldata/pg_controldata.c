@@ -329,6 +329,8 @@ main(int argc, char *argv[])
 		   ControlFile->toast_max_chunk_size);
 	printf(_("Size of a large-object chunk:         %u\n"),
 		   ControlFile->loblksize);
+	printf(_("Key generation:                       %u\n"),
+		   ControlFile->key_generation);
 	/* This is no longer configurable, but users may still expect to see it: */
 	printf(_("Date/time type storage:               %s\n"),
 		   _("64-bit integers"));

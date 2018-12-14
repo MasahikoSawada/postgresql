@@ -58,6 +58,7 @@
 #include "storage/ipc.h"
 #include "storage/large_object.h"
 #include "storage/latch.h"
+#include "storage/kmgr.h"
 #include "storage/pmsignal.h"
 #include "storage/predicate.h"
 #include "storage/proc.h"
@@ -4493,6 +4494,8 @@ WriteControlFile(void)
 	ControlFile->float4ByVal = FLOAT4PASSBYVAL;
 	ControlFile->float8ByVal = FLOAT8PASSBYVAL;
 
+	ControlFile->key_generation = GetCurrentKeyGeneration();
+
 	/* Contents are protected with a CRC */
 	INIT_CRC32C(ControlFile->crc);
 	COMP_CRC32C(ControlFile->crc,
@@ -4752,6 +4755,8 @@ ReadControlFile(void)
 		(wal_segment_size / XLOG_BLCKSZ * UsableBytesInPage) -
 		(SizeOfXLogLongPHD - SizeOfXLogShortPHD);
 
+	SetKeyGeneration(ControlFile->key_generation);
+
 	CalculateCheckpointSegments();
 
 	/* Make the initdb settings visible as GUC variables, too */
@@ -4856,6 +4861,12 @@ GetFakeLSNForUnloggedRel(void)
 	SpinLockRelease(&XLogCtl->ulsn_lck);
 
 	return nextUnloggedLSN;
+}
+
+uint32
+GetControlFileKeyGeneration(void)
+{
+	return ControlFile->key_generation;
 }
 
 /*
@@ -8874,6 +8885,7 @@ CreateCheckPoint(int flags)
 	/* crash recovery should always recover to the end of WAL */
 	ControlFile->minRecoveryPoint = InvalidXLogRecPtr;
 	ControlFile->minRecoveryPointTLI = 0;
+	ControlFile->key_generation = GetCurrentKeyGeneration();
 
 	/*
 	 * Persist unloggedLSN value. It's reset on crash recovery, so this goes

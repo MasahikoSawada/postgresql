@@ -29,6 +29,7 @@
 #include "replication/message.h"
 #include "replication/origin.h"
 #include "rmgrdesc.h"
+#include "storage/kmgr_xlog.h"
 #include "storage/standbydefs.h"
 #include "utils/relmapper.h"
 

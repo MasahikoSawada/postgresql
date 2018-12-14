@@ -27,6 +27,7 @@
 #include "replication/message.h"
 #include "replication/origin.h"
 #include "storage/standby.h"
+#include "storage/kmgr_xlog.h"
 #include "utils/relmapper.h"
 
 /* must be kept in sync with RmgrData definition in xlog_internal.h */
