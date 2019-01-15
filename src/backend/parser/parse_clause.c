@@ -1299,10 +1299,20 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 	{
 		RangeMatchRecognize *rmc = (RangeMatchRecognize *) n;
 		MatchRecognizeClause *match_recognize;
+		Node	*rel;
+		RangeTblRef *rtr;
+		RangeTblEntry *rte;
 
-		match_recognize = transformRangeMatchRecognize(pstate, rmc);
+		rel = transformFromClauseItem(pstate, rmc->relation,
+									  top_rte, top_rti, namespace);
+
+		rtr = castNode(RangeTblRef, rel);
+		rte = rt_fetch(rtr->rtindex, pstate->p_rtable);
+
+		rte->matchrecognize = transformRangeMatchRecognize(pstate, rmc);
 
 		elog(ERROR, "Ok, In transformFromClauseItem");
+		return (Node *) rtr;
 		/*
 		Node	*rel;
 		RangeTblEntry	*rte;

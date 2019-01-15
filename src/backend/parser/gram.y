@@ -14298,8 +14298,16 @@ row_pattern_rows_per_match:
 ;
 
 row_pattern_measures_list:
-row_pattern_measures_definition { $$ = list_make1($1); printf("measures_definion\n");}
-| row_pattern_measures_list ',' row_pattern_measures_definition { $$ = lappend($1, $3); printf("measures_list ',' measures_definition\n");}
+			row_pattern_measures_definition
+			{
+				$$ = list_make1($1);
+				printf("measures_definion\n");
+			}
+			| row_pattern_measures_list ',' row_pattern_measures_definition
+			{
+				$$ = lappend($1, $3);
+				printf("measures_list ',' measures_definition\n");
+			}
 ;
 
 row_pattern_measures_definition:
@@ -14314,8 +14322,15 @@ row_pattern_measures_definition:
 ;
 
 row_pattern_define_list:
-			row_pattern_define	{ $$ = list_make1($1); printf("define\n"); }
-			| row_pattern_define_list ',' row_pattern_define { $$ = lappend($1, $3); printf("define_list ',', define\n");}
+			row_pattern_define
+			{
+				$$ = list_make1($1);printf("define\n");
+			}
+			| row_pattern_define_list ',' row_pattern_define
+			{
+				$$ = lappend($1, $3);
+				printf("define_list ',', define\n");
+			}
 ;
 
 row_pattern_define:
@@ -14349,7 +14364,7 @@ row_pattern_term:
 			| row_pattern_term row_pattern_factor
 			{
 				StringInfo str = makeStringInfo();
-				appendStringInfo(str, "((%s)(%s))", $1, $2);
+				appendStringInfo(str, "((%s) (%s))", $1, $2);
 				$$ = str->data;
 			}
 ;
