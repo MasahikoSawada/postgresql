@@ -78,8 +78,9 @@ static RangeTblEntry *transformRangeTableFunc(ParseState *pstate,
 						RangeTableFunc *t);
 static TableSampleClause *transformRangeTableSample(ParseState *pstate,
 						  RangeTableSample *rts);
-static MatchRecognizeClause *transformRangeMatchRecognize(ParseState *pstate,
-							 RangeMatchRecognize *rmc);
+static void transformRangeMatchRecognize(ParseState *pstate,
+										 RangeMatchRecognize *rmc,
+										 RangeTblEntry *rte);
 static Node *transformFromClauseItem(ParseState *pstate, Node *n,
 						RangeTblEntry **top_rte, int *top_rti,
 						List **namespace);
@@ -1077,26 +1078,55 @@ color(regex_t *regex)
 	}
 }
 
-static MatchRecognizeClause *
-transformRangeMatchRecognize(ParseState *pstate, RangeMatchRecognize *rmc)
+static void
+transformRangeMatchRecognize(ParseState *pstate, RangeMatchRecognize *rmc,
+							 RangeTblEntry *rte)
 {
 	MatchRecognizeClause *match_recognize;
 	List	*orderClause;
 	List	*partitionClause;
-	List	*targetlist = NIL;
+	List	*targetList = NIL;
+	List	*defineList = NIL;
+	ListCell	*lc;
 
-	orderClause = transformSortClause(pstate,
-									  rmc->orderClause,
-									  &targetlist,
-									  EXPR_KIND_MATCH_RECOGNIZE_ORDER,
-									  true);
-	partitionClause = transformGroupClause(pstate,
-										   rmc->orderClause,
-										   NULL,
-										   &targetlist,
-										   orderClause,
-										   EXPR_KIND_MATCH_RECOGNIZE_PARTITION,
-										   true);
+	match_recognize = makeNode(MatchRecognizeClause);
+
+	/* PARTITION clause */
+	match_recognize->orderClause = transformSortClause(pstate,
+													   rmc->orderClause,
+													   &targetList,
+													   EXPR_KIND_MATCH_RECOGNIZE_ORDER,
+													   true);
+	/* ORDER BY clause */
+	match_recognize->partitionClause = transformGroupClause(pstate,
+															rmc->orderClause,
+															NULL,
+															&targetList,
+															orderClause,
+															EXPR_KIND_MATCH_RECOGNIZE_PARTITION,
+															true);
+
+	/* MEASURES clause */
+	foreach (lc, rmc->measuresClause)
+	{
+		ResTarget *res = (ResTarget *) lfirst(lc);
+
+		targetList = lappend(targetList,
+							 transformTargetEntry(pstate,
+												  res->val,
+												  NULL,
+												  EXPR_KIND_MATCH_RECOGNIZE_MEASURES_TARGET,
+												  res->name,
+												  false));
+		rte->eref->colnames = lappend(rte->eref->colnames, makeString(res->name));
+	}
+	match_recognize->targetList = targetList;
+
+	/* PER MATCH options */
+	match_recognize->permatchOption = 0;
+
+	/* PATTERN clause */
+	match_recognize->patternClause = rmc->patternClause;
 
 	/* TESTING REGEXPR */
 	{
@@ -1128,9 +1158,22 @@ transformRangeMatchRecognize(ParseState *pstate, RangeMatchRecognize *rmc)
 		color(&regex);
 	}
 
-	match_recognize = makeNode(MatchRecognizeClause);
+	/* DEFINE clause */
+	foreach (lc, rmc->defineClause)
+	{
+		ResTarget *res = (ResTarget *) lfirst(lc);
 
-	return match_recognize;
+		defineList = lappend(defineList,
+							 transformTargetEntry(pstate,
+												  res->val,
+												  NULL,
+												  EXPR_KIND_MATCH_RECOGNIZE_DEFINE,
+												  res->name,
+												  false));
+	}
+	match_recognize->defineClause = defineList;
+
+	rte->matchrecognize = match_recognize;
 }
 
 /*
@@ -1302,6 +1345,7 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		Node	*rel;
 		RangeTblRef *rtr;
 		RangeTblEntry *rte;
+		List *save_namespace;
 
 		rel = transformFromClauseItem(pstate, rmc->relation,
 									  top_rte, top_rti, namespace);
@@ -1309,7 +1353,15 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		rtr = castNode(RangeTblRef, rel);
 		rte = rt_fetch(rtr->rtindex, pstate->p_rtable);
 
-		rte->matchrecognize = transformRangeMatchRecognize(pstate, rmc);
+		/*
+		 * Add target list and information for match recognize.
+		 */
+		save_namespace = pstate->p_namespace;
+		pstate->p_namespace = namespace;
+
+		transformRangeMatchRecognize(pstate, rmc, rte);
+
+		pstate->p_namespace = save_namespace;
 
 		elog(ERROR, "Ok, In transformFromClauseItem");
 		return (Node *) rtr;
