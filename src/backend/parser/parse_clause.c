@@ -1316,7 +1316,7 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		 * Add target list and information for match recognize.
 		 */
 		save_namespace = pstate->p_namespace;
-		pstate->p_namespace = namespace;
+		pstate->p_namespace = *namespace;
 
 		transformRangeMatchRecognize(pstate, rmc, rte);
 
