@@ -1159,9 +1159,10 @@ typedef struct MatchRecognizeClause
 	NodeTag		type;
 	List		*partitionClause;
 	List		*orderClause;
-	List		*measuresClause;
+	List		*targetList;
+	//List		*measuresClause;
 	int			permatchOption;
-	List		*patternClause;
+	char		*patternClause;
 	List		*defineClause;
 } MatchRecognizeClause;
 
