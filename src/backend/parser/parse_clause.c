@@ -1092,19 +1092,22 @@ transformRangeMatchRecognize(ParseState *pstate, RangeMatchRecognize *rmc,
 	match_recognize = makeNode(MatchRecognizeClause);
 
 	/* PARTITION clause */
-	match_recognize->orderClause = transformSortClause(pstate,
-													   rmc->orderClause,
-													   &targetList,
-													   EXPR_KIND_MATCH_RECOGNIZE_ORDER,
-													   true);
+	orderClause = transformSortClause(pstate,
+									  rmc->orderClause,
+									  &targetList,
+									  EXPR_KIND_MATCH_RECOGNIZE_ORDER,
+									  true);
+	match_recognize->orderClause = orderClause;
+
 	/* ORDER BY clause */
-	match_recognize->partitionClause = transformGroupClause(pstate,
-															rmc->orderClause,
-															NULL,
-															&targetList,
-															orderClause,
-															EXPR_KIND_MATCH_RECOGNIZE_PARTITION,
-															true);
+	partitionClause = transformGroupClause(pstate,
+										   rmc->partitionClause,
+										   NULL,
+										   &targetList,
+										   orderClause,
+										   EXPR_KIND_MATCH_RECOGNIZE_PARTITION,
+										   true);
+	match_recognize->partitionClause = partitionClause;
 
 	/* MEASURES clause */
 	foreach (lc, rmc->measuresClause)
