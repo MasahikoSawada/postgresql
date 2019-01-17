@@ -308,6 +308,9 @@ set_base_rel_pathlists(PlannerInfo *root)
 			continue;
 
 		set_rel_pathlist(root, rel, rti, root->simple_rte_array[rti]);
+
+		if (root->simple_rte_array[rti]->matchrecognize != NULL)
+			elog(NOTICE, "set base rel path list for match_recognize");
 	}
 }
 

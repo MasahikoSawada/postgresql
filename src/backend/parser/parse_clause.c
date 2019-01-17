@@ -1243,7 +1243,7 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 
 		pstate->p_namespace = save_namespace;
 
-		elog(ERROR, "Ok, In transformFromClauseItem");
+		//elog(ERROR, "Ok, In transformFromClauseItem");
 
 		return (Node *) rtr;
 		/*
@@ -3771,6 +3771,9 @@ transformRangeMatchRecognize(ParseState *pstate, RangeMatchRecognize *rmc,
 	List	*targetList = NIL;
 	List	*defineList = NIL;
 	ListCell	*lc;
+	int	save_next_resno;
+
+	save_next_resno = pstate->p_next_resno;
 
 	match_recognize = makeNode(MatchRecognizeClause);
 
@@ -3804,7 +3807,6 @@ transformRangeMatchRecognize(ParseState *pstate, RangeMatchRecognize *rmc,
 												  EXPR_KIND_MATCH_RECOGNIZE_MEASURES_TARGET,
 												  res->name,
 												  false));
-		rte->eref->colnames = lappend(rte->eref->colnames, makeString(res->name));
 	}
 	match_recognize->targetList = targetList;
 
@@ -3814,6 +3816,7 @@ transformRangeMatchRecognize(ParseState *pstate, RangeMatchRecognize *rmc,
 	/* PATTERN clause */
 	match_recognize->patternClause = rmc->patternClause;
 
+	pstate->p_next_resno = 1;
 	/* TESTING REGEXPR */
 	{
 		regex_t regex;
@@ -3823,11 +3826,10 @@ transformRangeMatchRecognize(ParseState *pstate, RangeMatchRecognize *rmc,
 		int			pattern_len;
 
 		elog(NOTICE, "PATTERN String \"%s\"", rmc->patternClause);
-		pattern = (pg_wchar *) palloc(strlen(rmc->patternClause) * sizeof(pg_wchar));
+		pattern = (pg_wchar *) palloc((strlen(rmc->patternClause) + 1) * sizeof(pg_wchar));
 		pattern_len = pg_mb2wchar_with_len(rmc->patternClause,
 										   pattern,
 										   strlen(rmc->patternClause));
-
 		regcomp_result = pg_regcomp(&regex,
 									pattern,
 									pattern_len,
@@ -3842,10 +3844,12 @@ transformRangeMatchRecognize(ParseState *pstate, RangeMatchRecognize *rmc,
 					 errmsg("invalid regular expression: %s", errMsg)));
 		}
 
+
 		color(&regex);
 	}
 
 	/* DEFINE clause */
+	pstate->p_next_resno = 1;
 	foreach (lc, rmc->defineClause)
 	{
 		ResTarget *res = (ResTarget *) lfirst(lc);
@@ -3861,5 +3865,8 @@ transformRangeMatchRecognize(ParseState *pstate, RangeMatchRecognize *rmc,
 	match_recognize->defineClause = defineList;
 
 	rte->matchrecognize = match_recognize;
+
+	/* restore */
+	pstate->p_next_resno = save_next_resno;
 }
 
