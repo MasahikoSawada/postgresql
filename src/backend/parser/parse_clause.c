@@ -1056,129 +1056,6 @@ transformRangeTableSample(ParseState *pstate, RangeTableSample *rts)
 	return tablesample;
 }
 
-static void
-color(regex_t *regex)
-{
-	int colorsCount = pg_reg_getnumcolors(regex);
-
-	for (int i = 0; i < colorsCount; i++)
-	{
-		int charsCount = pg_reg_getnumcharacters(regex, i);
-		pg_wchar	*chars;
-		char buf[8192] = {'\0'};
-
-		if (charsCount < 0)
-			continue;
-
-		chars = (pg_wchar *) palloc(sizeof(pg_wchar) * charsCount);
-		pg_reg_getcharacters(regex, i, chars, charsCount);
-
-		pg_wchar2mb(chars, buf);
-		elog(NOTICE, "%s", buf);
-	}
-}
-
-static void
-transformRangeMatchRecognize(ParseState *pstate, RangeMatchRecognize *rmc,
-							 RangeTblEntry *rte)
-{
-	MatchRecognizeClause *match_recognize;
-	List	*orderClause;
-	List	*partitionClause;
-	List	*targetList = NIL;
-	List	*defineList = NIL;
-	ListCell	*lc;
-
-	match_recognize = makeNode(MatchRecognizeClause);
-
-	/* PARTITION clause */
-	orderClause = transformSortClause(pstate,
-									  rmc->orderClause,
-									  &targetList,
-									  EXPR_KIND_MATCH_RECOGNIZE_ORDER,
-									  true);
-	match_recognize->orderClause = orderClause;
-
-	/* ORDER BY clause */
-	partitionClause = transformGroupClause(pstate,
-										   rmc->partitionClause,
-										   NULL,
-										   &targetList,
-										   orderClause,
-										   EXPR_KIND_MATCH_RECOGNIZE_PARTITION,
-										   true);
-	match_recognize->partitionClause = partitionClause;
-
-	/* MEASURES clause */
-	foreach (lc, rmc->measuresClause)
-	{
-		ResTarget *res = (ResTarget *) lfirst(lc);
-
-		targetList = lappend(targetList,
-							 transformTargetEntry(pstate,
-												  res->val,
-												  NULL,
-												  EXPR_KIND_MATCH_RECOGNIZE_MEASURES_TARGET,
-												  res->name,
-												  false));
-		rte->eref->colnames = lappend(rte->eref->colnames, makeString(res->name));
-	}
-	match_recognize->targetList = targetList;
-
-	/* PER MATCH options */
-	match_recognize->permatchOption = 0;
-
-	/* PATTERN clause */
-	match_recognize->patternClause = rmc->patternClause;
-
-	/* TESTING REGEXPR */
-	{
-		regex_t regex;
-		int		regcomp_result;
-		char	errMsg[100];
-		pg_wchar	*pattern;
-		int			pattern_len;
-
-		pattern = (pg_wchar *) palloc(strlen(rmc->patternClause) * sizeof(pg_wchar));
-		pattern_len = pg_mb2wchar_with_len(rmc->patternClause,
-										   pattern,
-										   strlen(rmc->patternClause));
-
-		regcomp_result = pg_regcomp(&regex,
-									pattern,
-									pattern_len,
-									REG_BASIC,
-									DEFAULT_COLLATION_OID);
-
-		if (regcomp_result != REG_OKAY)
-		{
-			pg_regerror(regcomp_result, &regex, errMsg, sizeof(errMsg));
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_REGULAR_EXPRESSION),
-					 errmsg("invalid regular expression: %s", errMsg)));
-		}
-
-		color(&regex);
-	}
-
-	/* DEFINE clause */
-	foreach (lc, rmc->defineClause)
-	{
-		ResTarget *res = (ResTarget *) lfirst(lc);
-
-		defineList = lappend(defineList,
-							 transformTargetEntry(pstate,
-												  res->val,
-												  NULL,
-												  EXPR_KIND_MATCH_RECOGNIZE_DEFINE,
-												  res->name,
-												  false));
-	}
-	match_recognize->defineClause = defineList;
-
-	rte->matchrecognize = match_recognize;
-}
-
 /*
  * getRTEForSpecialRelationTypes
  *
@@ -1367,6 +1244,7 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		pstate->p_namespace = save_namespace;
 
 		elog(ERROR, "Ok, In transformFromClauseItem");
+
 		return (Node *) rtr;
 		/*
 		Node	*rel;
@@ -3853,3 +3731,135 @@ transformFrameOffset(ParseState *pstate, int frameOptions,
 
 	return node;
 }
+
+/***********************************************************
+ * MATCH_RECOGNIZE test functions
+ ***********************************************************/
+
+static void
+color(regex_t *regex)
+{
+	int colorsCount = pg_reg_getnumcolors(regex);
+
+
+	elog(NOTICE, "-------- MR color info --------");
+	for (int i = 0; i < colorsCount; i++)
+	{
+		int charsCount = pg_reg_getnumcharacters(regex, i);
+		pg_wchar	*chars;
+		char buf[8192] = {'\0'};
+
+		if (charsCount < 0)
+			continue;
+
+		chars = (pg_wchar *) palloc(sizeof(pg_wchar) * charsCount);
+		pg_reg_getcharacters(regex, i, chars, charsCount);
+
+		pg_wchar2mb(chars, buf);
+		elog(NOTICE, "%s", buf);
+	}
+	elog(NOTICE, "-------------------------------");
+}
+
+static void
+transformRangeMatchRecognize(ParseState *pstate, RangeMatchRecognize *rmc,
+							 RangeTblEntry *rte)
+{
+	MatchRecognizeClause *match_recognize;
+	List	*orderClause;
+	List	*partitionClause;
+	List	*targetList = NIL;
+	List	*defineList = NIL;
+	ListCell	*lc;
+
+	match_recognize = makeNode(MatchRecognizeClause);
+
+	/* PARTITION clause */
+	orderClause = transformSortClause(pstate,
+									  rmc->orderClause,
+									  &targetList,
+									  EXPR_KIND_MATCH_RECOGNIZE_ORDER,
+									  true);
+	match_recognize->orderClause = orderClause;
+
+	/* ORDER BY clause */
+	partitionClause = transformGroupClause(pstate,
+										   rmc->partitionClause,
+										   NULL,
+										   &targetList,
+										   orderClause,
+										   EXPR_KIND_MATCH_RECOGNIZE_PARTITION,
+										   true);
+	match_recognize->partitionClause = partitionClause;
+
+	/* MEASURES clause */
+	foreach (lc, rmc->measuresClause)
+	{
+		ResTarget *res = (ResTarget *) lfirst(lc);
+
+		targetList = lappend(targetList,
+							 transformTargetEntry(pstate,
+												  res->val,
+												  NULL,
+												  EXPR_KIND_MATCH_RECOGNIZE_MEASURES_TARGET,
+												  res->name,
+												  false));
+		rte->eref->colnames = lappend(rte->eref->colnames, makeString(res->name));
+	}
+	match_recognize->targetList = targetList;
+
+	/* PER MATCH options */
+	match_recognize->permatchOption = 0;
+
+	/* PATTERN clause */
+	match_recognize->patternClause = rmc->patternClause;
+
+	/* TESTING REGEXPR */
+	{
+		regex_t regex;
+		int		regcomp_result;
+		char	errMsg[100];
+		pg_wchar	*pattern;
+		int			pattern_len;
+
+		elog(NOTICE, "PATTERN String \"%s\"", rmc->patternClause);
+		pattern = (pg_wchar *) palloc(strlen(rmc->patternClause) * sizeof(pg_wchar));
+		pattern_len = pg_mb2wchar_with_len(rmc->patternClause,
+										   pattern,
+										   strlen(rmc->patternClause));
+
+		regcomp_result = pg_regcomp(&regex,
+									pattern,
+									pattern_len,
+									REG_BASIC,
+									DEFAULT_COLLATION_OID);
+
+		if (regcomp_result != REG_OKAY)
+		{
+			pg_regerror(regcomp_result, &regex, errMsg, sizeof(errMsg));
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_REGULAR_EXPRESSION),
+					 errmsg("invalid regular expression: %s", errMsg)));
+		}
+
+		color(&regex);
+	}
+
+	/* DEFINE clause */
+	foreach (lc, rmc->defineClause)
+	{
+		ResTarget *res = (ResTarget *) lfirst(lc);
+
+		defineList = lappend(defineList,
+							 transformTargetEntry(pstate,
+												  res->val,
+												  NULL,
+												  EXPR_KIND_MATCH_RECOGNIZE_DEFINE,
+												  res->name,
+												  false));
+	}
+	match_recognize->defineClause = defineList;
+
+	rte->matchrecognize = match_recognize;
+}
+
