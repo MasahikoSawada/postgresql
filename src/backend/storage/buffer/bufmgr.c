@@ -880,10 +880,10 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			 * Copy an empty page to encrypt and write. Note that since the page header of the
 			 * bufBlock in invalid we cannot use PageGetTempPageCopy() here.
 			 */
-			blockToWrite = palloc(BLCKSZ);
-			MemSet((char *) blockToWrite, 0, BLCKSZ);
-			smgrencrypt(smgr, forkNum, blockNum,
-						(char *) blockToWrite, (char *) blockToWrite, key);
+			//blockToWrite = palloc(BLCKSZ);
+			//MemSet((char *) blockToWrite, 0, BLCKSZ);
+			//smgrencrypt(smgr, forkNum, blockNum,
+			//			(char *) blockToWrite, (char *) blockToWrite, key);
 			encrypted = true;
 		}
 
