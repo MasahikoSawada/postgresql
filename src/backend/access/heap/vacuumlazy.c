@@ -112,7 +112,12 @@
 
 typedef struct LVRelStats
 {
-	/* hasindex = true means two-pass strategy; false means one-pass */
+	/*
+	 * hasindex = true means two-pass strategy; false means one-pass.
+	 *
+	 * If DISABLE_INDEX_CLEANUP is used, hasindex may still be true,
+	 * but we'll always use the one-pass strategy.
+	 */
 	bool		hasindex;
 	/* Overall statistics about rel */
 	BlockNumber old_rel_pages;	/* previous value of pg_class.relpages */
@@ -125,6 +130,8 @@ typedef struct LVRelStats
 	double		new_rel_tuples; /* new estimated total # of tuples */
 	double		new_live_tuples;	/* new estimated total # of live tuples */
 	double		new_dead_tuples;	/* new estimated total # of dead tuples */
+	double		nleft_dead_tuples;	/* # of dead tuples we left */
+	double		nleft_dead_itemids;	/* # of dead item pointers we left */
 	BlockNumber pages_removed;
 	double		tuples_deleted;
 	BlockNumber nonempty_pages; /* actually, last nonempty page + 1 */
@@ -167,7 +174,8 @@ static bool should_attempt_truncation(LVRelStats *vacrelstats);
 static void lazy_truncate_heap(Relation onerel, LVRelStats *vacrelstats);
 static BlockNumber count_nondeletable_pages(Relation onerel,
 						 LVRelStats *vacrelstats);
-static void lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks);
+static void lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks,
+							 bool skip_index_vacuum);
 static void lazy_record_dead_tuple(LVRelStats *vacrelstats,
 					   ItemPointer itemptr);
 static bool lazy_tid_reaped(ItemPointer itemptr, void *state);
@@ -403,6 +411,9 @@ heap_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 							 vacrelstats->new_rel_tuples,
 							 vacrelstats->new_dead_tuples,
 							 OldestXmin);
+			appendStringInfo(&buf, "%.0f tuples and %.0f item identifiers are left as dead.\n",
+							 vacrelstats->nleft_dead_tuples,
+							 vacrelstats->nleft_dead_itemids);
 			appendStringInfo(&buf,
 							 _("buffer usage: %d hits, %d misses, %d dirtied\n"),
 							 VacuumPageHit,
@@ -485,13 +496,17 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 				live_tuples,	/* live tuples (reltuples estimate) */
 				tups_vacuumed,	/* tuples cleaned up by vacuum */
 				nkeep,			/* dead-but-not-removable tuples */
-				nunused;		/* unused item pointers */
+				nunused,		/* unused item pointers */
+				nleft_dead_tuples,		/* tuples we left as dead */
+				nleft_dead_itemids;		/* item pointers we left as dead,
+										 * includes nleft_dead_tuples. */
 	IndexBulkDeleteResult **indstats;
 	int			i;
 	PGRUsage	ru0;
 	Buffer		vmbuffer = InvalidBuffer;
 	BlockNumber next_unskippable_block;
 	bool		skipping_blocks;
+	bool		skip_index_vacuum = (options & VACOPT_DISABLE_INDEX_CLEANUP) != 0;
 	xl_heap_freeze_tuple *frozen;
 	StringInfoData buf;
 	const int	initprog_index[] = {
@@ -517,7 +532,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 
 	empty_pages = vacuumed_pages = 0;
 	next_fsm_block_to_vacuum = (BlockNumber) 0;
-	num_tuples = live_tuples = tups_vacuumed = nkeep = nunused = 0;
+	num_tuples = live_tuples = tups_vacuumed  = nkeep = nunused =
+		nleft_dead_itemids = nleft_dead_tuples = 0;
 
 	indstats = (IndexBulkDeleteResult **)
 		palloc0(nindexes * sizeof(IndexBulkDeleteResult *));
@@ -529,7 +545,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	vacrelstats->nonempty_pages = 0;
 	vacrelstats->latestRemovedXid = InvalidTransactionId;
 
-	lazy_space_alloc(vacrelstats, nblocks);
+	lazy_space_alloc(vacrelstats, nblocks, skip_index_vacuum);
 	frozen = palloc(sizeof(xl_heap_freeze_tuple) * MaxHeapTuplesPerPage);
 
 	/* Report that we're scanning the heap, advertising total # of blocks */
@@ -721,6 +737,9 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 				PROGRESS_VACUUM_NUM_INDEX_VACUUMS
 			};
 			int64		hvp_val[2];
+
+			/* Index vacuum must be enabled in two-pass vacuum */
+			Assert(!skip_index_vacuum);
 
 			/*
 			 * Before beginning index vacuuming, we release any pin we may
@@ -1054,7 +1073,16 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 						HeapTupleIsHeapOnly(&tuple))
 						nkeep += 1;
 					else
+					{
 						tupgone = true; /* we can delete the tuple */
+
+						/*
+						 * Since the dead tuples will be not be vacuumed
+						 * and ignored when index vacuum is disabled we
+						 * count them for reporting.
+						 */
+						nleft_dead_tuples++;
+					}
 					all_visible = false;
 					break;
 				case HEAPTUPLE_LIVE:
@@ -1206,15 +1234,33 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		}
 
 		/*
-		 * If there are no indexes then we can vacuum the page right now
-		 * instead of doing a second scan.
+		 * If there are no indexes or index vacuum is disabled we can
+		 * vacuum the page right now instead of doing a second scan.
 		 */
-		if (nindexes == 0 &&
+		if ((nindexes == 0 || skip_index_vacuum) &&
 			vacrelstats->num_dead_tuples > 0)
 		{
-			/* Remove tuples from heap */
-			lazy_vacuum_page(onerel, blkno, buf, 0, vacrelstats, &vmbuffer);
-			has_dead_tuples = false;
+			if (nindexes == 0)
+			{
+				/* Remove tuples from heap if the table has no index */
+				lazy_vacuum_page(onerel, blkno, buf, 0, vacrelstats, &vmbuffer);
+				vacuumed_pages++;
+				has_dead_tuples = false;
+			}
+			else
+			{
+				/*
+				 * Here, we have indexes but index vacuum is disabled. Instead of
+				 * vacuuming the dead tuples on the heap, we just forget them.
+				 *
+				 * Note that vacrelstats->dead_tuples could have tuples which
+				 * became dead after HOT-pruning but are not marked dead yet.
+				 * We do not process them because it's a very rare condition, and
+				 * the next vacuum will process them anyway.
+				 */
+				Assert(skip_index_vacuum);
+				nleft_dead_itemids += vacrelstats->num_dead_tuples;
+			}
 
 			/*
 			 * Forget the now-vacuumed tuples, and press on, but be careful
@@ -1222,7 +1268,6 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			 * valid.
 			 */
 			vacrelstats->num_dead_tuples = 0;
-			vacuumed_pages++;
 
 			/*
 			 * Periodically do incremental FSM vacuuming to make newly-freed
@@ -1348,7 +1393,9 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 
 	/* save stats for use later */
 	vacrelstats->tuples_deleted = tups_vacuumed;
-	vacrelstats->new_dead_tuples = nkeep;
+	vacrelstats->new_dead_tuples = nkeep + nleft_dead_tuples;
+	vacrelstats->nleft_dead_tuples = nleft_dead_tuples;
+	vacrelstats->nleft_dead_itemids = nleft_dead_itemids;
 
 	/* now we can compute the new value for pg_class.reltuples */
 	vacrelstats->new_live_tuples = vac_estimate_reltuples(onerel,
@@ -1378,6 +1425,9 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			PROGRESS_VACUUM_NUM_INDEX_VACUUMS
 		};
 		int64		hvp_val[2];
+
+		/* Index vacuum must be enabled in two-pass vacuum */
+		Assert(!skip_index_vacuum);
 
 		/* Log cleanup info before we touch indexes */
 		vacuum_log_cleanup_info(onerel, vacrelstats);
@@ -1417,10 +1467,14 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 								 PROGRESS_VACUUM_PHASE_INDEX_CLEANUP);
 
 	/* Do post-vacuum cleanup and statistics update for each index */
-	for (i = 0; i < nindexes; i++)
-		lazy_cleanup_index(Irel[i], indstats[i], vacrelstats);
+	if (!skip_index_vacuum)
+		for (i = 0; i < nindexes; i++)
+			lazy_cleanup_index(Irel[i], indstats[i], vacrelstats);
 
-	/* If no indexes, make log report that lazy_vacuum_heap would've made */
+	/*
+	 * If no index or index vacuum is disabled, make log report that
+	 * lazy_vacuum_heap would've make.
+	 */
 	if (vacuumed_pages)
 		ereport(elevel,
 				(errmsg("\"%s\": removed %.0f row versions in %u pages",
@@ -1449,6 +1503,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 									"%u pages are entirely empty.\n",
 									empty_pages),
 					 empty_pages);
+	appendStringInfo(&buf, "%.0f tuples and %.0f item identifiers are left as dead.\n",
+					 nleft_dead_tuples, nleft_dead_itemids);
 	appendStringInfo(&buf, _("%s."), pg_rusage_show(&ru0));
 
 	ereport(elevel,
@@ -2085,14 +2141,15 @@ count_nondeletable_pages(Relation onerel, LVRelStats *vacrelstats)
  * See the comments at the head of this file for rationale.
  */
 static void
-lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks)
+lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks,
+				 bool skip_index_vacuum)
 {
 	long		maxtuples;
 	int			vac_work_mem = IsAutoVacuumWorkerProcess() &&
 	autovacuum_work_mem != -1 ?
 	autovacuum_work_mem : maintenance_work_mem;
 
-	if (vacrelstats->hasindex)
+	if (vacrelstats->hasindex && !skip_index_vacuum)
 	{
 		maxtuples = (vac_work_mem * 1024L) / sizeof(ItemPointerData);
 		maxtuples = Min(maxtuples, INT_MAX);

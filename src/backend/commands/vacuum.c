@@ -203,7 +203,8 @@ vacuum(int options, List *relations, VacuumParams *params,
 						stmttype)));
 
 	/*
-	 * Sanity check DISABLE_PAGE_SKIPPING option.
+	 * Sanity check DISABLE_PAGE_SKIPPING option and DISABLE_INDEX_CLEANUP
+	 * option.
 	 */
 	if ((options & VACOPT_FULL) != 0 &&
 		(options & VACOPT_DISABLE_PAGE_SKIPPING) != 0)
@@ -211,6 +212,11 @@ vacuum(int options, List *relations, VacuumParams *params,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("VACUUM option DISABLE_PAGE_SKIPPING cannot be used with FULL")));
 
+	if ((options & VACOPT_FULL) != 0 &&
+		(options & VACOPT_DISABLE_INDEX_CLEANUP) != 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("VACUUM option DISABLE_INDEX_CLEANUP cannot be used with FULL")));
 	/*
 	 * Send info about dead objects to the statistics collector, unless we are
 	 * in autovacuum --- autovacuum.c does this for itself.
@@ -1670,6 +1676,13 @@ vacuum_rel(Oid relid, RangeVar *relation, int options, VacuumParams *params)
 	 */
 	onerelid = onerel->rd_lockInfo.lockRelId;
 	LockRelationIdForSession(&onerelid, lmode);
+
+	/*
+	 * Disables index cleanup based on reloptions.
+	 */
+	if (onerel->rd_options &&
+		!((StdRdOptions *) onerel->rd_options)->vacuum_index_cleanup)
+		options |= VACOPT_DISABLE_INDEX_CLEANUP;
 
 	/*
 	 * Remember the relation's TOAST relation for later, if the caller asked

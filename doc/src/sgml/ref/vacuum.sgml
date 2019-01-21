@@ -31,6 +31,7 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
     VERBOSE
     ANALYZE
     DISABLE_PAGE_SKIPPING
+    DISABLE_INDEX_CLEANUP
     SKIP_LOCKED
 
 <phrase>and <replaceable class="parameter">table_and_columns</replaceable> is:</phrase>
@@ -161,7 +162,26 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
     </listitem>
    </varlistentry>
 
-   <varlistentry>
+    <varlistentry>
+    <term><literal>DISABLE_INDEX_CLEANUP</literal></term>
+    <listitem>
+     <para>
+      <command>VACUUM</command> removes dead tuples and prunes HOT-updated
+      tuples chain for live tuples on table. If the table has any dead tuple
+      it removes them from both the table and its indexes and marks the
+      corresponding item identifers as available for re-use. With this option
+      <command>VACUUM</command> still removes dead tuples from the table, but
+      it does not process any indexes, and the item identifers are marked as
+      dead instead of available. This is suitable for avoiding transaction
+      ID wraparound (see <xref linkend="vacuum-for-wraparound"/>) but not
+      sufficient for avoiding index bloat. This option is ignored if the
+      table does not have index. This cannot be used in conjunction with
+      <literal>FULL</literal> option.
+     </para>
+    </listitem>
+   </varlistentry>
+
+    <varlistentry>
     <term><literal>SKIP_LOCKED</literal></term>
     <listitem>
      <para>
@@ -258,6 +278,13 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
     physically shrink to occupy less disk space and allow faster table
     scans. <command>VACUUM FULL</command> will usually shrink the table
     more than a plain <command>VACUUM</command> would.
+   </para>
+
+   <para>
+    Setting a values for <literal>vacuum_index_cleanup</literal> via
+    <xref linkend="sql-altertable"/> also enables and disables index cleanup.
+    The <literal>DISABLE_INDEX_CLEANUP</literal> options to
+    <command>VACUUM</command> takes precedence over this option.
    </para>
 
    <para>
