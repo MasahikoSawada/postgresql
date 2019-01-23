@@ -223,6 +223,18 @@ PostgreSQL documentation
          <productname>PostgreSQL</productname> 9.6 and later.
         </para>
        </note>
+      <term><option>-P <replaceable class="parameter">workers</replaceable></option></term>
+      <term><option>--parallel=<replaceable class="parameter">workers</replaceable></option></term>
+      <listitem>
+       <para>
+        Execute parallel vacuum with <productname>PostgreSQL</productname>'s
+        <replaceable class="parameter">workers</replaceable> background workers.
+       </para>
+       <para>
+        <application>vacuumdb</application> will require background workers,
+        so make sure your <xref linkend="guc-max-parallel-workers-maintenance"/>
+        setting is more than one.
+       </para>
       </listitem>
      </varlistentry>
 
