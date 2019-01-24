@@ -143,6 +143,12 @@ static bool apply_child_basequals(PlannerInfo *root, RelOptInfo *rel,
 					  RelOptInfo *childrel,
 					  RangeTblEntry *childRTE, AppendRelInfo *appinfo);
 
+static void set_rel_match_recognize(PlannerInfo *root);
+static MatchRecognizePath *create_match_recognize_path(PlannerInfo *root,
+													   RelOptInfo *rel,
+													   Path *subpath,
+													   PathTarget *target,
+													   MatchRecognizeClause mcclause);
 
 /*
  * make_one_rel
@@ -221,6 +227,9 @@ make_one_rel(PlannerInfo *root, List *joinlist)
 	 * Generate access paths for each base rel.
 	 */
 	set_base_rel_pathlists(root);
+
+	/* Set MATCH_RECOGNIZE paths */
+	set_rel_match_recognize(root);
 
 	/*
 	 * Generate access paths for the entire join tree.
@@ -351,9 +360,6 @@ set_base_rel_pathlists(PlannerInfo *root)
 			continue;
 
 		set_rel_pathlist(root, rel, rti, root->simple_rte_array[rti]);
-
-		if (root->simple_rte_array[rti]->matchrecognize != NULL)
-			elog(NOTICE, "set base rel path list for match_recognize");
 	}
 }
 
@@ -4001,3 +4007,78 @@ debug_print_rel(PlannerInfo *root, RelOptInfo *rel)
 }
 
 #endif							/* OPTIMIZER_DEBUG */
+
+static void
+set_rel_match_recognize(PlannerInfo *root)
+{
+	RelOptInfo *rel;
+	Index		rti;
+	ListCell	*lc;
+
+	root->all_baserels = NULL;
+	for (rti = 1; rti < root->simple_rel_array_size; rti++)
+	{
+		RelOptInfo *rel = root->simple_rel_array[rti];
+		RangeTblEntry *rte = root->simple_rte_array[rti];
+		if (!rte->match_recognize)
+			continue;
+
+		/* @@@ need to save the various upper-rel PathTargtes? */
+
+		foreach (lc, rel->pathlist)
+		{
+			Path *path = (Path *) lfirst(lc);
+			RelOptInfo *mc_rel;
+			MatchRecognizeClause *mrc = rte->match_recognize;
+			List *sortClauses, pathkeys;
+
+			mc_rel = fetch_upper_rel(root, UPPERREL_MATCH_RECOGNIZE, NULL);
+
+			/* Create SortPath before match recognize path */
+			sortClauses = list_concat(list_copy(mrc->partitionClause),
+									  list_copy(mrc->orderClause));
+			pathkeys = make_pathkeys_for_sortclauses(root,
+													 sortClauses,
+													 root->processed_tlist);
+			list_free(sortClauses);
+			path = (Path *) create_sort_path(root, mc_rel,
+											 path, pathkeys,
+											 -1.0);
+
+			path = (Path *)
+				create_match_recognize_path(root, rc_rel, path,
+											mc_target);
+		}
+	}
+}
+
+static MatchRecognizePath *
+create_match_recognize_path(PlannerInfo *root,
+							RelOptInfo *rel,
+							Path *subpath,
+							PathTarget *target,
+							MatchRecognizeClause mcclause)
+{
+	MatchRecognizePath *pathnode = makeNode(MatchRecognizePath);
+
+	pathnode->path.pathtype = T_MatchRecognize;
+	pathnode->path.parent = rel;
+	pathnode->path.pathtaret = target;
+
+	pathnode->path.param_info = NULL;
+	pathnode->path.parallel_aware = false;
+	pathnode->path.parallel_safe = false;
+	pathnode->path.parallel_workers = 0;
+	pathnode->path.pathkeys = subpath->pathkeys;
+
+	pathnode->subpath = subpath;
+	pathnode->mcclause = mcclause;
+
+	/* @@@: set cost */
+
+	pathnode->path.startup_cost += target->cost.startup;
+	pathnode->path.total_cost += target->cost.startup +
+		target->cost.per_tuple * pathnode->path.rows;
+
+	return pathnode;
+}

@@ -3823,7 +3823,7 @@ transformRangeMatchRecognize(ParseState *pstate, RangeMatchRecognize *rmc,
 	}
 	match_recognize->defineClause = defineList;
 
-	rte->matchrecognize = match_recognize;
+	rte->match_recognize = match_recognize;
 
 	/* restore */
 	pstate->p_next_resno = save_next_resno;

@@ -1007,7 +1007,7 @@ typedef struct RangeTblEntry
 	char		relkind;		/* relation kind (see pg_class.relkind) */
 	int			rellockmode;	/* lock level that query requires on the rel */
 	struct TableSampleClause *tablesample;	/* sampling info, or NULL */
-	struct MatchRecognizeClause *matchrecognize;
+	struct MatchRecognizeClause *match_recognize;
 
 	/*
 	 * Fields valid for a subquery RTE (else NULL):
