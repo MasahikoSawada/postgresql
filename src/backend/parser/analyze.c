@@ -1273,6 +1273,22 @@ transformSelectStmt(ParseState *pstate, SelectStmt *stmt)
 											EXPR_KIND_GROUP_BY,
 											false /* allow SQL92 rules */ );
 
+	if (pstate->p_hasMatchRecognize)
+	{
+		ListCell *lc;
+
+		foreach (lc, pstate->p_rtable)
+		{
+			RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
+
+			if (rte->range_match_recognize)
+				transformRangeMatchRecognize(pstate,
+											 rte->range_match_recognize,
+											 &qry->targetList,
+											 rte);
+		}
+	}
+
 	if (stmt->distinctClause == NIL)
 	{
 		qry->distinctClause = NIL;

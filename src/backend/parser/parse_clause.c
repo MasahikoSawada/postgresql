@@ -78,9 +78,6 @@ static RangeTblEntry *transformRangeTableFunc(ParseState *pstate,
 						RangeTableFunc *t);
 static TableSampleClause *transformRangeTableSample(ParseState *pstate,
 						  RangeTableSample *rts);
-static void transformRangeMatchRecognize(ParseState *pstate,
-										 RangeMatchRecognize *rmc,
-										 RangeTblEntry *rte);
 static Node *transformFromClauseItem(ParseState *pstate, Node *n,
 						RangeTblEntry **top_rte, int *top_rti,
 						List **namespace);
@@ -1221,7 +1218,6 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 	else if (IsA(n, RangeMatchRecognize))
 	{
 		RangeMatchRecognize *rmc = (RangeMatchRecognize *) n;
-		MatchRecognizeClause *match_recognize;
 		Node	*rel;
 		RangeTblRef *rtr;
 		RangeTblEntry *rte;
@@ -1239,7 +1235,9 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		save_namespace = pstate->p_namespace;
 		pstate->p_namespace = *namespace;
 
-		transformRangeMatchRecognize(pstate, rmc, rte);
+		pstate->p_hasMatchRecognize = true;
+		rte->range_match_recognize = rmc;
+		//transformRangeMatchRecognize(pstate, rmc, rte);
 
 		pstate->p_namespace = save_namespace;
 
@@ -3761,14 +3759,16 @@ color(regex_t *regex)
 	elog(NOTICE, "-------------------------------");
 }
 
-static void
-transformRangeMatchRecognize(ParseState *pstate, RangeMatchRecognize *rmc,
+void
+transformRangeMatchRecognize(ParseState *pstate,
+							 RangeMatchRecognize *rmc,
+							 List **targetlist,
 							 RangeTblEntry *rte)
 {
 	MatchRecognizeClause *match_recognize;
 	List	*orderClause;
 	List	*partitionClause;
-	List	*targetList = NIL;
+	List	*measuresClause = NIL;
 	List	*defineList = NIL;
 	ListCell	*lc;
 	int	save_next_resno;
@@ -3780,7 +3780,7 @@ transformRangeMatchRecognize(ParseState *pstate, RangeMatchRecognize *rmc,
 	/* PARTITION clause */
 	orderClause = transformSortClause(pstate,
 									  rmc->orderClause,
-									  &targetList,
+									  targetlist,
 									  EXPR_KIND_MATCH_RECOGNIZE_ORDER,
 									  true);
 	match_recognize->orderClause = orderClause;
@@ -3789,7 +3789,7 @@ transformRangeMatchRecognize(ParseState *pstate, RangeMatchRecognize *rmc,
 	partitionClause = transformGroupClause(pstate,
 										   rmc->partitionClause,
 										   NULL,
-										   &targetList,
+										   targetlist,
 										   orderClause,
 										   EXPR_KIND_MATCH_RECOGNIZE_PARTITION,
 										   true);
@@ -3800,15 +3800,15 @@ transformRangeMatchRecognize(ParseState *pstate, RangeMatchRecognize *rmc,
 	{
 		ResTarget *res = (ResTarget *) lfirst(lc);
 
-		targetList = lappend(targetList,
-							 transformTargetEntry(pstate,
-												  res->val,
-												  NULL,
-												  EXPR_KIND_MATCH_RECOGNIZE_MEASURES_TARGET,
-												  res->name,
-												  false));
+		measuresClause = lappend(measuresClause,
+								 transformTargetEntry(pstate,
+													  res->val,
+													  NULL,
+													  EXPR_KIND_MATCH_RECOGNIZE_MEASURES_TARGET,
+													  res->name,
+													  false));
 	}
-	match_recognize->targetList = targetList;
+	match_recognize->measuresClause = measuresClause;
 
 	/* PER MATCH options */
 	match_recognize->permatchOption = 0;
@@ -3845,7 +3845,7 @@ transformRangeMatchRecognize(ParseState *pstate, RangeMatchRecognize *rmc,
 		}
 
 
-		color(&regex);
+		//color(&regex);
 	}
 
 	/* DEFINE clause */
@@ -3864,6 +3864,7 @@ transformRangeMatchRecognize(ParseState *pstate, RangeMatchRecognize *rmc,
 	}
 	match_recognize->defineClause = defineList;
 
+	/* Store transformed match recognize info */
 	rte->match_recognize = match_recognize;
 
 	/* restore */

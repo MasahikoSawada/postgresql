@@ -36,6 +36,11 @@ extern List *transformSortClause(ParseState *pstate, List *orderlist,
 extern List *transformWindowDefinitions(ParseState *pstate,
 						   List *windowdefs,
 						   List **targetlist);
+extern void transformRangeMatchRecognize(ParseState *pstate,
+										 RangeMatchRecognize *rmc,
+										 List **targetlist,
+										 RangeTblEntry *rte);
+
 
 extern List *transformDistinctClause(ParseState *pstate,
 						List **targetlist, List *sortClause, bool is_agg);

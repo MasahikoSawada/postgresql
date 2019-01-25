@@ -141,7 +141,7 @@ static MatchRecognizePath *create_match_recognize_path(PlannerInfo *root,
 													   RelOptInfo *rel,
 													   Path *subpath,
 													   PathTarget *target,
-													   MatchRecognizeClause mcclause);
+													   MatchRecognizeClause *mcclause);
 
 /*
  * make_one_rel
@@ -3894,44 +3894,48 @@ debug_print_rel(PlannerInfo *root, RelOptInfo *rel)
 static void
 set_rel_match_recognize(PlannerInfo *root)
 {
-	RelOptInfo *rel;
 	Index		rti;
 	ListCell	*lc;
 
-	root->all_baserels = NULL;
 	for (rti = 1; rti < root->simple_rel_array_size; rti++)
 	{
 		RelOptInfo *rel = root->simple_rel_array[rti];
 		RangeTblEntry *rte = root->simple_rte_array[rti];
-		if (!rte->match_recognize)
+		RelOptInfo *mr_rel;
+
+		if (rte->match_recognize == NULL)
 			continue;
 
 		/* @@@ need to save the various upper-rel PathTargtes? */
 
+		mr_rel = fetch_upper_rel(root, UPPERREL_MATCH_RECOGNIZE, NULL);
+
 		foreach (lc, rel->pathlist)
 		{
 			Path *path = (Path *) lfirst(lc);
-			RelOptInfo *mc_rel;
-			MatchRecognizeClause *mrc = rte->match_recognize;
-			List *sortClauses, pathkeys;
-
-			mc_rel = fetch_upper_rel(root, UPPERREL_MATCH_RECOGNIZE, NULL);
+			MatchRecognizeClause *mrclause = rte->match_recognize;
+			List *sortClauses, *pathkeys;
 
 			/* Create SortPath before match recognize path */
-			sortClauses = list_concat(list_copy(mrc->partitionClause),
-									  list_copy(mrc->orderClause));
+			sortClauses = list_concat(list_copy(mrclause->partitionClause),
+									  list_copy(mrclause->orderClause));
 			pathkeys = make_pathkeys_for_sortclauses(root,
 													 sortClauses,
 													 root->processed_tlist);
 			list_free(sortClauses);
-			path = (Path *) create_sort_path(root, mc_rel,
+			path = (Path *) create_sort_path(root, mr_rel,
 											 path, pathkeys,
 											 -1.0);
 
-			path = (Path *)
-				create_match_recognize_path(root, rc_rel, path,
-											mc_target);
+			/* Create MatchRecognizePath */
+			path = (Path *) create_match_recognize_path(root,
+														mr_rel,
+														path,
+														rel->reltarget,
+														mrclause);
 		}
+
+		set_cheapest(mr_rel);
 	}
 }
 
@@ -3940,13 +3944,13 @@ create_match_recognize_path(PlannerInfo *root,
 							RelOptInfo *rel,
 							Path *subpath,
 							PathTarget *target,
-							MatchRecognizeClause mcclause)
+							MatchRecognizeClause *mrclause)
 {
 	MatchRecognizePath *pathnode = makeNode(MatchRecognizePath);
 
 	pathnode->path.pathtype = T_MatchRecognize;
 	pathnode->path.parent = rel;
-	pathnode->path.pathtaret = target;
+	pathnode->path.pathtarget = target;
 
 	pathnode->path.param_info = NULL;
 	pathnode->path.parallel_aware = false;
@@ -3955,7 +3959,7 @@ create_match_recognize_path(PlannerInfo *root,
 	pathnode->path.pathkeys = subpath->pathkeys;
 
 	pathnode->subpath = subpath;
-	pathnode->mcclause = mcclause;
+	pathnode->mrclause = mrclause;
 
 	/* @@@: set cost */
 

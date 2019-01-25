@@ -1022,6 +1022,13 @@ _copyWindowAgg(const WindowAgg *from)
 }
 
 /*
+static MatchRecognize *
+_copyMatchRecognize(const MatchRecognize *from)
+{
+}
+*/
+
+/*
  * _copyUnique
  */
 static Unique *
@@ -2355,6 +2362,8 @@ _copyRangeTblEntry(const RangeTblEntry *from)
 	COPY_SCALAR_FIELD(relkind);
 	COPY_SCALAR_FIELD(rellockmode);
 	COPY_NODE_FIELD(tablesample);
+	COPY_NODE_FIELD(range_match_recognize);
+	COPY_NODE_FIELD(match_recognize);
 	COPY_NODE_FIELD(subquery);
 	COPY_SCALAR_FIELD(security_barrier);
 	COPY_SCALAR_FIELD(jointype);
@@ -2473,6 +2482,21 @@ _copyWindowClause(const WindowClause *from)
 	COPY_SCALAR_FIELD(inRangeNullsFirst);
 	COPY_SCALAR_FIELD(winref);
 	COPY_SCALAR_FIELD(copiedOrder);
+
+	return newnode;
+}
+
+static MatchRecognizeClause *
+_copyMatchRecognizeClause(const MatchRecognizeClause *from)
+{
+	MatchRecognizeClause *newnode = makeNode(MatchRecognizeClause);
+
+	COPY_NODE_FIELD(partitionClause);
+	COPY_NODE_FIELD(orderClause);
+	COPY_NODE_FIELD(measuresClause);
+	COPY_SCALAR_FIELD(permatchOption);
+	COPY_STRING_FIELD(patternClause);
+	COPY_NODE_FIELD(defineClause);
 
 	return newnode;
 }
@@ -2789,6 +2813,24 @@ _copyRangeTableSample(const RangeTableSample *from)
 
 	return newnode;
 }
+
+static RangeMatchRecognize *
+_copyRangeMatchRecognize(const RangeMatchRecognize *from)
+{
+	RangeMatchRecognize *newnode = makeNode(RangeMatchRecognize);
+
+	COPY_NODE_FIELD(relation);
+	COPY_NODE_FIELD(partitionClause);
+	COPY_NODE_FIELD(orderClause);
+	COPY_NODE_FIELD(measuresClause);
+	COPY_SCALAR_FIELD(permatchOption);
+	COPY_STRING_FIELD(patternClause);
+	COPY_NODE_FIELD(defineClause);
+	COPY_LOCATION_FIELD(location);
+
+	return newnode;
+}
+
 
 static RangeTableFunc *
 _copyRangeTableFunc(const RangeTableFunc *from)
@@ -4894,6 +4936,11 @@ copyObjectImpl(const void *from)
 		case T_WindowAgg:
 			retval = _copyWindowAgg(from);
 			break;
+			/*
+		case T_MatchRecognize:
+			retval = _copyMatchRecognize(from);
+			break;
+			*/
 		case T_Unique:
 			retval = _copyUnique(from);
 			break;
@@ -5558,6 +5605,9 @@ copyObjectImpl(const void *from)
 		case T_RangeTableFuncCol:
 			retval = _copyRangeTableFuncCol(from);
 			break;
+		case T_RangeMatchRecognize:
+			retval = _copyRangeMatchRecognize(from);
+			break;
 		case T_TypeName:
 			retval = _copyTypeName(from);
 			break;
@@ -5596,6 +5646,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_WindowClause:
 			retval = _copyWindowClause(from);
+			break;
+		case T_MatchRecognizeClause:
+			retval = _copyMatchRecognizeClause(from);
 			break;
 		case T_RowMarkClause:
 			retval = _copyRowMarkClause(from);

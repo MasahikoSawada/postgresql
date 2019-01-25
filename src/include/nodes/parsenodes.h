@@ -1006,6 +1006,7 @@ typedef struct RangeTblEntry
 	int			rellockmode;	/* lock level that query requires on the rel */
 	struct TableSampleClause *tablesample;	/* sampling info, or NULL */
 	struct MatchRecognizeClause *match_recognize;
+	RangeMatchRecognize *range_match_recognize;
 
 	/*
 	 * Fields valid for a subquery RTE (else NULL):
@@ -1157,8 +1158,7 @@ typedef struct MatchRecognizeClause
 	NodeTag		type;
 	List		*partitionClause;
 	List		*orderClause;
-	List		*targetList;
-	//List		*measuresClause;
+	List		*measuresClause;
 	int			permatchOption;
 	char		*patternClause;
 	List		*defineClause;
