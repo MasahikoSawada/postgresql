@@ -117,6 +117,7 @@ static SampleScan *create_samplescan_plan(PlannerInfo *root, Path *best_path,
 					   List *tlist, List *scan_clauses);
 static Scan *create_indexscan_plan(PlannerInfo *root, IndexPath *best_path,
 					  List *tlist, List *scan_clauses, bool indexonly);
+static MatchRecognize *create_match_recognize_plan(PlannerInfo *root, MatchRecognizePath *best_path);
 static BitmapHeapScan *create_bitmap_scan_plan(PlannerInfo *root,
 						BitmapHeapPath *best_path,
 						List *tlist, List *scan_clauses);
@@ -500,6 +501,10 @@ create_plan_recurse(PlannerInfo *root, Path *best_path, int flags)
 		case T_GatherMerge:
 			plan = (Plan *) create_gather_merge_plan(root,
 													 (GatherMergePath *) best_path);
+			break;
+		case T_MatchRecognize:
+			plan = (Plan *) create_match_recognize_plan(root,
+														(MatchRecognizePath *) best_path);
 			break;
 		default:
 			elog(ERROR, "unrecognized node type: %d",
@@ -6640,4 +6645,26 @@ is_projection_capable_plan(Plan *plan)
 			break;
 	}
 	return true;
+}
+
+static MatchRecognize *
+create_match_recognize_plan(PlannerInfo *root, MatchRecognizePath *best_path)
+{
+	MatchRecognize *node = makeNode(MatchRecognize);
+	Plan *plan = &node->plan;
+	Plan *subplan;
+	RangeTblEntry *rte;
+	Index scan_relid = ((Path *)best_path)->parent->relid;
+
+	subplan = create_plan_recurse(root, best_path->subpath, 0);
+
+	rte = planner_rt_fetch(scan_relid, root);
+
+	plan->targetlist = subplan->targetlist;
+	plan->lefttree = subplan;
+	plan->righttree = NULL;
+
+	node->match_recognize = &(rte->match_recognize);
+
+	return node;
 }
