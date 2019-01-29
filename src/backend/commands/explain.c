@@ -1219,6 +1219,9 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_Hash:
 			pname = sname = "Hash";
 			break;
+		case T_MatchRecognize:
+			pname = sname = "MatchRecognize";
+			break;
 		default:
 			pname = sname = "???";
 			break;

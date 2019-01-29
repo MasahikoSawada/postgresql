@@ -92,6 +92,7 @@
 #include "executor/nodeIndexscan.h"
 #include "executor/nodeLimit.h"
 #include "executor/nodeLockRows.h"
+#include "executor/nodeMatchRecognize.h"
 #include "executor/nodeMaterial.h"
 #include "executor/nodeMergeAppend.h"
 #include "executor/nodeMergejoin.h"
@@ -362,6 +363,10 @@ ExecInitNode(Plan *node, EState *estate, int eflags)
 		case T_Limit:
 			result = (PlanState *) ExecInitLimit((Limit *) node,
 												 estate, eflags);
+			break;
+		case T_MatchRecognize:
+			result = (PlanState *) ExecInitMatchRecognize((MatchRecognize *) node,
+														  estate, eflags);
 			break;
 
 		default:
@@ -724,6 +729,10 @@ ExecEndNode(PlanState *node)
 
 		case T_LimitState:
 			ExecEndLimit((LimitState *) node);
+			break;
+
+		case T_MatchRecognizeState:
+			ExecEndMatchRecognize((MatchRecognizeState *) node);
 			break;
 
 		default:

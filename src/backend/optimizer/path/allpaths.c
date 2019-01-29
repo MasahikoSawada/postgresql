@@ -142,6 +142,8 @@ static MatchRecognizePath *create_match_recognize_path(PlannerInfo *root,
 													   Path *subpath,
 													   PathTarget *target,
 													   MatchRecognizeClause *mcclause);
+static void set_match_recognize_pathlist(PlannerInfo *root, RelOptInfo *rel,
+										 RangeTblEntry *rte);
 
 /*
  * make_one_rel
@@ -186,7 +188,7 @@ make_one_rel(PlannerInfo *root, List *joinlist)
 	set_base_rel_pathlists(root);
 
 	/* Set MATCH_RECOGNIZE paths */
-	set_rel_match_recognize(root);
+	//set_rel_match_recognize(root);
 
 	/*
 	 * Generate access paths for the entire join tree.
@@ -458,7 +460,10 @@ set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 				else
 				{
 					/* Plain relation */
-					set_plain_rel_pathlist(root, rel, rte);
+					if (rte->match_recognize)
+						set_match_recognize_pathlist(root, rel, rte);
+					else
+						set_plain_rel_pathlist(root, rel, rte);
 				}
 				break;
 			case RTE_SUBQUERY:
@@ -3890,6 +3895,39 @@ debug_print_rel(PlannerInfo *root, RelOptInfo *rel)
 }
 
 #endif							/* OPTIMIZER_DEBUG */
+
+static void
+set_match_recognize_pathlist(PlannerInfo *root, RelOptInfo *rel,
+							 RangeTblEntry *rte)
+{
+	MatchRecognizeClause *mrclause = rte->match_recognize;
+	Path *path;
+	List *sortClauses, *pathkeys;
+	ListCell	*lc;
+
+	path = create_seqscan_path(root, rel, rel->lateral_relids, 0);
+
+	/* Create SortPath before match recognize path */
+	sortClauses = list_concat(list_copy(mrclause->partitionClause),
+							  list_copy(mrclause->orderClause));
+	pathkeys = make_pathkeys_for_sortclauses(root,
+											 sortClauses,
+											 root->processed_tlist);
+	list_free(sortClauses);
+
+	path = (Path *) create_sort_path(root, rel,
+									 path, pathkeys,
+									 -1.0);
+
+	/* Create MatchRecognizePath */
+	path = (Path *) create_match_recognize_path(root,
+												rel,
+												path,
+												rel->reltarget,
+												mrclause);
+	add_path(rel, path);
+	set_cheapest(rel);
+}
 
 static void
 set_rel_match_recognize(PlannerInfo *root)

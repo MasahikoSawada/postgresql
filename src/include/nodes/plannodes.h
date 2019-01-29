@@ -329,6 +329,12 @@ typedef struct BitmapOr
 	List	   *bitmapplans;
 } BitmapOr;
 
+typedef struct MatchRecognize
+{
+	Plan	plan;
+	struct MatchRecognizeclause *match_recognize;
+} MatchRecognize;
+
 /*
  * ==========
  * Scan nodes
