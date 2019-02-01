@@ -42,6 +42,7 @@ typedef struct vacuumingOptions
 	bool		full;
 	bool		freeze;
 	bool		disable_page_skipping;
+	bool		disable_index_cleanup;
 	bool		skip_locked;
 	int			min_xid_age;
 	int			min_mxid_age;
@@ -117,6 +118,7 @@ main(int argc, char *argv[])
 		{"skip-locked", no_argument, NULL, 5},
 		{"min-xid-age", required_argument, NULL, 6},
 		{"min-mxid-age", required_argument, NULL, 7},
+		{"disable-index-cleanup", no_argument, NULL, 8},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -244,6 +246,11 @@ main(int argc, char *argv[])
 					exit(1);
 				}
 				break;
+			case 8:
+				{
+					vacopts.disable_index_cleanup = true;
+					break;
+				}
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
 				exit(1);
@@ -286,6 +293,12 @@ main(int argc, char *argv[])
 		{
 			fprintf(stderr, _("%s: cannot use the \"%s\" option when performing only analyze\n"),
 					progname, "disable-page-skipping");
+			exit(1);
+		}
+		if (vacopts.disable_index_cleanup)
+		{
+			fprintf(stderr, _("%s: cannot use the \"%s\" option when performing only analyze\n"),
+					progname, "disable-index-cleanup");
 			exit(1);
 		}
 		/* allow 'and_analyze' with 'analyze_only' */
@@ -415,6 +428,14 @@ vacuum_one_database(const char *dbname, vacuumingOptions *vacopts,
 		PQfinish(conn);
 		fprintf(stderr, _("%s: cannot use the \"%s\" option on server versions older than PostgreSQL 9.6\n"),
 				progname, "disable-page-skipping");
+		exit(1);
+	}
+
+	if (vacopts->disable_index_cleanup && PQserverVersion(conn) < 120000)
+	{
+		PQfinish(conn);
+		fprintf(stderr, _("%s: cannot use the \"%s\" option on server versions older than PostgreSQL 12\n"),
+				progname, "disable-index-cleanup");
 		exit(1);
 	}
 
@@ -868,6 +889,13 @@ prepare_vacuum_command(PQExpBuffer sql, int serverVersion,
 				appendPQExpBuffer(sql, "%sDISABLE_PAGE_SKIPPING", sep);
 				sep = comma;
 			}
+			if (vacopts->disable_index_cleanup)
+			{
+				/* DISABLE_INDEX_CLEANUP is supported since 12 */
+				Assert(serverVersion >= 120000);
+				appendPQExpBuffer(sql, "%sDISABLE_INDEX_CLEANUP", sep);
+				sep = comma;
+			}
 			if (vacopts->skip_locked)
 			{
 				/* SKIP_LOCKED is supported since v12 */
@@ -1221,6 +1249,7 @@ help(const char *progname)
 	printf(_("  -a, --all                       vacuum all databases\n"));
 	printf(_("  -d, --dbname=DBNAME             database to vacuum\n"));
 	printf(_("      --disable-page-skipping     disable all page-skipping behavior\n"));
+	printf(_("      --disable-index-cleanup     disable index vacuuming and index cleanup\n"));
 	printf(_("  -e, --echo                      show the commands being sent to the server\n"));
 	printf(_("  -f, --full                      do full vacuuming\n"));
 	printf(_("  -F, --freeze                    freeze row transaction information\n"));
