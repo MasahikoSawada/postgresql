@@ -9579,7 +9579,7 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
    The view <structname>pg_prepared_fdw_xacts</structname> displays
    information about foreign transactions that are currently prepared on
    foreign servers for atomic distributed transaction commit (see
-   <xref linkend="fdw-transaction-managements"/> for details).
+   <xref linkend="atomic-commit"/> for details).
   </para>
 
   <para>
@@ -9622,7 +9622,7 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
       <entry><type>oid</type></entry>
       <entry><literal><link linkend="catalog-pg-foreign-server"><structname>pg_foreign_server</structname></link>.oid</literal></entry>
       <entry>
-       The OID of the foreign server that this foreign server is prepared
+       The OID of the foreign server on that the foreign transaction is prepared
       </entry>
      </row>
      <row>
@@ -9638,7 +9638,10 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
       <entry><type>text</type></entry>
       <entry></entry>
       <entry>
-       Status of foreign transaction: <literal>prepared</literal>, <literal>committing</literal>, <literal>aborting</literal> or <literal>unknown</literal>
+       Status of foreign transaction: <literal>preparing</literal>,
+       <literal>prepared</literal>, <literal>committing</literal>,
+       <literal>aborting</literal>, <literal>in-doubt</literal> or
+       <literal>unknown</literal>
       </entry>
      </row>
      <row>

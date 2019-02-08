@@ -8469,13 +8469,11 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
          distributed transaction if some foreign server crashes during committing the
          distributed transaction. When set to <literal>required</literal> the distributed
          transaction requires that all written servers can use two-phase commit protocol.
-         That is, the transaction fails if any of servers returns <literal>false</literal>
-         from <function>IsTwoPhaseCommitEnabled</function> or does not support transaction
-         management callback routines(described in
+         That is, the transaction fails if any of servers does not support the transaction
+         management callback routines (described in
          <xref linkend="fdw-callbacks-transaction-managements"/>).
-         When set to <literal>prefer</literal> the distributed transaction requires
-         two-phase commit protocol where available but without failing when it is not
-         available.
+         When set to <literal>prefer</literal> the distributed transaction use two-phase
+         commit protol on servers where available and commit on others.
         </para>
 
         <para>
@@ -8574,9 +8572,8 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
         <para>
          Terminate foreign transaction resolver processes that don't have any foreign
          transactions to resolve longer than the specified number of milliseconds.
-         A value of zero disables the timeout mechanism.  You should set this value to
-         zero only if you set <varname>max_foreign_transaction_resolvers</varname> as
-         much as databases you have. This parameter can only be set in the
+         A value of zero disables the timeout mechanism, meainig it connects to one
+         database until stopping manually. This parameter can only be set in the
          <filename>postgresql.conf</filename> file or on the server command line.
         </para>
         <para>
