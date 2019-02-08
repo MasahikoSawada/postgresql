@@ -1,7 +1,7 @@
 /*-------------------------------------------------------------------------
  *
  * fdwxact.c
- *		PostgreSQL distributed transaction manager for foreign servers.
+ *		PostgreSQL global transaction manager for foreign servers.
  *
  * To achieve commit among all foreign servers automically, we employee
  * two-phase commit protocol, which is a type of atomic commitment
@@ -9,15 +9,14 @@
  * transactions before committing locally and commit them after committing
  * locally.
  *
- * When a foreign data wrapper starts transaction on a foreign server that
- * is capable of two-phase commit protocol, foreign data wrappers registers
- * the foreign transaction using function either RegisterFdwXactByRelId() or
- * RegisterFdwXactByServerId() in order to participate to a group for atomic
- * commit. Participants are identified by oid of foreign server and user.
+ * During executor node initialization, they register the foreign server
+ * by calling either RegisterFdwXactByRelId() or RegisterFdwXactByServerId()
+ * to participate it to a group for atomic commit. Transaction participants
+ * are identified by OID of foreign server and user.
  *
  * During pre-commit of local transaction, we prepare the transaction on
  * foreign server everywhere. After committing or rolling back locally, we
- * notify the resolver process and tell it to commit or roll back those
+ * notify the resolver process and tell it to commit or rollback those
  * transactions. If we ask it to commit, we also tell it to notify us when
  * it's done, so that we can wait interruptibly for it to finish, and so
  * that we're not trying to locally do work that might fail when an ERROR
@@ -25,15 +24,17 @@
  *
  * The best performing way to manage the waiting backends is to have a
  * queue of waiting backends, so that we can avoid searching the through all
- * waiters each time we receive a request. We have two queues: the active
- * queue and the retry queue. The backend is inserted to the active queue at
- * first, and then it is moved to the retry queue by the resolver process if
- * the resolution fails. The backends in the retry queue are processed at
- * interval of foreign_transaction_resolution_retry_interval.
+ * foreign transactions each time we receive a request. We have two queues: the
+ * active queue and the retry queue. The backend is inserted to the active
+ * queue at first, and then it is moved to the retry queue by the resolver
+ * process if the resolution fails. The backends in the retry queue are
+ * processed at interval of foreign_transaction_resolution_retry_interval.
+ * The moving from the active queue to the retry queue is just operation
+ * of changing the links actually so we can do that safely.
  *
  * Two-phase commit protocol is required if the transaction modified two or more
  * servers including itself. In other case, all foreign transactions are
- * committed during pre-commit.
+ * committed or rolled back during pre-commit.
  *
  * If any network failure, server crash occurs or user stopped waiting
  * prepared foreign transactions are left in in-doubt state (aka. dangling
@@ -989,11 +990,18 @@ ForgetAllFdwXactParticipants(void)
 	LWLockRelease(FdwXactLock);
 
 	/*
-	 * Update the oldest local transaction of unresolved distributed
-	 * transaction if we leaved any FdwXact entries.
+	 * If we left any FdwXact entries, update the oldest local transaction of
+	 * unresolved distributed transaction and take over them to the foreign
+	 * transaction resolver.
 	 */
 	if (n_lefts > 0)
+	{
+		ereport(NOTICE,
+				(errmsg("left %u foreign transactions in in-doubt status",
+						n_lefts)));
 		FdwXactComputeRequiredXmin();
+		fdwxact_maybe_launch_resolver(true);
+	}
 
 	FdwXactAtomicCommitParticipants = NIL;
 }
@@ -1412,18 +1420,6 @@ FdwXactResolveAllDanglingTransactions(Oid dbid)
 /*
  * AtEOXact_FdwXacts
  *
- * In commit case, we have already prepared transactions on the foreign
- * servers during pre-commit. And that prepared transactions will be
- * resolved by the resolver process. So we don't do anything about the
- * foreign transaction.
- *
- * In abort case, user requested rollback or we changed over rollback
- * due to error during commit. To close current foreign transaction anyway
- * we call rollback API to every foreign transaction. If we raised an error
- * during preparing and came to here, it's possible that some entries of
- * FdwXactParticipants already registered its FdwXact entry. If there is
- * we leave them as dangling transaction and ask the resolver process to
- * process them.
  */
 extern void
 AtEOXact_FdwXacts(bool is_commit)
@@ -1432,7 +1428,6 @@ AtEOXact_FdwXacts(bool is_commit)
 
 	if (!is_commit)
 	{
-		int left_fdwxacts = 0;
 		FdwXactResolveState *state = create_fdw_xact_state();
 
 		foreach (lcell, FdwXactAtomicCommitParticipants)
@@ -1440,27 +1435,17 @@ AtEOXact_FdwXacts(bool is_commit)
 			FdwXactParticipant	*fdw_part = lfirst(lcell);
 
 			/*
-			 * Count FdwXact entries that we registered to shared memory array
-			 * in this transaction.
+			 * Skip already-prepared foreign transaction because it has closed
+			 * its transaction. But we are not sure that foreign transaction with
+			 * status == FDW_XACT_STATUS_PREPARING has been prepared or not. So we
+			 * call the rollback API to close its transaction for safety. The API
+			 * contract of rollback API here is the it can tolerate to be called
+			 * recursively. The prepared foreign transaction that we might have
+			 * will be resolved by the foreign transaction resolver.
 			 */
-			if (fdw_part->fdw_xact)
-			{
-				/*
-				 * The status of foreign transaction must be either preparing
-				 * or prepared. In any case, since we have registered FdwXact
-				 * entry we leave them to the resolver process. For the preparing
-				 * state, since the foreign transaction might not close yet we
-				 * fall through and call rollback API. For the prepared state,
-				 * since the foreign transaction has closed we don't need to do
-				 * anything.
-				 */
-				Assert(fdw_part->fdw_xact->status == FDW_XACT_STATUS_PREPARING ||
-					   fdw_part->fdw_xact->status == FDW_XACT_STATUS_PREPARED);
-
-				left_fdwxacts++;
-				if (fdw_part->fdw_xact->status == FDW_XACT_STATUS_PREPARED)
-					continue;
-			}
+			if (fdw_part->fdw_xact &&
+				fdw_part->fdw_xact->status == FDW_XACT_STATUS_PREPARED)
+				continue;
 
 			state->serverid = fdw_part->server->serverid;
 			state->userid = fdw_part->usermapping->userid;
@@ -1468,22 +1453,16 @@ AtEOXact_FdwXacts(bool is_commit)
 			state->fdw_state = fdw_part->fdw_state;
 			state->flags = FDW_XACT_FLAG_ONEPHASE;
 
-			/*
-			 * Rollback all current foreign transaction. Since we're rollbacking
-			 * the transaction it's too late even if we raise an error here.
-			 */
 			fdw_part->rollback_foreign_xact(state);
 		}
-
-		/* If we left some FdwXact entries, ask the resolver process */
-		if (left_fdwxacts > 0)
-		{
-			ereport(WARNING,
-					(errmsg("might have left %u foreign transactions in in-doubt status",
-							left_fdwxacts)));
-			fdwxact_maybe_launch_resolver(true);
-		}
 	}
+
+	/*
+	 * In a commit case, we have already prepared transactions on the foreign
+	 * servers during pre-commit. And that prepared transactions will be
+	 * resolved by the resolver process. So we don't do anything about the
+	 * foreign transaction.
+	 */
 
 	ForgetAllFdwXactParticipants();
 	FdwXactAtomicCommitReady = false;
@@ -1519,7 +1498,7 @@ AtPrepare_FdwXacts(void)
 		(MyXactFlags & XACT_FLAGS_FDWNOPREPARE) != 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("can not prepare the transaction because some foreign servers involved in transaction can not prepare the transaction")));
+				 errmsg("cannot prepare the transaction because some foreign servers involved in transaction can not prepare the transaction")));
 
 	/* Prepare transactions on participating foreign servers. */
 	FdwXactPrepareForeignTransactions();

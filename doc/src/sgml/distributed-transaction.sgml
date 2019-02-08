@@ -14,10 +14,11 @@
   <para>
    Atomic commit of distributed transaction is an operation that applies a set of changes
    as a single operation globally. <productname>PostgreSQL</productname> provides a way
-   to perform a transaction with foreign resources using <literal>Foreign Data Wrapper</literal>.
-   Using the <productname>PostgreSQL</productname>'s atomic commit ensures that all
-   changes on foreign servers end in either commit or rollback using the transaction
-   callback routines (see <xref linkend="fdw-callbacks-transaction-managements"/>).
+   to perform read-write transactions with foreign resources using
+   <literal>Foreign Data Wrapper</literal>. Using the <productname>PostgreSQL</productname>'s
+   atomic commit ensures that all changes on foreign servers end in either commit or
+   rollback using the transaction callback routines
+   (see <xref linkend="fdw-callbacks-transaction-managements"/>).
   </para>
 
   <sect2>
@@ -25,8 +26,8 @@
 
    <para>
     To achieve commit among all foreign servers automatially,
-    <productname>PostgreSQL</productname> employs Two-phase commit protocol, which is a
-    type of atomic commitment protocol (ACP). Using Two-phase commit protocol, the commit
+    <productname>PostgreSQL</productname> employs two-phase commit protocol, which is a
+    type of atomic commitment protocol (ACP). Using two-phase commit protocol, the commit
     sequence of distributed transaction performs with the following steps.
     <orderedlist>
      <listitem>
@@ -76,20 +77,10 @@
 
    <para>
     Foreign transaction resolutions are performed by foreign transaction resolver process.
-    They commit all prepared transaction on foreign servers if the coordinator received
-    agreement messages from all foreign servers during the first step. On the other hand,
-    if any foreign server failed to prepare the transaction, it rollbacks all prepared
+    They commit or rollback all prepared transaction on foreign servers if the coordinator
+    received agreement messages from all foreign servers during the first step. On the other
+    hand, if any foreign server failed to prepare the transaction, it rollbacks all prepared
     transactions.
-   </para>
-
-   <para>
-    The foreign transaction resolver deals with the two types of foreign transaction:
-    online and in-doubt. The online foreign transactions are transaction that the
-    server process are waiting for to be resolved, whereas in-doubt foreign transactions
-    are transaction whose fate is not determined and no one waiting for. The foreign
-    transaction resovlers deal with only online distributed transaction as long as
-    the request is coming. The in-dbout foreign transaction are dealt with when
-    there is no online foreign transactions at the time.
    </para>
 
    <para>
@@ -100,9 +91,10 @@
 
    <note>
     <para>
-     During a foreign transaction resolver process connecting to the database, it
+     During a foreign transaction resolver process connecting to the database, database
      cannot be dropped. So to drop the database, you can call
      <function>pg_stop_all_fdwxact_resolvers</function> function after disabled
+     <xref linkend="guc-distributed-atomic-commit"/>.
     </para>
    </note>
   </sect2>
@@ -126,7 +118,7 @@
    <para>
     The monitoring information about foreign transaction resolvers is visible in
     <link linkend="pg-stat-fdwxact-resolver-view"><literal>pg_stat_fdwxact_resolver</literal></link>
-    view. This view contains one row for every foreign Transaction resolver worker.
+    view. This view contains one row for every foreign transaction resolver worker.
    </para>
   </sect2>
 

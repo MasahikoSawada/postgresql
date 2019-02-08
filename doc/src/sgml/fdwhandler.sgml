@@ -1399,9 +1399,10 @@ ReparameterizeForeignPathByChild(PlannerInfo *root, List *fdw_private,
 
     <para>
      Transaction management callbacks are used for doing commit, rollack and
-     prepare the foreign transaction. If an FDW wish to control foreign transaction
-     by these callback it must provide <function>CommitForeignTransaction</function>
-     and <function>RollbackForeignTransaction</function>. In addition, if an FDW h
+     prepare the foreign transaction. If an FDW wishes to controll foreign transaction
+     by <productname>PostgreSQL</productname>'s global transaction manager it
+     must provide <function>CommitForeignTransaction</function> and
+     <function>RollbackForeignTransaction</function>. In addition, if an FDW
      wishes to support <firstterm>atomic commit</firstterm> (as described in
      <xref linkend="fdw-transaction-managements"/>), it must provide
      <function>PrepareForeignTransaction</function> as well.
