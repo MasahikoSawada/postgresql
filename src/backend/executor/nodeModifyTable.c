@@ -582,6 +582,10 @@ ExecInsert(ModifyTableState *mtstate,
 						 estate->es_output_cid,
 						 0, NULL);
 
+			/* Make note that we've wrote on non-temprary relation */
+			if (RelationNeedsWAL(resultRelationDesc))
+				MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
+
 			/* insert index entries for tuple */
 			if (resultRelInfo->ri_NumIndices > 0)
 				recheckIndexes = ExecInsertIndexTuples(slot, estate, false, NULL,
@@ -931,6 +935,10 @@ ldelete:;
 	/* Tell caller that the delete actually happened. */
 	if (tupleDeleted)
 		*tupleDeleted = true;
+
+	/* Make note that we've wrote on non-temprary relation */
+	if (RelationNeedsWAL(resultRelationDesc))
+		MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
 
 	/*
 	 * If this delete is the result of a partition key update that moved the
@@ -1440,6 +1448,10 @@ lreplace:;
 		if (resultRelInfo->ri_NumIndices > 0 && update_indexes)
 			recheckIndexes = ExecInsertIndexTuples(slot, estate, false, NULL, NIL);
 	}
+
+	/* Make note that we've wrote on non-temprary relation */
+	if (RelationNeedsWAL(resultRelationDesc))
+		MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
 
 	if (canSetTag)
 		(estate->es_processed)++;

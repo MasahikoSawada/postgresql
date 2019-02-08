@@ -103,6 +103,12 @@ extern int	MyXactFlags;
 #define XACT_FLAGS_ACQUIREDACCESSEXCLUSIVELOCK	(1U << 1)
 
 /*
+ * XACT_FLAGS_WROTENONTEMPREL - set when we wrote data on non-temporary
+ * relation.
+ */
+#define XACT_FLAGS_WROTENONTEMPREL				(1U << 2)
+
+/*
  *	start- and end-of-transaction callbacks for dynamically loaded modules
  */
 typedef enum
