@@ -37,8 +37,9 @@
  * committed or rolled back during pre-commit.
  *
  * If any network failure, server crash occurs or user stopped waiting
- * prepared foreign transactions are left in in-doubt state (aka. dangling
- * transaction). Dangling transactions are processed by the resolve process
+ * prepared foreign transactions are left in in-doubt state (aka. in-doubt
+ * transaction). In-doubt transactions are processed by the foreitn transaction
+ * resolve process.
  *
  * During replay WAL and replication FdwXactCtl also holds information about
  * active prepared foreign transaction that haven't been moved to disk yet.
@@ -47,10 +48,10 @@
  *
  * 	* On PREPARE redo we add the foreign transaction to FdwXactCtl->fdwXacts.
  *	  We set fdw_xact->inredo to true for such entries.
- *	* On Checkpoint redo, we iterate through FdwXactCtl->fdwXacts entries that
+ *  * On Checkpoint redo, we iterate through FdwXactCtl->fdwXacts entries that
  *	  have set fdw_xact->inredo true and are behind the redo_horizon. We save
  *    them to disk and then set fdw_xact->ondisk to true.
- *	* On COMMIT and ABORT we delete the entry from FdwXactCtl->fdwXacts.
+ *  * On COMMIT and ABORT we delete the entry from FdwXactCtl->fdwXacts.
  *	  If fdw_xact->ondisk is true, we delete the corresponding file from
  *	  the disk as well.
  *  * RecoverFdwXacts loads all foreign transaction entries from disk into
@@ -105,15 +106,17 @@
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
 
-/* Is atomic commit requested? */
-#define IsAtomicCommitEnabled() \
+/* Atomic commit is enabled by configuration */
+#define IsForeignTwophaseCommitEnabled() \
 	(max_prepared_foreign_xacts > 0 && \
 	 max_foreign_xact_resolvers > 0)
 
-#define IsAtomicCommitRequested() \
-	(IsAtomicCommitEnabled() && \
-	 (distributed_atomic_commit > DISTRIBUTED_ATOMIC_COMMIT_DISABLED))
+/* Atomic commit is enabled and requested by user */
+#define IsForeignTwophaseCommitRequested() \
+	(IsTwophaseCommitEnabled() && \
+	 (foreign_twophase_commit > DISTRIBUTED_FOREIGN_TWOPHASE_COMMIT_DISABLED))
 
+/* Check the FdwXactParticipant is capable of two-phase commit  */
 #define IsSeverCapableOfTwophaseCommit(fdw_part) \
 	(((FdwXactParticipant *)(fdw_part))->prepare_foreign_xact != NULL)
 
@@ -141,12 +144,12 @@ typedef struct FdwXactParticipant
 } FdwXactParticipant;
 
 /*
- * List of foreign transaction participants for atomic commit.
- * This list has only foreign servers that support atomic commit FDW
- * API regardless of their configuration.
+ * List of foreign transaction participants for atomic commit. This list
+ * has only foreign servers that provides transaction management callbacks,
+ * CommitForeignTransaction and RollbackForeignTransaction.
  */
-static List *FdwXactAtomicCommitParticipants = NIL;
-static bool FdwXactAtomicCommitReady = false;
+static List *FdwXactParticipants = NIL;
+static bool ForeignTwophaseCommitReady = false;
 
 /* Directory where the foreign prepared transaction files will reside */
 #define FDW_XACTS_DIR "pg_fdw_xact"
@@ -170,7 +173,7 @@ static void FdwXactPrepareForeignTransactions(void);
 static void FdwXactCommitForeignTransaction(FdwXactParticipant *fdw_part);
 static void FdwXactResolveForeignTransaction(FdwXactResolveState *state, FdwXact fdwxact);
 static void FdwXactComputeRequiredXmin(void);
-static bool FdwXactAtomicCommitRequired(void);
+static bool ForeignTwophaseCommitRequired(void);
 static void FdwXactCancelWait(void);
 static void FdwXactRedoAdd(char *buf, XLogRecPtr start_lsn, XLogRecPtr end_lsn);
 static void FdwXactRedoRemove(Oid dbid, TransactionId xid, Oid serverid,
@@ -202,7 +205,7 @@ static FdwXactResolveState *create_fdw_xact_state(void);
 /* Guc parameters */
 int	max_prepared_foreign_xacts = 0;
 int	max_foreign_xact_resolvers = 0;
-int distributed_atomic_commit = DISTRIBUTED_ATOMIC_COMMIT_DISABLED;
+int foreign_twophase_commit = FOREIGN_TWOPHASE_COMMIT_DISABLED;
 
 /* Keep track of registering process exit call back. */
 static bool fdwXactExitRegistered = false;
@@ -236,9 +239,9 @@ RegisterFdwXactByServerId(Oid serverid, bool modified)
  * Register given foreign transaction identified by given arguments as
  * a participant of the transaction.
  *
- * The foreign server identified by given server id must support atomic
- * commit APIs. Registered foreign transaction are managed by foreign
- * transaction manager until the end of the transaction.
+ * The foreign server identified by given server id and user id.
+ * Registered foreign transactions are managed by the global transaction
+ * manager until the end of the transaction.
  */
 static void
 register_fdw_xact(Oid serverid, Oid userid, bool modified)
@@ -260,7 +263,7 @@ register_fdw_xact(Oid serverid, Oid userid, bool modified)
 
 	routine = GetFdwRoutineByServerId(serverid);
 
-	foreach(lc, FdwXactAtomicCommitParticipants)
+	foreach(lc, FdwXactParticipants)
 	{
 		FdwXactParticipant	*fp = (FdwXactParticipant *) lfirst(lc);
 
@@ -313,7 +316,7 @@ register_fdw_xact(Oid serverid, Oid userid, bool modified)
 	fdw_part->get_prepareid = routine->GetPrepareId;
 
 	/* Add this foreign transaction to the participants list */
-	FdwXactAtomicCommitParticipants = lappend(FdwXactAtomicCommitParticipants, fdw_part);
+	FdwXactParticipants = lappend(FdwXactParticipants, fdw_part);
 
 	/* Revert back the context */
 	MemoryContextSwitchTo(old_ctx);
@@ -391,69 +394,65 @@ FdwXactShmemInit(void)
 /*
  * PreCommit_FdwXacts
  *
- * If atomic commit is required we prepare all foreign transactions within
- * FdwXactAtomicCommitParitipants, else directly commit them. In
- * distributed_atomic_commit is 'prefer' case, we can commit and prepare
- * foreign servers even if the FdwXactAtomicCommitParticipants has both foreign
- * transaction which is capable of two-phase commit and not.
- * If we failed to commit any of them we change to aborting.
+ * Prepare all foreign transactions if foreign twophase commit is required.
+ * If not, we commit them without preparation. When foreign_twophase_commit
+ * is 'prefer', we prepare foreign transactions on servers where are capable
+ * of two-phase commit, and commit foreign transactions on others. If we
+ * failed to commit any of them we change to aborting.
  *
- * Note that non-modified foreign servers always can be committed without
- * preparation.
+ * Non-modified foreign servers always can be committed without preparation.
  */
 void
 PreCommit_FdwXacts(void)
 {
-	bool		need_atomic_commit;
+	bool		need_twophase_commit;
 	ListCell	*lc;
 	ListCell	*next;
 	ListCell	*prev = NULL;
 
 	/* If there are no foreign servers involved, we have no business here */
-	if (FdwXactAtomicCommitParticipants == NIL)
+	if (FdwXactParticipants == NIL)
 		return;
 
-	/* Always false if atomic commit is not requested */
-	need_atomic_commit = FdwXactAtomicCommitRequired();
+	/* Always false if foreign twophsae commit is disabled */
+	need_twophase_commit = ForeignTwophaseCommitRequired();
 
-	/*
-	 * If 'require' case, we require all modified server have to be capable of
-	 * two-phase commit protocol.
-	 */
-	if (need_atomic_commit &&
-		distributed_atomic_commit == DISTRIBUTED_ATOMIC_COMMIT_REQUIRED &&
-		(MyXactFlags & XACT_FLAGS_FDWNOPREPARE) != 0)
-		ereport(ERROR,
+	if (foreign_twophase_commit == FOREIGN_TWOPHASE_COMMIT_REQUIRED)
+	{
+		/*
+		 * we require all modified server have to be capable of two-phase
+		 * commit protocol.
+		 */
+		if ((MyXactFlags & XACT_FLAGS_FDWNOPREPARE) != 0)
+			ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot COMMIT a distributed transaction that has operated on foreign server that doesn't support atomic commit")));
 
-	/*
-	 * Commited foreign transaction entry is removed from FdwXactAtomicCommitParticipants
-	 * so that the later transactoin preparation can process only servers that requires
-	 * to be committed using two-phase commit protocol. Even in 'required' case we
-	 * commit the foreign transactions if not modified.
-	 */
-	for (lc = list_head(FdwXactAtomicCommitParticipants); lc != NULL; lc = next)
+		goto prepare;
+	}
+
+	for (lc = list_head(FdwXactParticipants); lc != NULL; lc = next)
 	{
 		FdwXactParticipant *fdw_part = (FdwXactParticipant *) lfirst(lc);
 
 		next = lnext(lc);
 
 		/*
-		 * We can commit directly the foreign transaction in three cases: where the
-		 * atomic commit is not required, where the foreign server is not modified
-		 * or where the server is not 2pc-capable but in 'prefer' case.
+		 * We can commit directly the foreign transaction in three cases:
+		 * where the foreign twophase commit is not required, where the
+		 * foreign server is not modified and where the server is not
+		 * 2pc-capable but in 'prefer' case.
 		 */
-		if (!need_atomic_commit ||
+		if (!need_twophase_commit ||
 			!fdw_part->modified ||
 			(!IsSeverCapableOfTwophaseCommit(fdw_part) &&
-			 distributed_atomic_commit == DISTRIBUTED_ATOMIC_COMMIT_PREFER))
+			 foreign_twophase_commit == FOREIGN_TWOPHASE_COMMIT_PREFER))
 		{
 			FdwXactCommitForeignTransaction(fdw_part);
 
 			/* Delete it from the participant list */
-			FdwXactAtomicCommitParticipants =
-				list_delete_cell(FdwXactAtomicCommitParticipants, lc, prev);
+			FdwXactParticipants = list_delete_cell(FdwXactParticipants,
+												   lc, prev);
 
 			continue;
 		}
@@ -461,26 +460,41 @@ PreCommit_FdwXacts(void)
 		prev = lc;
 	}
 
-	/* Done with all participants? */
-	if (list_length(FdwXactAtomicCommitParticipants) == 0)
+	/*
+	 * All foreign transaction has been committed if foreign twophase commit
+	 * is disabled.
+	 */
+	if (foreign_twophase_commit == FOREIGN_TWOPHASE_COMMIT_DISABLED)
+	{
+		Assert(FdwXactParticipants == NIL);
+		return;
+	}
+
+	/*
+	 * When foreign_twophase_commit is 'prefer', we prepare the remaining
+	 * foreign transactions.
+	 */
+
+	/* but, already done with all participants? */
+	if (FdwXactParticipants == NIL)
 		return;
 
 	/*
-	 * In 'prefer' case, it's possible that we now have only one foreign server to
-	 * prepare in the case where the participants had only one 2pc-capable foreign
-	 * server and we've committed other servers. In this case, we can commit without
-	 * preparation if we didn't modified the local server.
+	 * It's possible that we now have only one foreign server to prepare
+	 * in the case where the participants had only one 2pc-capable foreign
+	 * server and we've committed all other servers. In this case, we can
+	 * commit without preparation if we didn't modified the local server.
 	 */
-	if (distributed_atomic_commit == DISTRIBUTED_ATOMIC_COMMIT_PREFER &&
-		list_length(FdwXactAtomicCommitParticipants) == 1 &&
+	if (list_length(FdwXactParticipants) == 1 &&
 		(MyXactFlags & XACT_FLAGS_WROTENONTEMPREL) == 0)
 	{
-			FdwXactCommitForeignTransaction(linitial(FdwXactAtomicCommitParticipants));
-			Assert(list_length(FdwXactAtomicCommitParticipants) == 0);
-			list_free(FdwXactAtomicCommitParticipants);
-			return;
+		FdwXactCommitForeignTransaction(linitial(FdwXactParticipants));
+		Assert(list_length(FdwXactParticipants) == 0);
+		list_free(FdwXactParticipants);
+		return;
 	}
 
+prepare:
 	/*
 	 * Prepare foreign servers. Note that we keep FdwXactparticipantsForAC until the
 	 * end of transaction.
@@ -504,7 +518,7 @@ FdwXactPrepareForeignTransactions(void)
 	FdwXact		prev_fdwxact = NULL;
 	TransactionId txid;
 
-	if (FdwXactAtomicCommitParticipants == NIL)
+	if (FdwXactParticipants == NIL)
 		return;
 
 	/* Parameter check */
@@ -524,15 +538,15 @@ FdwXactPrepareForeignTransactions(void)
 	txid = GetTopTransactionId();
 
 	/* Loop over the foreign connections */
-	foreach(lcell, FdwXactAtomicCommitParticipants)
+	foreach(lcell, FdwXactParticipants)
 	{
 		FdwXactParticipant *fdw_part = (FdwXactParticipant *) lfirst(lcell);
 		FdwXact		fdwxact;
 
 		/*
 		 * Generate an unique transaction identifier. If the PrepareId callback
-		 * is provided, we use returned string from the callback. Otherwise we
-		 * generate transaction id using built-in function.
+		 * is provided, we use the returned string from the callback. Otherwise
+		 * we generate transaction id using built-in function.
 		 */
 		if (fdw_part->get_prepareid)
 		{
@@ -570,7 +584,7 @@ FdwXactPrepareForeignTransactions(void)
 
 		/*
 		 * Insert the foreign transaction entry with the FDW_XACT_STATUS_PREPARING
-		 * state. Registration persists this information to the disk and logs
+		 * status. Registration persists this information to the disk and logs
 		 * (that way relaying it on standby). Thus in case we loose connectivity
 		 * to the foreign server or crash ourselves, we will remember that we might
 		 * have prepared transaction on the foreign server and try to resolve it
@@ -607,7 +621,7 @@ FdwXactPrepareForeignTransactions(void)
 		fdwxact->status = FDW_XACT_STATUS_PREPARED;
 		LWLockRelease(FdwXactLock);
 
-		/* Keep fdw_state until end of transaction */
+		/* Keep fdw_state until the end of transaction */
 		fdw_part->fdw_state = state->fdw_state;
 
 		/*
@@ -639,9 +653,9 @@ FdwXactCommitForeignTransaction(FdwXactParticipant *fdw_part)
 	fdw_part->fdw_state = (void *) state;
 
 	/*
-	 * Commit foreign transaction in one-phase. Since we don't insert foreign
+	 * Commit foreign transaction in one-phase. Since we didn't insert foreign
 	 * transaction entry for this transaction we don't need to care failures.
-	 * On failure we change to rollbacking.
+	 * On failure we change to rollback.
 	 */
 	fdw_part->commit_foreign_xact(state);
 }
@@ -672,9 +686,9 @@ FdwXactInsertFdwXactEntry(TransactionId xid, FdwXactParticipant *fdw_part)
 							fdw_part->usermapping->umid, fdw_part->fdw_xact_id);
 	fxact->status = FDW_XACT_STATUS_PREPARING;
 	fxact->held_by = MyBackendId;
-	fdw_part->fdw_xact = fxact;
 	LWLockRelease(FdwXactLock);
 
+	fdw_part->fdw_xact = fxact;
 	MemoryContextSwitchTo(old_context);
 
 	/*
@@ -875,19 +889,19 @@ remove_fdw_xact(FdwXact fdw_xact)
 
 /*
  * Return true and set FdwXactAtomicCommitReady to true if the current transaction
- * modified data on two or more servers in FdwXactAtomicCommitParticipants and
+ * modified data on two or more servers in FdwXactParticipants and
  * local server itself.
  */
 static bool
-FdwXactAtomicCommitRequired(void)
+ForeignTwophaseCommimtRequired(void)
 {
 	ListCell*	lc;
 	int			nserverswritten = 0;
 
-	if (!IsAtomicCommitRequested())
+	if (!IsForeignTwophaseCommitRequested())
 		return false;
 
-	foreach(lc, FdwXactAtomicCommitParticipants)
+	foreach(lc, FdwXactParticipants)
 	{
 		FdwXactParticipant *fdw_part = (FdwXactParticipant *) lfirst(lc);
 
@@ -902,7 +916,7 @@ FdwXactAtomicCommitRequired(void)
 	if (nserverswritten <= 1)
 		return false;
 
-	FdwXactAtomicCommitReady = true;
+	ForeignTwophaseCommitReady = true;
 	return true;
 }
 
@@ -960,12 +974,12 @@ ForgetAllFdwXactParticipants(void)
 	ListCell *cell;
 	int		n_lefts = 0;
 
-	if (FdwXactAtomicCommitParticipants == NIL)
+	if (FdwXactParticipants == NIL)
 		return;
 
 	LWLockAcquire(FdwXactLock, LW_EXCLUSIVE);
 
-	foreach(cell, FdwXactAtomicCommitParticipants)
+	foreach(cell, FdwXactParticipants)
 	{
 		FdwXactParticipant	*fdw_part = (FdwXactParticipant *) lfirst(cell);
 
@@ -975,7 +989,7 @@ ForgetAllFdwXactParticipants(void)
 
 		/*
 		 * There is a race condition; the FdwXact entries in
-		 * FdwXactAtomicCommitParticipants could be used by other backend before we
+		 * FdwXactParticipants could be used by other backend before we
 		 * forget in case where the resolver process removes the FdwXact entry
 		 * and other backend reuses it before we forget. So we need to check
 		 * if the entries are still associated with the transaction.
@@ -1003,7 +1017,7 @@ ForgetAllFdwXactParticipants(void)
 		fdwxact_maybe_launch_resolver(true);
 	}
 
-	FdwXactAtomicCommitParticipants = NIL;
+	FdwXactParticipants = NIL;
 }
 
 /*
@@ -1018,12 +1032,12 @@ AtProcExit_FdwXact(int code, Datum arg)
 }
 
 /*
- * Wait for foreign transaction to be resolved.
+ * Wait for the foreign transaction to be resolved.
  *
  * Initially backends start in state FDW_XACT_NOT_WAITING and then change
  * that state to FDW_XACT_WAITING before adding ourselves to the wait queue.
  * During FdwXactResolveForeignTransaction a fdwxact resolver changes the
- * state to FDW_XACT_WAIT_COMPLETE once foreign transactions are resolved.
+ * state to FDW_XACT_WAIT_COMPLETE once all foreign transactions are resolved.
  * This backend then resets its state to FDW_XACT_NOT_WAITING.
  * If a resolver fails to resolve the waiting transaction it moves us to
  * the retry queue.
@@ -1038,27 +1052,38 @@ FdwXactWaitToBeResolved(TransactionId wait_xid, bool is_commit)
 	ListCell	*lc;
 	List *fdwxact_participants = NIL;
 
-	/* Quick exit if atomic commit is not requested */
-	if (!IsAtomicCommitRequested())
-		return;
-
 	Assert(FdwXactCtl != NULL);
 	Assert(TransactionIdIsValid(wait_xid));
 	Assert(SHMQueueIsDetached(&(MyProc->fdwXactLinks)));
 	Assert(MyProc->fdwXactState == FDW_XACT_NOT_WAITING);
 
-	if (FdwXactAtomicCommitParticipants != NIL)
+	/* Quick exit if atomic commit is not requested */
+	if (!IsAtomicCommitRequested())
+		return;
+
+	if (FdwXactParticipants != NIL)
 	{
 		/*
 		 * If we're waiting for foreign transactions to be resolved that
 		 * we've prepared just before, use the participants list.
 		 */
 		Assert(MyPgXact->xid == wait_xid);
-		fdwxact_participants = FdwXactAtomicCommitParticipants;
+
+		foreach(lc, FdwXactParticipants)
+		{
+			FdwXactParticipant *fdw_part = (FdwXactParticipant *) lfirst(lc);
+
+			/* Don't overwrite status if the fate has been determined */
+			if (fdw_part->fdw_xact->status == FDW_XACT_STATUS_PREPARED)
+				fdw_part->fdw_xact->status = (is_commit ?
+											  FDW_XACT_STATUS_COMMITTING :
+											  FDW_XACT_STATUS_ABORTING);
+		}
 	}
-	else if (get_fdw_xacts(MyDatabaseId, wait_xid, InvalidOid, InvalidOid,
-						   false, true) == NIL)
+	else
 	{
+		List *fdwxact_list;
+
 		/*
 		 * Get participants list from the global array. This can happen when
 		 * we're waiting for foreign transactions to be resolved that is
@@ -1067,23 +1092,23 @@ FdwXactWaitToBeResolved(TransactionId wait_xid, bool is_commit)
 		 * of foreign transaction here as the fate will be determined at
 		 * a resolution time.
 		 */
-		return;
+		fdwxact_list = get_fdw_xacts(MyDatabaseId, wait_xid, InvalidOid, InvalidOid,
+									 false, true);
+
+		foreach(lc, fdwxact_list)
+		{
+			FdwXact fdwxact = (FdwXact) lfrist(lc);
+
+			/* Don't overwrite status if the fate has been determined */
+			if (fdw_part->status == FDW_XACT_STATUS_PREPARED)
+				fdw_part->status = (is_commit ?
+									FDW_XACT_STATUS_COMMITTING :
+									FDW_XACT_STATUS_ABORTING);
+		}
 	}
 
-	/* Exit if we found no foreign transaction to resolve */
-	if (fdwxact_participants == NIL)
+	if (FdwXactParticipants == NIL)
 		return;
-
-	foreach(lc, fdwxact_participants)
-	{
-		FdwXactParticipant *fdw_part = (FdwXactParticipant *) lfirst(lc);
-
-		/* Don't overwrite status if the fate has been determined */
-		if (fdw_part->fdw_xact->status == FDW_XACT_STATUS_PREPARED)
-			fdw_part->fdw_xact->status = (is_commit ?
-										  FDW_XACT_STATUS_COMMITTING :
-										  FDW_XACT_STATUS_ABORTING);
-	}
 
 	/* Set backend status and enqueue itself to the active queue */
 	LWLockAcquire(FdwXactLock, LW_EXCLUSIVE);
@@ -1430,7 +1455,7 @@ AtEOXact_FdwXacts(bool is_commit)
 	{
 		FdwXactResolveState *state = create_fdw_xact_state();
 
-		foreach (lcell, FdwXactAtomicCommitParticipants)
+		foreach (lcell, FdwXactParticipants)
 		{
 			FdwXactParticipant	*fdw_part = lfirst(lcell);
 
@@ -1475,20 +1500,20 @@ AtEOXact_FdwXacts(bool is_commit)
  *
  * Note that it's possible that the transaction aborts after we prepared part
  * of participants. In this case since we can change to abort we cannot forget
- * FdwXactAtomicCommitParticipants yet. These prepared transactions are processed
+ * FdwXactParticipants yet. These prepared transactions are processed
  * at EOXact_FdwXacts or by the resolve process.
  */
 void
 AtPrepare_FdwXacts(void)
 {
-	if (FdwXactAtomicCommitParticipants == NIL)
+	if (FdwXactParticipants == NIL)
 		return;
 
 	/* Check for an invalid condition */
 	if (!IsAtomicCommitRequested())
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("cannot PREPARE a distributed transaction when distributed_atomic_commit is \'disabled\'")));
+				 errmsg("cannot PREPARE a distributed transaction when foreign_twophase_commit is \'disabled\'")));
 
 	/*
 	 * We cannot prepare if any foreign server of participants isn't capable
@@ -2477,15 +2502,15 @@ RecoverFdwXacts(void)
 }
 
 bool
-check_distributed_atomic_commit(int *newval, void **extra, GucSource source)
+check_foreign_twophase_commit(int *newval, void **extra, GucSource source)
 {
 	DistributedAtomicCommitLevel newDistributedAtomicCommitLevel = *newval;
 
 		/* Parameter check */
-	if (newDistributedAtomicCommitLevel > DISTRIBUTED_ATOMIC_COMMIT_DISABLED &&
+	if (newDistributedAtomicCommitLevel > FOREIGN_TWOPHASE_COMMIT_DISABLED &&
 		(max_prepared_foreign_xacts == 0 || max_foreign_xact_resolvers == 0))
 	{
-		GUC_check_errdetail("Cannot enable \"distributed_atomic_commit\" when "
+		GUC_check_errdetail("Cannot enable \"foreign_twophase_commit\" when "
 							"\"max_prepared_foreign_transactions\" or \"max_foreign_transaction_resolvers\""
 							"is zero value");
 		return false;
