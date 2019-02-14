@@ -46,19 +46,18 @@ typedef enum
 	FDW_XACT_STATUS_PREPARED,		/* foreign transaction is prepared */
 	FDW_XACT_STATUS_COMMITTING,		/* foreign prepared transaction is to
 									 * be committed */
-	FDW_XACT_STATUS_ABORTING,		/* foreign prepared transaction is to be
+	FDW_XACT_STATUS_ABORTING		/* foreign prepared transaction is to be
 									 * aborted */
-	FDW_XACT_STATUS_IN_DOUBT
 } FdwXactStatus;
 
-/* Enum for distributed_atomic_commit parameter */
+/* Enum for foreign_twophase_commit parameter */
 typedef enum
 {
-	DISTRIBUTED_ATOMIC_COMMIT_DISABLED,	/* disable distributed atomic commit */
-	DISTRIBUTED_ATOMIC_COMMIT_PREFER,	/* use twophase commit where available */
-	DISTRIBUTED_ATOMIC_COMMIT_REQUIRED	/* all foreign servers have to support twophase
+	FOREIGN_TWOPHASE_COMMIT_DISABLED,	/* disable foreign twophase commit */
+	FOREIGN_TWOPHASE_COMMIT_PREFER,	/* use twophase commit where available */
+	FOREIGN_TWOPHASE_COMMIT_REQUIRED	/* all foreign servers have to support twophase
 										 * commit */
-} DistributedAtomicCommitLevel;
+} ForeignTwophaseCommitLevel;
 
 /* Shared memory entry for a prepared or being prepared foreign transaction */
 typedef struct FdwXactData *FdwXact;
@@ -129,7 +128,7 @@ extern int	max_prepared_foreign_xacts;
 extern int	max_foreign_xact_resolvers;
 extern int	foreign_xact_resolution_retry_interval;
 extern int	foreign_xact_resolver_timeout;
-extern int	distributed_atomic_commit;
+extern int	foreign_twophase_commit;
 
 /* Function declarations */
 extern Size FdwXactShmemSize(void);
@@ -146,14 +145,15 @@ extern bool FdwTwoPhaseNeeded(void);
 extern void PreCommit_FdwXacts(void);
 extern void KnownFdwXactRecreateFiles(XLogRecPtr redo_horizon);
 extern void FdwXactWaitToBeResolved(TransactionId wait_xid, bool commit);
-extern bool FdwXactResolveDistributedTransaction(Oid dbid, bool is_active);
-extern void FdwXactResolveAllDanglingTransactions(Oid dbid);
-extern bool FdwXactIsAtomicCommitReady(void);
+extern bool IsForeignTwophaseCommitReady(void);
+extern void FdwXactResolveTransactionAndReleaseWaiter(PGPROC *waiter, TransactionId xid);
+extern bool FdwXactResolveInDoubtTransactions(void);
+extern PGPROC *FdwXactGetWaiter(TimestampTz *nextResolutionTs_p, TransactionId *waitXid_p);
 extern void FdwXactCleanupAtProcExit(void);
 extern void RegisterFdwXactByRelId(Oid relid, bool modified);
 extern void RegisterFdwXactByServerId(Oid serverid, bool modified);
 extern void FdwXactMarkForeignServerAccessed(Oid relid, bool modified);
-extern bool check_distributed_atomic_commit(int *newval, void **extra,
+extern bool check_foreign_twophase_commit(int *newval, void **extra,
 										  GucSource source);
 
 #endif   /* FDW_XACT_H */

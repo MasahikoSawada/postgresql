@@ -46,11 +46,8 @@ typedef struct FdwXactResolver
 /* There is one FdwXactRslvCtlData struct for the whole database cluster */
 typedef struct FdwXactRslvCtlData
 {
-	/*
-	 * Foreign transaction resolution queues. Protected by FdwXactLock.
-	 */
-	SHM_QUEUE	FdwXactActiveQueue;
-	SHM_QUEUE	FdwXactRetryQueue;
+	/* Foreign transaction resolution queue. Protected by FdwXactLock */
+	SHM_QUEUE	FdwXactQueue;
 
 	/* Supervisor process and latch */
 	pid_t		launcher_pid;

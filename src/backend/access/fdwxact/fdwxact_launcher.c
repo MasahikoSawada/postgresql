@@ -42,7 +42,6 @@
 
 static void fdwxact_launcher_onexit(int code, Datum arg);
 static void fdwxact_launcher_sighup(SIGNAL_ARGS);
-static void fdwxact_launcher_sigusr2(SIGNAL_ARGS);
 static void fdwxact_launch_resolver(Oid dbid, int slot);
 static bool fdwxact_relaunch_resolvers(void);
 
@@ -51,22 +50,21 @@ static volatile sig_atomic_t got_SIGUSR2 = false;
 FdwXactResolver *MyFdwXactResolver = NULL;
 
 /*
- * Wake up the launcher process to retry launch. This is used by
- * the resolver process is being stopped.
+ * Wake up the launcher process to retry resolution.
  */
 void
-FdwXactLauncherWakeupToRetry(void)
+FdwXactLauncherRequestToLaunchForRetry(void)
 {
 	if (FdwXactRslvCtl->launcher_pid != InvalidPid)
 		SetLatch(FdwXactRslvCtl->launcher_latch);
 }
 
 /*
- * Wake up the launcher process to request resolution. This is
- * used by the backend process.
+ * Wake up the launcher process to request launching new resolvers
+ * immediately.
  */
 void
-FdwXactLauncherWakeupToRequest(void)
+FdwXactLauncherRequestToLaunch(void)
 {
 	if (FdwXactRslvCtl->launcher_pid != InvalidPid)
 		kill(FdwXactRslvCtl->launcher_pid, SIGUSR2);
@@ -104,8 +102,7 @@ FdwXactRslvShmemInit(void)
 		/* First time through, so initialize */
 		MemSet(FdwXactRslvCtl, 0, FdwXactRslvShmemSize());
 
-		SHMQueueInit(&(FdwXactRslvCtl->FdwXactActiveQueue));
-		SHMQueueInit(&(FdwXactRslvCtl->FdwXactRetryQueue));
+		SHMQueueInit(&(FdwXactRslvCtl->FdwXactQueue));
 
 		for (slot = 0; slot < max_foreign_xact_resolvers; slot++)
 		{
@@ -143,7 +140,7 @@ fdwxact_launcher_sighup(SIGNAL_ARGS)
 	errno = save_errno;
 }
 
-/* SIGUSR1: set flag to launch new resolver process immediately */
+/* SIGUSR2: set flag to launch new resolver process immediately */
 static void
 fdwxact_launcher_sigusr2(SIGNAL_ARGS)
 {
@@ -203,12 +200,11 @@ FdwXactLauncherMain(Datum main_arg)
 			MemoryContext subctx;
 			bool launched;
 
-			ResetLatch(MyLatch);
 			if (got_SIGUSR2)
 				got_SIGUSR2 = false;
 
 			subctx = AllocSetContextCreate(TopMemoryContext,
-										   "Foreign Transaction Launcher launch",
+										   "Foreign Transaction Launcher",
 										   ALLOCSET_DEFAULT_SIZES);
 			oldctx = MemoryContextSwitchTo(subctx);
 
@@ -348,7 +344,7 @@ fdwxact_maybe_launch_resolver(bool ignore_error)
 	LWLockRelease(FdwXactResolverLock);
 
 	/* Wake up launcher */
-	FdwXactLauncherWakeupToRequest();
+	FdwXactLauncherRequestToLaunch();
 }
 
 /*

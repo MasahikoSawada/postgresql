@@ -58,9 +58,9 @@ int foreign_xact_resolver_timeout = 60 * 1000;
 
 FdwXactRslvCtlData *FdwXactRslvCtl;
 
-static void FdwXactRslvLoop(void);
-static long FdwXactRslvComputeSleepTime(TimestampTz now);
-static void FdwXactRslvCheckTimeout(TimestampTz now);
+static void FXRslvLoop(void);
+static long FXRslvComputeSleepTime(TimestampTz now, TimestampTz nextResolutionTs);
+static void FXRslvCheckTimeout(TimestampTz now);
 
 static void fdwxact_resolver_sighup(SIGNAL_ARGS);
 static void fdwxact_resolver_onexit(int code, Datum arg);
@@ -69,6 +69,9 @@ static void fdwxact_resolver_attach(int slot);
 
 /* Flags set by signal handlers */
 static volatile sig_atomic_t got_SIGHUP = false;
+
+/* true during processing in-doubt transactions */
+static bool processing_indoubts = false;
 
 /* Set flag to reload configuration at next convenient time */
 static void
@@ -106,7 +109,15 @@ static void
 fdwxact_resolver_onexit(int code, Datum arg)
 {
 	fdwxact_resolver_detach();
-	FdwXactLauncherWakeupToRetry();
+
+	/*
+	 * If we exits during resolving in-doubt transactions, wake up the launcher
+	 * for the retry purpose, meaning re-launching resolvers by intervals.
+	 */
+	if (processing_indoubts)
+		FdwXactLauncherRequestToLaunchForRetry();
+	else
+		FdwXactLauncherRequestToLaunch();
 }
 
 /*
@@ -168,7 +179,7 @@ FdwXactResolverMain(Datum main_arg)
 	MyFdwXactResolver->last_resolved_time = GetCurrentTimestamp();
 
 	/* Run the main loop */
-	FdwXactRslvLoop();
+	FXRslvLoop();
 
 	proc_exit(0);
 }
@@ -177,9 +188,8 @@ FdwXactResolverMain(Datum main_arg)
  * Fdwxact resolver main loop
  */
 static void
-FdwXactRslvLoop(void)
+FXRslvLoop(void)
 {
-	TimestampTz last_retry_time = 0;
 	MemoryContext resolver_ctx;
 
 	resolver_ctx = AllocSetContextCreate(TopMemoryContext,
@@ -189,10 +199,12 @@ FdwXactRslvLoop(void)
 	/* Enter main loop */
 	for (;;)
 	{
+		PGPROC			*waiter = NULL;
+		TransactionId	waitXid = InvalidTransactionId;
+		TimestampTz		resolutionTs = -1;
 		int			rc;
 		TimestampTz	now;
 		long		sleep_time;
-		bool		resolved;
 
 		ResetLatch(MyLatch);
 
@@ -206,59 +218,81 @@ FdwXactRslvLoop(void)
 			ProcessConfigFile(PGC_SIGHUP);
 		}
 
-		/* Resolve one distributed transaction */
-		StartTransactionCommand();
-		resolved = FdwXactResolveDistributedTransaction(MyDatabaseId, true);
-		CommitTransactionCommand();
-
 		now = GetCurrentTimestamp();
 
-		/* Update my state */
-		if (resolved)
-			MyFdwXactResolver->last_resolved_time = now;
+		/* Get an waiter from the shmem queue */
+		waiter = FdwXactGetWaiter(&resolutionTs, &waitXid);
 
-		if (TimestampDifferenceExceeds(last_retry_time, now,
-									   foreign_xact_resolution_retry_interval))
+		if (!waiter)
 		{
+			bool ret;
+
+			ereport(LOG, (errmsg("@@@ no waiters, process indoubts")));
+
+			processing_indoubts = true;
+
+			/* The queue is empty, process in-doubt transactions */
 			StartTransactionCommand();
-			resolved = FdwXactResolveDistributedTransaction(MyDatabaseId, false);
+			ret = FdwXactResolveInDoubtTransactions();
 			CommitTransactionCommand();
 
-			last_retry_time = GetCurrentTimestamp();
+			processing_indoubts = false;
 
-			/* Update my state */
-			if (resolved)
-				MyFdwXactResolver->last_resolved_time = last_retry_time;
+			if (ret)
+			{
+				/* Update my stats */
+				SpinLockAcquire(&(MyFdwXactResolver->mutex));
+				MyFdwXactResolver->last_resolved_time = GetCurrentTimestamp();
+				SpinLockRelease(&(MyFdwXactResolver->mutex));
+			}
+
+			ereport(LOG, (errmsg("@@@ %s sleep %d msec",
+								 ret ? "processed some indoubts," : "",
+								 foreign_xact_resolution_retry_interval)));
+
+			sleep_time = foreign_xact_resolution_retry_interval;
 		}
-
-		/* Check for fdwxact resolver timeout */
-		FdwXactRslvCheckTimeout(now);
-
-		/*
-		 * If we have resolved any distributed transaction we go the next
-		 * without both resolving dangling transaction and sleeping because
-		 * there might be other on-line transactions waiting to be resolved.
-		 */
-		if (!resolved)
+		else if (resolutionTs < now)
 		{
-			/* Resolve dangling transactions as mush as possible */
+			Assert(TransactionIdIsValid(waitXid));
+
+			ereport(LOG, (errmsg("@@@ get waiter %u, process it", waitXid)));
+
+			/* Resolve the waiting distributed transaction */
 			StartTransactionCommand();
-			FdwXactResolveAllDanglingTransactions(MyDatabaseId);
+			FdwXactResolveTransactionAndReleaseWaiter(waiter, waitXid);
 			CommitTransactionCommand();
 
-			sleep_time = FdwXactRslvComputeSleepTime(now);
+			/* Update my stats */
+			SpinLockAcquire(&(MyFdwXactResolver->mutex));
+			MyFdwXactResolver->last_resolved_time = GetCurrentTimestamp();
+			SpinLockRelease(&(MyFdwXactResolver->mutex));
 
-			MemoryContextResetAndDeleteChildren(resolver_ctx);
-			MemoryContextSwitchTo(TopMemoryContext);
-
-			rc = WaitLatch(MyLatch,
-						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-						   sleep_time,
-						   WAIT_EVENT_FDW_XACT_RESOLVER_MAIN);
-
-			if (rc & WL_POSTMASTER_DEATH)
-				proc_exit(1);
+			continue;
 		}
+		else
+		{
+			ereport(LOG, (errmsg("@@@ get waiter %u, but should wait until %s",
+								 waitXid, timestamptz_to_str(resolutionTs))));
+			Assert(resolutionTs != 0);
+			sleep_time = FXRslvComputeSleepTime(now, resolutionTs);
+		}
+
+		FXRslvCheckTimeout(now);
+
+		if (sleep_time == 0)
+			continue;
+
+		MemoryContextResetAndDeleteChildren(resolver_ctx);
+		MemoryContextSwitchTo(TopMemoryContext);
+
+		rc = WaitLatch(MyLatch,
+					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
+					   sleep_time,
+					   WAIT_EVENT_FDW_XACT_RESOLVER_MAIN);
+
+		if (rc & WL_POSTMASTER_DEATH)
+			proc_exit(1);
 	}
 }
 
@@ -267,22 +301,33 @@ FdwXactRslvLoop(void)
  * foreign_xact_resolver_timeout and shutdown if not.
  */
 static void
-FdwXactRslvCheckTimeout(TimestampTz now)
+FXRslvCheckTimeout(TimestampTz now)
 {
+	TimestampTz last_resolved_time;
 	TimestampTz timeout;
 
 	if (foreign_xact_resolver_timeout == 0)
 		return;
 
-	timeout = TimestampTzPlusMilliseconds(MyFdwXactResolver->last_resolved_time,
+	SpinLockAcquire(&(MyFdwXactResolver->mutex));
+	last_resolved_time = MyFdwXactResolver->last_resolved_time;
+	SpinLockRelease(&(MyFdwXactResolver->mutex));
+
+	timeout = TimestampTzPlusMilliseconds(last_resolved_time,
 										  foreign_xact_resolver_timeout);
+
+	ereport(LOG, (errmsg("@@@ timeout %s, now %s",
+						 timestamptz_to_str(timeout),
+						 timestamptz_to_str(now))));
 
 	if (now < timeout)
 		return;
 
 	/*
-	 * Reached to the timeout. We exit if there is no more both pending on-line
-	 * transactions and dangling transactions.
+	 * Reached to the timeout. We exit if there is no more both pending foreign
+	 * transactions.
+	 *
+	 * @@@ Race condition.
 	 */
 	if (!fdw_xact_exists(InvalidTransactionId, MyDatabaseId, InvalidOid,
 						 InvalidOid))
@@ -290,7 +335,7 @@ FdwXactRslvCheckTimeout(TimestampTz now)
 		StartTransactionCommand();
 		ereport(LOG,
 				(errmsg("foreign transaction resolver for database \"%s\" will stop because the timeout",
-						get_database_name(MyFdwXactResolver->dbid))));
+						get_database_name(MyDatabaseId))));
 		CommitTransactionCommand();
 
 		fdwxact_resolver_detach();
@@ -303,22 +348,27 @@ FdwXactRslvCheckTimeout(TimestampTz now)
  * in milliseconds, -1 means that we reached to the timeout and should exits
  */
 static long
-FdwXactRslvComputeSleepTime(TimestampTz now)
+FXRslvComputeSleepTime(TimestampTz now, TimestampTz nextResolutionTs)
 {
-	static TimestampTz	wakeuptime = 0;
+	static TimestampTz	wakeup_time = 0;
 	long	sleeptime;
 	long	sec_to_timeout;
 	int		microsec_to_timeout;
 
-	if (now >= wakeuptime)
-		wakeuptime = TimestampTzPlusMilliseconds(now,
-												 foreign_xact_resolution_retry_interval);
+	if (wakeup_time <= nextResolutionTs)
+		wakeup_time = nextResolutionTs;
+
+	if (now >= wakeup_time)
+		return 0;
 
 	/* Compute relative time until wakeup. */
-	TimestampDifference(now, wakeuptime,
+	TimestampDifference(now, wakeup_time,
 						&sec_to_timeout, &microsec_to_timeout);
 
 	sleeptime = sec_to_timeout * 1000 + microsec_to_timeout / 1000;
+
+	ereport(LOG, (errmsg("@@@ Sleep %ld msec until %s",
+						 sleeptime, timestamptz_to_str(nextResolutionTs))));
 
 	return sleeptime;
 }

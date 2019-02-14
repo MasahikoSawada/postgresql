@@ -18,8 +18,8 @@
 
 extern void FdwXactLauncherRegister(void);
 extern void FdwXactLauncherMain(Datum main_arg);
-extern void FdwXactLauncherWakeupToRequest(void);
-extern void FdwXactLauncherWakeupToRetry(void);
+extern void FdwXactLauncherRequestToLaunch(void);
+extern void FdwXactLauncherRequestToLaunchForRetry(void);
 
 extern Size FdwXactRslvShmemSize(void);
 extern void FdwXactRslvShmemInit(void);

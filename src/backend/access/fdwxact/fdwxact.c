@@ -111,14 +111,17 @@
 	(max_prepared_foreign_xacts > 0 && \
 	 max_foreign_xact_resolvers > 0)
 
-/* Atomic commit is enabled and requested by user */
+/* Foreign twophase commit is enabled and requested by user */
 #define IsForeignTwophaseCommitRequested() \
-	(IsTwophaseCommitEnabled() && \
-	 (foreign_twophase_commit > DISTRIBUTED_FOREIGN_TWOPHASE_COMMIT_DISABLED))
+	(IsForeignTwophaseCommitEnabled() && \
+	 (foreign_twophase_commit > FOREIGN_TWOPHASE_COMMIT_DISABLED))
 
 /* Check the FdwXactParticipant is capable of two-phase commit  */
 #define IsSeverCapableOfTwophaseCommit(fdw_part) \
 	(((FdwXactParticipant *)(fdw_part))->prepare_foreign_xact != NULL)
+
+#define IsFdwXactInDoubt(fdwxact) \
+	(((FdwXact) (fdwxact))->held_by == InvalidBackendId)
 
 /* Structure to bundle the foreign transaction participant */
 typedef struct FdwXactParticipant
@@ -173,11 +176,12 @@ static void FdwXactPrepareForeignTransactions(void);
 static void FdwXactCommitForeignTransaction(FdwXactParticipant *fdw_part);
 static void FdwXactResolveForeignTransaction(FdwXactResolveState *state, FdwXact fdwxact);
 static void FdwXactComputeRequiredXmin(void);
-static bool ForeignTwophaseCommitRequired(void);
+static bool IsForeignTwophaseCommitRequired(void);
 static void FdwXactCancelWait(void);
 static void FdwXactRedoAdd(char *buf, XLogRecPtr start_lsn, XLogRecPtr end_lsn);
 static void FdwXactRedoRemove(Oid dbid, TransactionId xid, Oid serverid,
 							  Oid userid, bool give_warnings);
+static void FdwXactQueueInsert(PGPROC *waiter);
 static void AtProcExit_FdwXact(int code, Datum arg);
 static void ForgetAllFdwXactParticipants(void);
 static char *ReadFdwXactFile(Oid dbid, TransactionId xid, Oid serverid,
@@ -209,6 +213,33 @@ int foreign_twophase_commit = FOREIGN_TWOPHASE_COMMIT_DISABLED;
 
 /* Keep track of registering process exit call back. */
 static bool fdwXactExitRegistered = false;
+
+
+static void
+dump_queue(void)
+{
+	PGPROC *proc;
+	int num = 0;
+
+	LWLockAcquire(FdwXactLock, LW_SHARED);
+
+	proc = (PGPROC *) SHMQueueNext(&(FdwXactRslvCtl->FdwXactQueue),
+								   &(FdwXactRslvCtl->FdwXactQueue),
+								   offsetof(PGPROC, fdwXactLinks));
+
+	while (proc)
+	{
+		ereport(LOG, (errmsg("[%d] xid = %d, ts = %s",
+							 num++, proc->fdwXactWaitXid,
+							 timestamptz_to_str(proc->fdwXactNextResolutionTs))));
+
+		proc = (PGPROC *) SHMQueueNext(&(FdwXactRslvCtl->FdwXactQueue),
+									   &(proc->fdwXactLinks),
+									   offsetof(PGPROC, fdwXactLinks));
+	}
+
+	LWLockRelease(FdwXactLock);
+}
 
 /*
  * Remember accessed foreign server. Both RegisterFdwXactByRelId and
@@ -415,7 +446,7 @@ PreCommit_FdwXacts(void)
 		return;
 
 	/* Always false if foreign twophsae commit is disabled */
-	need_twophase_commit = ForeignTwophaseCommitRequired();
+	need_twophase_commit = IsForeignTwophaseCommitRequired();
 
 	if (foreign_twophase_commit == FOREIGN_TWOPHASE_COMMIT_REQUIRED)
 	{
@@ -428,7 +459,13 @@ PreCommit_FdwXacts(void)
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot COMMIT a distributed transaction that has operated on foreign server that doesn't support atomic commit")));
 
-		goto prepare;
+		if (need_twophase_commit)
+			goto prepare;
+
+		/*
+		 * If foreign twophase commit is not required, fall through to the
+		 * one-phase commit case.
+		 */
 	}
 
 	for (lc = list_head(FdwXactParticipants); lc != NULL; lc = next)
@@ -893,7 +930,7 @@ remove_fdw_xact(FdwXact fdw_xact)
  * local server itself.
  */
 static bool
-ForeignTwophaseCommimtRequired(void)
+IsForeignTwophaseCommitRequired(void)
 {
 	ListCell*	lc;
 	int			nserverswritten = 0;
@@ -921,9 +958,9 @@ ForeignTwophaseCommimtRequired(void)
 }
 
 bool
-FdwXactIsAtomicCommitReady(void)
+IsForeignTwophaseCommitReady(void)
 {
-	return FdwXactAtomicCommitReady;
+	return ForeignTwophaseCommitReady;
 }
 
 /*
@@ -1050,7 +1087,6 @@ FdwXactWaitToBeResolved(TransactionId wait_xid, bool is_commit)
 	char		*new_status = NULL;
 	const char	*old_status;
 	ListCell	*lc;
-	List *fdwxact_participants = NIL;
 
 	Assert(FdwXactCtl != NULL);
 	Assert(TransactionIdIsValid(wait_xid));
@@ -1058,7 +1094,7 @@ FdwXactWaitToBeResolved(TransactionId wait_xid, bool is_commit)
 	Assert(MyProc->fdwXactState == FDW_XACT_NOT_WAITING);
 
 	/* Quick exit if atomic commit is not requested */
-	if (!IsAtomicCommitRequested())
+	if (!IsForeignTwophaseCommitRequested())
 		return;
 
 	if (FdwXactParticipants != NIL)
@@ -1097,11 +1133,11 @@ FdwXactWaitToBeResolved(TransactionId wait_xid, bool is_commit)
 
 		foreach(lc, fdwxact_list)
 		{
-			FdwXact fdwxact = (FdwXact) lfrist(lc);
+			FdwXact fdwxact = (FdwXact) lfirst(lc);
 
 			/* Don't overwrite status if the fate has been determined */
-			if (fdw_part->status == FDW_XACT_STATUS_PREPARED)
-				fdw_part->status = (is_commit ?
+			if (fdwxact->status == FDW_XACT_STATUS_PREPARED)
+				fdwxact->status = (is_commit ?
 									FDW_XACT_STATUS_COMMITTING :
 									FDW_XACT_STATUS_ABORTING);
 		}
@@ -1114,9 +1150,11 @@ FdwXactWaitToBeResolved(TransactionId wait_xid, bool is_commit)
 	LWLockAcquire(FdwXactLock, LW_EXCLUSIVE);
 	MyProc->fdwXactState = FDW_XACT_WAITING;
 	MyProc->fdwXactWaitXid = wait_xid;
-	SHMQueueInsertBefore(&(FdwXactRslvCtl->FdwXactActiveQueue),
-						 &(MyProc->fdwXactLinks));
+	MyProc->fdwXactNextResolutionTs = GetCurrentTransactionStopTimestamp();
+	FdwXactQueueInsert(MyProc);
 	LWLockRelease(FdwXactLock);
+
+	dump_queue();
 
 	/* Launch a resolver process if not yet, or wake it up */
 	fdwxact_maybe_launch_resolver(false);
@@ -1232,6 +1270,33 @@ FdwXactWaitToBeResolved(TransactionId wait_xid, bool is_commit)
 	}
 }
 
+static void
+FdwXactQueueInsert(PGPROC *waiter)
+{
+	PGPROC *proc;
+
+	Assert(LWLockHeldByMeInMode(FdwXactLock, LW_EXCLUSIVE));
+
+	proc = (PGPROC *) SHMQueuePrev(&(FdwXactRslvCtl->FdwXactQueue),
+								   &(FdwXactRslvCtl->FdwXactQueue),
+								   offsetof(PGPROC, fdwXactLinks));
+
+	while (proc)
+	{
+		if (proc->fdwXactNextResolutionTs < waiter->fdwXactNextResolutionTs)
+			break;
+
+		proc = (PGPROC *) SHMQueuePrev(&(FdwXactRslvCtl->FdwXactQueue),
+									   &(proc->fdwXactLinks),
+									   offsetof(PGPROC, fdwXactLinks));
+	}
+
+	if (proc)
+		SHMQueueInsertAfter(&(proc->fdwXactLinks), &(waiter->fdwXactLinks));
+	else
+		SHMQueueInsertAfter(&(FdwXactRslvCtl->FdwXactQueue), &(waiter->fdwXactLinks));
+}
+
 /*
  * Acquire FdwXactLock and cancel any wait currently in progress.
  */
@@ -1254,192 +1319,6 @@ FdwXactCleanupAtProcExit(void)
 		SHMQueueDelete(&(MyProc->fdwXactLinks));
 		LWLockRelease(FdwXactLock);
 	}
-}
-
-/*
- * Resolve one distributed transaction on the given databvase . The target
- * distributed transaction is fetched from either the active queue or the
- * retry queue and its participants are fetched from either the global array.
- *
- * Release the waiter and return true if we resolved the all of the foreign
- * transaction participants. On failure, we move the FdwXactLinks entry to the
- * retry queue from the active queue, and raise an error and exit.
- */
-bool
-FdwXactResolveDistributedTransaction(Oid dbid, bool is_active)
-{
-	FdwXactResolveState	*state;
-	ListCell		*lc;
-	ListCell		*next;
-	PGPROC			*waiter = NULL;
-	List			*participants;
-	SHM_QUEUE		*target_queue;
-
-	if (is_active)
-		target_queue = &(FdwXactRslvCtl->FdwXactActiveQueue);
-	else
-		target_queue = &(FdwXactRslvCtl->FdwXactRetryQueue);
-
-	LWLockAcquire(FdwXactLock, LW_SHARED);
-
-	/* Fetch a waiter from the queue */
-	while ((waiter = (PGPROC *) SHMQueueNext(target_queue, target_queue,
-											 offsetof(PGPROC, fdwXactLinks))) != NULL)
-	{
-		/* Found a waiter */
-		if (waiter->databaseId == dbid)
-			break;
-	}
-
-	/* If no waiter, there is no job */
-	if (!waiter)
-	{
-		LWLockRelease(FdwXactLock);
-		return false;
-	}
-
-	Assert(TransactionIdIsValid(waiter->fdwXactWaitXid));
-
-	/* Get all foreign server participants involved with the transaction */
-	participants = get_fdw_xacts(dbid, waiter->fdwXactWaitXid, InvalidOid,
-								 InvalidOid, false, false);
-	Assert(participants != NIL);
-
-	LWLockRelease(FdwXactLock);
-
-	state = create_fdw_xact_state();
-
-	/* Resolve all foreign transactions one by one */
-	for (lc = list_head(participants); lc != NULL; lc = next)
-	{
-		FdwXact fdwxact = (FdwXact) lfirst(lc);
-
-		CHECK_FOR_INTERRUPTS();
-
-		next = lnext(lc);
-
-		state->serverid = fdwxact->serverid;
-		state->userid = fdwxact->userid;
-		state->umid = fdwxact->umid;
-		state->fdwxact_id = pstrdup(fdwxact->fdw_xact_id);
-
-		PG_TRY();
-		{
-			FdwXactResolveForeignTransaction(state, fdwxact);
-		}
-		PG_CATCH();
-		{
-			/*
-			 * Failed to resolve, re-insert the waiter to the tail of retry
-			 * queue if we're waiting in the active queue.
-			 */
-			LWLockAcquire(FdwXactLock, LW_EXCLUSIVE);
-			if (waiter->fdwXactState == FDW_XACT_WAITING)
-			{
-				SHMQueueDelete(&(waiter->fdwXactLinks));
-				pg_write_barrier();
-				SHMQueueInsertBefore(&(FdwXactRslvCtl->FdwXactRetryQueue),
-									 &(waiter->fdwXactLinks));
-			}
-			LWLockRelease(FdwXactLock);
-
-			PG_RE_THROW();
-		}
-		PG_END_TRY();
-
-		elog(DEBUG2, "resolved a foreign transaction xid %u, serverid %d, userid %d",
-			 fdwxact->local_xid, fdwxact->serverid, fdwxact->userid);
-	}
-
-	LWLockAcquire(FdwXactLock, LW_EXCLUSIVE);
-
-	/*
-	 * Remove waiter from shmem queue, if not detached yet. The waiter
-	 * could already be detached if user cancelled to wait before
-	 * resolution.
-	 */
-	if (!SHMQueueIsDetached(&(waiter->fdwXactLinks)))
-	{
-		TransactionId	wait_xid = waiter->fdwXactWaitXid;
-
-		SHMQueueDelete(&(waiter->fdwXactLinks));
-		pg_write_barrier();
-
-		/* Set state to complete */
-		waiter->fdwXactState = FDW_XACT_WAIT_COMPLETE;
-
-		/* Wake up the waiter only when we have set state and removed from queue */
-		SetLatch(&(waiter->procLatch));
-
-		elog(DEBUG2, "released the proc xid %u", wait_xid);
-	}
-
-	LWLockRelease(FdwXactLock);
-
-	return true;
-}
-
-/*
- * Resolve all dangling foreign transactions on the given database. Get
- * all dangling foreign transactions from shmem global array and resolve
- * them one by one.
- */
-void
-FdwXactResolveAllDanglingTransactions(Oid dbid)
-{
-	List		*dangling_fdwxacts = NIL;
-	int			n_resolved = 0;
-	int			i;
-	ListCell	*cell;
-
-	Assert(OidIsValid(dbid));
-
-	LWLockAcquire(FdwXactLock, LW_SHARED);
-
-	/*
-	 * Walk over the global array to make the list of dangling transactions
-	 * of which corresponding local transaction is on the given database.
-	 */
-	for (i = 0; i < FdwXactCtl->numFdwXacts; i++)
-	{
-		FdwXact fxact = FdwXactCtl->fdwXacts[i];
-
-		/*
-		 * Append the fdwxact entry on the given database to the list if
-		 * it's handled by nobody and the corresponding local transaction
-		 * is not part of the prepared transaction.
-		 */
-		if (fxact->dbid == dbid &&
-			fxact->held_by == InvalidBackendId &&
-			!TwoPhaseExists(fxact->local_xid))
-			dangling_fdwxacts = lappend(dangling_fdwxacts, fxact);
-	}
-
-	LWLockRelease(FdwXactLock);
-
-	/* Return if there is no foreign transaction we need to resolve */
-	if (dangling_fdwxacts == NIL)
-		return;
-
-	foreach(cell, dangling_fdwxacts)
-	{
-		FdwXact fdwxact = (FdwXact) lfirst(cell);
-		FdwXactResolveState *state;
-
-		state = create_fdw_xact_state();
-		state->serverid = fdwxact->serverid;
-		state->userid = fdwxact->userid;
-		state->umid = fdwxact->umid;
-		state->fdwxact_id = pstrdup(fdwxact->fdw_xact_id);
-
-		FdwXactResolveForeignTransaction(state, fdwxact);
-
-		n_resolved++;
-	}
-
-	list_free(dangling_fdwxacts);
-
-	elog(DEBUG2, "resolved %d dangling foreign xacts", n_resolved);
 }
 
 /*
@@ -1490,7 +1369,7 @@ AtEOXact_FdwXacts(bool is_commit)
 	 */
 
 	ForgetAllFdwXactParticipants();
-	FdwXactAtomicCommitReady = false;
+	ForeignTwophaseCommitReady = false;
 }
 
 /*
@@ -1510,7 +1389,7 @@ AtPrepare_FdwXacts(void)
 		return;
 
 	/* Check for an invalid condition */
-	if (!IsAtomicCommitRequested())
+	if (!IsForeignTwophaseCommitRequested())
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot PREPARE a distributed transaction when foreign_twophase_commit is \'disabled\'")));
@@ -1519,7 +1398,7 @@ AtPrepare_FdwXacts(void)
 	 * We cannot prepare if any foreign server of participants isn't capable
 	 * of two-phase commit.
 	 */
-	if (FdwXactAtomicCommitRequired() &&
+	if (IsForeignTwophaseCommitRequired() &&
 		(MyXactFlags & XACT_FLAGS_FDWNOPREPARE) != 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -1527,6 +1406,198 @@ AtPrepare_FdwXacts(void)
 
 	/* Prepare transactions on participating foreign servers. */
 	FdwXactPrepareForeignTransactions();
+}
+
+PGPROC *
+FdwXactGetWaiter(TimestampTz *nextResolutionTs_p, TransactionId *waitXid_p)
+{
+	PGPROC *proc;
+
+	LWLockAcquire(FdwXactLock, LW_SHARED);
+	proc = (PGPROC *) SHMQueueNext(&(FdwXactRslvCtl->FdwXactQueue),
+								   &(FdwXactRslvCtl->FdwXactQueue),
+								   offsetof(PGPROC, fdwXactLinks));
+
+	while (proc)
+	{
+		if (proc->databaseId == MyDatabaseId)
+			break;
+
+		proc = (PGPROC *) SHMQueueNext(&(FdwXactRslvCtl->FdwXactQueue),
+									   &(proc->fdwXactLinks),
+									   offsetof(PGPROC, fdwXactLinks));
+	}
+
+	if (proc)
+	{
+		*nextResolutionTs_p = proc->fdwXactNextResolutionTs;
+		*waitXid_p = proc->fdwXactWaitXid;
+	}
+	LWLockRelease(FdwXactLock);
+
+	return proc;
+}
+
+/*
+ * Resolve one distributed transaction on the given databvase . The target
+ * distributed transaction is fetched from either the active queue or the
+ * retry queue and its participants are fetched from either the global array.
+ *
+ * Release the waiter and return true if we resolved the all of the foreign
+ * transaction participants. On failure, we move the FdwXactLinks entry to the
+ * retry queue from the active queue, and raise an error and exit.
+ */
+void
+FdwXactResolveTransactionAndReleaseWaiter(PGPROC *waiter, TransactionId xid)
+{
+	FdwXactResolveState	*state;
+	ListCell		*lc;
+	ListCell		*next;
+	List			*participants;
+
+	Assert(TransactionIdIsValid(xid));
+
+	/* Get all foreign server participants involved with the transaction */
+	participants = get_fdw_xacts(MyDatabaseId, xid, InvalidOid, InvalidOid,
+								 false, true);
+	Assert(participants != NIL);
+
+	state = create_fdw_xact_state();
+
+	/* Resolve all foreign transactions one by one */
+	for (lc = list_head(participants); lc != NULL; lc = next)
+	{
+		FdwXact fdwxact = (FdwXact) lfirst(lc);
+
+		CHECK_FOR_INTERRUPTS();
+
+		next = lnext(lc);
+
+		LWLockAcquire(FdwXactLock, LW_SHARED);
+		state->serverid = fdwxact->serverid;
+		state->userid = fdwxact->userid;
+		state->umid = fdwxact->umid;
+		state->fdwxact_id = pstrdup(fdwxact->fdw_xact_id);
+		LWLockRelease(FdwXactLock);
+
+		PG_TRY();
+		{
+			FdwXactResolveForeignTransaction(state, fdwxact);
+		}
+		PG_CATCH();
+		{
+			/*
+			 * Failed to resolve, re-insert the waiter to the tail of retry
+			 * queue if the waiter is still waiting.
+			 */
+			LWLockAcquire(FdwXactLock, LW_EXCLUSIVE);
+			if (waiter->fdwXactState == FDW_XACT_WAITING)
+			{
+				SHMQueueDelete(&(waiter->fdwXactLinks));
+				pg_write_barrier();
+				waiter->fdwXactNextResolutionTs =
+					TimestampTzPlusMilliseconds(waiter->fdwXactNextResolutionTs,
+												foreign_xact_resolution_retry_interval);
+				FdwXactQueueInsert(waiter);
+			}
+			LWLockRelease(FdwXactLock);
+
+			dump_queue();
+
+			PG_RE_THROW();
+		}
+		PG_END_TRY();
+
+		elog(DEBUG2, "resolved a foreign transaction xid %u, serverid %d, userid %d",
+			 fdwxact->local_xid, fdwxact->serverid, fdwxact->userid);
+	}
+
+	LWLockAcquire(FdwXactLock, LW_EXCLUSIVE);
+
+	/*
+	 * Remove waiter from shmem queue, if not detached yet. The waiter
+	 * could already be detached if user cancelled to wait before
+	 * resolution.
+	 */
+	if (!SHMQueueIsDetached(&(waiter->fdwXactLinks)))
+	{
+		TransactionId	wait_xid = waiter->fdwXactWaitXid;
+
+		SHMQueueDelete(&(waiter->fdwXactLinks));
+		pg_write_barrier();
+
+		/* Set state to complete */
+		waiter->fdwXactState = FDW_XACT_WAIT_COMPLETE;
+
+		/* Wake up the waiter only when we have set state and removed from queue */
+		SetLatch(&(waiter->procLatch));
+
+		elog(DEBUG2, "released the proc xid %u", wait_xid);
+	}
+
+	LWLockRelease(FdwXactLock);
+}
+
+/*
+ * Resolve all dangling foreign transactions on the given database. Get
+ * all dangling foreign transactions from shmem global array and resolve
+ * them one by one.
+ */
+bool
+FdwXactResolveInDoubtTransactions(void)
+{
+	List		*dangling_fdwxacts = NIL;
+	int			n_resolved = 0;
+	int			i;
+	ListCell	*cell;
+
+	LWLockAcquire(FdwXactLock, LW_SHARED);
+
+	/*
+	 * Walk over the global array to make the list of dangling transactions
+	 * of which corresponding local transaction is on the given database.
+	 */
+	for (i = 0; i < FdwXactCtl->numFdwXacts; i++)
+	{
+		FdwXact fxact = FdwXactCtl->fdwXacts[i];
+
+		/*
+		 * Append the fdwxact entry on the given database to the list if
+		 * it's handled by nobody and the corresponding local transaction
+		 * is not part of the prepared transaction.
+		 */
+		if (fxact->dbid == MyDatabaseId &&
+			IsFdwXactInDoubt(fxact) &&
+			!TwoPhaseExists(fxact->local_xid))
+			dangling_fdwxacts = lappend(dangling_fdwxacts, fxact);
+	}
+
+	LWLockRelease(FdwXactLock);
+
+	/* Return if there is no foreign transaction we need to resolve */
+	if (dangling_fdwxacts == NIL)
+		return false;
+
+	foreach(cell, dangling_fdwxacts)
+	{
+		FdwXact fdwxact = (FdwXact) lfirst(cell);
+		FdwXactResolveState *state;
+
+		state = create_fdw_xact_state();
+		state->serverid = fdwxact->serverid;
+		state->userid = fdwxact->userid;
+		state->umid = fdwxact->umid;
+		state->fdwxact_id = pstrdup(fdwxact->fdw_xact_id);
+
+		FdwXactResolveForeignTransaction(state, fdwxact);
+
+		n_resolved++;
+	}
+
+	list_free(dangling_fdwxacts);
+	elog(DEBUG2, "resolved %d dangling foreign xacts", n_resolved);
+
+	return true;
 }
 
 /*
@@ -1570,15 +1641,14 @@ FdwXactResolveForeignTransaction(FdwXactResolveState *state, FdwXact fdwxact)
 		 * status.
 		 */
 		Assert(fdwxact->status == FDW_XACT_STATUS_PREPARING ||
-			   fdwxact->status == FDW_XACT_STATUS_PREPARED ||
-			   fdwxact->status == FDW_XACT_STATUS_IN_DOUBT);
+			   fdwxact->status == FDW_XACT_STATUS_PREPARED);
 
 		/*
-		 * FDW_XACT_FLAG_PREPARING flag indicates that the transaction might
-		 * not be prepared on the foreign server.
+		 * The transaction might not be preapred on the foreign server either
+		 * when it's preparing or it's in-doubt.
 		 */
-		if (fdwxact->status == FDW_XACT_STATUS_IN_DOUBT ||
-			fdwxact->status == FDW_XACT_STATUS_PREPARING)
+		if (fdwxact->status == FDW_XACT_STATUS_PREPARING ||
+			IsFdwXactInDoubt(fdwxact))
 			state->flags |= FDW_XACT_FLAG_PREPARING;
 
 		/*
@@ -1806,7 +1876,7 @@ get_fdw_xacts(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
 			matches = false;
 
 		/* in-doubt transaction? */
-		if (only_indoubt && fdw_xact->status != FDW_XACT_STATUS_IN_DOUBT)
+		if (only_indoubt && IsFdwXactInDoubt(fdw_xact))
 			matches = false;
 
 		/* Append it if matched */
@@ -2425,11 +2495,11 @@ FdwXactRedoAdd(char *buf, XLogRecPtr start_lsn, XLogRecPtr end_lsn)
 							fxact_data->umid, fxact_data->fdw_xact_id);
 
 	/*
-	 * Set status as in-doubt, since we do not know the xact status
+	 * Set status as preparing, since we do not know the xact status
 	 * right now. Resolver will set it later based on the status of
 	 * local transaction that prepared this fdwxact entry.
 	 */
-	fxact->status = FDW_XACT_STATUS_IN_DOUBT;
+	fxact->status = FDW_XACT_STATUS_PREPARING;
 	fxact->insert_start_lsn = start_lsn;
 	fxact->insert_end_lsn = end_lsn;
 	fxact->inredo = true;	/* added in redo */
@@ -2504,10 +2574,10 @@ RecoverFdwXacts(void)
 bool
 check_foreign_twophase_commit(int *newval, void **extra, GucSource source)
 {
-	DistributedAtomicCommitLevel newDistributedAtomicCommitLevel = *newval;
+	ForeignTwophaseCommitLevel newForeignTwophaseCommitLevel = *newval;
 
 		/* Parameter check */
-	if (newDistributedAtomicCommitLevel > FOREIGN_TWOPHASE_COMMIT_DISABLED &&
+	if (newForeignTwophaseCommitLevel > FOREIGN_TWOPHASE_COMMIT_DISABLED &&
 		(max_prepared_foreign_xacts == 0 || max_foreign_xact_resolvers == 0))
 	{
 		GUC_check_errdetail("Cannot enable \"foreign_twophase_commit\" when "
@@ -2609,26 +2679,29 @@ pg_prepared_fdw_xacts(PG_FUNCTION_ARGS)
 		values[1] = TransactionIdGetDatum(fdw_xact->local_xid);
 		values[2] = ObjectIdGetDatum(fdw_xact->serverid);
 		values[3] = ObjectIdGetDatum(fdw_xact->userid);
-		switch (fdw_xact->status)
+
+		if (IsFdwXactInDoubt(fdw_xact))
+			xact_status = "in-dobut";
+		else
 		{
-			case FDW_XACT_STATUS_PREPARING:
-				xact_status = "preparing";
-				break;
-			case FDW_XACT_STATUS_PREPARED:
-				xact_status = "prepared";
-				break;
-			case FDW_XACT_STATUS_COMMITTING:
-				xact_status = "committing";
-				break;
-			case FDW_XACT_STATUS_ABORTING:
-				xact_status = "aborting";
-				break;
-			case FDW_XACT_STATUS_IN_DOUBT:
-				xact_status = "in-doubt";
-				break;
-			default:
-				xact_status = "unknown";
-				break;
+			switch (fdw_xact->status)
+			{
+				case FDW_XACT_STATUS_PREPARING:
+					xact_status = "preparing";
+					break;
+				case FDW_XACT_STATUS_PREPARED:
+					xact_status = "prepared";
+					break;
+				case FDW_XACT_STATUS_COMMITTING:
+					xact_status = "committing";
+					break;
+				case FDW_XACT_STATUS_ABORTING:
+					xact_status = "aborting";
+					break;
+				default:
+					xact_status = "unknown";
+					break;
+			}
 		}
 		values[4] = CStringGetTextDatum(xact_status);
 		/* should this be really interpreted by FDW */
@@ -2667,7 +2740,7 @@ pg_resolve_fdw_xact(PG_FUNCTION_ARGS)
 		ereport(ERROR,
 				(errmsg("could not find foreign transaction entry")));
 
-	Assert(fdwxact->status == FDW_XACT_STATUS_IN_DOUBT);
+	Assert(fdwxact->held_by == InvalidBackendId);
 
 	usermapping = GetUserMapping(userid, serverid);
 	state = create_fdw_xact_state();

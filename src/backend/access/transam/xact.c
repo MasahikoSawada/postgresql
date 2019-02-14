@@ -1142,7 +1142,7 @@ RecordTransactionCommit(void)
 		nmsgs = xactGetCommittedInvalidationMessages(&invalMessages,
 													 &RelcacheInitFileInval);
 	wrote_xlog = (XactLastRecEnd != 0);
-	need_commit_globally = FdwXactIsAtomicCommitReady();
+	need_commit_globally = IsForeignTwophaseCommitReady();
 
 	/*
 	 * If we haven't been assigned an XID yet, we neither can, nor do we want

@@ -21,6 +21,7 @@
 #include "storage/lock.h"
 #include "storage/pg_sema.h"
 #include "storage/proclist_types.h"
+#include "datatype/timestamp.h"
 
 /*
  * Each backend advertises up to PGPROC_MAX_CACHED_SUBXIDS TransactionIds
@@ -158,9 +159,9 @@ struct PGPROC
 	 */
 	TransactionId	fdwXactWaitXid;	/* waiting for foreign transaction involved with
 									 * this transaction id to be resolved */
-	int			fdwXactState;	/* wait state for foreign transaction
-								 * resolution */
+	int			fdwXactState;	/* wait state for foreign transaction resolution */
 	SHM_QUEUE	fdwXactLinks;	/* list link if process is in queue */
+	TimestampTz fdwXactNextResolutionTs;
 
 	/*
 	 * All PROCLOCK objects for locks held or awaited by this backend are

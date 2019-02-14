@@ -398,18 +398,18 @@ static const struct config_enum_entry synchronous_commit_options[] = {
  * Although only "required", "prefer", and "disabled" are documented,
  *  we accept all the likely variants of "on" and "off".
  */
-static const struct config_enum_entry distributed_atomic_commit_options[] = {
-	{"required", DISTRIBUTED_ATOMIC_COMMIT_REQUIRED, false},
-	{"prefer", DISTRIBUTED_ATOMIC_COMMIT_PREFER, false},
-	{"disabled", DISTRIBUTED_ATOMIC_COMMIT_DISABLED, false},
-	{"on", DISTRIBUTED_ATOMIC_COMMIT_REQUIRED, false},
-	{"off", DISTRIBUTED_ATOMIC_COMMIT_DISABLED, false},
-	{"true", DISTRIBUTED_ATOMIC_COMMIT_REQUIRED, true},
-	{"false", DISTRIBUTED_ATOMIC_COMMIT_DISABLED, true},
-	{"yes", DISTRIBUTED_ATOMIC_COMMIT_REQUIRED, true},
-	{"no", DISTRIBUTED_ATOMIC_COMMIT_DISABLED, true},
-	{"1", DISTRIBUTED_ATOMIC_COMMIT_REQUIRED, true},
-	{"0", DISTRIBUTED_ATOMIC_COMMIT_DISABLED, true},
+static const struct config_enum_entry foreign_twophase_commit_options[] = {
+	{"required", FOREIGN_TWOPHASE_COMMIT_REQUIRED, false},
+	{"prefer", FOREIGN_TWOPHASE_COMMIT_PREFER, false},
+	{"disabled", FOREIGN_TWOPHASE_COMMIT_DISABLED, false},
+	{"on", FOREIGN_TWOPHASE_COMMIT_REQUIRED, false},
+	{"off", FOREIGN_TWOPHASE_COMMIT_DISABLED, false},
+	{"true", FOREIGN_TWOPHASE_COMMIT_REQUIRED, true},
+	{"false", FOREIGN_TWOPHASE_COMMIT_DISABLED, true},
+	{"yes", FOREIGN_TWOPHASE_COMMIT_REQUIRED, true},
+	{"no", FOREIGN_TWOPHASE_COMMIT_DISABLED, true},
+	{"1", FOREIGN_TWOPHASE_COMMIT_REQUIRED, true},
+	{"0", FOREIGN_TWOPHASE_COMMIT_DISABLED, true},
 	{NULL, 0, false}
 };
 
@@ -4346,13 +4346,13 @@ static struct config_enum ConfigureNamesEnum[] =
 	},
 
 	{
-		{"distributed_atomic_commit", PGC_USERSET, FDWXACT_SETTINGS,
-		 gettext_noop("Use of distributed atomic commit for the current transaction."),
+		{"foreign_twophase_commit", PGC_USERSET, FDWXACT_SETTINGS,
+		 gettext_noop("Use of foreign twophase commit for the current transaction."),
 			NULL
 		},
-		&distributed_atomic_commit,
-		DISTRIBUTED_ATOMIC_COMMIT_DISABLED, distributed_atomic_commit_options,
-		check_distributed_atomic_commit, NULL, NULL
+		&foreign_twophase_commit,
+		FOREIGN_TWOPHASE_COMMIT_DISABLED, foreign_twophase_commit_options,
+		check_foreign_twophase_commit, NULL, NULL
 	},
 
 	{
