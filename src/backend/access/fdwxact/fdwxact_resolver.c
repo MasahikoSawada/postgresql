@@ -233,7 +233,7 @@ FXRslvLoop(void)
 
 			/* The queue is empty, process in-doubt transactions */
 			StartTransactionCommand();
-			ret = FdwXactResolveInDoubtTransactions();
+			ret = FdwXactResolveInDoubtTransactions(MyDatabaseId);
 			CommitTransactionCommand();
 
 			processing_indoubts = false;
@@ -260,7 +260,7 @@ FXRslvLoop(void)
 
 			/* Resolve the waiting distributed transaction */
 			StartTransactionCommand();
-			FdwXactResolveTransactionAndReleaseWaiter(waiter, waitXid);
+			FdwXactResolveTransactionAndReleaseWaiter(MydatabaseId, waitXid, waiter);
 			CommitTransactionCommand();
 
 			/* Update my stats */

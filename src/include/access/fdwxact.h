@@ -41,13 +41,15 @@
 /* Enum to track the status of prepared foreign transaction */
 typedef enum
 {
+	FDW_XACT_STATUS_INVALID,
 	FDW_XACT_STATUS_INITIAL,
 	FDW_XACT_STATUS_PREPARING,		/* foreign transaction is being prepared */
 	FDW_XACT_STATUS_PREPARED,		/* foreign transaction is prepared */
 	FDW_XACT_STATUS_COMMITTING,		/* foreign prepared transaction is to
 									 * be committed */
-	FDW_XACT_STATUS_ABORTING		/* foreign prepared transaction is to be
+	FDW_XACT_STATUS_ABORTING,		/* foreign prepared transaction is to be
 									 * aborted */
+	FDW_XACT_STATUS_IN_DOUBT
 } FdwXactStatus;
 
 /* Enum for foreign_twophase_commit parameter */
@@ -90,6 +92,7 @@ typedef struct FdwXactData
 	BackendId	held_by;		/* backend who are holding */
 	bool		ondisk;			/* true if prepare state file is on disk */
 	bool		inredo;			/* true if entry was added via xlog_redo */
+
 	char		fdw_xact_id[FDW_XACT_MAX_ID_LEN];		/* prepared transaction identifier */
 } FdwXactData;
 
@@ -146,8 +149,9 @@ extern void PreCommit_FdwXacts(void);
 extern void KnownFdwXactRecreateFiles(XLogRecPtr redo_horizon);
 extern void FdwXactWaitToBeResolved(TransactionId wait_xid, bool commit);
 extern bool IsForeignTwophaseCommitReady(void);
-extern void FdwXactResolveTransactionAndReleaseWaiter(PGPROC *waiter, TransactionId xid);
-extern bool FdwXactResolveInDoubtTransactions(void);
+extern void FdwXactResolveTransactionAndReleaseWaiter(Oid dbid, TransactionId xid,
+													  PGPROC *waiter);
+extern bool FdwXactResolveInDoubtTransactions(Oid dbid);
 extern PGPROC *FdwXactGetWaiter(TimestampTz *nextResolutionTs_p, TransactionId *waitXid_p);
 extern void FdwXactCleanupAtProcExit(void);
 extern void RegisterFdwXactByRelId(Oid relid, bool modified);
