@@ -2415,7 +2415,7 @@ RESET enable_partitionwise_aggregate;
 -- ===================================================================
 
 -- Enable atomic commit
-SET distributed_atomic_commit TO 'required';
+SET foreign_twophase_commit TO 'required';
 
 -- Modify single foreign server and then commit and rollback.
 BEGIN;
@@ -2465,7 +2465,7 @@ ROLLBACK;
 SELECT * FROM ft8_twophase;
 
 -- When set to 'disabled', we can commit it
-SET distributed_atomic_commit TO 'disabled';
+SET foreign_twophase_commit TO 'disabled';
 BEGIN;
 INSERT INTO ft7_twophase VALUES(8);
 INSERT INTO ft8_twophase VALUES(8);
@@ -2473,7 +2473,7 @@ COMMIT; -- success
 SELECT * FROM ft7_twophase;
 SELECT * FROM ft8_twophase;
 
-SET distributed_atomic_commit TO 'required';
+SET foreign_twophase_commit TO 'required';
 
 -- Commit and rollback foreign transactions that are part of
 -- prepare transaction.

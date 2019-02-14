@@ -1115,7 +1115,6 @@ postgresCommitForeignTransaction(FdwXactResolveState *state)
 	bool			is_onephase = (state->flags & FDW_XACT_FLAG_ONEPHASE) != 0;
 	PGresult		*res;
 
-
 	if (is_onephase)
 	{
 		/*
@@ -1124,7 +1123,9 @@ postgresCommitForeignTransaction(FdwXactResolveState *state)
 		 * itself we the connection from the cache and use it.
 		 */
 		entry = GetConnectionCacheEntry(state->umid);
-		Assert(entry->conn && entry->xact_got_connection);
+
+		if (!entry->conn || !entry->xact_got_connection)
+			return;
 	}
 	else
 	{
