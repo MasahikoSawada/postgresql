@@ -16,7 +16,7 @@ max_prepared_foreign_transactions = 10
 max_foreign_transaction_resolvers = 2
 foreign_transaction_resolver_timeout = 0
 foreign_transaction_resolution_retry_interval = 5s
-distributed_atomic_commit = on
+foreign_twophase_commit = on
 ));
 $node_master->start;
 
