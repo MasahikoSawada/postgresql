@@ -139,7 +139,6 @@ typedef struct FdwXactParticipant
 	ForeignServer	*server;
 	UserMapping		*usermapping;
 	bool			modified;					/* true if modified the data on server */
-	void			*fdw_state;				/* fdw-private state */
 
 	/* Callbacks for foreign transaction */
 	PrepareForeignTransaction_function	prepare_foreign_xact;
@@ -201,7 +200,7 @@ static List *get_fdw_xacts(Oid dbid, TransactionId xid, Oid serverid, Oid userid
 						   bool including_indoubts, bool need_lock);
 static FdwXact get_one_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
 								bool only_indoubt, bool need_lock);
-static FdwXact get_all_fdw_xacts(int *length);
+static int get_all_fdw_xacts(FdwXact *fdwxacts);
 static FdwXact insert_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
 							   Oid umid, char *fdw_xact_id);
 static char *generate_fdw_xact_identifier(TransactionId xid, Oid serverid, Oid userid);
@@ -310,7 +309,6 @@ register_fdw_xact(Oid serverid, Oid userid, bool modified)
 		}
 	}
 
-
 	/*
 	 * Don't register foreign server if it doesn't provide transaction
 	 * management callbacks.
@@ -342,7 +340,6 @@ register_fdw_xact(Oid serverid, Oid userid, bool modified)
 	fdw_part->usermapping = user_mapping;
 	fdw_part->fdw_xact = NULL;
 	fdw_part->modified = modified;
-	fdw_part->fdw_state = NULL;
 	fdw_part->prepare_foreign_xact = routine->PrepareForeignTransaction;
 	fdw_part->commit_foreign_xact = routine->CommitForeignTransaction;
 	fdw_part->rollback_foreign_xact = routine->RollbackForeignTransaction;
@@ -413,6 +410,7 @@ FdwXactShmemInit(void)
 		for (cnt = 0; cnt < max_prepared_foreign_xacts; cnt++)
 		{
 			fdw_xacts[cnt].status = FDW_XACT_STATUS_INVALID;
+			fdw_xacts[cnt].fate = FDW_XACT_FATE_INVALID;
 			fdw_xacts[cnt].fxact_free_next = FdwXactCtl->freeFdwXacts;
 			FdwXactCtl->freeFdwXacts = &fdw_xacts[cnt];
 		}
@@ -661,6 +659,7 @@ FdwXactPrepareForeignTransactions(void)
 		}
 		PG_CATCH();
 		{
+			/* Back to the initial state */
 			LWLockAcquire(FdwXactLock, LW_EXCLUSIVE);
 			fdwxact->status = FDW_XACT_STATUS_INITIAL;
 			LWLockRelease(FdwXactLock);
@@ -673,9 +672,6 @@ FdwXactPrepareForeignTransactions(void)
 		LWLockAcquire(FdwXactLock, LW_EXCLUSIVE);
 		fdwxact->status = FDW_XACT_STATUS_PREPARED;
 		LWLockRelease(FdwXactLock);
-
-		/* Keep fdw_state until the end of transaction */
-		fdw_part->fdw_state = state->fdw_state;
 	}
 }
 
@@ -692,7 +688,6 @@ FdwXactCommitForeignTransaction(FdwXactParticipant *fdw_part)
 	state->userid = fdw_part->usermapping->userid;
 	state->umid = fdw_part->usermapping->umid;
 	state->flags = FDW_XACT_FLAG_ONEPHASE;
-	fdw_part->fdw_state = (void *) state;
 
 	/*
 	 * Commit foreign transaction in one-phase. Since we didn't insert foreign
@@ -1037,28 +1032,10 @@ ForgetAllFdwXactParticipants(void)
 		 * if the entries are still associated with the transaction.
 		 */
 		if (fdw_part->fdw_xact->held_by == MyBackendId)
-		{
 			fdw_part->fdw_xact->held_by = InvalidBackendId;
-			fdw_part->fdw_xact->status = FDW_XACT_STATUS_IN_DOUBT;
-			n_lefts++;
-		}
 	}
 
 	LWLockRelease(FdwXactLock);
-
-	/*
-	 * If we left any FdwXact entries, update the oldest local transaction of
-	 * unresolved distributed transaction and take over them to the foreign
-	 * transaction resolver.
-	 */
-	if (n_lefts > 0)
-	{
-		ereport(NOTICE,
-				(errmsg("left %u foreign transactions in in-doubt status",
-						n_lefts)));
-		FdwXactComputeRequiredXmin();
-		fdwxact_maybe_launch_resolver(true);
-	}
 
 	FdwXactParticipants = NIL;
 }
@@ -1342,31 +1319,59 @@ AtEOXact_FdwXacts(bool is_commit)
 	if (!is_commit)
 	{
 		FdwXactResolveState *state = create_fdw_xact_state();
+		int n_indoubts = 0;
 
 		foreach (lcell, FdwXactParticipants)
 		{
 			FdwXactParticipant	*fdw_part = lfirst(lcell);
 
+			LWLockAcquire(FdwXactLock, LW_EXCLUSIVE);
+
+			Assert(fdw_part->fdw_xact->status == FDW_XACT_STATUS_PREPARED ||
+				   fdw_part->fdw_xact->status == FDW_XACT_STATUS_INITIAL);
+
 			/*
 			 * Skip already-prepared foreign transaction because it has closed
-			 * its transaction. But we are not sure that foreign transaction with
-			 * status == FDW_XACT_STATUS_PREPARING has been prepared or not. So we
-			 * call the rollback API to close its transaction for safety. The API
-			 * contract of rollback API here is the it can tolerate to be called
-			 * recursively. The prepared foreign transaction that we might have
-			 * will be resolved by the foreign transaction resolver.
+			 * its transaction. But we are not sure foreign transactions with
+			 * status == FDW_XACT_STATUS_INITIAL, which means the foreign
+			 * transaction failed during preparation, has been prepared or not.
+			 * So we call the rollback API to close its transaction for safety.
+			 * The API contract of rollback API here is that it can tolerate to
+			 * be called recursively. Even if the foreign transaction has been
+			 * prepared the foreign transaction resolver process handles them
+			 * later.
 			 */
 			if (fdw_part->fdw_xact &&
 				fdw_part->fdw_xact->status == FDW_XACT_STATUS_PREPARED)
+			{
+				fdw_part->fdw_xact->status = FDW_XACT_STATUS_IN_DOUBT;
+				n_indoubts++;
+				LWLockRelease(FdwXactLock);
 				continue;
+			}
+			LWLockRelease(FdwXactLock);
 
 			state->serverid = fdw_part->server->serverid;
 			state->userid = fdw_part->usermapping->userid;
 			state->umid = fdw_part->usermapping->umid;
-			state->fdw_state = fdw_part->fdw_state;
 			state->flags = FDW_XACT_FLAG_ONEPHASE;
 
 			fdw_part->rollback_foreign_xact(state);
+		}
+
+		/*
+		 * If we left any FdwXact entries in in-doubt state, update the oldest
+		 * local transaction of unresolved distributed transaction so as not
+		 * to truncate the corresponding commit logs, and take over them to the
+		 * foreign transaction resolver.
+		 */
+		if (n_indoubts > 0)
+		{
+			ereport(DEBUG1,
+					(errmsg("left %u foreign transactions in in-doubt status",
+							n_lefts)));
+			FdwXactComputeRequiredXmin();
+			fdwxact_maybe_launch_resolver(true);
 		}
 	}
 
@@ -1413,8 +1418,7 @@ AtPrepare_FdwXacts(void)
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot prepare the transaction because some foreign servers involved in transaction can not prepare the transaction")));
 
-	/* Prepare transactions on participating foreign servers. */
-	FdwXactPrepareForeignTransactions();
+	ForgetAllFdwXactParticipants();
 }
 
 PGPROC *
@@ -1474,7 +1478,7 @@ FdwXactResolveTransactionAndReleaseWaiter(Oid dbid, TransactionId xid,
 
 	state = create_fdw_xact_state();
 
-	/* Resolve all foreign transactions one by one */
+	/* Resolve all foreign transactions */
 	for (lc = list_head(participants); lc != NULL; lc = next)
 	{
 		FdwXact fdwxact = (FdwXact) lfirst(lc);
@@ -1489,7 +1493,7 @@ FdwXactResolveTransactionAndReleaseWaiter(Oid dbid, TransactionId xid,
 		state->umid = fdwxact->umid;
 
 		state->fdwxact_id = pstrdup(fdwxact->fdw_xact_id);
-		is_commit = FdwXactDetermineTransactionFate(fdwxact, false);
+		is_commit = FdwXactDetermineTransactionFate(fdwxact);
 
 		LWLockRelease(FdwXactLock);
 
@@ -1592,13 +1596,13 @@ FdwXactResolveInDoubtTransactions(Oid dbid)
 		state->userid = fdwxact->userid;
 		state->umid = fdwxact->umid;
 		state->fdwxact_id = pstrdup(fdwxact->fdw_xact_id);
+		state->flags = FDW_XACT_FLAG_PREPARING;
 
-		prev_status = fdwxact->status;
-		is_commit = FdwXactDetermineTransactionFate(fdwxact, false);
+		is_commit = FdwXactDetermineTransactionFate(fdwxact);
 		LWLockRelease(FdwXactLock);
 
-		FdwXactResolveForeignTransaction(state, fdwxact, is_commit, prev_status);
-
+		FdwXactResolveForeignTransaction(state, fdwxact, is_commit,
+										 FDW_XACT_STATUS_IN_DOUBT);
 		n_resolved++;
 	}
 
@@ -1614,77 +1618,80 @@ FdwXactDetermineTransactionFate(FdwXact fdwxact)
 	bool is_commit = false;
 
 	Assert(LWLockHeldByMeInMode(FdwXactLock, LW_EXCLUSIVE));
+	Assert(fdwxact->status == FDW_XACT_STATUS_PREPARED ||
+		   fdwxact->status == FDW_XACT_STATUS_IN_DOUBT);
+
+	if (fdwxact->fate == FDW_XACT_FATE_COMMIT)
+	{
+		fdwxact->status = FDW_XACT_STATUS_COMMITTING;
+		return true;
+	}
+	else if (fdwxact->fate == FDW_XACT_FATE_ABORT)
+	{
+		fdwxact->status = FDW_XACT_STATUS_COMMITTING;
+		return false;
+	}
 
 	/*
-	 * Determine whether we commit or abort this foreign transaction.
+	 * The fate of the transaction is not determined. Resolve its fate
+	 * according the status of the local transaction and change its
+	 * status.
 	 */
-	if (fdwxact->status == FDW_XACT_STATUS_COMMITTING)
-		is_commit = true;
-	else if (fdwxact->status == FDW_XACT_STATUS_ABORTING)
-		is_commit = false;
-	else
+
+	/*
+	 * The transaction is in-dbout so might not be prepared on the foreign
+	 * server.
+	 */
+	Assert(fdwxact->status == FDW_XACT_STATUS_IN_DOUBT ||
+		   fdwxact->status == FDW_XACT_STATUS_PREPARED);
+
+	/*
+	 * If the local transaction is already committed, commit prepared
+	 * foreign transaction.
+	 */
+	if (TransactionIdDidCommit(fdwxact->local_xid))
 	{
-		/*
-		 * The fate of the transaction is not determined. Resolve its fate
-		 * according the status of the local transaction and change its
-		 * status.
-		 */
-
-		/*
-		 * The transaction is in-dbout so might not be prepared on the foreign
-		 * server.
-		 */
-		Assert(fdwxact->status == FDW_XACT_STATUS_IN_DOUBT ||
-			   fdwxact->status == FDW_XACT_STATUS_PREPARED);
-
-		if (fdwxact->status == FDW_XACT_STATUS_IN_DOUBT)
-			state->flags |= FDW_XACT_FLAG_PREPARING;
-
-		/*
-		 * If the local transaction is already committed, commit prepared
-		 * foreign transaction.
-		 */
-		if (TransactionIdDidCommit(fdwxact->local_xid))
-		{
-			fdwxact->status = FDW_XACT_STATUS_COMMITTING;
-			is_commit = true;
-		}
-
-		/*
-		 * If the local transaction is already aborted, abort prepared
-		 * foreign transactions.
-		 */
-		else if (TransactionIdDidAbort(fdwxact->local_xid))
-		{
-			fdwxact->status = FDW_XACT_STATUS_ABORTING;
-			is_commit = false;
-		}
-
-		/*
-		 * The local transaction is not in progress but the foreign
-		 * transaction is not prepared on the foreign server. This
-		 * can happen when transaction failed after registered this
-		 * entry but before actual preparing on the foreign server.
-		 * So let's assume it aborted.
-		 */
-		else if (!TransactionIdIsInProgress(fdwxact->local_xid))
-		{
-			fdwxact->status = FDW_XACT_STATUS_ABORTING;
-			is_commit = false;
-		}
-
-		/*
-		 * The Local transaction is in progress and foreign transaction
-		 * state is either committing or aborting. This should not
-		 * happen because we cannot determine to do commit or abort for
-		 * foreign transaction associated with the in-progress local
-		 * transaction.
-		 */
-		else
-			ereport(ERROR,
-					(errmsg("cannot resolve the foreign transaction associated with in-progress transaction %u on server %u",
-							fdwxact->local_xid, fdwxact->serverid)));
+		fdwxact->status = FDW_XACT_STATUS_COMMITTING;
+		fdwxact->fate = FDW_XACT_FATE_COMIT;
+		is_commit = true;
 	}
+
+	/*
+	 * If the local transaction is already aborted, abort prepared
+	 * foreign transactions.
+	 */
+	else if (TransactionIdDidAbort(fdwxact->local_xid))
+	{
+		fdwxact->status = FDW_XACT_STATUS_ABORTING;
+		fdwxact->fate = FDW_XACT_FATE_ABORT;
+		is_commit = false;
+	}
+
+	/*
+	 * The local transaction is not in progress but the foreign
+	 * transaction is not prepared on the foreign server. This
+	 * can happen when transaction failed after registered this
+	 * entry but before actual preparing on the foreign server.
+	 * So let's assume it aborted.
+	 */
+	else if (!TransactionIdIsInProgress(fdwxact->local_xid))
+	{
+		fdwxact->status = FDW_XACT_STATUS_ABORTING;
+		fdwxact->fate = FDW_XACT_FATE_ABORT;
+		is_commit = false;
+	}
+
+	/*
+	 * The Local transaction is in progress and foreign transaction
+	 * state is either committing or aborting. This should not
+	 * happen because we cannot determine to do commit or abort for
+	 * foreign transaction associated with the in-progress local
+	 * transaction.
+	 */
+	else
+		ereport(ERROR,
+				(errmsg("cannot resolve the foreign transaction associated with in-progress transaction %u on server %u",
+						fdwxact->local_xid, fdwxact->serverid)));
 
 	return is_commit;
 }
@@ -1750,12 +1757,11 @@ create_fdw_xact_state(void)
 {
 	FdwXactResolveState *state;
 
-	state = palloc(sizeof(FdwXactResolveState));
+	state = (FdwXactResolveState *) palloc(sizeof(FdwXactResolveState));
 	state->serverid = InvalidOid;
 	state->userid = InvalidOid;
 	state->umid = InvalidOid;
 	state->fdwxact_id = NULL;
-	state->fdw_state = NULL;
 	state->flags = 0;
 
 	return state;
@@ -1778,8 +1784,8 @@ get_one_fdw_xact(Oid dbid, TransactionId xid, Oid serverid, Oid userid,
 	Assert(OidIsValid(userid));
 	Assert(OidIsValid(dbid));
 
-	fdw_xact_list = get_fdw_xacts(dbid, xid, serverid, userid, including_indoubts,
-								  need_lock);
+	fdw_xact_list = get_fdw_xacts(dbid, xid, serverid, userid,
+								  including_indoubts, need_lock);
 
 	/* Could not find entry */
 	if (fdw_xact_list == NIL)
@@ -1817,43 +1823,35 @@ fdw_xact_exists(TransactionId xid, Oid dbid, Oid serverid, Oid userid)
  *
  * The returned array is palloc'd.
  */
-static FdwXact
-get_all_fdw_xacts(int *length)
+static int
+get_all_fdw_xacts(FdwXact *fdwxacts)
 {
-	List		*all_fdw_xacts;
-	ListCell	*lc;
-	FdwXact		fdw_xacts;
-	int			num_fdw_xacts = 0;
+	FdwXact		array;
+	int			num;
+	int			i;
 
-	Assert(length != NULL);
+	Assert(fdwxacts != NULL);
 
-	/* Get all entries */
-	all_fdw_xacts = get_fdw_xacts(InvalidOid, InvalidTransactionId,
-								  InvalidOid, InvalidOid, true, true);
+	LWLockAcquire(FdwXactLock, LW_SHARED);
 
-	if (all_fdw_xacts == NIL)
+	if (FdwXactCtl->numFdwXacts == 0)
 	{
-		*length = 0;
-		return NULL;
+		LWLockRelease(FdwXactLock);
+
+		*fdwxacts = NULL;
+		return 0;
 	}
 
-	fdw_xacts = (FdwXact)
-		palloc(sizeof(FdwXactData) * list_length(all_fdw_xacts));
+	num = FdwXactCtl->numFdwXacts;
+	array = (FdwXact) palloc(sizeof(FdwXact) * num);
+	*fdwxacts = array;
 
-	/* Convert list to array of FdwXact */
-	foreach(lc, all_fdw_xacts)
-	{
-		FdwXact fx = (FdwXact) lfirst(lc);
+	for (i = 0; i < num; i++)
+		memcpy(array + i, FdwXactCtl->fdwXacts[i], sizeof(FdwXactData));
 
-		memcpy(fdw_xacts + num_fdw_xacts, fx,
-			   sizeof(FdwXactData));
-		num_fdw_xacts++;
-	}
+	LWLockRelease(FdwXactLock);
 
-	*length = num_fdw_xacts;
-	list_free(all_fdw_xacts);
-
-	return fdw_xacts;
+	return num;
 }
 
 /*
@@ -2618,7 +2616,7 @@ typedef struct
 	FdwXact		fdw_xacts;
 	int			num_xacts;
 	int			cur_xact;
-}	WorkingStatus;
+}	WorkingState;
 
 Datum
 pg_prepared_fdw_xacts(PG_FUNCTION_ARGS)
@@ -2664,11 +2662,10 @@ pg_prepared_fdw_xacts(PG_FUNCTION_ARGS)
 		 * Collect status information that we will format and send out as a
 		 * result set.
 		 */
-		status = (WorkingStatus *) palloc(sizeof(WorkingStatus));
+		status = (WorkingState *) palloc(sizeof(WorkingState));
 		funcctx->user_fctx = (void *) status;
 
-		status->fdw_xacts = get_all_fdw_xacts(&num_fdw_xacts);
-		status->num_xacts = num_fdw_xacts;
+		status->num_xacts = get_all_fdw_xacts(&status->fdw_xacts);
 		status->cur_xact = 0;
 
 		MemoryContextSwitchTo(oldcontext);
@@ -2766,7 +2763,7 @@ pg_resolve_fdw_xact(PG_FUNCTION_ARGS)
 
 	prev_status = fdwxact->status;
 
-	is_commit = FdwXactDetermineTransactionFate(fdwxact, false);
+	is_commit = FdwXactDetermineTransactionFate(fdwxact);
 
 	FdwXactResolveForeignTransaction(state, fdwxact, is_commit, prev_status);
 

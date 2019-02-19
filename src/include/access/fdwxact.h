@@ -35,6 +35,10 @@
 #define FDW_XACT_FLAG_PREPARING		0x02	/* transaction could not be prepared due to
 											 * the crash during preparing */
 
+#define FDW_XACT_FATE_INVALID	0x00
+#define FDW_XACT_FATE_COMMIT	0x01
+#define FDW_XACT_FATE_ABORT		0x02
+
 /* Maximum length of the prepared transaction id, borrowed from twophase.c */
 #define FDW_XACT_ID_MAX_LEN 200
 
@@ -77,6 +81,7 @@ typedef struct FdwXactData
 	Oid				umid;
 	FdwXactStatus 	status;			/* The state of the foreign transaction. This
 									 * doubles as the action to be taken on this entry. */
+	int				fate;
 
 	/*
 	 * Note that we need to keep track of two LSNs for each FdwXact. We keep
@@ -123,7 +128,6 @@ typedef struct FdwXactResolveState
 	Oid		umid;
 	char	*fdwxact_id;
 	int		flags;
-	void	*fdw_state;		/* foreign-data wrapper can keep state here */
 } FdwXactResolveState;
 
 /* GUC parameters */
