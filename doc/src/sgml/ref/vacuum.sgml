@@ -30,6 +30,7 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
     FREEZE [ <replaceable class="parameter">boolean</replaceable> ]
     VERBOSE [ <replaceable class="parameter">boolean</replaceable> ]
     ANALYZE [ <replaceable class="parameter">boolean</replaceable> ]
+    PARALLEL [ <replaceable class="parameter">integer</replaceable> ]
     DISABLE_PAGE_SKIPPING [ <replaceable class="parameter">boolean</replaceable> ]
     SKIP_LOCKED [ <replaceable class="parameter">boolean</replaceable> ]
 
@@ -143,6 +144,22 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
    </varlistentry>
 
    <varlistentry>
+    <term><literal>PARALLEL</literal></term>
+    <listitem>
+     <para>
+      Perform vacuum index and cleanup index phases of <command>VACUUM</command>
+      in parallel using <replaceable class="parameter">integer</replaceable> background
+      workers (for the detail of each vacuum phases, please refer to
+      <xref linkend="vacuum-phases"/>). Only one worker can be used per index. So
+      parallel workers are launched only when there are at least <literal>2</literal>
+      indexes in the table. Workers for vacuum launches before starting each phases
+      and exit at the end of the phase. These behaviors might change in a future release.
+      This option can not use with <literal>FULL</literal> option.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><literal>DISABLE_PAGE_SKIPPING</literal></term>
     <listitem>
      <para>
@@ -191,6 +208,20 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
       <literal>OFF</literal>, or <literal>0</literal> to disable it.  The
       <replaceable class="parameter">boolean</replaceable> value can also
       be omitted, in which case <literal>TRUE</literal> is assumed.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">integer</replaceable></term>
+    <listitem>
+     <para>
+      Specifies parallel degree for <literal>PARALLEL</literal> option. The
+      value must be at least 1. If the parallel degree
+      <replaceable class="parameter">integer</replaceable> is omitted, then
+      <command>VACUUM</command> decides the number of workers based on number of
+      indexes on the relation which further limited by
+      <xref linkend="guc-max-parallel-workers-maintenance"/>.
      </para>
     </listitem>
    </varlistentry>

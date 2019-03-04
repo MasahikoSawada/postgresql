@@ -80,6 +80,12 @@ CONTEXT:  SQL function "do_analyze" statement 1
 SQL function "wrap_do_analyze" statement 1
 VACUUM FULL vactst;
 VACUUM (DISABLE_PAGE_SKIPPING) vaccluster;
+VACUUM (PARALLEL) vaccluster;
+VACUUM (PARALLEL 2) vaccluster;
+VACUUM (PARALLEL 0) vaccluster; -- error
+ERROR:  parallel vacuum degree must be at least 1
+LINE 1: VACUUM (PARALLEL 0) vaccluster;
+                ^
 -- partitioned table
 CREATE TABLE vacparted (a int, b char) PARTITION BY LIST (a);
 CREATE TABLE vacparted1 PARTITION OF vacparted FOR VALUES IN (1);
@@ -116,9 +122,9 @@ ERROR:  column "does_not_exist" of relation "vacparted" does not exist
 ANALYZE (VERBOSE) does_not_exist;
 ERROR:  relation "does_not_exist" does not exist
 ANALYZE (nonexistent-arg) does_not_exist;
-ERROR:  syntax error at or near "-"
+ERROR:  syntax error at or near "arg"
 LINE 1: ANALYZE (nonexistent-arg) does_not_exist;
-                            ^
+                             ^
 ANALYZE (nonexistentarg) does_not_exit;
 ERROR:  unrecognized ANALYZE option "nonexistentarg"
 LINE 1: ANALYZE (nonexistentarg) does_not_exit;

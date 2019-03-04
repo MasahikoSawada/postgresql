@@ -167,6 +167,11 @@ typedef struct VacuumParams
 	int			log_min_duration;	/* minimum execution threshold in ms at
 									 * which  verbose logs are activated, -1
 									 * to use default */
+	/*
+	 * The number of parallel vacuum workers. -1 by default for no workers
+	 * and 0 for choosing based on the number of indexes.
+	 */
+	int			nworkers;
 } VacuumParams;
 
 /* GUC parameters */
