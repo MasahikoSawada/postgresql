@@ -89,7 +89,10 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 	VacuumParams params;
 	ListCell	*lc;
 
-	params.options = vacstmt->is_vacuumcmd ? VACOPT_VACUUM : VACOPT_ANALYZE;
+	/* Vacuum enables index cleanup by default */
+	params.options = vacstmt->is_vacuumcmd
+		? VACOPT_VACUUM | VACOPT_INDEX_CLEANUP
+		: VACOPT_ANALYZE;
 
 	/* Parse options list */
 	foreach(lc, vacstmt->options)
@@ -116,6 +119,8 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 			params.options |= defGetBoolean(opt) ? VACOPT_FULL : 0;
 		else if (strcmp(opt->defname, "disable_page_skipping") == 0)
 			params.options |= defGetBoolean(opt) ? VACOPT_DISABLE_PAGE_SKIPPING : 0;
+		else if (strcmp(opt->defname, "index_cleanup") == 0)
+			params.options |= defGetBoolean(opt) ? VACOPT_INDEX_CLEANUP : 0;
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -237,7 +242,8 @@ vacuum(List *relations, VacuumParams *params,
 						stmttype)));
 
 	/*
-	 * Sanity check DISABLE_PAGE_SKIPPING option.
+	 * Sanity check DISABLE_PAGE_SKIPPING option and INDEX_CLEANUP
+	 * option.
 	 */
 	if ((params->options & VACOPT_FULL) != 0 &&
 		(params->options & VACOPT_DISABLE_PAGE_SKIPPING) != 0)
@@ -245,6 +251,11 @@ vacuum(List *relations, VacuumParams *params,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("VACUUM option DISABLE_PAGE_SKIPPING cannot be used with FULL")));
 
+	if ((params->options & VACOPT_FULL) != 0 &&
+		(params->options & VACOPT_INDEX_CLEANUP) == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("VACUUM option DISABLE_INDEX_CLEANUP cannot be used with FULL")));
 	/*
 	 * Send info about dead objects to the statistics collector, unless we are
 	 * in autovacuum --- autovacuum.c does this for itself.
@@ -1704,6 +1715,13 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params)
 	 */
 	onerelid = onerel->rd_lockInfo.lockRelId;
 	LockRelationIdForSession(&onerelid, lmode);
+
+	/*
+	 * Disables index cleanup based on reloptions.
+	 */
+	if (onerel->rd_options &&
+		!((StdRdOptions *) onerel->rd_options)->vacuum_index_cleanup)
+		params->options &= ~(VACOPT_INDEX_CLEANUP);
 
 	/*
 	 * Remember the relation's TOAST relation for later, if the caller asked

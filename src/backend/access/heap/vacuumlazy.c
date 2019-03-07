@@ -112,8 +112,10 @@
 
 typedef struct LVRelStats
 {
-	/* hasindex = true means two-pass strategy; false means one-pass */
-	bool		hasindex;
+	/*
+	 * useindex = true means two-pass strategy; false means one-pass.
+	 */
+	bool		useindex;
 	/* Overall statistics about rel */
 	BlockNumber old_rel_pages;	/* previous value of pg_class.relpages */
 	BlockNumber rel_pages;		/* total number of pages */
@@ -125,6 +127,8 @@ typedef struct LVRelStats
 	double		new_rel_tuples; /* new estimated total # of tuples */
 	double		new_live_tuples;	/* new estimated total # of live tuples */
 	double		new_dead_tuples;	/* new estimated total # of dead tuples */
+	double		nleft_dead_tuples;	/* # of dead tuples we left */
+	double		nleft_dead_itemids;	/* # of dead item pointers we left */
 	BlockNumber pages_removed;
 	double		tuples_deleted;
 	BlockNumber nonempty_pages; /* actually, last nonempty page + 1 */
@@ -258,7 +262,8 @@ heap_vacuum_rel(Relation onerel, VacuumParams *params,
 
 	/* Open all indexes of the relation */
 	vac_open_indexes(onerel, RowExclusiveLock, &nindexes, &Irel);
-	vacrelstats->hasindex = (nindexes > 0);
+	vacrelstats->useindex = (nindexes > 0 &&
+							 (params->options & VACOPT_INDEX_CLEANUP) != 0);
 
 	/* Do the vacuuming */
 	lazy_scan_heap(onerel, params->options, vacrelstats, Irel, nindexes, aggressive);
@@ -332,7 +337,7 @@ heap_vacuum_rel(Relation onerel, VacuumParams *params,
 						new_rel_pages,
 						new_live_tuples,
 						new_rel_allvisible,
-						vacrelstats->hasindex,
+						nindexes > 0,
 						new_frozen_xid,
 						new_min_multi,
 						false);
@@ -403,6 +408,9 @@ heap_vacuum_rel(Relation onerel, VacuumParams *params,
 							 vacrelstats->new_rel_tuples,
 							 vacrelstats->new_dead_tuples,
 							 OldestXmin);
+			appendStringInfo(&buf, "%.0f tuples and %.0f item identifiers are left as dead.\n",
+							 vacrelstats->nleft_dead_tuples,
+							 vacrelstats->nleft_dead_itemids);
 			appendStringInfo(&buf,
 							 _("buffer usage: %d hits, %d misses, %d dirtied\n"),
 							 VacuumPageHit,
@@ -485,7 +493,10 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 				live_tuples,	/* live tuples (reltuples estimate) */
 				tups_vacuumed,	/* tuples cleaned up by vacuum */
 				nkeep,			/* dead-but-not-removable tuples */
-				nunused;		/* unused item pointers */
+				nunused,		/* unused item pointers */
+				nleft_dead_tuples,		/* tuples we left as dead */
+				nleft_dead_itemids;		/* item pointers we left as dead,
+										 * includes nleft_dead_tuples. */
 	IndexBulkDeleteResult **indstats;
 	int			i;
 	PGRUsage	ru0;
@@ -517,7 +528,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 
 	empty_pages = vacuumed_pages = 0;
 	next_fsm_block_to_vacuum = (BlockNumber) 0;
-	num_tuples = live_tuples = tups_vacuumed = nkeep = nunused = 0;
+	num_tuples = live_tuples = tups_vacuumed  = nkeep = nunused = 0;
+	nleft_dead_itemids = nleft_dead_tuples = 0;
 
 	indstats = (IndexBulkDeleteResult **)
 		palloc0(nindexes * sizeof(IndexBulkDeleteResult *));
@@ -1054,7 +1066,16 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 						HeapTupleIsHeapOnly(&tuple))
 						nkeep += 1;
 					else
+					{
 						tupgone = true; /* we can delete the tuple */
+
+						/*
+						 * Since the dead tuples will be not be vacuumed
+						 * and ignored when index cleanup is disabled we
+						 * count them for reporting.
+						 */
+						nleft_dead_tuples++;
+					}
 					all_visible = false;
 					break;
 				case HEAPTUPLE_LIVE:
@@ -1206,15 +1227,33 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		}
 
 		/*
-		 * If there are no indexes then we can vacuum the page right now
-		 * instead of doing a second scan.
+		 * If there are no indexes we can vacuum the page right now instead of
+		 * doing a second scan. Also we don't do that but forget dead tuples
+		 * when index cleanup is disabled.
 		 */
-		if (nindexes == 0 &&
-			vacrelstats->num_dead_tuples > 0)
+		if (!vacrelstats->useindex && vacrelstats->num_dead_tuples > 0)
 		{
-			/* Remove tuples from heap */
-			lazy_vacuum_page(onerel, blkno, buf, 0, vacrelstats, &vmbuffer);
-			has_dead_tuples = false;
+			if (nindexes == 0)
+			{
+				/* Remove tuples from heap if the table has no index */
+				lazy_vacuum_page(onerel, blkno, buf, 0, vacrelstats, &vmbuffer);
+				vacuumed_pages++;
+				has_dead_tuples = false;
+			}
+			else
+			{
+				/*
+				 * Here, we have indexes but index cleanup is disabled. Instead of
+				 * vacuuming the dead tuples on the heap, we just forget them.
+				 *
+				 * Note that vacrelstats->dead_tuples could have tuples which
+				 * became dead after HOT-pruning but are not marked dead yet.
+				 * We do not process them because it's a very rare condition, and
+				 * the next vacuum will process them anyway.
+				 */
+				Assert((options & VACOPT_INDEX_CLEANUP) == 0);
+				nleft_dead_itemids += vacrelstats->num_dead_tuples;
+			}
 
 			/*
 			 * Forget the now-vacuumed tuples, and press on, but be careful
@@ -1222,7 +1261,6 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			 * valid.
 			 */
 			vacrelstats->num_dead_tuples = 0;
-			vacuumed_pages++;
 
 			/*
 			 * Periodically do incremental FSM vacuuming to make newly-freed
@@ -1348,7 +1386,9 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 
 	/* save stats for use later */
 	vacrelstats->tuples_deleted = tups_vacuumed;
-	vacrelstats->new_dead_tuples = nkeep;
+	vacrelstats->new_dead_tuples = nkeep + nleft_dead_tuples;
+	vacrelstats->nleft_dead_tuples = nleft_dead_tuples;
+	vacrelstats->nleft_dead_itemids = nleft_dead_itemids;
 
 	/* now we can compute the new value for pg_class.reltuples */
 	vacrelstats->new_live_tuples = vac_estimate_reltuples(onerel,
@@ -1417,10 +1457,13 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 								 PROGRESS_VACUUM_PHASE_INDEX_CLEANUP);
 
 	/* Do post-vacuum cleanup and statistics update for each index */
-	for (i = 0; i < nindexes; i++)
-		lazy_cleanup_index(Irel[i], indstats[i], vacrelstats);
+	if (vacrelstats->useindex)
+	{
+		for (i = 0; i < nindexes; i++)
+			lazy_cleanup_index(Irel[i], indstats[i], vacrelstats);
+	}
 
-	/* If no indexes, make log report that lazy_vacuum_heap would've made */
+	/* If no index, make log report that lazy_vacuum_heap would've made */
 	if (vacuumed_pages)
 		ereport(elevel,
 				(errmsg("\"%s\": removed %.0f row versions in %u pages",
@@ -1449,6 +1492,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 									"%u pages are entirely empty.\n",
 									empty_pages),
 					 empty_pages);
+	appendStringInfo(&buf, "%.0f tuples and %.0f item identifiers are left as dead.\n",
+					 nleft_dead_tuples, nleft_dead_itemids);
 	appendStringInfo(&buf, _("%s."), pg_rusage_show(&ru0));
 
 	ereport(elevel,
@@ -2092,7 +2137,7 @@ lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks)
 	autovacuum_work_mem != -1 ?
 	autovacuum_work_mem : maintenance_work_mem;
 
-	if (vacrelstats->hasindex)
+	if (vacrelstats->useindex)
 	{
 		maxtuples = (vac_work_mem * 1024L) / sizeof(ItemPointerData);
 		maxtuples = Min(maxtuples, INT_MAX);
