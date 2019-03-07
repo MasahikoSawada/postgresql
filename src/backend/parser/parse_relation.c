@@ -2743,25 +2743,51 @@ get_rte_attribute_type(RangeTblEntry *rte, AttrNumber attnum,
 				tp = SearchSysCache2(ATTNUM,
 									 ObjectIdGetDatum(rte->relid),
 									 Int16GetDatum(attnum));
-				if (!HeapTupleIsValid(tp))	/* shouldn't happen */
-					elog(ERROR, "cache lookup failed for attribute %d of relation %u",
-						 attnum, rte->relid);
-				att_tup = (Form_pg_attribute) GETSTRUCT(tp);
+				if (!HeapTupleIsValid(tp))
+				{
+					if (!rte->range_match_recognize)
+						elog(ERROR, "cache lookup failed for attribute %d of relation %u",
+							 attnum, rte->relid);
 
-				/*
-				 * If dropped column, pretend it ain't there.  See notes in
-				 * scanRTEForColumn.
-				 */
-				if (att_tup->attisdropped)
-					ereport(ERROR,
-							(errcode(ERRCODE_UNDEFINED_COLUMN),
-							 errmsg("column \"%s\" of relation \"%s\" does not exist",
-									NameStr(att_tup->attname),
-									get_rel_name(rte->relid))));
-				*vartype = att_tup->atttypid;
-				*vartypmod = att_tup->atttypmod;
-				*varcollid = att_tup->attcollation;
-				ReleaseSysCache(tp);
+					/* There is change if MEASURES clause has.. */
+				}
+
+				if (HeapTupleIsValid(tp))
+				{
+					/* Found attribute in the syscache */
+					att_tup = (Form_pg_attribute) GETSTRUCT(tp);
+
+					/*
+					 * If dropped column, pretend it ain't there.  See notes in
+					 * scanRTEForColumn.
+					 */
+					if (att_tup->attisdropped)
+						ereport(ERROR,
+								(errcode(ERRCODE_UNDEFINED_COLUMN),
+								 errmsg("column \"%s\" of relation \"%s\" does not exist",
+										NameStr(att_tup->attname),
+										get_rel_name(rte->relid))));
+					*vartype = att_tup->atttypid;
+					*vartypmod = att_tup->atttypmod;
+					*varcollid = att_tup->attcollation;
+				    ReleaseSysCache(tp);
+				}
+				else
+				{
+					/* Try to find the attribute in MEASURES clause */
+					int n_total = list_length(rte->eref->colnames);
+					int n_orig = n_total - list_length(rte->coltypes);
+
+					if (attnum - 1 > n_total - n_orig)
+						ereport(ERROR,
+								(errcode(ERRCODE_UNDEFINED_COLUMN),
+								 errmsg("column %d of relation \"%s\" does not exist",
+										attnum,
+										get_rel_name(rte->relid))));
+					*vartype = list_nth_oid(rte->coltypes, attnum - 1 - n_orig);
+					*vartypmod = list_nth_int(rte->coltypmods, attnum - 1 - n_orig);
+					*varcollid = list_nth_oid(rte->colcollations, attnum - 1 - n_orig);
+				}
 			}
 			break;
 		case RTE_SUBQUERY:

@@ -1222,6 +1222,7 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		RangeTblRef *rtr;
 		RangeTblEntry *rte;
 		List *save_namespace;
+		ListCell	*lc;
 
 		rel = transformFromClauseItem(pstate, rmc->relation,
 									  top_rte, top_rti, namespace);
@@ -1237,6 +1238,50 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 
 		pstate->p_hasMatchRecognize = true;
 		rte->range_match_recognize = rmc;
+
+		/* MEASURES clause */
+		List *coltypes = NIL;
+		List *coltypmods = NIL;
+		List *colcollations = NIL;
+		foreach (lc, rmc->measuresClause)
+		{
+			ResTarget *res = (ResTarget *) lfirst(lc);
+			Node *expr;
+			Oid type, collations;
+			int typmods;
+
+			if (IsA(res->val, A_Const))
+			{
+				A_Const *con = (A_Const *) res->val;
+				Const *result;
+				Value *val = &con->val;
+
+				result = make_const(pstate, val, con->location);
+				type = result->consttype;
+				typmods = result->consttypmod;
+				collations = DEFAULT_COLLATION_OID;
+			}
+			else
+			{
+				type = exprType((Node *) res->val);
+				typmods = exprTypmod((Node *) res->val);
+				collations = exprCollation((Node *) res->val);
+			}
+
+			coltypes = lappend_oid(coltypes, type);
+			coltypmods = lappend_int(coltypmods, typmods);
+			colcollations = lappend_oid(colcollations, collations);
+		}
+
+		rte->coltypes = list_concat(rte->coltypes, coltypes);
+		rte->coltypmods = list_concat(rte->coltypmods, coltypmods);
+		rte->colcollations = list_concat(rte->colcollations, colcollations);
+
+		foreach (lc, rmc->measuresClause)
+		{
+			ResTarget *res = (ResTarget *) lfirst(lc);
+			rte->eref->colnames = lappend(rte->eref->colnames, makeString(res->name));
+		}
 		//transformRangeMatchRecognize(pstate, rmc, rte);
 
 		pstate->p_namespace = save_namespace;

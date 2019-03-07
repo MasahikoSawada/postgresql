@@ -158,6 +158,7 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 	rel->consider_param_startup = false;	/* might get changed later */
 	rel->consider_parallel = false; /* might get changed later */
 	rel->reltarget = create_empty_pathtarget();
+	rel->baserel_natts = 0;
 	rel->pathlist = NIL;
 	rel->ppilist = NIL;
 	rel->partial_pathlist = NIL;
@@ -225,6 +226,29 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 		case RTE_RELATION:
 			/* Table --- retrieve statistics from the system catalogs */
 			get_relation_info(root, rte->relid, rte->inh, rel);
+
+			if (rte->range_match_recognize)
+			{
+				int i;
+				int save_max = rel->max_attr;
+
+				rel->baserel_natts = save_max;
+				rel->max_attr = list_length(rte->eref->colnames);
+				rel->attr_needed = (Relids *)
+					repalloc(rel->attr_needed,
+							 (rel->max_attr - rel->min_attr + 1) * sizeof(Relids));
+				rel->attr_widths = (int32 *)
+					repalloc(rel->attr_widths,
+							 (rel->max_attr - rel->min_attr + 1) * sizeof(int32));
+
+				for (i = (save_max - rel->min_attr);
+					 i < (rel->max_attr - rel->min_attr);
+					 i++)
+				{
+					rel->attr_needed[i] = NULL;
+					rel->attr_widths[i] = 0;
+				}
+			}
 			break;
 		case RTE_SUBQUERY:
 		case RTE_FUNCTION:

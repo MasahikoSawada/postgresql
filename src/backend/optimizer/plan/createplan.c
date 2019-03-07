@@ -6720,7 +6720,7 @@ create_match_recognize_plan(PlannerInfo *root, MatchRecognizePath *best_path)
 
 	rte = planner_rt_fetch(scan_relid, root);
 
-	plan->targetlist = subplan->targetlist;
+	plan->targetlist = build_path_tlist(root, &best_path->path);
 	plan->lefttree = subplan;
 	plan->righttree = NULL;
 

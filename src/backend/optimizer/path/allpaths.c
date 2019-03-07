@@ -3919,11 +3919,31 @@ set_match_recognize_pathlist(PlannerInfo *root, RelOptInfo *rel,
 									 path, pathkeys,
 									 -1.0);
 
+	PathTarget *tl = create_empty_pathtarget();
+	int n = 0;
+
+	foreach (lc, rel->reltarget->exprs)
+	{
+		Expr *e = (Expr *) lfirst(lc);
+
+		if (n > rel->baserel_natts)
+			break;
+
+		tl->exprs = lappend(tl->exprs, e);
+	}
+
+	foreach (lc, mrclause->measuresClause)
+	{
+		ResTarget *res = (ResTarget *) lfirst(lc);
+
+		tl->exprs = lappend(tl->exprs, res->val);
+	}
+
 	/* Create MatchRecognizePath */
 	path = (Path *) create_match_recognize_path(root,
 												rel,
 												path,
-												rel->reltarget,
+												tl,
 												mrclause);
 	add_path(rel, path);
 	set_cheapest(rel);
@@ -3948,6 +3968,14 @@ set_rel_match_recognize(PlannerInfo *root)
 
 		mr_rel = fetch_upper_rel(root, UPPERREL_MATCH_RECOGNIZE, NULL);
 
+		mr_rel->max_attr = list_length(rte->eref->colnames);
+		mr_rel->attr_needed = (Relids *)
+			palloc0((rel->max_attr - rel->min_attr + 1) * sizeof(Relids));
+		rel->attr_widths = (int32 *)
+			palloc0((rel->max_attr - rel->min_attr + 1) * sizeof(int32));
+
+		mr_rel->reltarget->exprs = list_concat(mr_rel->reltarget->exprs, rel->reltarget->exprs);
+
 		foreach (lc, rel->pathlist)
 		{
 			Path *path = (Path *) lfirst(lc);
@@ -3971,9 +3999,12 @@ set_rel_match_recognize(PlannerInfo *root)
 														path,
 														rel->reltarget,
 														mrclause);
+			add_path(rel, path);
 		}
 
 		set_cheapest(mr_rel);
+
+		root->simple_rel_array[rti] = mr_rel;
 	}
 }
 

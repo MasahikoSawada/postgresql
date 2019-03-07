@@ -18,11 +18,20 @@ ExecMatchRecognize(PlanState *pstate)
 	MatchRecognizeState *node = castNode(MatchRecognizeState, pstate);
 	TupleTableSlot *slot;
 	PlanState *outerNode;
+	ProjectionInfo *projInfo;
+	ExprContext *econtext;
+
+	projInfo = node->ss.ps.ps_ProjInfo;
+	econtext = node->ss.ps.ps_ExprContext;
+
+	ResetExprContext(econtext);
 
 	outerNode = node->ss.ps.lefttree;
 	slot = ExecProcNode(outerNode);
+	econtext->ecxt_scantuple = slot;
 
-	return slot;
+	return ExecProject(projInfo);
+//	return slot;
 }
 
 MatchRecognizeState *
@@ -35,10 +44,12 @@ ExecInitMatchRecognize(MatchRecognize *node, EState *estate, int eflags)
 	mrstate->ss.ps.state = estate;
 	mrstate->ss.ps.ExecProcNode = ExecMatchRecognize;
 
-	/* initialize child node */
+	ExecAssignExprContext(estate, &mrstate->ss.ps);
+
 	mrstate->ss.ps.lefttree = ExecInitNode(node->plan.lefttree, estate, eflags);
 
 	ExecInitResultTupleSlotTL(estate, &mrstate->ss.ps);
+	ExecAssignProjectionInfo(&mrstate->ss.ps, NULL);
 
 	return mrstate;
 }

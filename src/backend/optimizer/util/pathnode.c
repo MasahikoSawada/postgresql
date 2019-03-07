@@ -958,7 +958,27 @@ create_seqscan_path(PlannerInfo *root, RelOptInfo *rel,
 
 	pathnode->pathtype = T_SeqScan;
 	pathnode->parent = rel;
-	pathnode->pathtarget = rel->reltarget;
+	if (rel->baserel_natts > 0)
+	{
+		PathTarget *reltarget = create_empty_pathtarget();;
+		ListCell *lc;
+		int n = 0;
+
+		reltarget->cost = rel->reltarget->cost;
+		foreach (lc, rel->reltarget->exprs)
+		{
+			if (n >= rel->baserel_natts)
+				break;
+
+			Expr *e = (Expr *) lfirst(lc);
+			reltarget->exprs = lappend(reltarget->exprs, copyObject(e));
+
+			n++;
+		}
+		pathnode->pathtarget = reltarget;
+	}
+	else
+		pathnode->pathtarget = rel->reltarget;
 	pathnode->param_info = get_baserel_parampathinfo(root, rel,
 													 required_outer);
 	pathnode->parallel_aware = parallel_workers > 0 ? true : false;

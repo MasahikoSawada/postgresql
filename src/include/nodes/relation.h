@@ -631,6 +631,7 @@ typedef struct RelOptInfo
 
 	/* default result targetlist for Paths scanning this relation */
 	struct PathTarget *reltarget;	/* list of Vars/Exprs, cost, width */
+	int			baserel_natts;
 
 	/* materialization information */
 	List	   *pathlist;		/* Path structures */
