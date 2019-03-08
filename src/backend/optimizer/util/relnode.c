@@ -242,7 +242,7 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 							 (rel->max_attr - rel->min_attr + 1) * sizeof(int32));
 
 				for (i = (save_max - rel->min_attr);
-					 i < (rel->max_attr - rel->min_attr);
+					 i <= (rel->max_attr - rel->min_attr);
 					 i++)
 				{
 					rel->attr_needed[i] = NULL;

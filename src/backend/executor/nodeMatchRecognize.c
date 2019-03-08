@@ -28,6 +28,11 @@ ExecMatchRecognize(PlanState *pstate)
 
 	outerNode = node->ss.ps.lefttree;
 	slot = ExecProcNode(outerNode);
+
+	if (TupIsNull(slot))
+		return ExecClearTuple(projInfo->pi_state.resultslot);
+	//return NULL;
+
 	econtext->ecxt_scantuple = slot;
 
 	return ExecProject(projInfo);

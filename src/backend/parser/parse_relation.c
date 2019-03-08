@@ -2778,7 +2778,7 @@ get_rte_attribute_type(RangeTblEntry *rte, AttrNumber attnum,
 					int n_total = list_length(rte->eref->colnames);
 					int n_orig = n_total - list_length(rte->coltypes);
 
-					if (attnum - 1 > n_total - n_orig)
+					if (attnum > n_total)
 						ereport(ERROR,
 								(errcode(ERRCODE_UNDEFINED_COLUMN),
 								 errmsg("column %d of relation \"%s\" does not exist",

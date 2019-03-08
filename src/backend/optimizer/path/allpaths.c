@@ -3926,17 +3926,18 @@ set_match_recognize_pathlist(PlannerInfo *root, RelOptInfo *rel,
 	{
 		Expr *e = (Expr *) lfirst(lc);
 
-		if (n > rel->baserel_natts)
+		if (n >= rel->baserel_natts)
 			break;
 
 		tl->exprs = lappend(tl->exprs, e);
+		n++;
 	}
 
 	foreach (lc, mrclause->measuresClause)
 	{
-		ResTarget *res = (ResTarget *) lfirst(lc);
+		TargetEntry *t = (TargetEntry *) lfirst(lc);
 
-		tl->exprs = lappend(tl->exprs, res->val);
+		tl->exprs = lappend(tl->exprs, t->expr);
 	}
 
 	/* Create MatchRecognizePath */
