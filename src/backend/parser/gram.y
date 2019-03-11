@@ -14297,7 +14297,7 @@ row_pattern_measures_list:
 ;
 
 row_pattern_measures_definition:
-			d_expr AS IDENT
+			a_expr AS IDENT
 				{
 					$$ = makeNode(ResTarget);
 					$$->name = $3;

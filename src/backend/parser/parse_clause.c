@@ -1181,6 +1181,11 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		RangeTblRef *rtr;
 		RangeTblEntry *rte;
 		List *save_namespace;
+		/* MEASURES clause */
+		List *coltypes = NIL;
+		List *coltypmods = NIL;
+		List *colcollations = NIL;
+		ListCell *lc;
 
 		rel = transformFromClauseItem(pstate, rmc->relation,
 									  top_rte, top_rti, namespace);
@@ -1196,6 +1201,29 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 
 		pstate->p_hasMatchRecognize = true;
 		rte->range_match_recognize = rmc;
+
+		/*
+		 * Transform target list in MEASURES clause into coltypes, coltypmods,
+		 * colcollations.
+		 *
+		 * @@@ : I assumed that coltypes and 2 values are used only by RTE_RELATION
+		 * so these must be empty here. That's why I set them instead of appending.
+		 */
+		foreach(lc, rmc->measuresClause)
+		{
+			ResTarget *rt = (ResTarget *) lfirst(lc);
+			Node *expr = transformExpr(pstate, rt->val, EXPR_KIND_MATCH_RECOGNIZE_MEASURES_TARGET);
+
+
+			coltypes = lappend_oid(coltypes, exprType(expr));
+			coltypmods = lappend_int(coltypmods, exprTypmod(expr));
+			colcollations = lappend_oid(colcollations, exprCollation(expr));
+		}
+
+		rte->coltypes = coltypes;
+		rte->coltypmods = coltypmods;
+		rte->colcollations = colcollations;
+
 		//transformRangeMatchRecognize(pstate, rmc, rte);
 
 		pstate->p_namespace = save_namespace;
