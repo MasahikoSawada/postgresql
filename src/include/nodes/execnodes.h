@@ -2108,6 +2108,31 @@ typedef struct MatchRecognizeState
 {
 	ScanState ss;
 	PlanState *subplan;
+
+	int		framehead_ptr;
+	int		frametail_ptr;
+	int		current_ptr;
+
+	int64	spooled_rows;
+	int64	currentpos;
+	int64	frameheadpos;
+	int64	frametailpos;
+
+	Tuplestorestate *buffer;
+
+	TupleTableSlot	*first_part_slot;
+	TupleTableSlot	*framehead_slot;
+	TupleTableSlot	*frametail_slot;
+
+	bool	framehead_valid;
+	bool	frametail_valid;
+	bool	more_partitions;
+	bool	partition_spooled;
+
+	bool	all_done;
+
+	TupleTableSlot	*temp_slot_1;
+	TupleTableSlot	*temp_slot_2;
 } MatchRecognizeState;
 
 /* ----------------
