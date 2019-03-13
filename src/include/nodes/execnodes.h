@@ -2109,6 +2109,8 @@ typedef struct MatchRecognizeState
 	ScanState ss;
 	PlanState *subplan;
 
+	ExprState	*partEqfunction;
+
 	int		framehead_ptr;
 	int		frametail_ptr;
 	int		current_ptr;

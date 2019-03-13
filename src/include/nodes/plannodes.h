@@ -333,6 +333,11 @@ typedef struct MatchRecognize
 {
 	Plan	plan;
 	struct MatchRecognizeclause *match_recognize;
+
+
+	int partNumCols;
+	AttrNumber *partColIdx;
+	Oid *partOperators;
 } MatchRecognize;
 
 /*

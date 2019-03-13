@@ -6654,7 +6654,12 @@ create_match_recognize_plan(PlannerInfo *root, MatchRecognizePath *best_path)
 	Plan *plan = &node->plan;
 	Plan *subplan;
 	RangeTblEntry *rte;
+	ListCell *lc;
 	Index scan_relid = ((Path *)best_path)->parent->relid;
+	int numPart = list_length(best_path->mrclause->partitionClause);
+	int partNumCols;
+	AttrNumber *partColIdx;
+	Oid	*partOperators;
 
 	subplan = create_plan_recurse(root, best_path->subpath, 0);
 
@@ -6663,6 +6668,23 @@ create_match_recognize_plan(PlannerInfo *root, MatchRecognizePath *best_path)
 	plan->targetlist = subplan->targetlist;
 	plan->lefttree = subplan;
 	plan->righttree = NULL;
+
+	partColIdx = (AttrNumber *) palloc(sizeof(AttrNumber) * numPart);
+	partOperators = (Oid *) palloc(sizeof(Oid) * numPart);
+	partNumCols = 0;
+	foreach(lc, best_path->mrclause->partitionClause)
+	{
+		SortGroupClause *sgc = (SortGroupClause *) lfirst(lc);
+		TargetEntry *tle = get_sortgroupclause_tle(sgc, subplan->targetlist);
+
+		Assert(OidIsValid(sgc->eqop));
+		partColIdx[partNumCols] = tle->resno;
+		partOperators[partNumCols] = sgc->eqop;
+	}
+
+	node->partNumCols = partNumCols;
+	node->partColIdx = partColIdx;
+	node->partOperators = partOperators;
 
 	node->match_recognize = &(rte->match_recognize);
 

@@ -129,7 +129,7 @@ ExecMatchRecognize(PlanState *pstate)
 	if (mrstate->partition_spooled &&
 		mrstate->currentpos >= mrstate->spooled_rows)
 	{
-		//release_partition(mrstate);
+		release_partition(mrstate);
 
 		if (mrstate->more_partitions)
 		{
@@ -196,6 +196,13 @@ ExecInitMatchRecognize(MatchRecognize *node, EState *estate, int eflags)
 
 	ExecInitResultTupleSlotTL(&mrstate->ss.ps, &TTSOpsVirtual);
 	ExecAssignProjectionInfo(&mrstate->ss.ps, NULL);
+
+	mrstate->partEqfunction =
+		execTuplesMatchPrepare(scanDesc,
+							   node->partNumCols,
+							   node->partColIdx,
+							   node->partOperators,
+							   &mrstate->ss.ps);
 
 	mrstate->more_partitions = false;
 
