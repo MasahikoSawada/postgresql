@@ -27,6 +27,7 @@
 #include "nodes/primnodes.h"
 #include "nodes/value.h"
 #include "partitioning/partdefs.h"
+#include "lib/stringinfo.h"
 
 
 typedef enum OverridingKind
@@ -535,6 +536,13 @@ typedef struct WindowDef
 /*
  * MATCH_RECOGNIZE in a raw FROM clause
  */
+typedef struct MRPattern
+{
+	NodeTag		type;
+	List		*prims;
+	char		*str;
+} MRPattern;
+
 typedef struct RangeMatchRecognize
 {
 	NodeTag		type;
@@ -543,7 +551,7 @@ typedef struct RangeMatchRecognize
 	List		*orderClause;
 	List		*measuresClause;
 	int			permatchOption;
-	char		*patternClause;
+	MRPattern	*patternClause;
 	List		*defineClause;
 	int			location;
 } RangeMatchRecognize;
@@ -1162,7 +1170,7 @@ typedef struct MatchRecognizeClause
 	List		*orderClause;
 	List		*measuresClause;
 	int			permatchOption;
-	char		*patternClause;
+	MRPattern	*patternClause;
 	List		*defineClause;
 } MatchRecognizeClause;
 

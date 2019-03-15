@@ -52,9 +52,6 @@
 #include "utils/syscache.h"
 #include "utils/rel.h"
 
-#include "regex/regexport.h"
-
-
 /* Convenience macro for the most common makeNamespaceItem() case */
 #define makeDefaultNSItem(rte)	makeNamespaceItem(rte, true, true, false, true)
 
@@ -1177,6 +1174,7 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 	else if (IsA(n, RangeMatchRecognize))
 	{
 		RangeMatchRecognize *rmc = (RangeMatchRecognize *) n;
+		MatchRecognizeClause *mrc = makeNode(MatchRecognizeClause);
 		Node	*rel;
 		RangeTblRef *rtr;
 		RangeTblEntry *rte;
@@ -1200,7 +1198,15 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		pstate->p_namespace = *namespace;
 
 		pstate->p_hasMatchRecognize = true;
+		rte->match_recognize = mrc;
 		rte->range_match_recognize = rmc;
+
+		mrc->partitionClause = list_copy(rmc->partitionClause);
+		mrc->orderClause = list_copy(rmc->partitionClause);
+		mrc->measuresClause = list_copy(rmc->partitionClause);
+		mrc->permatchOption = rmc->permatchOption;
+		mrc->patternClause = rmc->patternClause;
+		mrc->defineClause = rmc->defineClause;
 
 		/*
 		 * Transform target list in MEASURES clause into coltypes, coltypmods,
@@ -3721,31 +3727,6 @@ transformFrameOffset(ParseState *pstate, int frameOptions,
  * MATCH_RECOGNIZE test functions
  ***********************************************************/
 
-static void
-color(regex_t *regex)
-{
-	int colorsCount = pg_reg_getnumcolors(regex);
-
-
-	elog(NOTICE, "-------- MR color info --------");
-	for (int i = 0; i < colorsCount; i++)
-	{
-		int charsCount = pg_reg_getnumcharacters(regex, i);
-		pg_wchar	*chars;
-		char buf[8192] = {'\0'};
-
-		if (charsCount < 0)
-			continue;
-
-		chars = (pg_wchar *) palloc(sizeof(pg_wchar) * charsCount);
-		pg_reg_getcharacters(regex, i, chars, charsCount);
-
-		pg_wchar2mb(chars, buf);
-		elog(NOTICE, "%s", buf);
-	}
-	elog(NOTICE, "-------------------------------");
-}
-
 void
 transformRangeMatchRecognize(ParseState *pstate,
 							 RangeMatchRecognize *rmc,
@@ -3804,36 +3785,6 @@ transformRangeMatchRecognize(ParseState *pstate,
 	match_recognize->patternClause = rmc->patternClause;
 
 	pstate->p_next_resno = 1;
-	/* TESTING REGEXPR */
-	{
-		regex_t regex;
-		int		regcomp_result;
-		char	errMsg[100];
-		pg_wchar	*pattern;
-		int			pattern_len;
-
-		elog(NOTICE, "PATTERN String \"%s\"", rmc->patternClause);
-		pattern = (pg_wchar *) palloc((strlen(rmc->patternClause) + 1) * sizeof(pg_wchar));
-		pattern_len = pg_mb2wchar_with_len(rmc->patternClause,
-										   pattern,
-										   strlen(rmc->patternClause));
-		regcomp_result = pg_regcomp(&regex,
-									pattern,
-									pattern_len,
-									REG_BASIC,
-									DEFAULT_COLLATION_OID);
-
-		if (regcomp_result != REG_OKAY)
-		{
-			pg_regerror(regcomp_result, &regex, errMsg, sizeof(errMsg));
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_REGULAR_EXPRESSION),
-					 errmsg("invalid regular expression: %s", errMsg)));
-		}
-
-
-		//color(&regex);
-	}
 
 	/* DEFINE clause */
 	pstate->p_next_resno = 1;

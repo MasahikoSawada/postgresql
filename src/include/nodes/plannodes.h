@@ -332,8 +332,7 @@ typedef struct BitmapOr
 typedef struct MatchRecognize
 {
 	Plan	plan;
-	struct MatchRecognizeclause *match_recognize;
-
+	struct MatchRecognizeClause *match_recognize;
 
 	int partNumCols;
 	AttrNumber *partColIdx;

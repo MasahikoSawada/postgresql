@@ -3,6 +3,7 @@
 #include "access/hash.h"
 #include "access/relscan.h"
 #include "access/tsmapi.h"
+#include "catalog/pg_collation.h"
 #include "executor/executor.h"
 #include "executor/nodeMatchRecognize.h"
 #include "miscadmin.h"
@@ -11,9 +12,40 @@
 #include "utils/builtins.h"
 #include "utils/rel.h"
 
+#include "regex/regexport.h"
+
+static void MatchRecognizeCompileRE(MatchRecognizeState *node,
+									MatchRecognizeClause *mrc);
+
 static void begin_partition(MatchRecognizeState *mrstate);
 static void spool_tuples(MatchRecognizeState *mrstate, int64 pos);
 static void release_partition(MatchRecognizeState *mrstate);
+
+static void
+color(regex_t *regex)
+{
+	int colorsCount = pg_reg_getnumcolors(regex);
+
+	elog(NOTICE, "-------- MR color info --------");
+	for (int i = 0; i < colorsCount; i++)
+	{
+		int charsCount = pg_reg_getnumcharacters(regex, i);
+		pg_wchar	*chars;
+		char buf[8192] = {'\0'};
+
+		if (charsCount < 0)
+			continue;
+
+		chars = (pg_wchar *) palloc(sizeof(pg_wchar) * charsCount);
+		pg_reg_getcharacters(regex, i, chars, charsCount);
+
+		for (int j = 0; j < charsCount; j++)
+			buf[j] = chars[j];
+
+		elog(NOTICE, "%s", buf);
+	}
+	elog(NOTICE, "-------------------------------");
+}
 
 static void
 spool_tuples(MatchRecognizeState *mrstate, int64 pos)
@@ -163,6 +195,7 @@ MatchRecognizeState *
 ExecInitMatchRecognize(MatchRecognize *node, EState *estate, int eflags)
 {
 	MatchRecognizeState *mrstate;
+	MatchRecognizeClause *mrclause = node->match_recognize;
 	Plan	*outerPlan;
 	TupleDesc	scanDesc;
 
@@ -206,6 +239,9 @@ ExecInitMatchRecognize(MatchRecognize *node, EState *estate, int eflags)
 
 	mrstate->more_partitions = false;
 
+	/* Compile PATTERN clause */
+	MatchRecognizeCompileRE(mrstate, mrclause);
+
 	return mrstate;
 }
 
@@ -214,4 +250,53 @@ ExecEndMatchRecognize(MatchRecognizeState *node)
 {
 	ExecClearTuple(node->ss.ps.ps_ResultTupleSlot);
 	ExecEndNode(node->ss.ps.lefttree);
+}
+
+static void
+MatchRecognizeCompileRE(MatchRecognizeState *node, MatchRecognizeClause *mrc)
+{
+	MRPattern *mrpattern = mrc->patternClause;
+	regex_t regex;
+	int		regcomp_result;
+	char	errMsg[100];
+	pg_wchar	*pattern;
+	int			pattern_len;
+
+	/* Debug code */
+	{
+		ListCell *lc;
+		StringInfo str = makeStringInfo();
+
+		foreach(lc, mrpattern->prims)
+		{
+			char *p = (char *) lfirst(lc);
+			appendStringInfo(str, "%s ", p);
+		}
+		elog(NOTICE, "PRIMS: \"%s\"", str->data);
+		elog(NOTICE, "PATTERN String: \"%s\"", mrpattern->str);
+	}
+
+	/* Compile */
+	pattern = (pg_wchar *) palloc((strlen(mrpattern->str) + 1) * sizeof(pg_wchar));
+	pattern_len = pg_mb2wchar_with_len(mrpattern->str,
+									   pattern,
+									   strlen(mrpattern->str));
+	regcomp_result = pg_regcomp(&regex,
+								pattern,
+								pattern_len,
+								REG_BASIC,
+								DEFAULT_COLLATION_OID);
+
+	pfree(pattern);
+	if (regcomp_result != REG_OKAY)
+	{
+		pg_regerror(regcomp_result, &regex, errMsg, sizeof(errMsg));
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_REGULAR_EXPRESSION),
+				 errmsg("invalid regular expression: %s", errMsg)));
+	}
+
+	color(&regex);
+
+	
 }

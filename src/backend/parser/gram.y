@@ -61,6 +61,7 @@
 #include "parser/parser.h"
 #include "parser/parse_expr.h"
 #include "storage/lmgr.h"
+#include "lib/stringinfo.h"
 #include "utils/date.h"
 #include "utils/datetime.h"
 #include "utils/numeric.h"
@@ -241,7 +242,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	PartitionElem		*partelem;
 	PartitionSpec		*partspec;
 	PartitionBoundSpec	*partboundspec;
-	char				*row_pattern;
+	MRPattern			*row_pattern;
 	RoleSpec			*rolespec;
 }
 
@@ -589,7 +590,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <defelt>		hash_partbound_elem
 
 %type <row_pattern>	row_pattern row_pattern_term row_pattern_factor row_pattern_primary
-					row_pattern_quantifier
+%type <str>		row_pattern_quantifier
 %type <list>	row_pattern_measures_list
 %type <list>	row_pattern_define_list
 %type <ival>	row_pattern_rows_per_match
@@ -14336,9 +14337,14 @@ row_pattern:
 			}
 			| row_pattern '|' row_pattern_term
 			{
-				StringInfo str = makeStringInfo();
-				appendStringInfo(str, "((%s)|(%s))", $1, $3);
-				$$ = str->data;
+				MRPattern *pat1 = $1;
+				MRPattern *pat2 = $3;
+				StringInfo s = makeStringInfo();
+				appendStringInfo(s, "(%s)|(%s)",
+								 pat1->str, pat2->str);
+				pat1->prims = list_concat_unique(pat1->prims, pat2->prims);
+				pat1->str = s->data;
+				$$ = pat1;
 			}
 ;
 
@@ -14349,9 +14355,14 @@ row_pattern_term:
 			}
 			| row_pattern_term row_pattern_factor
 			{
-				StringInfo str = makeStringInfo();
-				appendStringInfo(str, "((%s) (%s))", $1, $2);
-				$$ = str->data;
+				MRPattern *pat1 = $1;
+				MRPattern *pat2 = $2;
+				StringInfo s = makeStringInfo();
+				appendStringInfo(s, "(%s) (%s)",
+								 pat1->str, pat2->str);
+				pat1->prims = list_concat_unique(pat1->prims, pat2->prims);
+				pat1->str = s->data;
+				$$ = pat1;
 			}
 ;
 
@@ -14362,9 +14373,12 @@ row_pattern_factor:
 			}
 			| row_pattern_primary row_pattern_quantifier
 			{
-				StringInfo str = makeStringInfo();
-				appendStringInfo(str, "(%s)%s", $1, $2);
-				$$ = str->data;
+				MRPattern *pat = $1;
+				StringInfo s = makeStringInfo();
+				appendStringInfo(s, "(%s)%s", pat->str, $2);
+
+				pat->str = s->data;
+				$$ = pat;
 			}
 ;
 
@@ -14396,14 +14410,24 @@ row_pattern_quantifier:
 ;
 
 row_pattern_primary:
-IDENT {
-	$$ = $1;
-}
+			IDENT
+			{
+				/* intialize */
+				MRPattern *pat = makeNode(MRPattern);
+				pat->prims = NIL;
+
+				/* register */
+				pat->prims = lappend(pat->prims, $1);
+				pat->str = $1;
+				$$ = pat;
+			}
 			| '(' row_pattern ')'
 			{
-				StringInfo str = makeStringInfo();
-				appendStringInfo(str, "(%s)", $2);
-				$$ = str->data;
+				MRPattern *pat = $2;
+				StringInfo s = makeStringInfo();
+				appendStringInfo(s, "(%s)", pat->str);
+				pat->str = s->data;
+				$$ = pat;
 			}
 ;
 

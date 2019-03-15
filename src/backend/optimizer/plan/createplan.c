@@ -6686,7 +6686,7 @@ create_match_recognize_plan(PlannerInfo *root, MatchRecognizePath *best_path)
 	node->partColIdx = partColIdx;
 	node->partOperators = partOperators;
 
-	node->match_recognize = &(rte->match_recognize);
+	node->match_recognize = best_path->mrclause;
 
 	return node;
 }

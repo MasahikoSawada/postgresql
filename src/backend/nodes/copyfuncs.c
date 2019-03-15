@@ -1021,12 +1021,10 @@ _copyWindowAgg(const WindowAgg *from)
 	return newnode;
 }
 
-/*
 static MatchRecognize *
 _copyMatchRecognize(const MatchRecognize *from)
 {
 }
-*/
 
 /*
  * _copyUnique
@@ -2497,7 +2495,7 @@ _copyMatchRecognizeClause(const MatchRecognizeClause *from)
 	COPY_NODE_FIELD(orderClause);
 	COPY_NODE_FIELD(measuresClause);
 	COPY_SCALAR_FIELD(permatchOption);
-	COPY_STRING_FIELD(patternClause);
+	COPY_NODE_FIELD(patternClause);
 	COPY_NODE_FIELD(defineClause);
 
 	return newnode;
@@ -2827,13 +2825,23 @@ _copyRangeMatchRecognize(const RangeMatchRecognize *from)
 	COPY_NODE_FIELD(orderClause);
 	COPY_NODE_FIELD(measuresClause);
 	COPY_SCALAR_FIELD(permatchOption);
-	COPY_STRING_FIELD(patternClause);
+	COPY_NODE_FIELD(patternClause);
 	COPY_NODE_FIELD(defineClause);
 	COPY_LOCATION_FIELD(location);
 
 	return newnode;
 }
 
+static MRPattern *
+_copyMRPattern(const MRPattern *from)
+{
+	MRPattern *newnode = makeNode(MRPattern);
+
+	COPY_STRING_FIELD(str);
+	newnode->prims = list_copy(from->prims);
+
+	return newnode;
+}
 
 static RangeTableFunc *
 _copyRangeTableFunc(const RangeTableFunc *from)
@@ -4939,11 +4947,9 @@ copyObjectImpl(const void *from)
 		case T_WindowAgg:
 			retval = _copyWindowAgg(from);
 			break;
-			/*
 		case T_MatchRecognize:
 			retval = _copyMatchRecognize(from);
 			break;
-			*/
 		case T_Unique:
 			retval = _copyUnique(from);
 			break;
@@ -5652,6 +5658,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_MatchRecognizeClause:
 			retval = _copyMatchRecognizeClause(from);
+			break;
+		case T_MRPattern:
+			retval = _copyMRPattern(from);
 			break;
 		case T_RowMarkClause:
 			retval = _copyRowMarkClause(from);
