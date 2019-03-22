@@ -36,6 +36,7 @@
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_namespace.h"
 #include "commands/cluster.h"
+#include "commands/defrem.h"
 #include "commands/vacuum.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -97,9 +98,9 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 
 		/* Parse common options for VACUUM and ANALYZE */
 		if (strcmp(opt->defname, "verbose") == 0)
-			params.options |= VACOPT_VERBOSE;
+			params.options |= defGetBoolean(opt) ? VACOPT_VERBOSE : 0;
 		else if (strcmp(opt->defname, "skip_locked") == 0)
-			params.options |= VACOPT_SKIP_LOCKED;
+			params.options |= defGetBoolean(opt) ? VACOPT_SKIP_LOCKED : 0;
 		else if (!vacstmt->is_vacuumcmd)
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -108,13 +109,13 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 
 		/* Parse options available on VACUUM */
 		else if (strcmp(opt->defname, "analyze") == 0)
-				params.options |= VACOPT_ANALYZE;
+			params.options |= defGetBoolean(opt) ? VACOPT_ANALYZE : 0;
 		else if (strcmp(opt->defname, "freeze") == 0)
-				params.options |= VACOPT_FREEZE;
+			params.options |= defGetBoolean(opt) ? VACOPT_FREEZE : 0;
 		else if (strcmp(opt->defname, "full") == 0)
-			params.options |= VACOPT_FULL;
+			params.options |= defGetBoolean(opt) ? VACOPT_FULL : 0;
 		else if (strcmp(opt->defname, "disable_page_skipping") == 0)
-			params.options |= VACOPT_DISABLE_PAGE_SKIPPING;
+			params.options |= defGetBoolean(opt) ? VACOPT_DISABLE_PAGE_SKIPPING : 0;
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
