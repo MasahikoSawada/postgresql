@@ -233,6 +233,8 @@ typedef struct
 	bool		date_is_int;
 	bool		float8_pass_by_value;
 	bool		data_checksum_version;
+	bool		data_encrypted;
+	uint8		encryption_verification[16];
 } ControlData;
 
 /*

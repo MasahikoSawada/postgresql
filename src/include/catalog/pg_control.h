@@ -94,6 +94,11 @@ typedef enum DBState
 } DBState;
 
 /*
+ * Number of bytes reserved to store encryption sample in ControlFileData.
+ */
+#define ENCRYPTION_SAMPLE_SIZE 16
+
+/*
  * Contents of pg_control.
  */
 
@@ -227,6 +232,11 @@ typedef struct ControlFileData
 	 * failed at an early stage.
 	 */
 	char		mock_authentication_nonce[MOCK_AUTH_NONCE_LEN];
+
+	/* Is data directory encrypted? */
+	bool		data_encrypted;
+	/* Sample value for encryption key verification */
+	uint8		encryption_verification[ENCRYPTION_SAMPLE_SIZE];
 
 	/* CRC of all above ... MUST BE LAST! */
 	pg_crc32c	crc;

@@ -107,4 +107,10 @@ extern void smgrtruncate(SMgrRelation reln, ForkNumber forknum,
 extern void smgrimmedsync(SMgrRelation reln, ForkNumber forknum);
 extern void AtEOXact_SMgr(void);
 
+#ifdef USE_ENCRYPTION
+extern BlockNumber ReencryptBlock(char *buffer, int blocks,
+								  RelFileNode *srcNode, RelFileNode *dstNode,
+								  ForkNumber srcForkNum, ForkNumber dstForkNum,
+								  BlockNumber blockNum);
+#endif
 #endif							/* SMGR_H */

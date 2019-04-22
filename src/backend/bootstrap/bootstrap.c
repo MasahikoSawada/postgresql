@@ -26,6 +26,7 @@
 #include "bootstrap/bootstrap.h"
 #include "catalog/index.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_control.h"
 #include "catalog/pg_type.h"
 #include "common/link-canary.h"
 #include "libpq/pqsignal.h"
@@ -40,6 +41,7 @@
 #include "storage/bufmgr.h"
 #include "storage/bufpage.h"
 #include "storage/condition_variable.h"
+#include "storage/encryption.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
 #include "tcop/tcopprot.h"
@@ -51,7 +53,6 @@
 #include "utils/relmapper.h"
 
 uint32		bootstrap_data_checksum_version = 0;	/* No checksum */
-
 
 #define ALLOC(t, c) \
 	((t *) MemoryContextAllocZero(TopMemoryContext, (unsigned)(c) * sizeof(t)))
@@ -226,7 +227,7 @@ AuxiliaryProcessMain(int argc, char *argv[])
 	/* If no -x argument, we are a CheckerProcess */
 	MyAuxProcType = CheckerProcess;
 
-	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:x:X:-:")) != -1)
+	while ((flag = getopt(argc, argv, "B:c:d:D:FkK:r:x:X:-:")) != -1)
 	{
 		switch (flag)
 		{
@@ -252,6 +253,25 @@ AuxiliaryProcessMain(int argc, char *argv[])
 			case 'F':
 				SetConfigOption("fsync", "false", PGC_POSTMASTER, PGC_S_ARGV);
 				break;
+#ifdef	USE_OPENSSL
+			case 'K':
+				encryption_key_command = strdup(optarg);
+
+				/*
+				 * When auxiliary process (typically bootstrap) starts, the
+				 * control file might not exist yet. In this case we also use
+				 * encryption_key_command to indicate that the encryption is
+				 * enabled.
+				 *
+				 * Postmaster should not set this variable. Instead, it just
+				 * sets data_encrypted according to the control file and child
+				 * processes inherit that.
+				 */
+				Assert(!IsUnderPostmaster);
+				data_encrypted = true;
+
+				break;
+#endif							/* USE_OPENSSL */
 			case 'k':
 				bootstrap_data_checksum_version = PG_DATA_CHECKSUM_VERSION;
 				break;
@@ -372,6 +392,20 @@ AuxiliaryProcessMain(int argc, char *argv[])
 	/* Initialize MaxBackends (if under postmaster, was done already) */
 	if (!IsUnderPostmaster)
 		InitializeMaxBackends();
+
+	/*
+	 * If data_encryption is set because of command line argument, do the
+	 * setup now. (If set by postmaster, postmaster should have performed the
+	 * setup.)
+	 *
+	 * This should only be useful for the bootstrap process. Anyone else
+	 * initializes the encryption via ReadControlFile().
+	 */
+	if (data_encrypted && MyAuxProcType == BootstrapProcess)
+	{
+		Assert(!IsUnderPostmaster);
+		setup_encryption(true);
+	}
 
 	BaseInit();
 

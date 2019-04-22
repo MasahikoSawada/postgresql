@@ -43,6 +43,7 @@
 #include "catalog/pg_database.h"
 #include "catalog/pg_proc.h"
 #include "common/ip.h"
+#include "lib/stringinfo.h"
 #include "libpq/libpq.h"
 #include "libpq/pqsignal.h"
 #include "mb/pg_wchar.h"
@@ -53,6 +54,7 @@
 #include "postmaster/postmaster.h"
 #include "replication/walsender.h"
 #include "storage/backendid.h"
+#include "storage/encryption.h"
 #include "storage/dsm.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
@@ -105,6 +107,10 @@
 #define PGSTAT_TAB_HASH_SIZE	512
 #define PGSTAT_FUNCTION_HASH_SIZE	512
 
+/*
+ * Size of a buffer used to read stats files from file.
+ */
+#define PGSTAT_FILE_BUFFER_SIZE	1024
 
 /* ----------
  * Total number of backends including auxiliary
@@ -309,6 +315,9 @@ static HTAB *pgstat_collect_oids(Oid catalogid, AttrNumber anum_oid);
 static PgStat_TableStatus *get_tabstat_entry(Oid rel_id, bool isshared);
 
 static void pgstat_setup_memcxt(void);
+static StringInfo pgstat_setup_serial_buffer(MemoryContext *context);
+static bool pgstat_read_file(StringInfo buf, const char *statfile,
+				 FILE *fpin);
 
 static const char *pgstat_get_wait_activity(WaitEventActivity w);
 static const char *pgstat_get_wait_client(WaitEventClient w);
@@ -337,6 +346,12 @@ static void pgstat_recv_recoveryconflict(PgStat_MsgRecoveryConflict *msg, int le
 static void pgstat_recv_deadlock(PgStat_MsgDeadlock *msg, int len);
 static void pgstat_recv_checksum_failure(PgStat_MsgChecksumFailure *msg, int len);
 static void pgstat_recv_tempfile(PgStat_MsgTempFile *msg, int len);
+
+static bool readFromStringInfo(StringInfo str, void *data, Size size);
+
+#ifdef USE_ENCRYPTION
+static void pgstat_encryption_tweak(char *tweak, Oid dbid, bool permament);
+#endif
 
 /* ------------------------------------------------------------
  * Public functions called from postmaster follow
@@ -3878,6 +3893,15 @@ pgstat_get_wait_io(WaitEventIO w)
 		case WAIT_EVENT_DSM_FILL_ZERO_WRITE:
 			event_name = "DSMFillZeroWrite";
 			break;
+		case WAIT_EVENT_KDF_FILE_READ:
+			event_name = "KDFFileRead";
+			break;
+		case WAIT_EVENT_KDF_FILE_SYNC:
+			event_name = "KDFFileSync";
+			break;
+		case WAIT_EVENT_KDF_FILE_WRITE:
+			event_name = "KDFFileWrite";
+			break;
 		case WAIT_EVENT_LOCK_FILE_ADDTODATADIR_READ:
 			event_name = "LockFileAddToDataDirRead";
 			break;
@@ -4780,6 +4804,8 @@ pgstat_write_statsfiles(bool permanent, bool allDbs)
 	const char *tmpfile = permanent ? PGSTAT_STAT_PERMANENT_TMPFILE : pgstat_stat_tmpname;
 	const char *statfile = permanent ? PGSTAT_STAT_PERMANENT_FILENAME : pgstat_stat_filename;
 	int			rc;
+	StringInfo	buf;
+	MemoryContext serialContext;
 
 	elog(DEBUG2, "writing stats file \"%s\"", statfile);
 
@@ -4802,23 +4828,25 @@ pgstat_write_statsfiles(bool permanent, bool allDbs)
 	globalStats.stats_timestamp = GetCurrentTimestamp();
 
 	/*
+	 * Memory for data serialization.
+	 */
+	buf = pgstat_setup_serial_buffer(&serialContext);
+
+	/*
 	 * Write the file header --- currently just a format ID.
 	 */
 	format_id = PGSTAT_FILE_FORMAT_ID;
-	rc = fwrite(&format_id, sizeof(format_id), 1, fpout);
-	(void) rc;					/* we'll check for error with ferror */
+	appendBinaryStringInfo(buf, (char *) &format_id, sizeof(format_id));
 
 	/*
 	 * Write global stats struct
 	 */
-	rc = fwrite(&globalStats, sizeof(globalStats), 1, fpout);
-	(void) rc;					/* we'll check for error with ferror */
+	appendBinaryStringInfo(buf, (char *) &globalStats, sizeof(globalStats));
 
 	/*
 	 * Write archiver stats struct
 	 */
-	rc = fwrite(&archiverStats, sizeof(archiverStats), 1, fpout);
-	(void) rc;					/* we'll check for error with ferror */
+	appendBinaryStringInfo(buf, (char *) &archiverStats, sizeof(archiverStats));
 
 	/*
 	 * Walk through the database table.
@@ -4842,18 +4870,53 @@ pgstat_write_statsfiles(bool permanent, bool allDbs)
 		 * Write out the DB entry. We don't write the tables or functions
 		 * pointers, since they're of no use to any other process.
 		 */
-		fputc('D', fpout);
-		rc = fwrite(dbentry, offsetof(PgStat_StatDBEntry, tables), 1, fpout);
-		(void) rc;				/* we'll check for error with ferror */
+		appendBinaryStringInfo(buf, (char *) "D", 1);
+		appendBinaryStringInfo(buf, (char *) dbentry,
+							   offsetof(PgStat_StatDBEntry, tables));
 	}
 
 	/*
-	 * No more output to be done. Close the temp file and replace the old
-	 * pgstat.stat with it.  The ferror() check replaces testing for error
-	 * after each individual fputc or fwrite above.
+	 * No more output to be done.
 	 */
-	fputc('E', fpout);
+	appendBinaryStringInfo(buf, (char *) "E", 1);
 
+	if (data_encrypted)
+	{
+#ifdef	USE_ENCRYPTION
+		char		tweak[TWEAK_SIZE];
+
+		/*
+		 * Make sure the data is aligned to ENCRYPTION_BLOCK.
+		 */
+		if (buf->len % ENCRYPTION_BLOCK > 0)
+		{
+			char		zerobuf[ENCRYPTION_BLOCK];
+
+			memset(zerobuf, 0, ENCRYPTION_BLOCK);
+			appendBinaryStringInfo(buf,
+								   zerobuf,
+								   ENCRYPTION_BLOCK - buf->len % ENCRYPTION_BLOCK);
+		}
+
+		pgstat_encryption_tweak(tweak, InvalidOid, permanent);
+		encrypt_block(buf->data, buf->data, buf->len, tweak);
+#else
+		ENCRYPTION_NOT_SUPPORTED_MSG;
+#endif							/* USE_ENCRYPTION */
+	}
+
+	/*
+	 * Write the data to the file.
+	 */
+	rc = fwrite(buf->data, buf->len, 1, fpout);
+	(void) rc;					/* we'll check for error with ferror */
+
+	/* Free the temporary storage. */
+	MemoryContextResetOnly(serialContext);
+
+	/*
+	 * Close the temp file and replace the old pgstat.stat with it.
+	 */
 	if (ferror(fpout))
 	{
 		ereport(LOG,
@@ -4934,6 +4997,8 @@ pgstat_write_db_statsfile(PgStat_StatDBEntry *dbentry, bool permanent)
 	int			rc;
 	char		tmpfile[MAXPGPATH];
 	char		statfile[MAXPGPATH];
+	StringInfo	buf;
+	MemoryContext serialContext;
 
 	get_dbstat_filename(permanent, true, dbid, tmpfile, MAXPGPATH);
 	get_dbstat_filename(permanent, false, dbid, statfile, MAXPGPATH);
@@ -4954,11 +5019,15 @@ pgstat_write_db_statsfile(PgStat_StatDBEntry *dbentry, bool permanent)
 	}
 
 	/*
+	 * Memory for data serialization.
+	 */
+	buf = pgstat_setup_serial_buffer(&serialContext);
+
+	/*
 	 * Write the file header --- currently just a format ID.
 	 */
 	format_id = PGSTAT_FILE_FORMAT_ID;
-	rc = fwrite(&format_id, sizeof(format_id), 1, fpout);
-	(void) rc;					/* we'll check for error with ferror */
+	appendBinaryStringInfo(buf, (char *) &format_id, sizeof(format_id));
 
 	/*
 	 * Walk through the database's access stats per table.
@@ -4966,9 +5035,8 @@ pgstat_write_db_statsfile(PgStat_StatDBEntry *dbentry, bool permanent)
 	hash_seq_init(&tstat, dbentry->tables);
 	while ((tabentry = (PgStat_StatTabEntry *) hash_seq_search(&tstat)) != NULL)
 	{
-		fputc('T', fpout);
-		rc = fwrite(tabentry, sizeof(PgStat_StatTabEntry), 1, fpout);
-		(void) rc;				/* we'll check for error with ferror */
+		appendBinaryStringInfo(buf, (char *) "T", 1);
+		appendBinaryStringInfo(buf, (char *) tabentry, sizeof(PgStat_StatTabEntry));
 	}
 
 	/*
@@ -4977,18 +5045,52 @@ pgstat_write_db_statsfile(PgStat_StatDBEntry *dbentry, bool permanent)
 	hash_seq_init(&fstat, dbentry->functions);
 	while ((funcentry = (PgStat_StatFuncEntry *) hash_seq_search(&fstat)) != NULL)
 	{
-		fputc('F', fpout);
-		rc = fwrite(funcentry, sizeof(PgStat_StatFuncEntry), 1, fpout);
-		(void) rc;				/* we'll check for error with ferror */
+		appendBinaryStringInfo(buf, (char *) "F", 1);
+		appendBinaryStringInfo(buf, (char *) funcentry, sizeof(PgStat_StatFuncEntry));
 	}
 
 	/*
-	 * No more output to be done. Close the temp file and replace the old
-	 * pgstat.stat with it.  The ferror() check replaces testing for error
-	 * after each individual fputc or fwrite above.
+	 * No more output to be done.
 	 */
-	fputc('E', fpout);
+	appendBinaryStringInfo(buf, (char *) "E", 1);
 
+	if (data_encrypted)
+	{
+#ifdef	USE_ENCRYPTION
+		char		tweak[TWEAK_SIZE];
+
+		/*
+		 * Make sure the data is aligned to ENCRYPTION_BLOCK.
+		 */
+		if (buf->len % ENCRYPTION_BLOCK > 0)
+		{
+			char		zerobuf[ENCRYPTION_BLOCK];
+
+			memset(zerobuf, 0, ENCRYPTION_BLOCK);
+			appendBinaryStringInfo(buf,
+								   zerobuf,
+								   ENCRYPTION_BLOCK - buf->len % ENCRYPTION_BLOCK);
+		}
+
+		pgstat_encryption_tweak(tweak, dbid, permanent);
+		encrypt_block(buf->data, buf->data, buf->len, tweak);
+#else
+		ENCRYPTION_NOT_SUPPORTED_MSG;
+#endif							/* USE_ENCRYPTION */
+	}
+
+	/*
+	 * Write the data to the file.
+	 */
+	rc = fwrite(buf->data, buf->len, 1, fpout);
+	(void) rc;					/* we'll check for error with ferror */
+
+	/* Free the temporary storage. */
+	MemoryContextResetOnly(serialContext);
+
+	/*
+	 * Close the temp file and replace the old pgstat.stat with it.
+	 */
 	if (ferror(fpout))
 	{
 		ereport(LOG,
@@ -5055,6 +5157,8 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 	int32		format_id;
 	bool		found;
 	const char *statfile = permanent ? PGSTAT_STAT_PERMANENT_FILENAME : pgstat_stat_filename;
+	StringInfo	buf;
+	MemoryContext serialContext;
 
 	/*
 	 * The tables will live in pgStatLocalContext.
@@ -5105,9 +5209,38 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 	}
 
 	/*
+	 * Memory for data serialization.
+	 */
+	buf = pgstat_setup_serial_buffer(&serialContext);
+
+	/*
+	 * Read the data into memory.
+	 */
+	if (!pgstat_read_file(buf, statfile, fpin))
+		goto done;
+
+	/*
+	 * Decrypt the data if it's encrypted.
+	 */
+	if (data_encrypted)
+	{
+#ifdef	USE_ENCRYPTION
+		char		tweak[TWEAK_SIZE];
+
+		pgstat_encryption_tweak(tweak, InvalidOid, permanent);
+		decrypt_block(buf->data, buf->data, buf->len, tweak);
+#else
+		ENCRYPTION_NOT_SUPPORTED_MSG;
+#endif							/* USE_ENCRYPTION */
+	}
+
+	/* Prepare for reading. */
+	buf->cursor = 0;
+
+	/*
 	 * Verify it's of the expected format.
 	 */
-	if (fread(&format_id, 1, sizeof(format_id), fpin) != sizeof(format_id) ||
+	if (!readFromStringInfo(buf, &format_id, sizeof(format_id)) ||
 		format_id != PGSTAT_FILE_FORMAT_ID)
 	{
 		ereport(pgStatRunningInCollector ? LOG : WARNING,
@@ -5118,7 +5251,7 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 	/*
 	 * Read global stats struct
 	 */
-	if (fread(&globalStats, 1, sizeof(globalStats), fpin) != sizeof(globalStats))
+	if (!readFromStringInfo(buf, &globalStats, sizeof(globalStats)))
 	{
 		ereport(pgStatRunningInCollector ? LOG : WARNING,
 				(errmsg("corrupted statistics file \"%s\"", statfile)));
@@ -5139,7 +5272,7 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 	/*
 	 * Read archiver stats struct
 	 */
-	if (fread(&archiverStats, 1, sizeof(archiverStats), fpin) != sizeof(archiverStats))
+	if (!readFromStringInfo(buf, &archiverStats, sizeof(archiverStats)))
 	{
 		ereport(pgStatRunningInCollector ? LOG : WARNING,
 				(errmsg("corrupted statistics file \"%s\"", statfile)));
@@ -5153,15 +5286,24 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 	 */
 	for (;;)
 	{
-		switch (fgetc(fpin))
+		char		kind;
+
+		if (!readFromStringInfo(buf, &kind, 1))
+		{
+			ereport(pgStatRunningInCollector ? LOG : WARNING,
+					(errmsg("corrupted statistics file \"%s\"", statfile)));
+			goto done;
+		}
+
+		switch (kind)
 		{
 				/*
 				 * 'D'	A PgStat_StatDBEntry struct describing a database
 				 * follows.
 				 */
 			case 'D':
-				if (fread(&dbbuf, 1, offsetof(PgStat_StatDBEntry, tables),
-						  fpin) != offsetof(PgStat_StatDBEntry, tables))
+				if (!readFromStringInfo(buf, &dbbuf,
+										offsetof(PgStat_StatDBEntry, tables)))
 				{
 					ereport(pgStatRunningInCollector ? LOG : WARNING,
 							(errmsg("corrupted statistics file \"%s\"",
@@ -5251,6 +5393,9 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 done:
 	FreeFile(fpin);
 
+	/* Free the temporary storage. */
+	MemoryContextResetOnly(serialContext);
+
 	/* If requested to read the permanent file, also get rid of it. */
 	if (permanent)
 	{
@@ -5288,6 +5433,8 @@ pgstat_read_db_statsfile(Oid databaseid, HTAB *tabhash, HTAB *funchash,
 	int32		format_id;
 	bool		found;
 	char		statfile[MAXPGPATH];
+	StringInfo	buf;
+	MemoryContext serialContext;
 
 	get_dbstat_filename(permanent, false, databaseid, statfile, MAXPGPATH);
 
@@ -5311,9 +5458,39 @@ pgstat_read_db_statsfile(Oid databaseid, HTAB *tabhash, HTAB *funchash,
 	}
 
 	/*
+	 * Memory for data serialization.
+	 */
+	buf = pgstat_setup_serial_buffer(&serialContext);
+
+	/*
+	 * Read the data into memory.
+	 */
+
+	if (!pgstat_read_file(buf, statfile, fpin))
+		goto done;
+
+	/*
+	 * Decrypt the data if it's encrypted.
+	 */
+	if (data_encrypted)
+	{
+#ifdef	USE_ENCRYPTION
+		char		tweak[TWEAK_SIZE];
+
+		pgstat_encryption_tweak(tweak, databaseid, permanent);
+		decrypt_block(buf->data, buf->data, buf->len, tweak);
+#else
+		ENCRYPTION_NOT_SUPPORTED_MSG;
+#endif							/* USE_ENCRYPTION */
+	}
+
+	/* Prepare for reading. */
+	buf->cursor = 0;
+
+	/*
 	 * Verify it's of the expected format.
 	 */
-	if (fread(&format_id, 1, sizeof(format_id), fpin) != sizeof(format_id) ||
+	if (!readFromStringInfo(buf, &format_id, sizeof(format_id)) ||
 		format_id != PGSTAT_FILE_FORMAT_ID)
 	{
 		ereport(pgStatRunningInCollector ? LOG : WARNING,
@@ -5327,14 +5504,22 @@ pgstat_read_db_statsfile(Oid databaseid, HTAB *tabhash, HTAB *funchash,
 	 */
 	for (;;)
 	{
-		switch (fgetc(fpin))
+		char		kind;
+
+		if (!readFromStringInfo(buf, &kind, 1))
+		{
+			ereport(pgStatRunningInCollector ? LOG : WARNING,
+					(errmsg("corrupted statistics file \"%s\"", statfile)));
+			goto done;
+		}
+
+		switch (kind)
 		{
 				/*
 				 * 'T'	A PgStat_StatTabEntry follows.
 				 */
 			case 'T':
-				if (fread(&tabbuf, 1, sizeof(PgStat_StatTabEntry),
-						  fpin) != sizeof(PgStat_StatTabEntry))
+				if (!readFromStringInfo(buf, &tabbuf, sizeof(PgStat_StatTabEntry)))
 				{
 					ereport(pgStatRunningInCollector ? LOG : WARNING,
 							(errmsg("corrupted statistics file \"%s\"",
@@ -5367,8 +5552,8 @@ pgstat_read_db_statsfile(Oid databaseid, HTAB *tabhash, HTAB *funchash,
 				 * 'F'	A PgStat_StatFuncEntry follows.
 				 */
 			case 'F':
-				if (fread(&funcbuf, 1, sizeof(PgStat_StatFuncEntry),
-						  fpin) != sizeof(PgStat_StatFuncEntry))
+				if (!readFromStringInfo(buf, &funcbuf,
+										sizeof(PgStat_StatFuncEntry)))
 				{
 					ereport(pgStatRunningInCollector ? LOG : WARNING,
 							(errmsg("corrupted statistics file \"%s\"",
@@ -5414,6 +5599,9 @@ pgstat_read_db_statsfile(Oid databaseid, HTAB *tabhash, HTAB *funchash,
 done:
 	FreeFile(fpin);
 
+	/* Free the temporary storage. */
+	MemoryContextResetOnly(serialContext);
+
 	if (permanent)
 	{
 		elog(DEBUG2, "removing permanent stats file \"%s\"", statfile);
@@ -5448,6 +5636,8 @@ pgstat_read_db_statsfile_timestamp(Oid databaseid, bool permanent,
 	FILE	   *fpin;
 	int32		format_id;
 	const char *statfile = permanent ? PGSTAT_STAT_PERMANENT_FILENAME : pgstat_stat_filename;
+	StringInfo	buf;
+	MemoryContext serialContext;
 
 	/*
 	 * Try to open the stats file.  As above, anything but ENOENT is worthy of
@@ -5464,38 +5654,68 @@ pgstat_read_db_statsfile_timestamp(Oid databaseid, bool permanent,
 	}
 
 	/*
+	 * Memory for data serialization.
+	 */
+	buf = pgstat_setup_serial_buffer(&serialContext);
+
+	/*
+	 * Read the data into memory.
+	 */
+	if (!pgstat_read_file(buf, statfile, fpin))
+		goto done;
+
+	/*
+	 * Decrypt the data if it's encrypted.
+	 */
+	if (data_encrypted)
+	{
+#ifdef	USE_ENCRYPTION
+		char		tweak[TWEAK_SIZE];
+
+		pgstat_encryption_tweak(tweak, InvalidOid, permanent);
+		decrypt_block(buf->data, buf->data, buf->len, tweak);
+#else
+		ENCRYPTION_NOT_SUPPORTED_MSG;
+#endif							/* USE_ENCRYPTION */
+	}
+
+	/* Prepare for reading. */
+	buf->cursor = 0;
+
+	/*
 	 * Verify it's of the expected format.
 	 */
-	if (fread(&format_id, 1, sizeof(format_id), fpin) != sizeof(format_id) ||
+	if (!readFromStringInfo(buf, &format_id, sizeof(format_id)) ||
 		format_id != PGSTAT_FILE_FORMAT_ID)
 	{
 		ereport(pgStatRunningInCollector ? LOG : WARNING,
 				(errmsg("corrupted statistics file \"%s\"", statfile)));
 		FreeFile(fpin);
+		MemoryContextResetOnly(serialContext);
 		return false;
 	}
 
 	/*
 	 * Read global stats struct
 	 */
-	if (fread(&myGlobalStats, 1, sizeof(myGlobalStats),
-			  fpin) != sizeof(myGlobalStats))
+	if (!readFromStringInfo(buf, &myGlobalStats, sizeof(myGlobalStats)))
 	{
 		ereport(pgStatRunningInCollector ? LOG : WARNING,
 				(errmsg("corrupted statistics file \"%s\"", statfile)));
 		FreeFile(fpin);
+		MemoryContextResetOnly(serialContext);
 		return false;
 	}
 
 	/*
 	 * Read archiver stats struct
 	 */
-	if (fread(&myArchiverStats, 1, sizeof(myArchiverStats),
-			  fpin) != sizeof(myArchiverStats))
+	if (!readFromStringInfo(buf, &myArchiverStats, sizeof(myArchiverStats)))
 	{
 		ereport(pgStatRunningInCollector ? LOG : WARNING,
 				(errmsg("corrupted statistics file \"%s\"", statfile)));
 		FreeFile(fpin);
+		MemoryContextResetOnly(serialContext);
 		return false;
 	}
 
@@ -5508,15 +5728,24 @@ pgstat_read_db_statsfile_timestamp(Oid databaseid, bool permanent,
 	 */
 	for (;;)
 	{
-		switch (fgetc(fpin))
+		char		kind;
+
+		if (!readFromStringInfo(buf, &kind, 1))
+		{
+			ereport(pgStatRunningInCollector ? LOG : WARNING,
+					(errmsg("corrupted statistics file \"%s\"", statfile)));
+			goto done;
+		}
+
+		switch (kind)
 		{
 				/*
 				 * 'D'	A PgStat_StatDBEntry struct describing a database
 				 * follows.
 				 */
 			case 'D':
-				if (fread(&dbentry, 1, offsetof(PgStat_StatDBEntry, tables),
-						  fpin) != offsetof(PgStat_StatDBEntry, tables))
+				if (!readFromStringInfo(buf, &dbentry,
+										offsetof(PgStat_StatDBEntry, tables)))
 				{
 					ereport(pgStatRunningInCollector ? LOG : WARNING,
 							(errmsg("corrupted statistics file \"%s\"",
@@ -5549,6 +5778,7 @@ pgstat_read_db_statsfile_timestamp(Oid databaseid, bool permanent,
 
 done:
 	FreeFile(fpin);
+	MemoryContextResetOnly(serialContext);
 	return true;
 }
 
@@ -5698,6 +5928,61 @@ pgstat_setup_memcxt(void)
 		pgStatLocalContext = AllocSetContextCreate(TopMemoryContext,
 												   "Statistics snapshot",
 												   ALLOCSET_SMALL_SIZES);
+}
+
+/* ----------
+ * pgstat_setup_serial_buffer() -
+ *
+ *	Allocate memory for data serialization and return the containing memory
+ *	context.
+ *
+ * ----------
+ */
+static StringInfo
+pgstat_setup_serial_buffer(MemoryContext *context)
+{
+	MemoryContext oldCxt;
+	StringInfo	result;
+
+	*context = AllocSetContextCreate(TopMemoryContext,
+									 "Statistics encryption",
+									 ALLOCSET_DEFAULT_SIZES);
+	oldCxt = MemoryContextSwitchTo(*context);
+	result = makeStringInfo();
+	MemoryContextSwitchTo(oldCxt);
+
+	return result;
+}
+
+/*
+ * Read statistics data from file into memory.
+ */
+static bool
+pgstat_read_file(StringInfo buf, const char *statfile, FILE *fpin)
+{
+	for (;;)
+	{
+		char		bufread[PGSTAT_FILE_BUFFER_SIZE];
+		Size		bytesread;
+
+		bytesread = fread(bufread, 1, PGSTAT_FILE_BUFFER_SIZE, fpin);
+		appendBinaryStringInfo(buf, bufread, bytesread);
+
+		if (bytesread < PGSTAT_FILE_BUFFER_SIZE)
+			break;
+	}
+
+	/*
+	 * Check if the amount of data makes sense.
+	 */
+	if (buf->len == 0 || (data_encrypted && buf->len % ENCRYPTION_BLOCK > 0))
+	{
+		ereport(pgStatRunningInCollector ? LOG : WARNING,
+				(errmsg("corrupted statistics file \"%s\"", statfile)));
+		return false;
+	}
+
+	return true;
 }
 
 
@@ -6425,6 +6710,35 @@ pgstat_write_statsfile_needed(void)
 	/* Everything was written recently */
 	return false;
 }
+
+/*
+ * Read "size" bytes into "data" from StringInfo.
+ *
+ * Return true iff there was enough data available.
+ *
+ * XXX Consider moving this function to stringinfo.c.
+ */
+static bool
+readFromStringInfo(StringInfo str, void *data, Size size)
+{
+	if (str->cursor + size > str->len)
+		return false;
+
+	memcpy(data, str->data + str->cursor, size);
+	str->cursor += size;
+
+	return true;
+}
+
+#ifdef USE_ENCRYPTION
+static void
+pgstat_encryption_tweak(char *tweak, Oid dbid, bool permanent)
+{
+	memset(tweak, 0, TWEAK_SIZE);
+	memcpy(tweak, &dbid, sizeof(Oid));
+	memcpy(tweak + sizeof(Oid), &permanent, sizeof(bool));
+}
+#endif							/* USE_ENCRYPTION */
 
 /* ----------
  * pgstat_db_requested() -

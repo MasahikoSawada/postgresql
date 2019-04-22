@@ -63,6 +63,7 @@
 #include "replication/walsender.h"
 #include "rewrite/rewriteHandler.h"
 #include "storage/bufmgr.h"
+#include "storage/encryption.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
 #include "storage/procsignal.h"
@@ -3497,7 +3498,7 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
 	 * postmaster/postmaster.c (the option sets should not conflict) and with
 	 * the common help() function in main/main.c.
 	 */
-	while ((flag = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:nOo:Pp:r:S:sTt:v:W:-:")) != -1)
+	while ((flag = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijK:k:lN:nOo:Pp:r:S:sTt:v:W:-:")) != -1)
 	{
 		switch (flag)
 		{
@@ -3554,6 +3555,12 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
 				if (secure)
 					UseSemiNewlineNewline = true;
 				break;
+
+#ifdef	USE_OPENSSL
+			case 'K':
+				encryption_key_command = strdup(optarg);
+				break;
+#endif							/* USE_OPENSSL */
 
 			case 'k':
 				SetConfigOption("unix_socket_directories", optarg, ctx, gucsource);

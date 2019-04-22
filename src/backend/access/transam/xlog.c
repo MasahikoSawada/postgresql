@@ -55,6 +55,7 @@
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
+#include "storage/encryption.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/large_object.h"
@@ -77,6 +78,7 @@
 #include "pg_trace.h"
 
 extern uint32 bootstrap_data_checksum_version;
+extern char *bootstrap_encryption_sample;
 
 /* Unsupported old recovery command file names (relative to $PGDATA) */
 #define RECOVERY_COMMAND_FILE	"recovery.conf"
@@ -1253,7 +1255,7 @@ ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 	uint64		endbytepos;
 	uint64		prevbytepos;
 
-	size = MAXALIGN(size);
+	size = XLOG_REC_ALIGN(size);
 
 	/* All (non xlog-switch) records should contain data. */
 	Assert(size > SizeOfXLogRecord);
@@ -1307,7 +1309,7 @@ ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos, XLogRecPtr *PrevPtr)
 	uint64		startbytepos;
 	uint64		endbytepos;
 	uint64		prevbytepos;
-	uint32		size = MAXALIGN(SizeOfXLogRecord);
+	uint32		size = XLOG_REC_ALIGN(SizeOfXLogRecord);
 	XLogRecPtr	ptr;
 	uint32		segleft;
 
@@ -1603,7 +1605,7 @@ CopyXLogRecordToWAL(int write_len, bool isLogSwitch, XLogRecData *rdata,
 	else
 	{
 		/* Align the end position, so that the next record starts aligned */
-		CurrPos = MAXALIGN64(CurrPos);
+		CurrPos = XLOG_REC_ALIGN(CurrPos);
 	}
 
 	if (CurrPos != EndPos)
@@ -2492,27 +2494,80 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 			from = XLogCtl->pages + startidx * (Size) XLOG_BLCKSZ;
 			nbytes = npages * (Size) XLOG_BLCKSZ;
 			nleft = nbytes;
-			do
+
+//			if (data_encrypted)
+			if (false)
 			{
-				errno = 0;
-				pgstat_report_wait_start(WAIT_EVENT_WAL_WRITE);
-				written = pg_pwrite(openLogFile, from, nleft, startoffset);
-				pgstat_report_wait_end();
-				if (written <= 0)
+#ifdef	USE_ENCRYPTION
+				int			i;
+
+				/*
+				 * XXX: use larger encryption buffer to enable larger writes
+				 * and reduce number of syscalls?
+				 */
+				for (i = 0; i < npages; i++)
 				{
-					if (errno == EINTR)
-						continue;
-					ereport(PANIC,
-							(errcode_for_file_access(),
-							 errmsg("could not write to log file %s "
-									"at offset %u, length %zu: %m",
-									XLogFileNameP(ThisTimeLineID, openLogSegNo),
-									startoffset, nleft)));
+					char		buf[XLOG_BLCKSZ];
+					char		tweak[TWEAK_SIZE];
+					char *enc_from;
+					Size enc_nleft;
+
+					enc_from = XLogCtl->pages + (startidx + i) * (Size) XLOG_BLCKSZ;
+					enc_nleft = XLOG_BLCKSZ;
+
+					XLogEncryptionTweak(tweak, openLogSegNo, startoffset);
+					encrypt_block(enc_from, buf, XLOG_BLCKSZ, tweak);
+
+					/*
+					 * @@@: writng encrypted wal doesn't use pg_pwrite so far.
+					 */
+					do
+					{
+						errno = 0;
+						pgstat_report_wait_start(WAIT_EVENT_WAL_WRITE);
+						written = write(openLogFile, buf, enc_nleft);
+						pgstat_report_wait_end();
+						if (written <= 0)
+						{
+							if (errno == EINTR)
+								continue;
+							ereport(PANIC,
+									(errcode_for_file_access(),
+									 errmsg("could not write to log file (encrypted) "
+											"at offset %u, length %zu: %m",
+											startoffset, npages * (Size) XLOG_BLCKSZ)));
+						}
+						enc_nleft -= written;
+					} while (enc_nleft > 0);
 				}
-				nleft -= written;
-				from += written;
-				startoffset += written;
-			} while (nleft > 0);
+#else
+				ENCRYPTION_NOT_SUPPORTED_MSG;
+#endif							/* USE_ENCRYPTION */
+			}
+			else
+			{
+				do
+				{
+					errno = 0;
+					pgstat_report_wait_start(WAIT_EVENT_WAL_WRITE);
+					written = pg_pwrite(openLogFile, from, nleft, startoffset);
+					pgstat_report_wait_end();
+					if (written <= 0)
+					{
+						if (errno == EINTR)
+							continue;
+						ereport(PANIC,
+								(errcode_for_file_access(),
+								 errmsg("could not write to log file %s "
+										"at offset %u, length %zu: %m",
+										XLogFileNameP(ThisTimeLineID, openLogSegNo),
+										startoffset, nleft)));
+					}
+					nleft -= written;
+					from += written;
+					startoffset += written;
+				} while (nleft > 0);
+			}
 
 			npages = 0;
 
@@ -4775,6 +4830,31 @@ ReadControlFile(void)
 		ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						errmsg("\"max_wal_size\" must be at least twice \"wal_segment_size\"")));
 
+	/*
+	 * Initialize encryption, but not if the current backend has already done
+	 * that.
+	 */
+	if (ControlFile->data_encrypted && !data_encrypted)
+	{
+		char		sample[ENCRYPTION_SAMPLE_SIZE];
+
+		setup_encryption(false);
+
+		memset(sample, 0, ENCRYPTION_SAMPLE_SIZE);
+		sample_encryption(sample);
+		if (memcmp(ControlFile->encryption_verification, sample, ENCRYPTION_SAMPLE_SIZE))
+			ereport(FATAL,
+					(errmsg("invalid encryption key"),
+					 errdetail("The passed encryption key does not match"
+							   " database encryption key.")));
+	}
+	SetConfigOption("data_encryption", DataEncryptionEnabled() ? "yes" : "no",
+					PGC_INTERNAL, PGC_S_OVERRIDE);
+
+	/*
+	 * This calculation relies on data_encryption (in particular the header
+	 * sizes do), so we could not do it earlier.
+	 */
 	UsableBytesInSegment =
 		(wal_segment_size / XLOG_BLCKSZ * UsableBytesInPage) -
 		(SizeOfXLogLongPHD - SizeOfXLogShortPHD);
@@ -4824,6 +4904,16 @@ DataChecksumsEnabled(void)
 {
 	Assert(ControlFile != NULL);
 	return (ControlFile->data_checksum_version > 0);
+}
+
+/*
+ * Is this cluster encrypted?
+ */
+bool
+DataEncryptionEnabled(void)
+{
+	Assert(ControlFile != NULL);
+	return (ControlFile->data_encrypted);
 }
 
 /*
@@ -5205,6 +5295,18 @@ BootStrapXLOG(void)
 	use_existent = false;
 	openLogFile = XLogFileInit(1, &use_existent, false);
 
+	if (data_encrypted)
+	{
+#ifdef USE_ENCRYPTION
+		char		tweak[TWEAK_SIZE];
+
+		XLogEncryptionTweak(tweak, 1, 0);
+		//encrypt_block((char *) page, (char *) page, XLOG_BLCKSZ, tweak);
+#else
+		ENCRYPTION_NOT_SUPPORTED_MSG;
+#endif							/* USE_ENCRYPTION */
+	}
+
 	/* Write the first page with the initial record */
 	errno = 0;
 	pgstat_report_wait_start(WAIT_EVENT_WAL_BOOTSTRAP_WRITE);
@@ -5255,6 +5357,22 @@ BootStrapXLOG(void)
 	ControlFile->wal_log_hints = wal_log_hints;
 	ControlFile->track_commit_timestamp = track_commit_timestamp;
 	ControlFile->data_checksum_version = bootstrap_data_checksum_version;
+	ControlFile->data_encrypted = data_encrypted;
+
+	if (data_encrypted)
+	{
+		char	   *sample;
+
+		sample = palloc0(ENCRYPTION_SAMPLE_SIZE);
+		sample_encryption(sample);
+
+		memcpy(ControlFile->encryption_verification, sample,
+			   ENCRYPTION_SAMPLE_SIZE);
+		pfree(sample);
+	}
+	else
+		memset(ControlFile->encryption_verification, 0,
+			   ENCRYPTION_SAMPLE_SIZE);
 
 	/* some additional ControlFile fields are set in WriteControlFile() */
 
@@ -11625,6 +11743,18 @@ retry:
 	Assert(targetSegNo == readSegNo);
 	Assert(targetPageOff == readOff);
 	Assert(reqLen <= readLen);
+
+	if (data_encrypted)
+	{
+#ifdef USE_ENCRYPTION
+		char		tweak[TWEAK_SIZE];
+
+		XLogEncryptionTweak(tweak, readSegNo, readOff);
+		//decrypt_block(readBuf, readBuf, XLOG_BLCKSZ, tweak);
+#else
+		ENCRYPTION_NOT_SUPPORTED_MSG;
+#endif							/* USE_ENCRYPTION */
+	}
 
 	*readTLI = curFileTLI;
 

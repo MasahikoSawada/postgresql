@@ -28,6 +28,7 @@
 #include "miscadmin.h"
 #include "replication/origin.h"
 #include "storage/bufmgr.h"
+#include "storage/encryption.h"
 #include "storage/proc.h"
 #include "utils/memutils.h"
 #include "pg_trace.h"

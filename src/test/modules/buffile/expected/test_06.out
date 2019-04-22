@@ -1,0 +1,41 @@
+-- This test shows that the first component file (segment) stays empty, read
+-- stops prematurely even if it starts on that segment, even though it'd
+-- otherwise receive some data from the following one.
+BEGIN;
+SELECT buffile_create();
+ buffile_create 
+----------------
+ 
+(1 row)
+
+SELECT buffile_seek(0, 32768);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+SELECT buffile_write('a');
+ buffile_write 
+---------------
+             1
+(1 row)
+
+SELECT buffile_seek(0, 32767);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+SELECT buffile_read(2);
+ buffile_read 
+--------------
+ \x
+(1 row)
+
+SELECT buffile_close();
+ buffile_close 
+---------------
+ 
+(1 row)
+
+COMMIT;

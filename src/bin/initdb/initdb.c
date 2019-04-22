@@ -69,6 +69,9 @@
 #include "common/username.h"
 #include "fe_utils/logging.h"
 #include "fe_utils/string_utils.h"
+#include "storage/encryption.h"
+#include "lib/ilist.h"
+#include "mb/pg_wchar.h"
 #include "getaddrinfo.h"
 #include "getopt_long.h"
 #include "mb/pg_wchar.h"
@@ -77,6 +80,12 @@
 
 /* Ideally this would be in a .h file, but it hardly seems worth the trouble */
 extern const char *select_default_timezone(const char *share_path);
+
+typedef struct
+{
+	dlist_node	list_node;
+	char	   *value;
+} extra_option;
 
 static const char *const auth_methods_host[] = {
 	"trust", "reject", "scram-sha-256", "md5", "password", "ident", "radius",
@@ -142,9 +151,11 @@ static bool do_sync = true;
 static bool sync_only = false;
 static bool show_setting = false;
 static bool data_checksums = false;
+static char *encr_key_cmd_str = NULL;
 static char *xlog_dir = NULL;
 static char *str_wal_segment_size_mb = NULL;
 static int	wal_segment_size_mb;
+static dlist_head extra_options = DLIST_STATIC_INIT(extra_options);
 
 
 /* internal vars */
@@ -528,6 +539,7 @@ readfile(const char *path)
 
 	fclose(infile);
 	free(buffer);
+
 	result[n] = NULL;
 
 	return result;
@@ -1072,6 +1084,39 @@ pretty_wal_size(int segment_count)
 	return result;
 }
 
+static void
+append_extra_options(char ***conflines)
+{
+	dlist_iter	iter;
+	int			n_extra = 0;
+	int			n_current = 0;
+	int			i = 0;
+	char	  **new_conflines;
+
+	dlist_foreach(iter, &extra_options)
+	{
+		n_extra++;
+	}
+	while ((*conflines)[i++] != NULL)
+		n_current++;
+
+	new_conflines = (char **) pg_malloc((n_current + n_extra + 1) * sizeof(char *));
+	for (i = 0; i < n_current; i++)
+		new_conflines[i] = (*conflines)[i];
+
+	dlist_foreach(iter, &extra_options)
+	{
+		extra_option *opt = dlist_container(extra_option, list_node, iter.cur);
+
+		new_conflines[i++] = opt->value;
+	}
+
+	new_conflines[i] = NULL;
+	pg_free(*conflines);
+	*conflines = new_conflines;
+}
+
+
 /*
  * set up all the config files
  */
@@ -1089,6 +1134,8 @@ setup_config(void)
 	/* postgresql.conf */
 
 	conflines = readfile(conf_file);
+
+	append_extra_options(&conflines);
 
 	snprintf(repltok, sizeof(repltok), "max_connections = %d", n_connections);
 	conflines = replace_token(conflines, "#max_connections = 100", repltok);
@@ -1230,6 +1277,17 @@ setup_config(void)
 								  "#log_file_mode = 0600",
 								  "log_file_mode = 0640");
 	}
+
+#ifdef	USE_OPENSSL
+	if (encryption_key_command)
+	{
+		snprintf(repltok, sizeof(repltok), "encryption_key_command = '%s'",
+				 encryption_key_command);
+		conflines = replace_token(conflines,
+								  "#encryption_key_command = ''", repltok);
+	}
+#endif							/* USE_OPENSSL */
+
 
 	snprintf(path, sizeof(path), "%s/postgresql.conf", pg_data);
 
@@ -1444,11 +1502,29 @@ bootstrap_template1(void)
 	/* Also ensure backend isn't confused by this environment var: */
 	unsetenv("PGCLIENTENCODING");
 
+#ifdef	USE_OPENSSL
+	/* Prepare the -K option for the backend. */
+	if (encryption_key_command)
+	{
+		size_t		len;
+
+		len = 3 + strlen(encryption_key_command) + 1;
+		encr_key_cmd_str = (char *) pg_malloc(len);
+		snprintf(encr_key_cmd_str, len, "-K %s", encryption_key_command);
+	}
+	else
+	{
+		encr_key_cmd_str = (char *) pg_malloc(1);
+		encr_key_cmd_str[0] = '\0';
+	}
+#endif							/* USE_OPENSSL */
+
 	snprintf(cmd, sizeof(cmd),
-			 "\"%s\" --boot -x1 -X %u %s %s %s",
+			 "\"%s\" --boot -x1 -X %u %s %s %s %s",
 			 backend_exec,
 			 wal_segment_size_mb * (1024 * 1024),
 			 data_checksums ? "-k" : "",
+			 encr_key_cmd_str,
 			 boot_options,
 			 debug ? "-d 5" : "");
 
@@ -2376,6 +2452,10 @@ usage(const char *progname)
 	printf(_("\nLess commonly used options:\n"));
 	printf(_("  -d, --debug               generate lots of debugging output\n"));
 	printf(_("  -k, --data-checksums      use data page checksums\n"));
+#ifdef	USE_OPENSSL
+	printf(_("  -K, --encryption-key-command\n"
+			 "                            command that returns encryption key\n"));
+#endif							/* USE_OPENSSL */
 	printf(_("  -L DIRECTORY              where to find the input files\n"));
 	printf(_("  -n, --no-clean            do not clean up after errors\n"));
 	printf(_("  -N, --no-sync             do not wait for changes to be written safely to disk\n"));
@@ -2478,7 +2558,6 @@ setup_pgdata(void)
 	pgdata_set_env = psprintf("PGDATA=%s", pg_data);
 	putenv(pgdata_set_env);
 }
-
 
 void
 setup_bin_paths(const char *argv0)
@@ -2978,8 +3057,8 @@ initialize_data_directory(void)
 	fflush(stdout);
 
 	snprintf(cmd, sizeof(cmd),
-			 "\"%s\" %s template1 >%s",
-			 backend_exec, backend_options,
+			 "\"%s\" %s %s template1 >%s",
+			 backend_exec, backend_options, encr_key_cmd_str,
 			 DEVNULL);
 
 	PG_CMD_OPEN;
@@ -3018,6 +3097,23 @@ initialize_data_directory(void)
 	check_ok();
 }
 
+static void
+parse_extra_option_arg(char *optarg)
+{
+	extra_option *opt;
+
+	if (!strchr(optarg, '='))
+	{
+		fprintf(stderr, _("Option value is not in key=value format"));
+		exit(1);
+	}
+
+	opt = malloc(sizeof(extra_option));
+	if (asprintf(&opt->value, "%s\n", optarg) < 0)
+		exit(1);
+
+	dlist_push_tail(&extra_options, &opt->list_node);
+}
 
 int
 main(int argc, char *argv[])
@@ -3052,6 +3148,9 @@ main(int argc, char *argv[])
 		{"waldir", required_argument, NULL, 'X'},
 		{"wal-segsize", required_argument, NULL, 12},
 		{"data-checksums", no_argument, NULL, 'k'},
+#ifdef	USE_OPENSSL
+		{"encryption-key-command", required_argument, NULL, 'K'},
+#endif							/* USE_OPENSSL */
 		{"allow-group-access", no_argument, NULL, 'g'},
 		{NULL, 0, NULL, 0}
 	};
@@ -3094,7 +3193,7 @@ main(int argc, char *argv[])
 
 	/* process command-line options */
 
-	while ((c = getopt_long(argc, argv, "dD:E:kL:nNU:WA:sST:X:g", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "dD:E:kK:L:nNU:WA:sST:X:g", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
@@ -3145,6 +3244,14 @@ main(int argc, char *argv[])
 				break;
 			case 'k':
 				data_checksums = true;
+				break;
+#ifdef	USE_OPENSSL
+			case 'K':
+				encryption_key_command = pg_strdup(optarg);
+				break;
+#endif							/* USE_OPENSSL */
+			case 'c':
+				parse_extra_option_arg(optarg);
 				break;
 			case 'L':
 				share_path = pg_strdup(optarg);
@@ -3316,7 +3423,12 @@ main(int argc, char *argv[])
 	if (pwprompt || pwfilename)
 		get_su_pwd();
 
-	printf("\n");
+#ifdef	USE_OPENSSL
+	if (encryption_key_command)
+		printf(_("Data encryption is enabled.\n"));
+	else
+		printf(_("Data encryption is disabled.\n"));
+#endif							/* USE_OPENSSL */
 
 	initialize_data_directory();
 

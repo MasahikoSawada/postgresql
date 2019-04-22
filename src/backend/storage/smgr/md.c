@@ -30,6 +30,7 @@
 #include "access/xlog.h"
 #include "pgstat.h"
 #include "postmaster/bgwriter.h"
+#include "storage/encryption.h"
 #include "storage/fd.h"
 #include "storage/bufmgr.h"
 #include "storage/md.h"
@@ -85,7 +86,14 @@ typedef struct _MdfdVec
 } MdfdVec;
 
 static MemoryContext MdCxt;		/* context for all MdfdVec objects */
-
+#ifdef USE_ENCRYPTION
+/*
+ * encryption_buffer from encryption.h is not used here because of the special
+ * memory context.
+ */
+static char md_encryption_buffer[BLCKSZ];
+static char md_encryption_tweak[TWEAK_SIZE];
+#endif
 
 /* Populate a file tag describing an md.c segment file. */
 #define INIT_MD_FILETAG(a,xx_rnode,xx_forknum,xx_segno) \
@@ -139,6 +147,11 @@ static MdfdVec *_mdfd_getseg(SMgrRelation reln, ForkNumber forkno,
 static BlockNumber _mdnblocks(SMgrRelation reln, ForkNumber forknum,
 		   MdfdVec *seg);
 
+#ifdef USE_ENCRYPTION
+static void mdtweak(char *tweak, RelFileNode *relnode, ForkNumber forknum, BlockNumber blocknum);
+static void mdencrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, char *buffer);
+static void mddecrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, char *buffer);
+#endif
 
 /*
  *	mdinit() -- Initialize private state for magnetic disk storage manager.
@@ -401,6 +414,16 @@ mdextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 
 	Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
 
+	if (data_encrypted)
+	{
+#ifdef USE_ENCRYPTION
+		mdencrypt(reln, forknum, blocknum, buffer);
+		buffer = md_encryption_buffer;
+#else
+		ENCRYPTION_NOT_SUPPORTED_MSG;
+#endif							/* USE_ENCRYPTION */
+	}
+
 	if ((nbytes = FileWrite(v->mdfd_vfd, buffer, BLCKSZ, seekpos, WAIT_EVENT_DATA_FILE_EXTEND)) != BLCKSZ)
 	{
 		if (nbytes < 0)
@@ -575,6 +598,11 @@ mdwriteback(SMgrRelation reln, ForkNumber forknum,
 		nblocks -= nflush;
 		blocknum += nflush;
 	}
+
+#ifdef USE_ENCRYPTION
+//	md_encryption_buffer = MemoryContextAllocZero(MdCxt, BLCKSZ);
+//	md_encryption_tweak = MemoryContextAllocZero(MdCxt, TWEAK_SIZE);
+#endif
 }
 
 /*
@@ -587,6 +615,7 @@ mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	off_t		seekpos;
 	int			nbytes;
 	MdfdVec    *v;
+	char	   *buffer_read = buffer;
 
 	TRACE_POSTGRESQL_SMGR_MD_READ_START(forknum, blocknum,
 										reln->smgr_rnode.node.spcNode,
@@ -601,7 +630,15 @@ mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 
 	Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
 
-	nbytes = FileRead(v->mdfd_vfd, buffer, BLCKSZ, seekpos, WAIT_EVENT_DATA_FILE_READ);
+	if (data_encrypted)
+	{
+#ifdef USE_ENCRYPTION
+		buffer_read = md_encryption_buffer;
+#else
+		ENCRYPTION_NOT_SUPPORTED_MSG;
+#endif							/* USE_ENCRYPTION */
+	}
+	nbytes = FileRead(v->mdfd_vfd, buffer_read, BLCKSZ, seekpos, WAIT_EVENT_DATA_FILE_READ);
 
 	TRACE_POSTGRESQL_SMGR_MD_READ_DONE(forknum, blocknum,
 									   reln->smgr_rnode.node.spcNode,
@@ -635,6 +672,14 @@ mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 					 errmsg("could not read block %u in file \"%s\": read only %d of %d bytes",
 							blocknum, FilePathName(v->mdfd_vfd),
 							nbytes, BLCKSZ)));
+	}
+	else if (data_encrypted)
+	{
+#ifdef USE_ENCRYPTION
+		mddecrypt(reln, forknum, blocknum, buffer);
+#else
+		ENCRYPTION_NOT_SUPPORTED_MSG;
+#endif							/* USE_ENCRYPTION */
 	}
 }
 
@@ -670,6 +715,16 @@ mdwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
 
 	Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
+
+	if (data_encrypted)
+	{
+#ifdef USE_ENCRYPTION
+		mdencrypt(reln, forknum, blocknum, buffer);
+		buffer = md_encryption_buffer;
+#else
+		ENCRYPTION_NOT_SUPPORTED_MSG;
+#endif							/* USE_ENCRYPTION */
+	}
 
 	nbytes = FileWrite(v->mdfd_vfd, buffer, BLCKSZ, seekpos, WAIT_EVENT_DATA_FILE_WRITE);
 
@@ -1315,3 +1370,58 @@ mdfiletagmatches(const FileTag *ftag, const FileTag *candidate)
 	 */
 	return ftag->rnode.dbNode == candidate->rnode.dbNode;
 }
+
+#ifdef USE_ENCRYPTION
+/*
+ * md files are encrypted block at a time. Tweak will alias higher numbered
+ * forks for huge tables.
+ */
+static void
+mdtweak(char *tweak, RelFileNode *relnode, ForkNumber forknum, BlockNumber blocknum)
+{
+	uint32		fork_and_block = (forknum << 24) ^ blocknum;
+
+	memcpy(tweak, relnode, sizeof(RelFileNode));
+	memcpy(tweak + sizeof(RelFileNode), &fork_and_block, 4);
+}
+
+static void
+mdencrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, char *buffer)
+{
+	mdtweak(md_encryption_tweak, &(reln->smgr_rnode.node), forknum, blocknum);
+	encrypt_block(buffer, md_encryption_buffer, BLCKSZ, md_encryption_tweak);
+}
+
+static void
+mddecrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, char *dest)
+{
+	mdtweak(md_encryption_tweak, &(reln->smgr_rnode.node), forknum, blocknum);
+	decrypt_block(md_encryption_buffer, dest, BLCKSZ, md_encryption_tweak);
+}
+
+/*
+ * Copying relations between tablespaces/databases means that the tweak values
+ * of each block will change. This function transcodes a series of blocks with
+ * new tweak values. Returns the new block number for convenience.
+ */
+BlockNumber
+ReencryptBlock(char *buffer, int blocks,
+			   RelFileNode *srcNode, RelFileNode *dstNode,
+			   ForkNumber srcForkNum, ForkNumber dstForkNum,
+			   BlockNumber blockNum)
+{
+	char	   *cur;
+	char		srcTweak[TWEAK_SIZE];
+	char		dstTweak[TWEAK_SIZE];
+
+	for (cur = buffer; cur < buffer + blocks * BLCKSZ; cur += BLCKSZ)
+	{
+		mdtweak(srcTweak, srcNode, srcForkNum, blockNum);
+		mdtweak(dstTweak, dstNode, dstForkNum, blockNum);
+		decrypt_block(cur, cur, BLCKSZ, srcTweak);
+		encrypt_block(cur, cur, BLCKSZ, dstTweak);
+		blockNum++;
+	}
+	return blockNum;
+}
+#endif							/* USE_ENCRYPTION */

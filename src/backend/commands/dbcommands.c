@@ -627,7 +627,12 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 			 *
 			 * We don't need to copy subdirectories
 			 */
-			copydir(srcpath, dstpath, false);
+			{
+				RelFileNode fromNode = {srctablespace, src_dboid, InvalidOid};
+				RelFileNode toNode = {dsttablespace, dboid, InvalidOid};
+
+				copydir(srcpath, dstpath, &fromNode, &toNode);
+			}
 
 			/* Record the filesystem change in XLOG */
 			{
@@ -1256,7 +1261,12 @@ movedb(const char *dbname, const char *tblspcname)
 		/*
 		 * Copy files from the old tablespace to the new one
 		 */
-		copydir(src_dbpath, dst_dbpath, false);
+		{
+			RelFileNode fromNode = {src_tblspcoid, db_id, InvalidOid};
+			RelFileNode toNode = {dst_tblspcoid, db_id, InvalidOid};
+
+			copydir(src_dbpath, dst_dbpath, &fromNode, &toNode);
+		}
 
 		/*
 		 * Record the filesystem change in XLOG
@@ -2119,7 +2129,12 @@ dbase_redo(XLogReaderState *record)
 		 *
 		 * We don't need to copy subdirectories
 		 */
-		copydir(src_path, dst_path, false);
+		{
+			RelFileNode fromNode = {xlrec->src_tablespace_id, xlrec->src_db_id, InvalidOid};
+			RelFileNode toNode = {xlrec->tablespace_id, xlrec->db_id, InvalidOid};
+
+			copydir(src_path, dst_path, &fromNode, &toNode);
+		}
 	}
 	else if (info == XLOG_DBASE_DROP)
 	{

@@ -25,6 +25,7 @@
 #include "access/xlogutils.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "storage/encryption.h"
 #include "storage/smgr.h"
 #include "utils/guc.h"
 #include "utils/hsearch.h"
@@ -653,12 +654,15 @@ XLogTruncateRelation(RelFileNode rnode, ForkNumber forkNum,
  * frontend).  Probably these should be merged at some point.
  */
 static void
-XLogRead(char *buf, int segsize, TimeLineID tli, XLogRecPtr startptr,
-		 Size count)
+XLogRead(char *buf, int segsize, TimeLineID tli, XLogRecPtr startptr, Size count)
 {
-	char	   *p;
 	XLogRecPtr	recptr;
 	Size		nbytes;
+#ifdef USE_ENCRYPTION
+	char	   *decrypt_p;
+	uint32		decryptOff;
+#endif
+	char	   *p;
 
 	/* state maintained across calls */
 	static int	sendFile = -1;
@@ -669,6 +673,9 @@ XLogRead(char *buf, int segsize, TimeLineID tli, XLogRecPtr startptr,
 	Assert(segsize == wal_segment_size);
 
 	p = buf;
+#ifdef USE_ENCRYPTION
+	decrypt_p = p;
+#endif
 	recptr = startptr;
 	nbytes = count;
 
@@ -679,6 +686,9 @@ XLogRead(char *buf, int segsize, TimeLineID tli, XLogRecPtr startptr,
 		int			readbytes;
 
 		startoff = XLogSegmentOffset(recptr, segsize);
+#ifdef USE_ENCRYPTION
+		decryptOff = startoff;
+#endif
 
 		/* Do we need to switch to a different xlog segment? */
 		if (sendFile < 0 || !XLByteInSeg(recptr, sendSegNo, segsize) ||
@@ -758,6 +768,25 @@ XLogRead(char *buf, int segsize, TimeLineID tli, XLogRecPtr startptr,
 		sendOff += readbytes;
 		nbytes -= readbytes;
 		p += readbytes;
+
+		/* Decrypt completed blocks */
+		if (data_encrypted)
+		{
+#ifdef USE_ENCRYPTION
+			while (decrypt_p + XLOG_BLCKSZ <= p)
+			{
+				char		tweak[TWEAK_SIZE];
+
+				XLogEncryptionTweak(tweak, sendSegNo, decryptOff);
+				decrypt_block(decrypt_p, decrypt_p, XLOG_BLCKSZ, tweak);
+
+				decrypt_p += XLOG_BLCKSZ;
+				decryptOff += XLOG_BLCKSZ;
+			}
+#else
+			ENCRYPTION_NOT_SUPPORTED_MSG;
+#endif							/* USE_ENCRYPTION */
+		}
 	}
 }
 

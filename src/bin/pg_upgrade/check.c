@@ -284,6 +284,23 @@ check_cluster_versions(void)
 		GET_MAJOR_VERSION(new_cluster.bin_version))
 		pg_fatal("New cluster data and binary directories are from different major versions.\n");
 
+	/*
+	 * As this is the first version that supports encryption, we actually do
+	 * not expect the old cluster to be encrypted.
+	 *
+	 * TODO Change this logic as soon as we merge the encryption into the
+	 * next, even minor version (pg_upgrade seems to accept clusters that
+	 * differ only in the minor version), or for the PG core patch. Eventually
+	 * we'll support the upgrade if either both clusters are unencrypted, or
+	 * if both are encrypted using the same key. In the latter case, we need
+	 * to ensure that the PGENCRYPTIONKEY environment variable is passed to
+	 * both clusters.
+	 */
+	if (old_cluster.controldata.data_encrypted)
+		pg_fatal("Old cluster is encrypted.\n");
+	if (new_cluster.controldata.data_encrypted)
+		pg_fatal("New cluster is encrypted.\n");
+
 	check_ok();
 }
 

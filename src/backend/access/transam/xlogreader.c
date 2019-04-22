@@ -24,6 +24,7 @@
 #include "catalog/pg_control.h"
 #include "common/pg_lzcompress.h"
 #include "replication/origin.h"
+#include "storage/encryption.h"
 
 #ifndef FRONTEND
 #include "utils/memutils.h"
@@ -317,9 +318,9 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 	 *
 	 * NB: Even though we use an XLogRecord pointer here, the whole record
 	 * header might not fit on this page. xl_tot_len is the first field of the
-	 * struct, so it must be on this page (the records are MAXALIGNed), but we
-	 * cannot access any other fields until we've verified that we got the
-	 * whole header.
+	 * struct, so it must be on this page (the records are XLOG_REC_ALIGNed)
+	 * but we cannot access any other fields until we've verified that we got
+	 * the whole header.
 	 */
 	record = (XLogRecord *) (state->readBuf + RecPtr % XLOG_BLCKSZ);
 	total_len = record->xl_tot_len;
@@ -461,8 +462,8 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 
 		pageHeaderSize = XLogPageHeaderSize((XLogPageHeader) state->readBuf);
 		state->ReadRecPtr = RecPtr;
-		state->EndRecPtr = targetPagePtr + pageHeaderSize
-			+ MAXALIGN(pageHeader->xlp_rem_len);
+		state->EndRecPtr = targetPagePtr + pageHeaderSize;
+		state->EndRecPtr += XLOG_REC_ALIGN(pageHeader->xlp_rem_len);
 	}
 	else
 	{
@@ -476,7 +477,7 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 		if (!ValidXLogRecord(state, record, RecPtr))
 			goto err;
 
-		state->EndRecPtr = RecPtr + MAXALIGN(total_len);
+		state->EndRecPtr = RecPtr + XLOG_REC_ALIGN(total_len);
 
 		state->ReadRecPtr = RecPtr;
 	}
@@ -530,6 +531,17 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 	XLogPageHeader hdr;
 
 	Assert((pageptr % XLOG_BLCKSZ) == 0);
+
+	/*
+	 * Make sure that we only return data that can be decrypted in a sensible
+	 * way. If the valid data ended in the middle of encryption block, then
+	 * decryption of that last block would turn the contained data into
+	 * garbage.
+	 */
+#ifndef FRONTEND
+	if (data_encrypted)
+		reqLen = XLOG_REC_ALIGN(reqLen);
+#endif
 
 	XLByteToSeg(pageptr, targetSegNo, state->wal_segment_size);
 	targetPageOff = XLogSegmentOffset(pageptr, state->wal_segment_size);
@@ -953,9 +965,10 @@ XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr)
 			 * next page header will contain the remaining length of the
 			 * continuation data
 			 *
-			 * Note that record headers are MAXALIGN'ed
+			 * Note that record headers are XLOG_REC_ALIGN'ed
 			 */
-			if (MAXALIGN(header->xlp_rem_len) > (XLOG_BLCKSZ - pageHeaderSize))
+			if (XLOG_REC_ALIGN(header->xlp_rem_len) >
+				(XLOG_BLCKSZ - pageHeaderSize))
 				tmpRecPtr = targetPagePtr + XLOG_BLCKSZ;
 			else
 			{
@@ -964,7 +977,7 @@ XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr)
 				 * tmpRecPtr to point to the first valid record
 				 */
 				tmpRecPtr = targetPagePtr + pageHeaderSize
-					+ MAXALIGN(header->xlp_rem_len);
+					+ XLOG_REC_ALIGN(header->xlp_rem_len);
 				break;
 			}
 		}

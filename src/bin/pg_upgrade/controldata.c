@@ -58,6 +58,7 @@ get_control_data(ClusterInfo *cluster, bool live_check)
 	bool		got_large_object = false;
 	bool		got_date_is_int = false;
 	bool		got_data_checksum_version = false;
+	bool		got_data_encrypted = false;
 	bool		got_cluster_state = false;
 	char	   *lc_collate = NULL;
 	char	   *lc_ctype = NULL;
@@ -200,6 +201,13 @@ get_control_data(ClusterInfo *cluster, bool live_check)
 	{
 		cluster->controldata.data_checksum_version = 0;
 		got_data_checksum_version = true;
+	}
+
+	/* Only in <= 9.6 */
+	if (GET_MAJOR_VERSION(cluster->major_version) <= 906)
+	{
+		cluster->controldata.data_encrypted = false;
+		got_data_encrypted = true;
 	}
 
 	/* we have the result of cmd in "output". so parse it line by line now */
@@ -485,6 +493,34 @@ get_control_data(ClusterInfo *cluster, bool live_check)
 			cluster->controldata.data_checksum_version = str2uint(p);
 			got_data_checksum_version = true;
 		}
+		else if ((p = strstr(bufin, "encryption fingerprint")) != NULL)
+		{
+			int			i;
+
+			p = strchr(p, ':');
+
+			if (p == NULL || strlen(p) <= 1)
+				pg_fatal("%d: controldata retrieval problem\n", __LINE__);
+
+			cluster->controldata.data_encrypted = true;
+
+			/* Skip the colon and any whitespace after it */
+			p = strchr(p, ':');
+			if (p == NULL || strlen(p) <= 1)
+				pg_fatal("%d: controldata retrieval problem\n", __LINE__);
+			p = strpbrk(p, "01234567890ABCDEF");
+			if (p == NULL || strlen(p) <= 1)
+				pg_fatal("%d: controldata retrieval problem\n", __LINE__);
+
+			/* Make sure it looks like a valid finerprint */
+			if (strspn(p, "0123456789ABCDEF") != 32)
+				pg_fatal("%d: controldata retrieval problem\n", __LINE__);
+
+			for (i = 0; i < 16; i++)
+				sscanf(p + 2 * i, "%2hhx",
+					   cluster->controldata.encryption_verification + i);
+			got_data_encrypted = true;
+		}
 	}
 
 	pclose(output);
@@ -539,7 +575,7 @@ get_control_data(ClusterInfo *cluster, bool live_check)
 		!got_index || !got_toast ||
 		(!got_large_object &&
 		 cluster->controldata.ctrl_ver >= LARGE_OBJECT_SIZE_PG_CONTROL_VER) ||
-		!got_date_is_int || !got_data_checksum_version)
+		!got_date_is_int || !got_data_checksum_version || !got_data_encrypted)
 	{
 		if (cluster == &old_cluster)
 			pg_log(PG_REPORT,
@@ -605,6 +641,10 @@ get_control_data(ClusterInfo *cluster, bool live_check)
 		if (!got_data_checksum_version)
 			pg_log(PG_REPORT, "  data checksum version\n");
 
+		/* value added in Postgres 10 */
+		if (!got_data_encrypted)
+			pg_log(PG_REPORT, "  data encryption status\n");
+
 		pg_fatal("Cannot continue without required control information, terminating\n");
 	}
 }
@@ -669,6 +709,18 @@ check_control_data(ControlData *oldctrl,
 		pg_fatal("old cluster uses data checksums but the new one does not\n");
 	else if (oldctrl->data_checksum_version != newctrl->data_checksum_version)
 		pg_fatal("old and new cluster pg_controldata checksum versions do not match\n");
+
+	if (oldctrl->data_encrypted && !newctrl->data_encrypted)
+		pg_fatal("old cluster is encrypted, but the new one is not\n");
+	else if (!oldctrl->data_encrypted && newctrl->data_encrypted)
+		pg_fatal("old cluster is not encrypted, but the new one is\n");
+	else if (oldctrl->data_encrypted && newctrl->data_encrypted)
+	{
+		if (oldctrl->encryption_verification != newctrl->encryption_verification)
+			pg_fatal("encryption keys do not match between old and new cluster\n");
+		else
+			pg_fatal("upgrading encrypted databases is not implemented yet\n"); /* TODO */
+	}
 }
 
 

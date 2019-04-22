@@ -72,6 +72,7 @@
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
 #include "storage/dsm_impl.h"
+#include "storage/encryption.h"
 #include "storage/standby.h"
 #include "storage/fd.h"
 #include "storage/large_object.h"
@@ -215,6 +216,9 @@ static bool check_recovery_target_lsn(char **newval, void **extra, GucSource sou
 static void assign_recovery_target_lsn(const char *newval, void *extra);
 static bool check_primary_slot_name(char **newval, void **extra, GucSource source);
 static bool check_default_with_oids(bool *newval, void **extra, GucSource source);
+#ifdef	USE_OPENSSL
+static const char *show_encryption_key_command(void);
+#endif							/* USE_OPENSSL */
 
 /* Private functions in guc-file.l that need to be called from guc.c */
 static ConfigVariable *ProcessConfigFileInternal(GucContext context,
@@ -1831,6 +1835,17 @@ static struct config_bool ConfigureNamesBool[] =
 			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
 		},
 		&data_checksums,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"data_encryption", PGC_INTERNAL, PRESET_OPTIONS,
+			gettext_noop("Shows whether data encryption is turned on for this cluster."),
+			NULL,
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+		},
+		&data_encrypted,
 		false,
 		NULL, NULL, NULL
 	},
@@ -4211,6 +4226,19 @@ static struct config_string ConfigureNamesString[] =
 		"llvmjit",
 		NULL, NULL, NULL
 	},
+
+#ifdef	USE_OPENSSL
+	{
+		{"encryption_key_command", PGC_POSTMASTER, 0,
+			gettext_noop("Sets the shell command that will be called to fetch database encryption key."),
+			NULL,
+			GUC_NOT_IN_SAMPLE | GUC_SUPERUSER_ONLY | GUC_IS_NAME
+		},
+		&encryption_key_command,
+		NULL,
+		NULL, NULL, show_encryption_key_command
+	},
+#endif							/* USE_OPENSSL */
 
 	/* End-of-list marker */
 	{
@@ -11744,5 +11772,16 @@ check_default_with_oids(bool *newval, void **extra, GucSource source)
 
 	return true;
 }
+
+#ifdef USE_OPENSSL
+static const char *
+show_encryption_key_command(void)
+{
+	if (encryption_key_command)
+		return encryption_key_command;
+	else
+		return "(disabled)";
+}
+#endif							/* USE_OPENSSL */
 
 #include "guc-file.c"
