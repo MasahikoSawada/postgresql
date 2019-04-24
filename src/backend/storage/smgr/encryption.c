@@ -631,9 +631,8 @@ run_encryption_key_command(bool *is_key_p, size_t *len_p)
 	 */
 	read_len = Min(key_pref_len, pwd_pref_len);
 
-	int rc;
-	if ((rc = fread(buf, 1, read_len, fp)) != read_len)
-		encryption_error(true, psprintf("Not enough data received from encryption_key_command: %d %d", rc, read_len));
+	if (fread(buf, 1, read_len, fp) != read_len)
+		encryption_error(true, "Not enough data received from encryption_key_command");
 
 	if (read_len == key_pref_len &&
 		strncmp(buf, encryption_key_prefix, key_pref_len) == 0)

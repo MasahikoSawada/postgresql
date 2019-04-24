@@ -945,6 +945,24 @@ static void WALInsertLockAcquireExclusive(void);
 static void WALInsertLockRelease(void);
 static void WALInsertLockUpdateInsertingAt(XLogRecPtr insertingAt);
 
+#ifdef UNUSED
+static void
+dump_tweak(char t[TWEAK_SIZE])
+{
+	for (int i = 0; i < TWEAK_SIZE; i++)
+		fprintf(stderr, "%x", ((uint32) t[i]));
+	fprintf(stderr, "\n");
+}
+
+static void
+dump_page(char *t)
+{
+	for (int i = 0; i < BLCKSZ; i++)
+		fprintf(stderr, "%x", ((uint32) t[i]));
+	fprintf(stderr, "\n");
+}
+#endif
+
 /*
  * Insert an XLOG record represented by an already-constructed chain of data
  * chunks.  This is a low-level routine; to construct the WAL record header
@@ -2495,8 +2513,8 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 			nbytes = npages * (Size) XLOG_BLCKSZ;
 			nleft = nbytes;
 
-//			if (data_encrypted)
-			if (false)
+			if (data_encrypted)
+//			if (false)
 			{
 #ifdef	USE_ENCRYPTION
 				int			i;
@@ -2511,12 +2529,32 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 					char		tweak[TWEAK_SIZE];
 					char *enc_from;
 					Size enc_nleft;
+					uint32	enc_offset;
 
 					enc_from = XLogCtl->pages + (startidx + i) * (Size) XLOG_BLCKSZ;
 					enc_nleft = XLOG_BLCKSZ;
+					enc_offset = XLogSegmentOffset(startoffset,
+												   wal_segment_size);
 
-					XLogEncryptionTweak(tweak, openLogSegNo, startoffset);
+					XLogEncryptionTweak(tweak, openLogSegNo, enc_offset);
 					encrypt_block(enc_from, buf, XLOG_BLCKSZ, tweak);
+
+					/*
+					if (enc_offset == 6496256)
+					{
+						dump_page(enc_from);
+						fprintf(stderr, "|\n");
+						fprintf(stderr, "v\n");
+						dump_page(buf);
+					}
+
+
+					dump_tweak(tweak);
+					fprintf(stderr, "ENcryption tweak %lu, %u, \"%s\" %u%u -> %u%u\n",
+							openLogSegNo, enc_offset, tweak,
+							(uint32) (enc_from[0]), (uint32) (enc_from[1]),
+							(uint32) (buf[0]), (uint32) (buf[1]));
+					*/
 
 					/*
 					 * @@@: writng encrypted wal doesn't use pg_pwrite so far.
@@ -2525,7 +2563,7 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 					{
 						errno = 0;
 						pgstat_report_wait_start(WAIT_EVENT_WAL_WRITE);
-						written = write(openLogFile, buf, enc_nleft);
+						written = pg_pwrite(openLogFile, buf, enc_nleft, startoffset);
 						pgstat_report_wait_end();
 						if (written <= 0)
 						{
@@ -2538,6 +2576,7 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 											startoffset, npages * (Size) XLOG_BLCKSZ)));
 						}
 						enc_nleft -= written;
+						startoffset += written;
 					} while (enc_nleft > 0);
 				}
 #else
@@ -5299,9 +5338,16 @@ BootStrapXLOG(void)
 	{
 #ifdef USE_ENCRYPTION
 		char		tweak[TWEAK_SIZE];
+		//uint32	a = (uint32) (((char *) page)[0]), b = (uint32) (((char *) page)[1]);
 
 		XLogEncryptionTweak(tweak, 1, 0);
-		//encrypt_block((char *) page, (char *) page, XLOG_BLCKSZ, tweak);
+		encrypt_block((char *) page, (char *) page, XLOG_BLCKSZ, tweak);
+		/*
+		fprintf(stderr, "E!cryption tweak 1, 0, \"%s\", %u%u -> %u%u\n",
+				tweak,
+				a, b,
+				((uint32 *) page)[0], ((uint32 *) page)[1]);
+		*/
 #else
 		ENCRYPTION_NOT_SUPPORTED_MSG;
 #endif							/* USE_ENCRYPTION */
@@ -11748,9 +11794,32 @@ retry:
 	{
 #ifdef USE_ENCRYPTION
 		char		tweak[TWEAK_SIZE];
+		/*
+		uint32 a = (uint32) (readBuf[0]), b = (uint32) (readBuf[1]);
+		char *xpage = palloc(XLOG_BLCKSZ);
+		memcpy(xpage, readBuf, XLOG_BLCKSZ);
+		*/
 
 		XLogEncryptionTweak(tweak, readSegNo, readOff);
-		//decrypt_block(readBuf, readBuf, XLOG_BLCKSZ, tweak);
+		decrypt_block(readBuf, readBuf, XLOG_BLCKSZ, tweak);
+
+		/*
+		decrypt_block(xpage, readBuf, XLOG_BLCKSZ, tweak);
+		if (readOff == 6496256)
+		{
+			dump_page(xpage);
+			fprintf(stderr, "|\n");
+			fprintf(stderr, "v\n");
+			dump_page(readBuf);
+		}
+		dump_tweak(tweak);
+		fprintf(stderr, "DEcryption tweak %lu, %u, \"%s\", %u%u -> %u%u(%p)\n",
+				readSegNo, readOff, tweak,
+				a, b,
+				(uint32)(readBuf[0]), (uint32)(readBuf[1]),
+				readBuf);
+		pfree(xpage);
+		*/
 #else
 		ENCRYPTION_NOT_SUPPORTED_MSG;
 #endif							/* USE_ENCRYPTION */
