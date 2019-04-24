@@ -30,6 +30,7 @@
 #include "access/xlog.h"
 #include "pgstat.h"
 #include "postmaster/bgwriter.h"
+#include "storage/encryption.h"
 #include "storage/fd.h"
 #include "storage/bufmgr.h"
 #include "storage/md.h"
@@ -86,6 +87,12 @@ typedef struct _MdfdVec
 
 static MemoryContext MdCxt;		/* context for all MdfdVec objects */
 
+/*
+ * encryption_buffer from encryption.h is not used here because of the special
+ * memory context.
+ */
+static char md_encryption_buffer[BLCKSZ];
+static char md_encryption_tweak[ENCRYPTION_TWEAK_SIZE];
 
 /* Populate a file tag describing an md.c segment file. */
 #define INIT_MD_FILETAG(a,xx_rnode,xx_forknum,xx_segno) \
@@ -138,6 +145,12 @@ static MdfdVec *_mdfd_getseg(SMgrRelation reln, ForkNumber forkno,
 							 BlockNumber blkno, bool skipFsync, int behavior);
 static BlockNumber _mdnblocks(SMgrRelation reln, ForkNumber forknum,
 							  MdfdVec *seg);
+static void mdtweak(char *tweak, RelFileNode *relnode, ForkNumber forknum,
+					BlockNumber blocknum);
+static void mdencrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+					  char *buffer);
+static void mddecrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+					  char *buffer);
 
 
 /*
@@ -1314,4 +1327,35 @@ mdfiletagmatches(const FileTag *ftag, const FileTag *candidate)
 	 * the ftag from the SYNC_FILTER_REQUEST request, so they're forgotten.
 	 */
 	return ftag->rnode.dbNode == candidate->rnode.dbNode;
+}
+
+/*
+ * md files are encrypted block at a time. Tweak will alias higher numbered
+ * forks for huge tables.
+ */
+static void
+mdtweak(char *tweak, RelFileNode *relnode, ForkNumber forknum,
+		BlockNumber blocknum)
+{
+	uint32		fork_and_block = (forknum << 24) ^ blocknum;
+
+	memcpy(tweak, relnode, sizeof(RelFileNode));
+	memcpy(tweak + sizeof(RelFileNode), &fork_and_block, 4);
+}
+
+static void
+mdencrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+		  char *buffer)
+{
+	mdtweak(md_encryption_tweak, &(reln->smgr_rnode.node), forknum, blocknum);
+	EncryptBufferBlock(reln->smgr_rnode.node.spcNode, md_encryption_tweak,
+					   buffer, md_encryption_buffer);
+}
+
+static void
+mddecrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, char *dest)
+{
+	mdtweak(md_encryption_tweak, &(reln->smgr_rnode.node), forknum, blocknum);
+	DecryptBufferBlock(reln->smgr_rnode.node.spcNode, md_encryption_tweak,
+					   md_encryption_buffer, dest);
 }

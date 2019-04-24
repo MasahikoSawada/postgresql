@@ -48,7 +48,8 @@ SUBDIRS = \
 		tsm_system_rows \
 		tsm_system_time \
 		unaccent	\
-		vacuumlo
+		vacuumlo	\
+		test_keyring
 
 ifeq ($(with_openssl),yes)
 SUBDIRS += sslinfo

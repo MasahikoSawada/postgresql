@@ -1,0 +1,25 @@
+/* test_kerying */
+
+-- complain if script is sourced in psql, rather than via CREATE EXTENSION
+\echo Use "CREATE EXTENSION test_keyring" to load this file. \quit
+
+CREATE FUNCTION generate_tblsp_key(oid int)
+RETURNS BOOL
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT PARALLEL UNSAFE;
+
+CREATE FUNCTION update_tblsp_keyring_file()
+RETURNS BOOL
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT PARALLEL UNSAFE;
+
+CREATE FUNCTION load_tblsp_keyring_file()
+RETURNS BOOL
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT PARALLEL UNSAFE;
+
+CREATE FUNCTION dump_local_tblsp_keyring()
+RETURNS BOOL
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT PARALLEL UNSAFE;
+

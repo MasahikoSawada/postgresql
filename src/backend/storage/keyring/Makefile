@@ -1,17 +1,17 @@
 #-------------------------------------------------------------------------
 #
 # Makefile--
-#    Makefile for storage/smgr
+#    Makefile for storage/keyring
 #
 # IDENTIFICATION
-#    src/backend/storage/smgr/Makefile
+#    src/backend/storage/keyring/Makefile
 #
 #-------------------------------------------------------------------------
 
-subdir = src/backend/storage/smgr
+subdir = src/backend/storage/keyring
 top_builddir = ../../../..
 include $(top_builddir)/src/Makefile.global
 
-OBJS = md.o smgr.o encryption.o
+OBJS = keyring.o
 
 include $(top_srcdir)/src/backend/common.mk
