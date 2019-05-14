@@ -75,6 +75,7 @@
 #include "storage/standby.h"
 #include "storage/fd.h"
 #include "storage/large_object.h"
+#include "storage/kmgr.h"
 #include "storage/pg_shmem.h"
 #include "storage/proc.h"
 #include "storage/predicate.h"
@@ -215,6 +216,7 @@ static bool check_recovery_target_lsn(char **newval, void **extra, GucSource sou
 static void assign_recovery_target_lsn(const char *newval, void *extra);
 static bool check_primary_slot_name(char **newval, void **extra, GucSource source);
 static bool check_default_with_oids(bool *newval, void **extra, GucSource source);
+static bool check_kmgr_plugin_library(char **newval, void **extra, GucSource source);
 
 /* Private functions in guc-file.l that need to be called from guc.c */
 static ConfigVariable *ProcessConfigFileInternal(GucContext context,
@@ -4211,6 +4213,17 @@ static struct config_string ConfigureNamesString[] =
 		&jit_provider,
 		"llvmjit",
 		NULL, NULL, NULL
+	},
+
+	{
+		{"kmgr_plugin_library", PGC_POSTMASTER, CLIENT_CONN_PRELOAD,
+			gettext_noop("Keyring library to use."),
+			NULL,
+			GUC_SUPERUSER_ONLY,
+		},
+		&kmgr_plugin_library,
+		"",
+		check_kmgr_plugin_library, NULL, NULL
 	},
 
 	/* End-of-list marker */
@@ -11709,6 +11722,17 @@ check_recovery_target_lsn(char **newval, void **extra, GucSource source)
 	}
 	return true;
 }
+
+static bool
+check_kmgr_plugin_library(char **newval, void **extra, GucSource source)
+{
+#ifndef USE_OPENSSL
+	GUC_check_errdetail("database encryption requies openssl library");
+	return false;
+#endif
+	return true;
+}
+
 
 static void
 assign_recovery_target_lsn(const char *newval, void *extra)

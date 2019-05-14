@@ -344,5 +344,7 @@ main(int argc, char *argv[])
 		   ControlFile->data_checksum_version);
 	printf(_("Mock authentication nonce:            %s\n"),
 		   mock_auth_nonce_str);
+	printf(_("Master key sequential number          %u\n"),
+		   ControlFile->master_key_seqno);
 	return 0;
 }

@@ -39,6 +39,7 @@
 #include "storage/sync.h"
 #include "utils/hsearch.h"
 #include "utils/memutils.h"
+#include "utils/spccache.h"
 #include "pg_trace.h"
 
 /*
@@ -91,7 +92,6 @@ static MemoryContext MdCxt;		/* context for all MdfdVec objects */
  * encryption_buffer from encryption.h is not used here because of the special
  * memory context.
  */
-static char md_encryption_buffer[BLCKSZ];
 static char md_encryption_tweak[ENCRYPTION_TWEAK_SIZE];
 
 /* Populate a file tag describing an md.c segment file. */
@@ -151,7 +151,6 @@ static void mdencrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknu
 					  char *buffer);
 static void mddecrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 					  char *buffer);
-
 
 /*
  *	mdinit() -- Initialize private state for magnetic disk storage manager.
@@ -1329,33 +1328,26 @@ mdfiletagmatches(const FileTag *ftag, const FileTag *candidate)
 	return ftag->rnode.dbNode == candidate->rnode.dbNode;
 }
 
-/*
- * md files are encrypted block at a time. Tweak will alias higher numbered
- * forks for huge tables.
- */
-static void
-mdtweak(char *tweak, RelFileNode *relnode, ForkNumber forknum,
-		BlockNumber blocknum)
-{
-	uint32		fork_and_block = (forknum << 24) ^ blocknum;
-
-	memcpy(tweak, relnode, sizeof(RelFileNode));
-	memcpy(tweak + sizeof(RelFileNode), &fork_and_block, 4);
-}
-
-static void
+void
 mdencrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		  char *buffer)
 {
-	mdtweak(md_encryption_tweak, &(reln->smgr_rnode.node), forknum, blocknum);
+	BufferEncryptionTweak(md_encryption_tweak, &(reln->smgr_rnode.node),
+						  forknum, blocknum);
+	fprintf(stderr, "  md::mdencrypt r = %u, f = %u, b = %u\n",
+			reln->smgr_rnode.node.relNode, forknum, blocknum);
 	EncryptBufferBlock(reln->smgr_rnode.node.spcNode, md_encryption_tweak,
-					   buffer, md_encryption_buffer);
+					   buffer, buffer);
 }
 
-static void
-mddecrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, char *dest)
+void
+mddecrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+		  char *buffer)
 {
-	mdtweak(md_encryption_tweak, &(reln->smgr_rnode.node), forknum, blocknum);
+	BufferEncryptionTweak(md_encryption_tweak, &(reln->smgr_rnode.node),
+						  forknum, blocknum);
+	fprintf(stderr, "  md::mddecrypt r = %u, f = %u, b = %u\n",
+			reln->smgr_rnode.node.relNode, forknum, blocknum);
 	DecryptBufferBlock(reln->smgr_rnode.node.spcNode, md_encryption_tweak,
-					   md_encryption_buffer, dest);
+					   buffer, buffer);
 }

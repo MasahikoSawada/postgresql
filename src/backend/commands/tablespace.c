@@ -73,6 +73,7 @@
 #include "miscadmin.h"
 #include "postmaster/bgwriter.h"
 #include "storage/fd.h"
+#include "storage/kmgr.h"
 #include "storage/lmgr.h"
 #include "storage/standby.h"
 #include "utils/acl.h"
@@ -242,6 +243,8 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	char	   *location;
 	Oid			ownerId;
 	Datum		newOptions;
+	TableSpaceOpts *tsopts;
+	char	   *tskey;
 
 	/* Must be super user */
 	if (!superuser())
@@ -340,7 +343,7 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	newOptions = transformRelOptions((Datum) 0,
 									 stmt->options,
 									 NULL, NULL, false, false);
-	(void) tablespace_reloptions(newOptions, true);
+	tsopts = (TableSpaceOpts *) tablespace_reloptions(newOptions, true);
 	if (newOptions != (Datum) 0)
 		values[Anum_pg_tablespace_spcoptions - 1] = newOptions;
 	else
@@ -358,6 +361,17 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	/* Post creation hook for new tablespace */
 	InvokeObjectPostCreateHook(TableSpaceRelationId, tablespaceoid, 0);
 
+	/* Create an encryption key fot the tablespace */
+	if (tsopts->encryption)
+	{
+		if (!TransparentEncryptionEnabled())
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("tablespace encryption requires a kmgr library"),
+					 errhint("Please set kmgr_plugin_library parameter")));
+		tskey = KeyringCreateKey(tablespaceoid);
+	}
+
 	create_tablespace_directories(location, tablespaceoid);
 
 	/* Record the filesystem change in XLOG */
@@ -365,6 +379,8 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 		xl_tblspc_create_rec xlrec;
 
 		xlrec.ts_id = tablespaceoid;
+		if (tskey != NULL)
+			memcpy(xlrec.ts_key, tskey, ENCRYPTION_KEY_SIZE);
 
 		XLogBeginInsert();
 		XLogRegisterData((char *) &xlrec,
@@ -412,6 +428,9 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 	Form_pg_tablespace spcform;
 	ScanKeyData entry[1];
 	Oid			tablespaceoid;
+	TableSpaceOpts *tsopts;
+	Datum			datum;
+	bool			isnull;
 
 	/*
 	 * Find the target tuple
@@ -449,6 +468,10 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 	spcform = (Form_pg_tablespace) GETSTRUCT(tuple);
 	tablespaceoid = spcform->oid;
 
+	datum = heap_getattr(tuple, Anum_pg_tablespace_spcoptions,
+						 RelationGetDescr(rel), &isnull);
+	tsopts = (TableSpaceOpts *) tablespace_reloptions(datum, false);
+
 	/* Must be tablespace owner */
 	if (!pg_tablespace_ownercheck(tablespaceoid, GetUserId()))
 		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_TABLESPACE,
@@ -462,6 +485,10 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 
 	/* DROP hook for the tablespace being removed */
 	InvokeObjectDropHook(TableSpaceRelationId, tablespaceoid, 0);
+
+	/* Drop encryption key if enabled */
+	if (tsopts->encryption)
+		KeyringDropKey(tablespaceoid);
 
 	/*
 	 * Remove the pg_tablespace tuple (this will roll back if we fail below)
@@ -1003,7 +1030,11 @@ AlterTableSpaceOptions(AlterTableSpaceOptionsStmt *stmt)
 	bool		isnull;
 	bool		repl_null[Natts_pg_tablespace];
 	bool		repl_repl[Natts_pg_tablespace];
+	bool		encrypted_old;
+	bool		encrypted_new;
 	HeapTuple	newtuple;
+	TableSpaceOpts *tsopts_old;
+	TableSpaceOpts *tsopts_new;
 
 	/* Search pg_tablespace */
 	rel = table_open(TableSpaceRelationId, RowExclusiveLock);
@@ -1021,6 +1052,10 @@ AlterTableSpaceOptions(AlterTableSpaceOptionsStmt *stmt)
 						stmt->tablespacename)));
 
 	tablespaceoid = ((Form_pg_tablespace) GETSTRUCT(tup))->oid;
+	datum = heap_getattr(tup, Anum_pg_tablespace_spcoptions,
+						 RelationGetDescr(rel), &isnull);
+	tsopts_old = (TableSpaceOpts *) tablespace_reloptions(datum, false);
+	encrypted_old = tsopts_old != NULL && tsopts_old->encryption;
 
 	/* Must be owner of the existing object */
 	if (!pg_tablespace_ownercheck(tablespaceoid, GetUserId()))
@@ -1033,7 +1068,16 @@ AlterTableSpaceOptions(AlterTableSpaceOptionsStmt *stmt)
 	newOptions = transformRelOptions(isnull ? (Datum) 0 : datum,
 									 stmt->options, NULL, NULL, false,
 									 stmt->isReset);
-	(void) tablespace_reloptions(newOptions, true);
+	tsopts_new = (TableSpaceOpts *) tablespace_reloptions(newOptions, true);
+	encrypted_new = tsopts_new != NULL && tsopts_new->encryption;
+
+	/*
+	 * We don't support change un-encrypted tablespace to encrypted and
+	 * vice versa.
+	 */
+	if (encrypted_old != encrypted_new)
+		ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						errmsg("could not change encryption option")));
 
 	/* Build new tuple. */
 	memset(repl_null, false, sizeof(repl_null));

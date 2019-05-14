@@ -24,6 +24,7 @@
 #include "miscadmin.h"
 #include "optimizer/optimizer.h"
 #include "storage/bufmgr.h"
+#include "storage/kmgr.h"
 #include "utils/catcache.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
@@ -220,4 +221,11 @@ get_tablespace_io_concurrency(Oid spcid)
 		return effective_io_concurrency;
 	else
 		return spc->opts->effective_io_concurrency;
+}
+
+bool
+tablespace_is_encrypted(Oid spcoid)
+{
+	Assert(spcoid);
+	return KeyringKeyExists(spcoid);
 }

@@ -23,10 +23,16 @@
 #include <sys/stat.h>
 
 #include "storage/copydir.h"
+#include "storage/encryption.h"
 #include "storage/fd.h"
+#include "storage/kmgr.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "utils/spccache.h"
 
+static void reencrypt_copy_buffer(char *buffer, int nbytes, RelFileNode srcNode,
+								  RelFileNode dstNode, BlockNumber blkno_inseg,
+								  ForkNumber forknum);
 /*
  * copydir: copy a directory
  *
@@ -132,6 +138,11 @@ copy_file(char *fromfile, char *tofile)
 	int			nbytes;
 	off_t		offset;
 	off_t		flush_offset;
+	RelFileNode fromNode;
+	RelFileNode toNode;
+	ForkNumber	forknum;
+	BlockNumber	segment;
+	bool		need_encryption;
 
 	/* Size of copy buffer (read and write requests) */
 #define COPY_BUF_SIZE (8 * BLCKSZ)
@@ -167,6 +178,24 @@ copy_file(char *fromfile, char *tofile)
 				 errmsg("could not create file \"%s\": %m", tofile)));
 
 	/*
+	 * Encryption while copying is needed when the target file is a relation file
+	 * and either from file or to file is encrypted.
+	 */
+	need_encryption = ParseRelationPath(fromfile, &(fromNode.dbNode),
+										&(fromNode.spcNode),
+										&(fromNode.relNode),
+										&forknum, &segment);
+	ParseRelationPath(tofile, &(toNode.dbNode),
+					  &(toNode.spcNode), &(toNode.relNode),
+					  &forknum, &segment);
+	need_encryption &= (tablespace_is_encrypted(fromNode.spcNode) ||
+						tablespace_is_encrypted(toNode.spcNode));
+
+	fprintf(stderr, "copydir::copy file \"%s\"d = %u, s = %u, r = %u, enc = %d\n",
+			tofile, toNode.dbNode, toNode.spcNode, toNode.relNode,
+			need_encryption);
+
+	/*
 	 * Do the data copying.
 	 */
 	flush_offset = 0;
@@ -196,6 +225,16 @@ copy_file(char *fromfile, char *tofile)
 		if (nbytes == 0)
 			break;
 		errno = 0;
+
+		/* Encrypt buffer data */
+		if (TransparentEncryptionEnabled() && need_encryption)
+		{
+			BlockNumber blkno_inseg = offset / BLCKSZ;
+
+			reencrypt_copy_buffer(buffer, nbytes, fromNode, toNode,
+								  blkno_inseg, forknum);
+		}
+
 		pgstat_report_wait_start(WAIT_EVENT_COPY_FILE_WRITE);
 		if ((int) write(dstfd, buffer, nbytes) != nbytes)
 		{
@@ -223,4 +262,40 @@ copy_file(char *fromfile, char *tofile)
 				 errmsg("could not close file \"%s\": %m", fromfile)));
 
 	pfree(buffer);
+}
+
+/*
+ * 'buffer' has 'nbytes' data of block data starting from 'blkno' block number
+ */
+static void
+reencrypt_copy_buffer(char *buffer, int nbytes, RelFileNode srcNode,
+					  RelFileNode dstNode, BlockNumber blkno_inseg,
+					  ForkNumber forknum)
+{
+	BlockNumber curblkno = blkno_inseg;
+	BlockNumber nblocks = nbytes / BLCKSZ;
+	char		srcTweak[ENCRYPTION_TWEAK_SIZE] = {0};
+	char		dstTweak[ENCRYPTION_TWEAK_SIZE] = {0};
+	char		*cur;
+	bool		srcisencrypted = tablespace_is_encrypted(srcNode.spcNode);
+	bool		dstisencrypted = tablespace_is_encrypted(dstNode.spcNode);
+
+	Assert(nbytes % BLCKSZ == 0);
+
+	for (cur = buffer; cur < buffer + (nblocks * BLCKSZ);
+		 cur += BLCKSZ)
+	{
+		if (srcisencrypted)
+		{
+			BufferEncryptionTweak(srcTweak, &srcNode, forknum, curblkno);
+			DecryptBufferBlock(srcNode.spcNode, srcTweak, cur, cur);
+		}
+
+		if (dstisencrypted)
+		{
+			BufferEncryptionTweak(dstTweak, &dstNode, forknum, curblkno);
+			EncryptBufferBlock(dstNode.spcNode, dstTweak, cur, cur);
+		}
+		curblkno++;
+	}
 }

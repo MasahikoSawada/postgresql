@@ -26,8 +26,13 @@ tblspc_desc(StringInfo buf, XLogReaderState *record)
 	if (info == XLOG_TBLSPC_CREATE)
 	{
 		xl_tblspc_create_rec *xlrec = (xl_tblspc_create_rec *) rec;
+		char tskey[ENCRYPTION_KEY_SIZE + 1];
 
-		appendStringInfo(buf, "%u \"%s\"", xlrec->ts_id, xlrec->ts_path);
+		memcpy(tskey, xlrec->ts_key, ENCRYPTION_KEY_SIZE);
+		tskey[ENCRYPTION_KEY_SIZE] = '\0';
+		appendStringInfo(buf, "%u \"%s\", encryption key = \"%s\"",
+						 xlrec->ts_id, xlrec->ts_path,
+						 tskey);
 	}
 	else if (info == XLOG_TBLSPC_DROP)
 	{

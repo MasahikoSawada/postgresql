@@ -14,7 +14,7 @@
 #include "utils/ps_status.h"
 #include "utils/memutils.h"
 
-#include "storage/keyring.h"
+#include "storage/kmgr.h"
 #include "storage/encryption.h"
 
 PG_MODULE_MAGIC;
@@ -23,7 +23,6 @@ PG_MODULE_MAGIC;
 	do { \
 		if (!initialized) \
 		{ \
-			KeyringSetup(); \
 			initialized = true; \
 		} \
 	} while(0)
@@ -34,6 +33,8 @@ PG_FUNCTION_INFO_V1(generate_tblsp_key);
 PG_FUNCTION_INFO_V1(update_tblsp_keyring_file);
 PG_FUNCTION_INFO_V1(load_tblsp_keyring_file);
 PG_FUNCTION_INFO_V1(dump_local_tblsp_keyring);
+PG_FUNCTION_INFO_V1(get_tblsp_key);
+PG_FUNCTION_INFO_V1(get_master_key);
 
 Datum
 generate_tblsp_key(PG_FUNCTION_ARGS)
@@ -70,5 +71,21 @@ dump_local_tblsp_keyring(PG_FUNCTION_ARGS)
 	INIT();
 
 	test_dumpLocalTblspKeyring();
+	PG_RETURN_BOOL(true);
+}
+
+Datum
+get_tblsp_key(PG_FUNCTION_ARGS)
+{
+	Oid oid = (Oid) PG_GETARG_INT32(0);
+
+	test_getTablespaceKey(oid);
+	PG_RETURN_BOOL(true);
+}
+
+Datum
+get_master_key(PG_FUNCTION_ARGS)
+{
+	test_getMasterKey();
 	PG_RETURN_BOOL(true);
 }

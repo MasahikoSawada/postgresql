@@ -119,6 +119,7 @@
 #include "replication/walsender.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
+#include "storage/kmgr.h"
 #include "storage/pg_shmem.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
@@ -988,6 +989,11 @@ PostmasterMain(int argc, char *argv[])
 	process_shared_preload_libraries();
 
 	/*
+	 * Load and invoke startup callback of keyring plugin.
+	 */
+	processKmgrPlugin();
+
+	/*
 	 * Now that loadable modules have had their chance to register background
 	 * workers, calculate MaxBackends.
 	 */
@@ -1311,6 +1317,12 @@ PostmasterMain(int argc, char *argv[])
 	 * Initialize the autovacuum subsystem (again, no process start yet)
 	 */
 	autovac_init();
+
+	/*
+	 * Get the master encrption key via kmgr plugin and store into the
+	 * shared memory.
+	 */
+	InitializeMasterKey();
 
 	/*
 	 * Load configuration files for client authentication.
@@ -4900,6 +4912,11 @@ SubPostmasterMain(int argc, char *argv[])
 	 * non-EXEC_BACKEND behavior.
 	 */
 	process_shared_preload_libraries();
+
+	/*
+	 * Load and invoke startup callback of keyring plugin.
+	 */
+	processKmgrPlugin();
 
 	/* Run backend or appropriate child */
 	if (strcmp(argv[1], "--forkbackend") == 0)

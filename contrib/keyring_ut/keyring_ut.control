@@ -1,5 +1,5 @@
 # test_keyring extension
 comment = ''
 default_version = '1.0'
-module_pathname = '$libdir/test_keyring'
+module_pathname = '$libdir/keyring_ut'
 relocatable = true

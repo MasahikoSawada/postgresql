@@ -36,6 +36,7 @@
 #include "utils/builtins.h"
 #include "utils/index_selfuncs.h"
 #include "utils/memutils.h"
+#include "utils/spccache.h"
 
 
 /* Working state needed by btvacuumpage */
@@ -161,6 +162,10 @@ btbuildempty(Relation index)
 	/* Construct metapage. */
 	metapage = (Page) palloc(BLCKSZ);
 	_bt_initmetapage(metapage, P_NONE, 0);
+
+	if (tablespace_is_encrypted(index->rd_node.spcNode))
+		smgrencrypt(index->rd_smgr, INIT_FORKNUM, BTREE_METAPAGE,
+					(char *) metapage);
 
 	/*
 	 * Write the page and log it.  It might seem that an immediate sync would

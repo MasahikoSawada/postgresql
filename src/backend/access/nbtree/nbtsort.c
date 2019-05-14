@@ -73,6 +73,7 @@
 #include "tcop/tcopprot.h"		/* pgrminclude ignore */
 #include "utils/rel.h"
 #include "utils/sortsupport.h"
+#include "utils/spccache.h"
 #include "utils/tuplesort.h"
 
 
@@ -269,6 +270,7 @@ typedef struct BTWriteState
 	BlockNumber btws_pages_alloced; /* # pages allocated */
 	BlockNumber btws_pages_written; /* # pages written out */
 	Page		btws_zeropage;	/* workspace for filling zeroes */
+	bool		btws_need_encryption;
 } BTWriteState;
 
 
@@ -583,6 +585,8 @@ _bt_leafbuild(BTSpool *btspool, BTSpool *btspool2)
 	wstate.btws_pages_alloced = BTREE_METAPAGE + 1;
 	wstate.btws_pages_written = 0;
 	wstate.btws_zeropage = NULL;	/* until needed */
+	wstate.btws_need_encryption =
+		tablespace_is_encrypted(btspool->index->rd_node.spcNode);
 
 	pgstat_progress_update_param(PROGRESS_CREATEIDX_SUBPHASE,
 								 PROGRESS_BTREE_PHASE_LEAF_LOAD);
@@ -678,6 +682,13 @@ _bt_blwritepage(BTWriteState *wstate, Page page, BlockNumber blkno)
 				   (char *) wstate->btws_zeropage,
 				   true);
 	}
+
+	/*
+	 * Encrypt page if enabled. Since the page is allocated in local buffer
+	 * we can overwrite buffer by encrypted data.
+	 */
+	if (wstate->btws_need_encryption)
+		smgrencrypt(wstate->index->rd_smgr, MAIN_FORKNUM, blkno, page);
 
 	PageSetChecksumInplace(page, blkno);
 

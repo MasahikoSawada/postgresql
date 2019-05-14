@@ -51,6 +51,7 @@
 #include "storage/standby.h"
 #include "utils/rel.h"
 #include "utils/resowner_private.h"
+#include "utils/spccache.h"
 #include "utils/timestamp.h"
 
 
@@ -749,7 +750,14 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		bufHdr = BufferAlloc(smgr, relpersistence, forkNum, blockNum,
 							 strategy, &found);
 		if (found)
+		{
 			pgBufferUsage.shared_blks_hit++;
+#ifdef TDE_DEBUG
+			fprintf(stderr, "bufmgs:read found in pool buf r = %u, f = %u, b = %u\n",
+					smgr->smgr_rnode.node.relNode,
+					forkNum, blockNum);
+#endif
+		}
 		else if (isExtend)
 			pgBufferUsage.shared_blks_written++;
 		else if (mode == RBM_NORMAL || mode == RBM_NORMAL_NO_LOG ||
@@ -866,11 +874,45 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 	if (isExtend)
 	{
+		bool encrypt = false;
+
 		/* new buffers are zero-filled */
 		MemSet((char *) bufBlock, 0, BLCKSZ);
+
+		/* If the tablespace is encrypted, encrypt buffer and mark */
+		if (tablespace_is_encrypted(smgr->smgr_rnode.node.spcNode))
+			encrypt = true;
+
+		/*
+		 * If we need to encrypt the block, encrypt bufBlock and write it to
+		 * the disk, and then initialize it to 0 again and mark buffer header
+		 * as need to be encrypted.
+		 */
+		if (encrypt)
+		{
+#ifdef TDE_DEBUG
+			fprintf(stderr, "bufmgr::read,extend encrypt r = %u, f = %u, b = %u\n",
+					smgr->smgr_rnode.node.relNode,
+					forkNum,
+					blockNum);
+#endif
+			smgrencrypt(smgr, forkNum, blockNum, bufBlock);
+		}
+
 		/* don't set checksum for all-zero page */
 		smgrextend(smgr, forkNum, blockNum, (char *) bufBlock, false);
 
+		if (encrypt)
+		{
+			uint32	buf_state;
+
+			/* Intialize to 0 again since bufBlock has an encrypted data */
+			MemSet((char *) bufBlock, 0, BLCKSZ);
+
+			buf_state = LockBufHdr(bufHdr);
+			buf_state |= BM_ENCRYPTION_NEEDED;
+			UnlockBufHdr(bufHdr, buf_state);
+		}
 		/*
 		 * NB: we're *not* doing a ScheduleBufferTagForWriteback here;
 		 * although we're essentially performing a write. At least on linux
@@ -904,6 +946,26 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				INSTR_TIME_ADD(pgBufferUsage.blk_read_time, io_time);
 			}
 
+			/*
+			 * @@@: Decrypt then checksum, or should checksum then decrypt?
+			 */
+			if (tablespace_is_encrypted(smgr->smgr_rnode.node.spcNode))
+			{
+				uint32	buf_state;
+
+#ifdef TDE_DEBUG
+				fprintf(stderr, "bufmgr::read decrypt r = %u, f = %u, b = %u\n",
+						smgr->smgr_rnode.node.relNode,
+						forkNum,
+						blockNum);
+#endif
+
+				smgrdecrypt(smgr, forkNum, blockNum, bufBlock);
+				buf_state = LockBufHdr(bufHdr);
+				buf_state |= BM_ENCRYPTION_NEEDED;
+				UnlockBufHdr(bufHdr, buf_state);
+			}
+
 			/* check for garbage data */
 			if (!PageIsVerified((Page) bufBlock, blockNum))
 			{
@@ -923,6 +985,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 									blockNum,
 									relpath(smgr->smgr_rnode, forkNum))));
 			}
+
 		}
 	}
 
@@ -1308,7 +1371,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	buf->tag = newTag;
 	buf_state &= ~(BM_VALID | BM_DIRTY | BM_JUST_DIRTIED |
 				   BM_CHECKPOINT_NEEDED | BM_IO_ERROR | BM_PERMANENT |
-				   BUF_USAGECOUNT_MASK);
+				   BUF_USAGECOUNT_MASK | BM_ENCRYPTION_NEEDED);
 	if (relpersistence == RELPERSISTENCE_PERMANENT || forkNum == INIT_FORKNUM)
 		buf_state |= BM_TAG_VALID | BM_PERMANENT | BUF_USAGECOUNT_ONE;
 	else
@@ -2749,6 +2812,18 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 	 */
 	bufToWrite = PageSetChecksumCopy((Page) bufBlock, buf->tag.blockNum);
 
+	/*
+	 * Encrypt page if needed. Since pages in shared buffer must not be
+	 * encrypted we copy the page and encrypt it.
+	 *
+	 * @@@: Checksum then encrypt, or should encrypt then checksum?
+	 */
+	if (buf_state & BM_ENCRYPTION_NEEDED)
+		bufToWrite = PageEncryptCopy(bufToWrite,
+									 reln,
+									 buf->tag.forkNum,
+									 buf->tag.blockNum);
+
 	if (track_io_timing)
 		INSTR_TIME_SET_CURRENT(io_start);
 
@@ -3211,6 +3286,22 @@ FlushRelationBuffers(Relation rel)
 				Page		localpage;
 
 				localpage = (char *) LocalBufHdrGetBlock(bufHdr);
+
+				/* Encrypt buffer and then update checksum */
+				if (buf_state & BM_ENCRYPTION_NEEDED)
+				{
+#ifdef TDE_DEBUG
+					fprintf(stderr, "bufmgr::flush encrypt r = %u, f = %u, b = %u\n",
+							rel->rd_id,
+							bufHdr->tag.forkNum,
+							bufHdr->tag.blockNum);
+#endif
+
+					smgrencrypt(rel->rd_smgr,
+								bufHdr->tag.forkNum,
+								bufHdr->tag.blockNum,
+								localpage);
+				}
 
 				/* Setup error traceback support for ereport() */
 				errcallback.callback = local_buffer_write_error_callback;

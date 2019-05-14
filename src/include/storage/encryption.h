@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * encryption.h
+ * encryption.huffer
  *	  Full database encryption support
  *
  *
@@ -16,6 +16,7 @@
 
 #include "access/xlogdefs.h"
 #include "port/pg_crc32c.h"
+#include "storage/smgr.h"
 
 /*
  * OpenSSL is currently the only implementation of encryption we use.
@@ -39,13 +40,8 @@
  */
 #define ENCRYPTION_BLOCK_OPENSSL 1
 
-#define	ENCRYPTION_KEY_SIZE		64
+#define	ENCRYPTION_KEY_SIZE		32
 #define ENCRYPTION_TWEAK_SIZE	16
-
-extern char *encryption_buffer;
-extern Size encryption_buf_size;
-
-extern void enlarge_encryption_buffer(Size new_size);
 
 /*
  * If one XLOG record ended and the following one started in the same block,
@@ -85,17 +81,13 @@ extern void EncryptBufferBlock(Oid spcOid, const char *tweak,
 							   const char *input, char *output);
 extern void DecryptBufferBlock(Oid spcOid, const char *tweak,
 							   const char *input, char *output);
-
-extern void setup_encryption(bool bootstrap);
-extern void setup_encryption_key(char *credentials, bool is_key, size_t len);
-extern void sample_encryption(char *buf);
 extern void encrypt_block(const char *input, char *output, Size size,
-						  const char *key, const char *tweak);
+						  const char *key, const char *tweak, bool stream);
 extern void decrypt_block(const char *input, char *output, Size size,
-						  const char *key, const char *tweak);
-extern void encryption_error(bool fatal, char *message);
-
+						  const char *key, const char *tweak, bool stream);
 extern void XLogEncryptionTweak(char *tweak, XLogSegNo segment,
 					uint32 offset);
+extern void BufferEncryptionTweak(char *tweak, RelFileNode *relnode,
+								  ForkNumber forknum, BlockNumber blocknum);
 
 #endif							/* ENCRYPTION_H */

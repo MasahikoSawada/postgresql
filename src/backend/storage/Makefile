@@ -9,6 +9,6 @@ top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
 SUBDIRS     = buffer file freespace ipc large_object lmgr page smgr sync \
-		keyring
+		kmgr
 
 include $(top_srcdir)/src/backend/common.mk

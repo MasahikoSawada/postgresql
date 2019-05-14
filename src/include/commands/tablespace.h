@@ -18,6 +18,7 @@
 #include "catalog/objectaddress.h"
 #include "lib/stringinfo.h"
 #include "nodes/parsenodes.h"
+#include "storage/kmgr.h"
 
 /* XLOG stuff */
 #define XLOG_TBLSPC_CREATE		0x00
@@ -26,6 +27,7 @@
 typedef struct xl_tblspc_create_rec
 {
 	Oid			ts_id;
+	char		ts_key[ENCRYPTION_KEY_SIZE];
 	char		ts_path[FLEXIBLE_ARRAY_MEMBER]; /* null-terminated string */
 } xl_tblspc_create_rec;
 
@@ -40,6 +42,7 @@ typedef struct TableSpaceOpts
 	float8		random_page_cost;
 	float8		seq_page_cost;
 	int			effective_io_concurrency;
+	bool		encryption;
 } TableSpaceOpts;
 
 extern Oid	CreateTableSpace(CreateTableSpaceStmt *stmt);
