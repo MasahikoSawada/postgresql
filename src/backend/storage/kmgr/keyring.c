@@ -324,8 +324,10 @@ reload_keyring_file(void)
 	/* There is no key in the file */
 	if (keylist == NIL)
 	{
+#ifdef DEBUG_TDE
 		fprintf(stderr, "tblsp_key::reload loaded 0 keys by pid %d\n",
 				MyProcPid);
+#endif
 		tblspKeyring = NULL;
 		return;
 	}
@@ -349,9 +351,10 @@ reload_keyring_file(void)
 		memcpy(cache_key, key, sizeof(TblspKeyData));
 	}
 
+#ifdef DEBUG_TDE
 	fprintf(stderr, "tblsp_key::reload loaded %d keys by pid %d\n",
 			list_length(keylist), MyProcPid);
-
+#endif
 	list_free_deep(keylist);
 }
 
@@ -502,7 +505,9 @@ invalidate_keyring(Datum arg, int cacheid, uint32 hashvalue)
 {
 	elog(DEBUG1, "invalidate tablespace keyring caches");
 
+#ifdef DEBUG_TDE
 	fprintf(stderr, "tblsp_key::invalid tblspkeys %d\n", MyProcPid);
+#endif
 	keyring_invalid = true;
 }
 

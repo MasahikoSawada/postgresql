@@ -109,8 +109,10 @@ load_all_keys(void)
 
 		keycache = hash_search(MyKeys, (void *) &key->id, HASH_ENTER, NULL);
 		memcpy(keycache->key, key->key, ENCRYPTION_KEY_SIZE);
+#ifdef DEBUG_TDE
 		ereport(LOG, (errmsg("keyring_file: load mkid = \"%s\", mk = \"%s\"",
 							 keycache->id, keycache->key)));
+#endif
 	}
 
 	CloseTransientFile(fd);
@@ -143,8 +145,10 @@ save_all_keys(void)
 	hash_seq_init(&status, MyKeys);
 	while ((key = (MyKey *) hash_seq_search(&status)) != NULL)
 	{
+#ifdef DEBUG_TDE
 		ereport(LOG, (errmsg("keyring_file: save mkid = \"%s\", mk = \"%s\"",
 							 key->id, key->key)));
+#endif
 		rc = fwrite(key, sizeof(MyKey), 1, fpout);
 	}
 
@@ -208,8 +212,10 @@ test_getkey(const char *keyid, char **key)
 	*key = palloc0(ENCRYPTION_KEY_SIZE);
 	memcpy(*key, mykey->key, ENCRYPTION_KEY_SIZE);
 
+#ifdef DEBUG_TDE
 	ereport(LOG, (errmsg("keyring_file: get master key, keyid = \"%s\", key = \"%s\"",
 						 keyid, *key)));
+#endif
 }
 
 static bool
@@ -249,9 +255,10 @@ test_generatekey(const char *keyid)
 	memcpy(mykey->key, MATERKEYDATA, ENCRYPTION_KEY_SIZE);
 
 	/* debug log */
+#ifdef DEBUG_TDE
 	ereport(LOG, (errmsg("keyring_file: genearte key id = \"%s\", key = \"%s\"",
 						 keyid, mykey->key)));
-
+#endif
 	/* update key file */
 	save_all_keys();
 }

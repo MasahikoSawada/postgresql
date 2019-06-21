@@ -191,10 +191,11 @@ copy_file(char *fromfile, char *tofile)
 	need_encryption &= (tablespace_is_encrypted(fromNode.spcNode) ||
 						tablespace_is_encrypted(toNode.spcNode));
 
+#ifdef DEBUG_TDE
 	fprintf(stderr, "copydir::copy file \"%s\"d = %u, s = %u, r = %u, enc = %d\n",
 			tofile, toNode.dbNode, toNode.spcNode, toNode.relNode,
 			need_encryption);
-
+#endif
 	/*
 	 * Do the data copying.
 	 */

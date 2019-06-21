@@ -665,12 +665,8 @@ vm_extend(Relation rel, BlockNumber vm_nblocks)
 		PageSetChecksumInplace((Page) pg.data, vm_nblocks_now);
 
 		if (tablespace_is_encrypted(rel->rd_smgr->smgr_rnode.node.spcNode))
-		{
-			fprintf(stderr, "vm:extend rel = %u, fsmblk = %u\n",
-					RelationGetRelid(rel), vm_nblocks_now);
 			smgrencrypt(rel->rd_smgr, VISIBILITYMAP_FORKNUM, vm_nblocks_now,
 						pg.data);
-		}
 
 		smgrextend(rel->rd_smgr, VISIBILITYMAP_FORKNUM, vm_nblocks_now,
 				   pg.data, false);

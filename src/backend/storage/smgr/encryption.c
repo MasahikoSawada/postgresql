@@ -46,6 +46,8 @@
 #include <openssl/evp.h>
 #include <openssl/err.h>
 
+PGAlignedBlock encrypt_buf;
+
 static bool		encryption_initialized = false;
 static EVP_CIPHER_CTX *ctx_encrypt;
 static EVP_CIPHER_CTX *ctx_decrypt;
@@ -57,6 +59,7 @@ static void evp_error(void);
 static void setup_encryption(void) ;
 static void initialize_encryption_context(EVP_CIPHER_CTX **ctx_p, bool stream);
 
+#ifdef DEBUG_TDE
 static char *
 dk(const char *key)
 {
@@ -80,6 +83,7 @@ dp(const char *buffer)
 
 	return buf;
 }
+#endif
 
 /*
  * Encryption a buffer block on the given tablespace.
@@ -93,14 +97,17 @@ EncryptBufferBlock(Oid spcOid, const char *tweak, const char *input,
 	spckey = KeyringGetKey(spcOid);
 	Assert(spckey);
 
+#ifdef DEBUG_TDE
 	fprintf(stderr, "    encryption::encrypt with tskey \"%s\", plain page = %s\n",
 			dk(spckey), dp(input));
-
+#endif
 	/* Always use block cipher for buffer data */
 	encrypt_block(input, output, BLCKSZ, spckey, tweak, false);
 
+#ifdef DEBUG_TDE
 	fprintf(stderr, "    encryption::encrypt encrypted page = %s\n",
 			dp(output));
+#endif
 }
 
 /*
@@ -115,14 +122,17 @@ DecryptBufferBlock(Oid spcOid, const char *tweak, const char *input,
 	spckey = KeyringGetKey(spcOid);
 	Assert(spckey);
 
+#ifdef DEBUG_TDE
 	fprintf(stderr, "    encryption::decrypt with tskey \"%s\", encrypted page = %s\n",
 			dk(spckey), dp(input));
-
+#endif
 	/* Always use block cipher for buffer data */
 	decrypt_block(input, output, BLCKSZ, spckey, tweak, false);
 
+#ifdef DEBUG_TDE
 	fprintf(stderr, "    encryption::decrypt plain page = %s\n",
 			dp(output));
+#endif
 }
 
 /*

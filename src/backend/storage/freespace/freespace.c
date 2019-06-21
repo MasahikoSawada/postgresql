@@ -655,12 +655,8 @@ fsm_extend(Relation rel, BlockNumber fsm_nblocks)
 		PageSetChecksumInplace((Page) pg.data, fsm_nblocks_now);
 
 		if (tablespace_is_encrypted(rel->rd_smgr->smgr_rnode.node.spcNode))
-		{
-			fprintf(stderr, "fsm:extend rel = %u, fsmblk = %u\n",
-					RelationGetRelid(rel), fsm_nblocks_now);
 			smgrencrypt(rel->rd_smgr, FSM_FORKNUM, fsm_nblocks_now,
 						pg.data);
-		}
 
 		smgrextend(rel->rd_smgr, FSM_FORKNUM, fsm_nblocks_now,
 				   pg.data, false);

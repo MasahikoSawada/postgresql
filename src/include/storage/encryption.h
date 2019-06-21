@@ -77,6 +77,8 @@
  */
 #define XLOG_REC_ALIGN(LEN) MAXALIGN(LEN)
 
+extern PGAlignedBlock encrypt_buf;
+
 extern void EncryptBufferBlock(Oid spcOid, const char *tweak,
 							   const char *input, char *output);
 extern void DecryptBufferBlock(Oid spcOid, const char *tweak,
