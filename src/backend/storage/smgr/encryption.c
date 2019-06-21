@@ -46,8 +46,6 @@
 #include <openssl/evp.h>
 #include <openssl/err.h>
 
-static char	   *encryption_buffer = NULL;
-static Size		encryption_buf_size = 0;
 static bool		encryption_initialized = false;
 static EVP_CIPHER_CTX *ctx_encrypt;
 static EVP_CIPHER_CTX *ctx_decrypt;
@@ -55,10 +53,8 @@ static EVP_CIPHER_CTX *ctx_encrypt_stream;
 static EVP_CIPHER_CTX *ctx_decrypt_stream;
 
 static void setup_encryption_openssl(void);
-static void enlarge_encryption_buffer(Size new_size);
 static void evp_error(void);
 static void setup_encryption(void) ;
-static void encryption_error(bool fatal, char *message);
 static void initialize_encryption_context(EVP_CIPHER_CTX **ctx_p, bool stream);
 
 static char *
@@ -296,22 +292,6 @@ initialize_encryption_context(EVP_CIPHER_CTX **ctx_p, bool stream)
 }
 
 /*
- * Report an error in an universal way so that caller does not have to care
- * whether it executes in backend or front-end.
- */
-static void
-encryption_error(bool fatal, char *message)
-{
-#ifndef FRONTEND
-	elog(fatal ? FATAL : INFO, "%s", message);
-#else
-	fprintf(stderr, "%s\n", message);
-	if (fatal)
-		exit(EXIT_FAILURE);
-#endif
-}
-
-/*
  * Initialize encryption subsystem for use. Must be called before any
  * encryptable data is read from or written to data directory.
  */
@@ -336,33 +316,6 @@ setup_encryption_openssl(void)
 	ERR_load_crypto_strings();
 	OpenSSL_add_all_algorithms();
 	OPENSSL_config(NULL);
-}
-
-static void
-enlarge_encryption_buffer(Size new_size)
-{
-	Assert(new_size > 0);
-
-	/*
-	 * Shrinkage is not the use case for this routine.
-	 */
-	if (new_size <= encryption_buf_size)
-		return;
-
-	/*
-	 * Allocate a new chunk if nothing is there yet, else reallocate the
-	 * existing one.
-	 */
-	if (encryption_buf_size == 0)
-#ifndef FRONTEND
-		encryption_buffer = (char *) MemoryContextAlloc(TopMemoryContext,
-														new_size);
-#else
-		encryption_buffer = (char *) palloc(new_size);
-#endif							/* FRONTEND */
-	else
-		encryption_buffer = (char *) repalloc(encryption_buffer, new_size);
-	encryption_buf_size = new_size;
 }
 
 /*
