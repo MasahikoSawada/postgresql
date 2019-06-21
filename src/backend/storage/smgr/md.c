@@ -145,12 +145,6 @@ static MdfdVec *_mdfd_getseg(SMgrRelation reln, ForkNumber forkno,
 							 BlockNumber blkno, bool skipFsync, int behavior);
 static BlockNumber _mdnblocks(SMgrRelation reln, ForkNumber forknum,
 							  MdfdVec *seg);
-static void mdtweak(char *tweak, RelFileNode *relnode, ForkNumber forknum,
-					BlockNumber blocknum);
-static void mdencrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-					  char *buffer);
-static void mddecrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-					  char *buffer);
 
 /*
  *	mdinit() -- Initialize private state for magnetic disk storage manager.

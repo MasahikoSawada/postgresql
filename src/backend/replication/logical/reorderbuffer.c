@@ -204,7 +204,6 @@ static ReorderBufferTupleBuf *ReorderBufferRestoreTuple(ReorderBuffer *rb,
 						  TransientBufFile *file);
 static void ReorderBufferReadData(TransientBufFile *file, void *ptr, size_t size,
 					  bool *no_data_p);
->>>>>>> apply buffile patch from cybertec.
 static void ReorderBufferRestoreCleanup(ReorderBuffer *rb, ReorderBufferTXN *txn);
 static void ReorderBufferCleanupSerializedTXNs(const char *slotname);
 static void ReorderBufferSerializedPath(char *path, ReplicationSlot *slot,
