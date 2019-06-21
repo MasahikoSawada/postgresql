@@ -48,4 +48,8 @@ extern char *GetMasterKey(char *id);
 extern void GetCurrentMasterKeyId(char *keyid);
 extern void RotateMasterKey(char *keyid_new);
 
+
+/* tempkey.c */
+extern char * GetBackendKey(void);
+
 #endif /* KMGR_H */
