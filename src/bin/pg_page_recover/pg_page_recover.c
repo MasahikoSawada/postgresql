@@ -868,19 +868,17 @@ skipfile(const char *fn)
 }
 
 static char *
-scan_directory(const char *datadir, const char *basedir, const char *subdir)
+scan_directory(const char *datadir, const char *scandir)
 {
-	char		fullpath[MAXPGPATH];
-	char		relativepath[MAXPGPATH];
+	char		path[MAXPGPATH];
 	DIR		   *dir;
 	struct dirent *de;
 
-	snprintf(relativepath, sizeof(relativepath), "%s/%s", basedir, subdir);
-	snprintf(fullpath, sizeof(fullpath), "%s/%s", datadir, relativepath);
-	dir = opendir(fullpath);
+	snprintf(path, sizeof(path), "%s/%s", datadir, scandir);
+	dir = opendir(path);
 	if (!dir)
 	{
-		pg_log_error("could not open directory \"%s\": %m", fullpath);
+		pg_log_error("could not open directory \"%s\": %m", path);
 		exit(1);
 	}
 
@@ -905,7 +903,7 @@ scan_directory(const char *datadir, const char *basedir, const char *subdir)
 					strlen(PG_TEMP_FILES_DIR)) == 0)
 			continue;
 
-		snprintf(fn, sizeof(fn), "%s/%s", fullpath, de->d_name);
+		snprintf(fn, sizeof(fn), "%s/%s", path, de->d_name);
 		if (lstat(fn, &st) < 0)
 		{
 			pg_log_error("could not stat file \"%s\": %m", fn);
@@ -946,15 +944,13 @@ scan_directory(const char *datadir, const char *basedir, const char *subdir)
 			if (forkpath != NULL)
 				continue;
 
+			/* Found! */
 			if (strcmp(targetFileNode, fnonly) == 0)
 			{
-				char abspath[MAXPGPATH];
+				char filepath[MAXPGPATH];
 
-				/* Make a relative path to the relfile */
-				snprintf(abspath, sizeof(abspath), "%s/%s", relativepath, fnonly);
-
-				/* Found! */
-				return strdup(abspath);
+				snprintf(filepath, sizeof(filepath), "%s/%s", scandir, fnonly);
+				return strdup(filepath);
 			}
 		}
 #ifndef WIN32
@@ -963,8 +959,13 @@ scan_directory(const char *datadir, const char *basedir, const char *subdir)
 		else if (S_ISDIR(st.st_mode) || pgwin32_is_junction(fn))
 #endif
 		{
+			char relpath[MAXPGPATH];
 			char *p;
-			if ((p = scan_directory(datadir, relativepath, de->d_name)) != NULL)
+
+			/* Make a relative path to the relfile */
+			snprintf(relpath, sizeof(relpath), "%s/%s", scandir, de->d_name);
+
+			if ((p = scan_directory(datadir, relpath)) != NULL)
 				return p;
 		}
 	}
@@ -1110,9 +1111,9 @@ main (int argc, char **argv)
 		exit(1);
 	}
 
-	if ((targetRelFilePath = scan_directory(targetDataDir, "global", "")) == NULL &&
-		(targetRelFilePath = scan_directory(targetDataDir, "base", "")) == NULL &&
-		(targetRelFilePath = scan_directory(targetDataDir, "pg_tblspc", "")) == NULL)
+	if ((targetRelFilePath = scan_directory(targetDataDir, "global")) == NULL &&
+		(targetRelFilePath = scan_directory(targetDataDir, "base")) == NULL &&
+		(targetRelFilePath = scan_directory(targetDataDir, "pg_tblspc")) == NULL)
 	{
 		pg_log_error("could not find relfile");
 		exit(1);
