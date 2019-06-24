@@ -134,6 +134,35 @@ heap_pageredo_insert(char *page, BlockNumber blkno, XLogReaderState *record)
 static void
 heap_pageredo_update(char *page, BlockNumber blkno, XLogReaderState *record)
 {
+	XLogRecPtr	lsn = record->EndRecPtr;
+	xl_heap_update *xlrec = (xl_heap_update *) XLogRecGetData(record);
+	BlockNumber oldblk;
+	BlockNumber newblk;
+	OffsetNumber offnum;
+	ItemId		lp = NULL;
+	HeapTupleData oldtup;
+	HeapTupleHeader htup;
+	XLogRedoAction oldaction;
+	XLogRedoAction newaction;
+
+	/* initialize to keep the compiler quiet */
+	oldtup.t_data = NULL;
+	oldtup.t_len = 0;
+
+	XLogRecGetBlockTag(record, 0, &rnode, NULL, &newblk);
+	if (!XLogRecGetBlockTag(record, 1, NULL, NULL, &oldblk))
+		oldblk = newblk;
+
+	ItemPointerSet(&newtid, newblk, xlrec->new_offnum);
+
+	oldaction = xlogProcessRecord(record, (oldblk == newblk) ? 0 : 1,
+								  page);
+
+	if (oldaction == BLK_NEEDS_REDO)
+	{
+
+
+	}
 
 }
 

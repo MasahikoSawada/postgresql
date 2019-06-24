@@ -12,9 +12,7 @@ my $datadir_target = $node_target->data_dir();
 
 # enable checksums
 command_ok(
-	[
-	 'pg_checksums', '--enable', '-D', $datadir_target
-	]);
+	[ 'pg_checksums', '--enable', '-D', $datadir_target ]);
 
 $node_target->start;
 
@@ -23,25 +21,25 @@ $node_target->psql(
   'postgres', "
     BEGIN;
 	CREATE TABLE test (a int);
-	INSERT INTO test SELECT generate_series(1,5);
+	INSERT INTO test SELECT generate_series(1,10);
     COMMIT;
 	");
 
+# Get file node and file path
 my $targetrelpath = $node_target->safe_psql(
 	'postgres',	"SELECT pg_relation_filepath('test'::regclass);");
 my $targetrel = $node_target->safe_psql(
 	'postgres', "SELECT relfilenode FROM pg_class WHERE relname = 'test'");
 
-my $backup_name = 'my_backup';
-
 # Take backup
+my $backup_name = 'my_backup';
 $node_target->backup($backup_name);
 
 # Generate update WAL
 $node_target->safe_psql(
 	'postgres', "
     BEGIN;
-	INSERT INTO test SELECT generate_series(1,5);
+	INSERT INTO test SELECT generate_series(1,10);
     COMMIT;
 	");
 
@@ -55,8 +53,6 @@ my $archivedir = $node_target->archive_dir();
 # create work dir
 my $workdir = $node_target->basedir() . "/work";
 mkdir $workdir;
-
-## xxx: currpt block and pg_checksum
 
 # Set page header and block size
 my $pageheader_size = 24;
@@ -107,4 +103,4 @@ command_ok(
 $node_target->start;
 my $cnt;
 $node_target->psql('postgres', 'SELECT count(*) FROM test', stdout => \$cnt);
-is($cnt, '10', 'Check recovered table');
+is($cnt, '20', 'Check recovered table');
