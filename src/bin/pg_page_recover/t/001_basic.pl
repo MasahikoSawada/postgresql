@@ -60,7 +60,6 @@ my $block_size = $node_target->safe_psql('postgres', 'SHOW block_size;');
 $node_target->stop;
 
 # Time to create some corruption
-copy("$datadir_target/$targetrelpath", "/tmp/");
 open my $file, '+<', "$datadir_target/$targetrelpath";
 seek($file, $pageheader_size, 0);
 syswrite($file, "\0\0\0\0\0\0\0\0\0");
@@ -85,7 +84,7 @@ command_ok(
 	 'pg_page_recover',
 	 "-D", $datadir_target,
 	 "-B", $datadir_base,
-	 "-r", $targetrelpath . ":0",
+	 "-r", $targetrel . ":0",
 	 "-R", "cp $archivedir/%f %p",
 	 "-w", $workdir
 	],

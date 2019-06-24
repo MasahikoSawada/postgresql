@@ -149,6 +149,7 @@ heap_pageredo_update(char *page, BlockNumber blkno, XLogReaderState *record)
 	oldtup.t_data = NULL;
 	oldtup.t_len = 0;
 
+/*
 	XLogRecGetBlockTag(record, 0, &rnode, NULL, &newblk);
 	if (!XLogRecGetBlockTag(record, 1, NULL, NULL, &oldblk))
 		oldblk = newblk;
@@ -163,6 +164,7 @@ heap_pageredo_update(char *page, BlockNumber blkno, XLogReaderState *record)
 
 
 	}
+*/
 
 }
 
