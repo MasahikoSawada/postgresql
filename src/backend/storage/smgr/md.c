@@ -1329,8 +1329,8 @@ mdencrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	BufferEncryptionTweak(md_encryption_tweak, &(reln->smgr_rnode.node),
 						  forknum, blocknum);
 #ifdef DEBUG_TDE
-	fprintf(stderr, "  md::mdencrypt r = %u, f = %u, b = %u\n",
-			reln->smgr_rnode.node.relNode, forknum, blocknum);
+	fprintf(stderr, "  md::mdencrypt r = %u, f = %u, b = %u, tw = %s\n",
+			reln->smgr_rnode.node.relNode, forknum, blocknum, dt(md_encryption_tweak));
 #endif
 	EncryptBufferBlock(reln->smgr_rnode.node.spcNode, md_encryption_tweak,
 					   buffer, buffer);
@@ -1343,8 +1343,8 @@ mddecrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	BufferEncryptionTweak(md_encryption_tweak, &(reln->smgr_rnode.node),
 						  forknum, blocknum);
 #ifdef DEBUG_TDE
-	fprintf(stderr, "  md::mddecrypt r = %u, f = %u, b = %u\n",
-			reln->smgr_rnode.node.relNode, forknum, blocknum);
+	fprintf(stderr, "  md::mddecrypt r = %u, f = %u, b = %u, tw = %s\n",
+			reln->smgr_rnode.node.relNode, forknum, blocknum, dt(md_encryption_tweak));
 #endif
 	DecryptBufferBlock(reln->smgr_rnode.node.spcNode, md_encryption_tweak,
 					   buffer, buffer);

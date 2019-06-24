@@ -38,6 +38,7 @@
 #include "storage/kmgr_api.h"
 #include "storage/kmgr_plugin.h"
 #include "storage/spin.h"
+#include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
 
@@ -64,6 +65,8 @@ static MasterKeyCtlData *masterKeyCtl = NULL;
 /* GUC variable */
 char *kmgr_plugin_library = NULL;
 
+PG_FUNCTION_INFO_V1(pg_rotate_encryption_key);
+
 /* process and load kmgr_plugin_library plugin */
 void
 processKmgrPlugin(void)
@@ -83,13 +86,13 @@ InitializeMasterKey(void)
 {
 	char id[MAX_MASTER_KEY_ID_LEN] = {0};
 	char *key = NULL;
+	MasterKeySeqNo seqno = GetMasterKeySeqNoFromControlFile();
 
 	if (!TransparentEncryptionEnabled())
 		return;
 
 	/* Craft the master key id */
-	sprintf(id, MASTERKEY_ID_FORMAT, GetSystemIdentifier(),
-			masterKeyCtl->seqno);
+	sprintf(id, MASTERKEY_ID_FORMAT, GetSystemIdentifier(), seqno);
 
 	if (!KmgrPluginIsExist(id))
 		KmgrPluginGenerateKey(id);
@@ -101,9 +104,15 @@ InitializeMasterKey(void)
 		ereport(FATAL,
 				(errmsg("could not get the encryption master key via kmgr plugin")));
 
-	/* Store both to the shared memory */
+	/* Cache the master key information */
 	memcpy(masterKeyCtl->id, id, MAX_MASTER_KEY_ID_LEN);
 	memcpy(masterKeyCtl->key, key, ENCRYPTION_KEY_SIZE);
+	masterKeyCtl->seqno = seqno;
+
+#ifdef DEBUG_TDE
+	fprintf(stderr, "masterkey::initialize set id %s, key %s, seq %u\n",
+			id, dk(key), masterKeyCtl->seqno);
+#endif
 }
 
 Size
@@ -144,6 +153,10 @@ SetMasterKeySeqNo(MasterKeySeqNo seqno)
 	SpinLockAcquire(&masterKeyCtl->mutex);
 	masterKeyCtl->seqno = seqno;
 	SpinLockRelease(&masterKeyCtl->mutex);
+
+#ifdef DEBUG_TDE
+	fprintf(stderr, "masterkey::setseq seqno = %u\n", seqno);
+#endif
 }
 
 MasterKeySeqNo
@@ -161,17 +174,22 @@ GetMasterKeySeqNo(void)
 }
 
 char *
-GetMasterKey(char *id)
+GetMasterKey(const char *id)
 {
-	char *mkey = NULL;
-
-	mkey = (char *) palloc0(ENCRYPTION_KEY_SIZE);
+	char *key = palloc0(ENCRYPTION_KEY_SIZE);
 
 	SpinLockAcquire(&masterKeyCtl->mutex);
-	memcpy(mkey, masterKeyCtl->key, ENCRYPTION_KEY_SIZE);
+
+	if (strncmp(id, masterKeyCtl->id, ENCRYPTION_KEY_SIZE) != 0)
+	{
+		SpinLockRelease(&masterKeyCtl->mutex);
+		elog(ERROR, "could not get the master key: \"%s\"", id);
+	}
+
+	memcpy(key, masterKeyCtl->key, ENCRYPTION_KEY_SIZE);
 	SpinLockRelease(&masterKeyCtl->mutex);
 
-	return mkey;
+	return key;
 }
 
 void
@@ -184,10 +202,10 @@ GetCurrentMasterKeyId(char *keyid)
 /*
  * Rotate the master key and reencrypt all tablespace keys with new one.
  */
-void
-RotateMasterKey(char *keyid_new)
+Datum
+pg_rotate_encryption_key(PG_FUNCTION_ARGS)
 {
-	char newid[MAX_MASTER_KEY_ID_LEN] = {0};
+	char newid[MAX_MASTER_KEY_ID_LEN + 1] = {0};
 	char *newkey = NULL;
 	MasterKeySeqNo seqno;
 
@@ -202,11 +220,34 @@ RotateMasterKey(char *keyid_new)
 	KmgrPluginGenerateKey(newid);
 	KmgrPluginGetKey(newid, &newkey);
 
-	/* Reencrypt all tablespace keys with the new master key */
-	reencryptKeyring(newkey);
+#ifdef DEBUG_TDE
+	fprintf(stderr, "masterkey::rotate new master id %s, key %s, oldseq %u\n",
+			newid, dk(newkey), seqno);
+#endif
+
+	/* Block concurrent processes are about to read the keyring file */
+	LWLockAcquire(KeyringControlLock, LW_EXCLUSIVE);
+
+	/*
+	 * Reencrypt all tablespace keys with the new master key, and update
+	 * the keyring file.
+	 */
+	reencryptKeyring(newid, newkey);
+
+	/* Update master key information */
+	SpinLockAcquire(&masterKeyCtl->mutex);
+	masterKeyCtl->seqno = seqno + 1;
+	memcpy(masterKeyCtl->key, newkey, ENCRYPTION_KEY_SIZE);
+	memcpy(masterKeyCtl->id, newid, MAX_MASTER_KEY_ID_LEN);
+	SpinLockRelease(&masterKeyCtl->mutex);
+
+	/* Ok allows processes to read the keyring file */
+	LWLockRelease(KeyringControlLock);
 
 	/* Invalidate keyring caches before releasing the lock */
 	SysCacheInvalidate(TABLESPACEOID, (Datum) 0);
 
 	LWLockRelease(MasterKeyRotationLock);
+
+	PG_RETURN_TEXT_P(cstring_to_text(newid));
 }

@@ -19,13 +19,6 @@
 #include "storage/smgr.h"
 
 /*
- * OpenSSL is currently the only implementation of encryption we use.
- */
-#ifdef USE_OPENSSL
-#define USE_ENCRYPTION
-#endif
-
-/*
  * The encrypted data is a series of blocks of size
  * ENCRYPTION_BLOCK. Currently we use the EVP_aes_256_xts implementation. Make
  * sure the following constants match if adopting another algorithm.

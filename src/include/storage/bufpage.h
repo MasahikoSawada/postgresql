@@ -440,6 +440,6 @@ extern bool PageIndexTupleOverwrite(Page page, OffsetNumber offnum,
 extern char *PageSetChecksumCopy(Page page, BlockNumber blkno);
 extern void PageSetChecksumInplace(Page page, BlockNumber blkno);
 extern char *PageEncryptCopy(char *page, SMgrRelation reln,
-							 BlockNumber blocknum, ForkNumber forknum);
+							 ForkNumber forknum, BlockNumber blocknum);
 
 #endif							/* BUFPAGE_H */

@@ -51,3 +51,4 @@ LogicalRepWorkerLock				43
 CLogTruncationLock					44
 KeyringControlLock					45
 MasterKeyRotationLock					46
+MasterKeyControlLock					47

@@ -1205,8 +1205,8 @@ PageSetChecksumInplace(Page page, BlockNumber blkno)
 }
 
 char *
-PageEncryptCopy(char *page, SMgrRelation reln, BlockNumber blocknum,
-				ForkNumber forknum)
+PageEncryptCopy(char *page, SMgrRelation reln, ForkNumber forknum,
+				BlockNumber blocknum)
 {
 	static char *pageCopy = NULL;
 

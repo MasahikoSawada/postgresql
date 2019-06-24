@@ -961,6 +961,10 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 #endif
 
 				smgrdecrypt(smgr, forkNum, blockNum, bufBlock);
+#ifdef TDE_DEBUG
+				fprintf(stderr, "bufmgr::read decrypt blk %u, page %s\n",
+						blockNum, ddp(bufBlock));
+#endif
 				buf_state = LockBufHdr(bufHdr);
 				buf_state |= BM_ENCRYPTION_NEEDED;
 				UnlockBufHdr(bufHdr, buf_state);
@@ -3295,6 +3299,8 @@ FlushRelationBuffers(Relation rel)
 							rel->rd_id,
 							bufHdr->tag.forkNum,
 							bufHdr->tag.blockNum);
+					fprintf(stderr, "bufmgr::flush decrypt blk %u, page %s\n",
+							bufHdr->tag.blockNum, ddp(localpage));
 #endif
 
 					smgrencrypt(rel->rd_smgr,

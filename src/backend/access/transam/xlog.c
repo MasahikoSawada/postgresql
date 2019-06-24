@@ -4826,6 +4826,16 @@ DataChecksumsEnabled(void)
 }
 
 /*
+ * Returns the master key sequence number from control file.
+ */
+MasterKeySeqNo
+GetMasterKeySeqNoFromControlFile(void)
+{
+	Assert(ControlFile != NULL);
+	return (ControlFile->master_key_seqno);
+}
+
+/*
  * Returns a fake LSN for unlogged relations.
  *
  * Each call generates an LSN that is greater than any previous value
@@ -6657,11 +6667,6 @@ StartupXLOG(void)
 	 * Recover knowledge about replay progress of known replication partners.
 	 */
 	StartupReplicationOrigin();
-
-	/*
-	 *
-	 */
-	SetMasterKeySeqNo(ControlFile->master_key_seqno);
 
 	/*
 	 * Initialize unlogged LSN. On a clean shutdown, it's restored from the

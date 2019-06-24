@@ -34,41 +34,51 @@
 
 #include <unistd.h>
 
+#include "funcapi.h"
+#include "miscadmin.h"
 #include "storage/encryption.h"
 #include "storage/fd.h"
 #include "storage/kmgr.h"
-#include "storage/shmem.h"
-#include "miscadmin.h"
 #include "storage/lwlock.h"
-#include "utils/memutils.h"
+#include "storage/shmem.h"
+#include "utils/builtins.h"
 #include "utils/hsearch.h"
+#include "utils/memutils.h"
 #include "utils/inval.h"
 #include "utils/syscache.h"
 
 #define KEYRING_TBLSP_FILE "pg_tblsp.kr"
 
+PG_FUNCTION_INFO_V1(pg_get_tablespace_keys);
+
 /* Struct for one tablespace key */
 typedef struct TblspKeyData
 {
 	Oid		spcoid;		/* hash key; must be first */
-	char	masterkey_id[MAX_MASTER_KEY_ID_LEN];
 	char	tblspkey[ENCRYPTION_KEY_SIZE];
 } TblspKeyData;
 
-HTAB *tblspKeyring;
-MemoryContext tblspKeyringContext;
+/* The master key written in the keyring file */
+static char	currentMasterKeyId[MAX_MASTER_KEY_ID_LEN];
+static bool currentMasterKeyId_initialize = false;
+
+/* Tablespace keys */
+static HTAB *tblspKeyring;
+
+static MemoryContext tblspKeyringContext;
 
 static bool keyring_invalid = true;
 
 static void initialize_keyring(void);
 static void reload_keyring_file(void);
 static List *read_keyring_file(void);
-static void update_keyring_file(char *masterkey);
+static void update_keyring_file(const char *masterkey_id,
+								const char *masterkey);
 static TblspKeyData *get_keyring_entry(Oid spcOid, bool *found);
 static void invalidate_keyring(Datum arg, int cacheid, uint32 hashvalue);
 static void key_encryption_tweak(char *tweak, Oid spcoid);
-static void encrypt_tblsp_key(Oid spcoid, char *tblspkey, char *masterkey);
-static void decrypt_tblsp_key(Oid spcoid, char *tblspkey, char *masterkey);
+static void encrypt_tblsp_key(Oid spcoid, char *tblspkey, const char *masterkey);
+static void decrypt_tblsp_key(Oid spcoid, char *tblspkey, const char *masterkey);
 
 /*
  * Register kerying invalidation callback.
@@ -264,14 +274,24 @@ KeyringCreateKey(Oid spcOid)
 
 	memcpy(key->tblspkey, retkey, ENCRYPTION_KEY_SIZE);
 
+	/*
+	 * If the current master key is not initialized, we fetch the current
+	 * id and set to the cache.
+	 */
+	if (!currentMasterKeyId_initialize)
+	{
+		GetCurrentMasterKeyId(currentMasterKeyId);
+		currentMasterKeyId_initialize = true;
+	}
+
 	/* Update tablespace key file */
-	update_keyring_file(NULL);
+	update_keyring_file(currentMasterKeyId,
+						GetMasterKey(currentMasterKeyId));
 
 	LWLockRelease(KeyringControlLock);
 
-	/* Get the master key and encrypt the tablespace key with it */
-	GetCurrentMasterKeyId(key->masterkey_id);
-	masterkey = GetMasterKey(key->masterkey_id);
+	/* Encrypt tablespace key with the master key */
+	masterkey = GetMasterKey(currentMasterKeyId);
 	encrypt_tblsp_key(spcOid, retkey, masterkey);
 
 	return retkey;
@@ -305,7 +325,8 @@ KeyringDropKey(Oid spcOid)
 						spcOid)));
 
 	/* Update tablespace key file */
-	update_keyring_file(NULL);
+	update_keyring_file(currentMasterKeyId,
+						GetMasterKey(currentMasterKeyId));
 
 	LWLockRelease(KeyringControlLock);
 }
@@ -318,6 +339,7 @@ reload_keyring_file(void)
 {
 	List *keylist;
 	ListCell *lc;
+	char *masterkey = NULL;
 
 	keylist = read_keyring_file();
 
@@ -335,24 +357,34 @@ reload_keyring_file(void)
 	/* cleanup the existing keyring */
 	initialize_keyring();
 
+	/* Get the master key by identifier */
+	masterkey = GetMasterKey(currentMasterKeyId);
+
+#ifdef DEBUG_TDE
+	fprintf(stderr, "keyring:: reload get master key id %s, key %s\n",
+			currentMasterKeyId, dk(masterkey));
+#endif
+
 	foreach (lc, keylist)
 	{
 		TblspKeyData *key = (TblspKeyData *) lfirst(lc);
 		TblspKeyData *cache_key;
-		char *masterkey = NULL;
 
 		cache_key = hash_search(tblspKeyring, (void *) &key->spcoid,
 								HASH_ENTER, NULL);
 
-		masterkey = GetMasterKey(key->masterkey_id);
-
 		/* Decyrpt tablespace key by the master key before caching */
 		decrypt_tblsp_key(key->spcoid, key->tblspkey, masterkey);
+
+#ifdef DEBUG_TDE
+		fprintf(stderr, "keyring::reload load oid = %u, mkid = %s, mk = %s, dk = %s\n",
+				key->spcoid, currentMasterKeyId, dk(masterkey), dk(key->tblspkey));
+#endif
 		memcpy(cache_key, key, sizeof(TblspKeyData));
 	}
 
 #ifdef DEBUG_TDE
-	fprintf(stderr, "tblsp_key::reload loaded %d keys by pid %d\n",
+	fprintf(stderr, "    keyring::reload loaded %d keys by pid %d\n",
 			list_length(keylist), MyProcPid);
 #endif
 	list_free_deep(keylist);
@@ -366,6 +398,7 @@ read_keyring_file(void)
 {
 	char *path = "global/"KEYRING_TBLSP_FILE;
 	List *key_list = NIL;
+	int read_len;
 	int fd;
 
 	fd = OpenTransientFile(path, O_RDONLY | PG_BINARY);
@@ -380,10 +413,15 @@ read_keyring_file(void)
 				 errmsg("could not open file \"%s\": %m", path)));
 	}
 
+	/* Read and set the current master key id */
+	if ((read_len = read(fd, currentMasterKeyId, MAX_MASTER_KEY_ID_LEN)) < 0)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 (errmsg("could not read from file \"%s\": %m", path))));
+
 	for (;;)
 	{
 		TblspKeyData *key = palloc(sizeof(TblspKeyData));
-		int read_len;
 
 		read_len = read(fd, key, sizeof(TblspKeyData));
 
@@ -413,7 +451,7 @@ read_keyring_file(void)
  * with it regardless of the master key ID of each tablespace keys.
  */
 static void
-update_keyring_file(char *masterkey)
+update_keyring_file(const char *masterkey_id, const char *masterkey)
 {
 	HASH_SEQ_STATUS status;
 	TblspKeyData *key;
@@ -435,20 +473,27 @@ update_keyring_file(char *masterkey)
 		return;
 	}
 
+	/* Write the master key id first */
+	rc = fwrite(masterkey_id, MAX_MASTER_KEY_ID_LEN, 1, fpout);
+
 	/* Write tablespace key to the file */
 	hash_seq_init(&status, tblspKeyring);
 	while ((key = (TblspKeyData *) hash_seq_search(&status)) != NULL)
 	{
 		TblspKeyData k;
 
-		/* Get master key to encrypt a tablespace key */
-		if (!masterkey)
-			masterkey = GetMasterKey(key->masterkey_id);
-
 		/* Copy to work buffer */
 		memcpy(&k, key, sizeof(TblspKeyData));
 
+		/* Prepare tablespace key and master key to write */
 		encrypt_tblsp_key(key->spcoid, (char *) &k.tblspkey, masterkey);
+
+#ifdef DEBUG_TDE
+		fprintf(stderr, "keyring::udpate file::reenc tblspkey oid %u, mkid %s, mk %s, dk %s, edk %s\n",
+				key->spcoid, masterkey_id, dk(masterkey),
+				dk(key->tblspkey), dk(k.tblspkey));
+#endif
+
 		rc = fwrite(&k, sizeof(TblspKeyData), 1, fpout);
 		(void) rc; /* will check for error with ferror */
 	}
@@ -481,22 +526,19 @@ update_keyring_file(char *masterkey)
 }
 
 /*
- * Reencrypt all tablespace keys with the given key.
+ * Reencrypt all tablespace keys with the given key. The caller must
+ * holt KeyringControlLock in exclusive mode.
  */
 void
-reencryptKeyring(char *key)
+reencryptKeyring(const char *masterkey_id, const char *masterkey)
 {
-	LWLockAcquire(KeyringControlLock, LW_EXCLUSIVE);
-
 	if (keyring_invalid)
 	{
 		reload_keyring_file();
 		keyring_invalid = false;
 	}
 
-	update_keyring_file(key);
-
-	LWLockRelease(KeyringControlLock);
+	update_keyring_file(masterkey_id, masterkey);
 }
 
 /* Invalidation callback to clear all buffered tablespace keys */
@@ -515,7 +557,7 @@ invalidate_keyring(Datum arg, int cacheid, uint32 hashvalue)
  * Encrypt and decrypt routine for tablespace key
  */
 static void
-encrypt_tblsp_key(Oid spcoid, char *tblspkey, char *masterkey)
+encrypt_tblsp_key(Oid spcoid, char *tblspkey, const char *masterkey)
 {
 	char tweak[ENCRYPTION_TWEAK_SIZE];
 
@@ -527,7 +569,7 @@ encrypt_tblsp_key(Oid spcoid, char *tblspkey, char *masterkey)
 }
 
 static void
-decrypt_tblsp_key(Oid spcoid, char *tblspkey, char *masterkey)
+decrypt_tblsp_key(Oid spcoid, char *tblspkey, const char *masterkey)
 {
 	char tweak[ENCRYPTION_TWEAK_SIZE];
 
@@ -543,4 +585,89 @@ key_encryption_tweak(char *tweak, Oid spcoid)
 {
 	memset(tweak, 0, ENCRYPTION_TWEAK_SIZE);
 	memcpy(tweak, &spcoid, sizeof(Oid));
+}
+
+Datum
+pg_get_tablespace_keys(PG_FUNCTION_ARGS)
+{
+#define PG_TABLESPACE_KEYS_COLS 2
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+	HASH_SEQ_STATUS status;
+	TblspKeyData *key;
+
+	/* check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not " \
+						"allowed in this context")));
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	/* if the local cache is out of date, update it */
+	if (keyring_invalid)
+	{
+		reload_keyring_file();
+		keyring_invalid = false;
+	}
+
+	/* Get the master key and encrypt the tablespace key with it */
+
+	/* Get all tablespace keys */
+	hash_seq_init(&status, tblspKeyring);
+	while ((key = (TblspKeyData *) hash_seq_search(&status)) != NULL)
+	{
+		Datum	values[PG_TABLESPACE_KEYS_COLS];
+		bool	nulls[PG_TABLESPACE_KEYS_COLS];
+		char	buf[ENCRYPTION_KEY_SIZE + 1];
+		char	*masterkey;
+		bytea	*data_bytea;
+
+		memcpy(buf, key->tblspkey, ENCRYPTION_KEY_SIZE);
+
+		/* Encrypt tablespace key */
+		masterkey = GetMasterKey(currentMasterKeyId);
+		encrypt_tblsp_key(key->spcoid, buf, masterkey);
+		buf[ENCRYPTION_KEY_SIZE] = '\0';
+
+		memset(nulls, 0, 2);
+		values[0] = ObjectIdGetDatum(key->spcoid);
+
+		data_bytea = (bytea *) palloc(ENCRYPTION_KEY_SIZE + VARHDRSZ);
+		SET_VARSIZE(data_bytea, ENCRYPTION_KEY_SIZE + VARHDRSZ);
+		memcpy(VARDATA(data_bytea), buf, ENCRYPTION_KEY_SIZE);
+		values[1] = PointerGetDatum(data_bytea);
+
+#ifdef DEBUG_TDE
+		fprintf(stderr, "keyring::dump oid %u, mkid %s, mk %s, dk %s, edk %s\n",
+				key->spcoid, currentMasterKeyId, dk(masterkey),
+				dk(key->tblspkey), dk(buf));
+#endif
+
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+
+	tuplestore_donestoring(tupestore);
+
+	return (Datum) 0;
 }

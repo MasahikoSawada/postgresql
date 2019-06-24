@@ -118,11 +118,11 @@ load_all_keys(void)
 					 errmsg("could not read from file \"%s\": read %d instead of %d bytes",
 							path, read_len, (int32) sizeof(MyKey))));
 
-		keycache = hash_search(MyKeys, (void *) &key->id, HASH_ENTER, NULL);
+		keycache = hash_search(MyKeys, (void *) key->id, HASH_ENTER, NULL);
 		memcpy(keycache->key, key->key, ENCRYPTION_KEY_SIZE);
 #ifdef DEBUG_TDE
-		ereport(LOG, (errmsg("keyring_file: load mkid = \"%s\", mk = \"%s\"",
-							 keycache->id, keycache->key)));
+		fprintf(stderr, "keyring_file: load mkid = \"%s\", mk = \"%s\"\n",
+				keycache->id, dk(keycache->key));
 #endif
 	}
 
@@ -157,8 +157,8 @@ save_all_keys(void)
 	while ((key = (MyKey *) hash_seq_search(&status)) != NULL)
 	{
 #ifdef DEBUG_TDE
-		ereport(LOG, (errmsg("keyring_file: save mkid = \"%s\", mk = \"%s\"",
-							 key->id, key->key)));
+		fprintf(stderr, "keyring_file: save mkid = \"%s\", mk = \"%s\"\n",
+				key->id, dk(key->key));
 #endif
 		rc = fwrite(key, sizeof(MyKey), 1, fpout);
 	}
@@ -190,7 +190,7 @@ test_startup(void)
 	old_cxt = MemoryContextSwitchTo(TopMemoryContext);
 
 	MemSet(&ctl, 0, sizeof(ctl));
-	ctl.keysize = sizeof(MAX_MASTER_KEY_ID_LEN);
+	ctl.keysize = sizeof(char) * MAX_MASTER_KEY_ID_LEN;
 	ctl.entrysize = sizeof(MyKey);
 	ctl.hcxt = TopMemoryContext;
 
@@ -212,7 +212,7 @@ test_getkey(const char *keyid, char **key)
 
 	Assert(keyid != NULL && key != NULL);
 
-	mykey = hash_search(MyKeys, &keyid, HASH_FIND,	&found);
+	mykey = hash_search(MyKeys, (void *) keyid, HASH_FIND,	&found);
 
 	if (!found)
 		ereport(ERROR,
@@ -224,8 +224,8 @@ test_getkey(const char *keyid, char **key)
 	memcpy(*key, mykey->key, ENCRYPTION_KEY_SIZE);
 
 #ifdef DEBUG_TDE
-	ereport(LOG, (errmsg("keyring_file: get master key, keyid = \"%s\", key = \"%s\"",
-						 keyid, *key)));
+	fprintf(stderr, "keyring_file: get master key, keyid = \"%s\", key = \"%s\"\n",
+			keyid, dk(*key));
 #endif
 }
 
@@ -236,7 +236,7 @@ test_isexistkey(const char *keyid)
 
 	Assert(keyid != NULL);
 
-	(void *) hash_search(MyKeys, &keyid, HASH_FIND,	&found);
+	(void *) hash_search(MyKeys, (void *) keyid, HASH_FIND,	&found);
 
 	return found;
 }
@@ -244,32 +244,39 @@ test_isexistkey(const char *keyid)
 static void
 test_generatekey(const char *keyid)
 {
-#define MATERKEYDATA "0987654321098765432109876543210987654321098765432109876543210987"
 	MyKey *mykey;
 	bool found;
+	char *newkey;
+	int ret;
 
 	Assert(keyid);
 
+	/* Set master key */
+	newkey = (char *) palloc0(ENCRYPTION_KEY_SIZE);
+	ret = pg_strong_random(newkey, ENCRYPTION_KEY_SIZE);
+	if (!ret)
+		ereport(ERROR,
+				(errmsg("failed to generate tablespace encryption key")));
+
 	/* Duplication check */
-	mykey = hash_search(MyKeys, &keyid, HASH_FIND,	&found);
+	mykey = hash_search(MyKeys, (void *) keyid, HASH_FIND,	&found);
 
 	if (found)
 		ereport(ERROR,
 				(errmsg("key \"%s\" is already registered", keyid)));
 
 	/* Ok, register the key */
-	mykey = hash_search(MyKeys, &keyid,	HASH_ENTER,	&found);
+	mykey = hash_search(MyKeys, (void *) keyid,	HASH_ENTER,	&found);
 	Assert(!found);
 
-	/* Set master key */
-	MemSet(mykey->key, 0, ENCRYPTION_KEY_SIZE);
-	memcpy(mykey->key, MATERKEYDATA, ENCRYPTION_KEY_SIZE);
+	memcpy(mykey->key, newkey, ENCRYPTION_KEY_SIZE);
 
 	/* debug log */
 #ifdef DEBUG_TDE
-	ereport(LOG, (errmsg("keyring_file: genearte key id = \"%s\", key = \"%s\"",
-						 keyid, mykey->key)));
+	fprintf(stderr, "keyring_file: genearte key id = \"%s\", key = \"%s\"\n",
+			mykey->id, dk(mykey->key));
 #endif
+
 	/* update key file */
 	save_all_keys();
 }

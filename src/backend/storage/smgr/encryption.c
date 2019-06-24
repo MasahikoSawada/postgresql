@@ -60,7 +60,7 @@ static void setup_encryption(void) ;
 static void initialize_encryption_context(EVP_CIPHER_CTX **ctx_p, bool stream);
 
 #ifdef DEBUG_TDE
-static char *
+char *
 dk(const char *key)
 {
 	char *buf = palloc(100); /* "AB BC DE JG OR 2X ... " */
@@ -72,7 +72,7 @@ dk(const char *key)
 	return buf;
 }
 
-static char *
+char *
 dp(const char *buffer)
 {
 	char *buf = palloc(100); /* "AB BC DE JG OR 2X" */
@@ -80,6 +80,36 @@ dp(const char *buffer)
 
 	sprintf(buf, "%X %X %X %X %X",
 			b[0], b[1], b[2], b[3], b[4]);
+
+	return buf;
+}
+
+char *
+dt(const char *buffer)
+{
+	char *buf = palloc(100); /* "AB BC DE JG OR 2X" */
+	uint8 *b = (uint8 *) buffer;
+
+	sprintf(buf, "%X %X %X %X | %X %X %X %X | %X %X %X %X | %X %X %X %X",
+			b[0], b[1], b[2], b[3],
+			b[4], b[5], b[6], b[7],
+			b[8], b[9], b[10], b[11],
+			b[12], b[13], b[14], b[15]
+		);
+
+	return buf;
+}
+
+
+char *
+ddp(const char *p)
+{
+	PageHeader pp = (PageHeader) p;
+	char *buf = palloc(100); /* "AB BC DE JG OR 2X" */
+
+	sprintf(buf, "lo %u, hi %u, sp %u, szver %u",
+			pp->pd_lower, pp->pd_upper, pp->pd_special,
+			pp->pd_pagesize_version);
 
 	return buf;
 }
@@ -98,8 +128,8 @@ EncryptBufferBlock(Oid spcOid, const char *tweak, const char *input,
 	Assert(spckey);
 
 #ifdef DEBUG_TDE
-	fprintf(stderr, "    encryption::encrypt with tskey \"%s\", plain page = %s\n",
-			dk(spckey), dp(input));
+	fprintf(stderr, "    encryption::encrypt with tskey \"%s\", tw = %s, plain page = %s, %s\n",
+			dk(spckey), dt(tweak), dp(input), ddp(input));
 #endif
 	/* Always use block cipher for buffer data */
 	encrypt_block(input, output, BLCKSZ, spckey, tweak, false);
@@ -123,15 +153,15 @@ DecryptBufferBlock(Oid spcOid, const char *tweak, const char *input,
 	Assert(spckey);
 
 #ifdef DEBUG_TDE
-	fprintf(stderr, "    encryption::decrypt with tskey \"%s\", encrypted page = %s\n",
-			dk(spckey), dp(input));
+	fprintf(stderr, "    encryption::decrypt with tskey \"%s\", tw = %s, encrypted page = %s\n",
+			dk(spckey), dt(tweak), dp(input));
 #endif
 	/* Always use block cipher for buffer data */
 	decrypt_block(input, output, BLCKSZ, spckey, tweak, false);
 
 #ifdef DEBUG_TDE
-	fprintf(stderr, "    encryption::decrypt plain page = %s\n",
-			dp(output));
+	fprintf(stderr, "    encryption::decrypt plain page = %s, %s\n",
+			dp(output), ddp(output));
 #endif
 }
 
@@ -381,7 +411,14 @@ BufferEncryptionTweak(char *tweak, RelFileNode *relnode, ForkNumber forknum,
 {
 	uint32		fork_and_block = (forknum << 24) ^ blocknum;
 
+#ifdef DEBUG_TDE
+	Assert(forknum <= MAX_FORKNUM);
+	fprintf(stderr, "encryption::create tweak r %u, d %u, s %u, f %u, b %u\n",
+			relnode->relNode, relnode->dbNode, relnode->spcNode,
+			forknum, blocknum);
+#endif
+
+	memset(tweak, 0, ENCRYPTION_TWEAK_SIZE);
 	memcpy(tweak, relnode, sizeof(RelFileNode));
 	memcpy(tweak + sizeof(RelFileNode), &fork_and_block, 4);
 }
-
