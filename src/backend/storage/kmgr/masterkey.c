@@ -68,7 +68,9 @@ char *kmgr_plugin_library = NULL;
 void
 processKmgrPlugin(void)
 {
+	process_shared_preload_libraries_in_progress = true;
 	startupKmgrPlugin(kmgr_plugin_library);
+	process_shared_preload_libraries_in_progress = false;
 }
 
 /*

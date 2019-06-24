@@ -21,10 +21,11 @@
 #include "storage/kmgr.h"
 #include "storage/kmgr_api.h"
 #include "utils/memutils.h"
+#include "utils/guc.h"
 #include "miscadmin.h"
 
 #define KEYRING_MAX_KYES 128
-#define TEST_MATERKEY_PATH  "global/kmgr_test"
+#define TEST_MASTERKEY_FILENAME "kmgr_test"
 
 
 PG_MODULE_MAGIC;
@@ -38,6 +39,7 @@ typedef struct MyKey
 } MyKey;
 
 static HTAB *MyKeys;
+static char *masterkey_filepath;
 
 /* function prototypes */
 extern void _PG_kmgr_init(KmgrPluginCallbacks *cb);
@@ -62,6 +64,15 @@ _PG_kmgr_init(KmgrPluginCallbacks *cb)
 	cb->generatekey_cb = test_generatekey;
 	cb->isexistkey_cb = test_isexistkey;
 	cb->removekey_cb = test_removekey;
+
+	DefineCustomStringVariable("kmgr_file.masterkey_filepath",
+							   "file location of key file",
+							   NULL,
+							   &masterkey_filepath,
+							   "global/",
+							   PGC_POSTMASTER,
+							   0,
+							   NULL, NULL, NULL);
 }
 
 /*
@@ -73,7 +84,7 @@ load_all_keys(void)
 	char path[MAXPGPATH];
 	int fd;
 
-	sprintf(path, TEST_MATERKEY_PATH);
+	sprintf(path, "%s/%s", masterkey_filepath, TEST_MASTERKEY_FILENAME);
 
 	fd = OpenTransientFile(path, O_RDONLY | PG_BINARY);
 
@@ -130,7 +141,7 @@ save_all_keys(void)
 	FILE *fpout;
 	int	rc;
 
-	sprintf(path, TEST_MATERKEY_PATH);
+	sprintf(path, "%s/%s", masterkey_filepath, TEST_MASTERKEY_FILENAME);
 	fpout = AllocateFile(path, PG_BINARY_W);
 	if (fpout == NULL)
 	{
