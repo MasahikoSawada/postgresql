@@ -29,7 +29,6 @@ static MemoryContext KmgrPluginCtx;
 static KmgrPluginCallbacks callbacks;
 
 static void load_kmgr_plugin(const char *libraryname);
-static void kmgr_plugin_startup(void);
 
 void
 KmgrPluginGetKey(const char *id, char **key)
@@ -53,6 +52,13 @@ bool
 KmgrPluginIsExist(const char *id)
 {
 	return callbacks.isexistkey_cb(id);
+}
+
+void
+KmgrPluginStartup(void)
+{
+	if (callbacks.startup_cb)
+		callbacks.startup_cb();
 }
 
 /*
@@ -79,7 +85,6 @@ startupKmgrPlugin(const char *libraryname)
 
 	/* Load keyring plugins and call the startup callback */
 	load_kmgr_plugin(libraryname);
-	kmgr_plugin_startup();
 
 	MemoryContextSwitchTo(old_ctx);
 }
@@ -106,12 +111,4 @@ load_kmgr_plugin(const char *libraryname)
         elog(ERROR, "key management plugin have to register a generate key callback");
     if (callbacks.removekey_cb == NULL)
         elog(ERROR, "key management plugin have to register a remove key callback");
-}
-
-/* Invoke startup callback */
-static void
-kmgr_plugin_startup(void)
-{
-	if (callbacks.startup_cb)
-		callbacks.startup_cb();
 }

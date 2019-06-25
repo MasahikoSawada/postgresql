@@ -57,8 +57,6 @@
  */
 typedef struct MasterKeyCtlData
 {
-	char			id[MAX_MASTER_KEY_ID_LEN];
-	char			key[ENCRYPTION_KEY_SIZE];
 	MasterKeySeqNo	seqno;
 	slock_t			mutex;	/* protect above fields */
 } MasterKeyCtlData;
@@ -93,6 +91,8 @@ InitializeMasterKey(void)
 	if (!TransparentEncryptionEnabled())
 		return;
 
+	KmgrPluginStartup();
+
 	/* Read keyring file and get the master key id */
 	if (!getMasterKeyIdFromFile(id))
 	{
@@ -126,9 +126,7 @@ InitializeMasterKey(void)
 		ereport(FATAL,
 				(errmsg("could not get the encryption master key via kmgr plugin")));
 
-	/* Cache the master key information */
-	memcpy(masterKeyCtl->id, id, MAX_MASTER_KEY_ID_LEN);
-	memcpy(masterKeyCtl->key, key, ENCRYPTION_KEY_SIZE);
+	/* Save current master key seqno */
 	masterKeyCtl->seqno = seqno;
 
 #ifdef DEBUG_TDE
@@ -150,7 +148,7 @@ MasterKeyCtlShmemInit(void)
 
 	/* Create shared memory struct for master keyring */
 	masterKeyCtl = (MasterKeyCtlData *)
-		ShmemInitStruct("Keyring for master key", MasterKeyCtlShmemSize(),
+		ShmemInitStruct("Encryption key management", MasterKeyCtlShmemSize(),
 						&found);
 
 	if (!found)
@@ -158,27 +156,7 @@ MasterKeyCtlShmemInit(void)
 		/* Initialize */
 		MemSet(masterKeyCtl, 0, MasterKeyCtlShmemSize());
 		SpinLockInit(&masterKeyCtl->mutex);
-
-		/*
-		 * XXX : need to prevent memory address storing the master key
-		 * from dumped using madvice(MADV_DONTDUMP)?
-		 */
 	}
-}
-
-void
-SetMasterKeySeqNo(MasterKeySeqNo seqno)
-{
-	Assert(seqno >= 0);
-	Assert(masterKeyCtl);
-
-	SpinLockAcquire(&masterKeyCtl->mutex);
-	masterKeyCtl->seqno = seqno;
-	SpinLockRelease(&masterKeyCtl->mutex);
-
-#ifdef DEBUG_TDE
-	fprintf(stderr, "masterkey::setseq seqno = %u\n", seqno);
-#endif
 }
 
 MasterKeySeqNo
@@ -198,18 +176,9 @@ GetMasterKeySeqNo(void)
 char *
 GetMasterKey(const char *id)
 {
-	char *key = palloc0(ENCRYPTION_KEY_SIZE);
+	char *key = NULL;
 
-	SpinLockAcquire(&masterKeyCtl->mutex);
-
-	if (strncmp(id, masterKeyCtl->id, ENCRYPTION_KEY_SIZE) != 0)
-	{
-		SpinLockRelease(&masterKeyCtl->mutex);
-		elog(ERROR, "could not get the master key: \"%s\"", id);
-	}
-
-	memcpy(key, masterKeyCtl->key, ENCRYPTION_KEY_SIZE);
-	SpinLockRelease(&masterKeyCtl->mutex);
+	KmgrPluginGetKey(id, &key);
 
 	return key;
 }
@@ -259,8 +228,6 @@ pg_rotate_encryption_key(PG_FUNCTION_ARGS)
 	/* Update master key information */
 	SpinLockAcquire(&masterKeyCtl->mutex);
 	masterKeyCtl->seqno = seqno + 1;
-	memcpy(masterKeyCtl->key, newkey, ENCRYPTION_KEY_SIZE);
-	memcpy(masterKeyCtl->id, newid, MAX_MASTER_KEY_ID_LEN);
 	SpinLockRelease(&masterKeyCtl->mutex);
 
 	/* Ok allows processes to read the keyring file */

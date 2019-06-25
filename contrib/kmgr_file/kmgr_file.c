@@ -20,11 +20,15 @@
 #include "storage/fd.h"
 #include "storage/kmgr.h"
 #include "storage/kmgr_api.h"
+#include "storage/ipc.h"
+#include "storage/lwlock.h"
+#include "storage/shmem.h"
 #include "utils/memutils.h"
+#include "utils/hashutils.h"
 #include "utils/guc.h"
 #include "miscadmin.h"
 
-#define KEYRING_MAX_KYES 128
+#define KEYRING_MAX_KEYS 128
 #define TEST_MASTERKEY_FILENAME "kmgr_test"
 
 
@@ -39,6 +43,7 @@ typedef struct MyKey
 } MyKey;
 
 static HTAB *MyKeys;
+static LWLock *lock;
 static char *masterkey_filepath;
 
 /* function prototypes */
@@ -50,6 +55,7 @@ static void test_removekey(const char *keyid);
 static bool test_isexistkey(const char *keyid);
 static void load_all_keys(void);
 static void save_all_keys(void);
+static Size test_memsize(void);
 
 /*
  * Specify output plugin callbacks
@@ -73,6 +79,20 @@ _PG_kmgr_init(KmgrPluginCallbacks *cb)
 							   PGC_POSTMASTER,
 							   0,
 							   NULL, NULL, NULL);
+
+	RequestAddinShmemSpace(test_memsize());
+	RequestNamedLWLockTranche("kmgr_test", 1);
+}
+
+static Size
+test_memsize(void)
+{
+	Size size;
+
+	size = MAXALIGN(sizeof(lock));
+	size = add_size(size, hash_estimate_size(KEYRING_MAX_KEYS, sizeof(MyKey)));
+
+	return size;
 }
 
 /*
@@ -84,6 +104,8 @@ load_all_keys(void)
 	char path[MAXPGPATH];
 	int fd;
 
+	LWLockAcquire(lock, LW_EXCLUSIVE);
+
 	sprintf(path, "%s/%s", masterkey_filepath, TEST_MASTERKEY_FILENAME);
 
 	fd = OpenTransientFile(path, O_RDONLY | PG_BINARY);
@@ -91,7 +113,10 @@ load_all_keys(void)
 	if (fd < 0)
 	{
 		if (errno == ENOENT)
+		{
+			LWLockRelease(lock);
 			return;
+		}
 
 		ereport(ERROR,
 				(errcode_for_file_access(),
@@ -127,6 +152,7 @@ load_all_keys(void)
 	}
 
 	CloseTransientFile(fd);
+	LWLockRelease(lock);
 }
 
 /*
@@ -183,25 +209,25 @@ static void
 test_startup(void)
 {
 	HASHCTL ctl;
-	MemoryContext old_cxt;
 
 	ereport(LOG, (errmsg("keyring_file: starting up")));
 
-	old_cxt = MemoryContextSwitchTo(TopMemoryContext);
+	//LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
 
 	MemSet(&ctl, 0, sizeof(ctl));
 	ctl.keysize = sizeof(char) * MAX_MASTER_KEY_ID_LEN;
 	ctl.entrysize = sizeof(MyKey);
-	ctl.hcxt = TopMemoryContext;
 
-	MyKeys = hash_create("test_kmgr key hash map",
-						 KEYRING_MAX_KYES,
-						 &ctl,
-						 HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+	MyKeys = ShmemInitHash("test_kmgr key shared hash map",
+						   KEYRING_MAX_KEYS, KEYRING_MAX_KEYS,
+						   &ctl,
+						   HASH_ELEM | HASH_BLOBS);
+
+	lock = &(GetNamedLWLockTranche("kmgr_test"))->lock;
+
+	//LWLockRelease(AddinShmemInitLock);
 
 	load_all_keys();
-
-	MemoryContextSwitchTo(old_cxt);
 }
 
 static void
@@ -211,6 +237,8 @@ test_getkey(const char *keyid, char **key)
 	bool found;
 
 	Assert(keyid != NULL && key != NULL);
+
+	LWLockAcquire(lock, LW_SHARED);
 
 	mykey = hash_search(MyKeys, (void *) keyid, HASH_FIND,	&found);
 
@@ -227,6 +255,8 @@ test_getkey(const char *keyid, char **key)
 	fprintf(stderr, "keyring_file: get master key, keyid = \"%s\", key = \"%s\"\n",
 			keyid, dk(*key));
 #endif
+
+	LWLockRelease(lock);
 }
 
 static bool
@@ -236,7 +266,11 @@ test_isexistkey(const char *keyid)
 
 	Assert(keyid != NULL);
 
+	LWLockAcquire(lock, LW_SHARED);
+
 	(void *) hash_search(MyKeys, (void *) keyid, HASH_FIND,	&found);
+
+	LWLockRelease(lock);
 
 	return found;
 }
@@ -250,6 +284,8 @@ test_generatekey(const char *keyid)
 	int ret;
 
 	Assert(keyid);
+
+	LWLockAcquire(lock, LW_EXCLUSIVE);
 
 	/* Set master key */
 	newkey = (char *) palloc0(ENCRYPTION_KEY_SIZE);
@@ -279,6 +315,8 @@ test_generatekey(const char *keyid)
 
 	/* update key file */
 	save_all_keys();
+
+	LWLockRelease(lock);
 }
 
 static void

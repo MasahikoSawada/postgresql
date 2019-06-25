@@ -21,5 +21,6 @@ extern void KmgrPluginGetKey(const char *id, char **key);
 extern void KmgrPluginGenerateKey(const char *id);
 extern void KmgrPluginRemoveKey(const char *id);
 extern bool KmgrPluginIsExist(const char *id);
+extern void KmgrPluginStartup(void);
 
 #endif /* KMGR_PLUGIN_H */
