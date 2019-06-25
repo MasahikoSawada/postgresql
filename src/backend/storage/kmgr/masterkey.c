@@ -50,6 +50,8 @@
  */
 #define MASTERKEY_ID_FORMAT "pg_master_key-%7lu-%04u"
 
+#define FIRST_MASTERKEY_SEQNO	0
+
 /*
  * Shared memory structer for master key.
  */
@@ -85,14 +87,34 @@ void
 InitializeMasterKey(void)
 {
 	char id[MAX_MASTER_KEY_ID_LEN] = {0};
+	MasterKeySeqNo seqno;
 	char *key = NULL;
-	MasterKeySeqNo seqno = GetMasterKeySeqNoFromControlFile();
 
 	if (!TransparentEncryptionEnabled())
 		return;
 
-	/* Craft the master key id */
-	sprintf(id, MASTERKEY_ID_FORMAT, GetSystemIdentifier(), seqno);
+	/* Read keyring file and get the master key id */
+	if (!getMasterKeyIdFromFile(id))
+	{
+		/* First time, create initial identifier */
+		seqno = FIRST_MASTERKEY_SEQNO;
+		snprintf(id, MAX_MASTER_KEY_ID_LEN, MASTERKEY_ID_FORMAT,
+				 GetSystemIdentifier(), seqno);
+	}
+	else
+	{
+		uint64	dummy;
+
+		/* Got the maste key id, got sequence number */
+		sscanf(id, MASTERKEY_ID_FORMAT, &dummy, &seqno);
+	}
+
+	Assert(seqno >= 0);
+
+#ifdef DEBUG_TDE
+	fprintf(stderr, "keyring::startup mkid %s, systemid %lu, seqno %u\n",
+			id, systemid, seqno);
+#endif
 
 	if (!KmgrPluginIsExist(id))
 		KmgrPluginGenerateKey(id);

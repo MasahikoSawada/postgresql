@@ -19,7 +19,6 @@
 #include "lib/stringinfo.h"
 #include "nodes/pg_list.h"
 #include "storage/fd.h"
-#include "storage/kmgr.h"
 
 
 /* Sync methods */
@@ -296,7 +295,6 @@ extern uint64 GetSystemIdentifier(void);
 extern char *GetMockAuthenticationNonce(void);
 extern bool DataChecksumsEnabled(void);
 extern XLogRecPtr GetFakeLSNForUnloggedRel(void);
-extern MasterKeySeqNo GetMasterKeySeqNoFromControlFile(void);
 extern Size XLOGShmemSize(void);
 extern void XLOGShmemInit(void);
 extern void BootStrapXLOG(void);

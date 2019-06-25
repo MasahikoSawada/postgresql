@@ -71,7 +71,7 @@ static bool keyring_invalid = true;
 
 static void initialize_keyring(void);
 static void reload_keyring_file(void);
-static List *read_keyring_file(void);
+static List *read_keyring_file(char *masterkeyid);
 static void update_keyring_file(const char *masterkey_id,
 								const char *masterkey);
 static TblspKeyData *get_keyring_entry(Oid spcOid, bool *found);
@@ -169,7 +169,7 @@ get_keyring_entry(Oid spcOid, bool *found)
 		 *
 		 * @@@ : perhaps this is required only by checkpointer and bgwriter.
 		 */
-		read_keyring_file();
+		read_keyring_file(currentMasterKeyId);
 		key = hash_search(tblspKeyring, (void *) &spcOid, HASH_FIND, found);
 	}
 
@@ -341,7 +341,7 @@ reload_keyring_file(void)
 	ListCell *lc;
 	char *masterkey = NULL;
 
-	keylist = read_keyring_file();
+	keylist = read_keyring_file(currentMasterKeyId);
 
 	/* There is no key in the file */
 	if (keylist == NIL)
@@ -391,10 +391,22 @@ reload_keyring_file(void)
 }
 
 /*
+ * Read the keyring file and set *masterkeyid to the master key id.
+ */
+bool
+getMasterKeyIdFromFile(char *masterkeyid)
+{
+	if (read_keyring_file(masterkeyid) == NULL)
+		return false;
+
+	return true;
+}
+
+/*
  * Read the keyring file and return the list of tablespace keys.
  */
 static List *
-read_keyring_file(void)
+read_keyring_file(char *masterkeyid)
 {
 	char *path = "global/"KEYRING_TBLSP_FILE;
 	List *key_list = NIL;
@@ -414,7 +426,7 @@ read_keyring_file(void)
 	}
 
 	/* Read and set the current master key id */
-	if ((read_len = read(fd, currentMasterKeyId, MAX_MASTER_KEY_ID_LEN)) < 0)
+	if ((read_len = read(fd, masterkeyid, MAX_MASTER_KEY_ID_LEN)) < 0)
 			ereport(ERROR,
 					(errcode_for_file_access(),
 					 (errmsg("could not read from file \"%s\": %m", path))));

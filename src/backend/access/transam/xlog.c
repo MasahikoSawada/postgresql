@@ -4826,16 +4826,6 @@ DataChecksumsEnabled(void)
 }
 
 /*
- * Returns the master key sequence number from control file.
- */
-MasterKeySeqNo
-GetMasterKeySeqNoFromControlFile(void)
-{
-	Assert(ControlFile != NULL);
-	return (ControlFile->master_key_seqno);
-}
-
-/*
  * Returns a fake LSN for unlogged relations.
  *
  * Each call generates an LSN that is greater than any previous value
@@ -5264,7 +5254,6 @@ BootStrapXLOG(void)
 	ControlFile->wal_log_hints = wal_log_hints;
 	ControlFile->track_commit_timestamp = track_commit_timestamp;
 	ControlFile->data_checksum_version = bootstrap_data_checksum_version;
-	ControlFile->master_key_seqno = 0;
 
 	/* some additional ControlFile fields are set in WriteControlFile() */
 
@@ -8516,7 +8505,6 @@ CreateCheckPoint(int flags)
 	XLogRecPtr	last_important_lsn;
 	VirtualTransactionId *vxids;
 	int			nvxids;
-	MasterKeySeqNo master_key_seqno;
 
 	/*
 	 * An end-of-recovery checkpoint is really a shutdown checkpoint, just
@@ -8829,9 +8817,6 @@ CreateCheckPoint(int flags)
 	 */
 	PriorRedoPtr = ControlFile->checkPointCopy.redo;
 
-	/* Get the current master key seq no */
-	master_key_seqno = GetMasterKeySeqNo();
-
 	/*
 	 * Update the control file.
 	 */
@@ -8844,9 +8829,6 @@ CreateCheckPoint(int flags)
 	/* crash recovery should always recover to the end of WAL */
 	ControlFile->minRecoveryPoint = InvalidXLogRecPtr;
 	ControlFile->minRecoveryPointTLI = 0;
-
-	/* Set the current master key seq number */
-	ControlFile->master_key_seqno = master_key_seqno;
 
 	/*
 	 * Persist unloggedLSN value. It's reset on crash recovery, so this goes

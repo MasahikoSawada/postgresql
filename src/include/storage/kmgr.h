@@ -25,11 +25,11 @@
 //#define DEBUG_TDE 1
 
 /*
- *
  * masterKeySeqno is the sequence number starting from 0 and get incremented
  * every time key rotation.
  */
 typedef uint32 MasterKeySeqNo;
+
 extern char *kmgr_plugin_library;
 
 /* keyring.c */
@@ -39,6 +39,7 @@ extern char *KeyringGetKey(Oid spcOid);
 extern void KeyringDropKey(Oid tablespaceoid);
 extern bool KeyringKeyExists(Oid spcOid);
 extern void reencryptKeyring(const char *masterkey_id, const char *masterkrey);
+extern bool getMasterKeyIdFromFile(char *masterkeyid);
 
 /* masterkey.c */
 extern void processKmgrPlugin(void);
