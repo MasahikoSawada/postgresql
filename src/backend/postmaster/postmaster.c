@@ -1322,7 +1322,7 @@ PostmasterMain(int argc, char *argv[])
 	 * Get the master encrption key via kmgr plugin and store into the
 	 * shared memory.
 	 */
-	InitializeMasterKey();
+	InitializeKmgr();
 
 	/*
 	 * Load configuration files for client authentication.

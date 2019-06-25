@@ -43,9 +43,9 @@ extern bool getMasterKeyIdFromFile(char *masterkeyid);
 
 /* masterkey.c */
 extern void processKmgrPlugin(void);
-extern void InitializeMasterKey(void);
-extern Size MasterKeyCtlShmemSize(void);
-extern void MasterKeyCtlShmemInit(void);
+extern void InitializeKmgr(void);
+extern Size KmgrCtlShmemSize(void);
+extern void KmgrCtlShmemInit(void);
 extern void SetMasterKeySeqNo(MasterKeySeqNo seqno);
 extern MasterKeySeqNo GetMasterKeySeqNo(void);
 extern char *GetMasterKey(const char *id);

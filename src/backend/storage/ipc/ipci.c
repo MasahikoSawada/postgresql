@@ -148,7 +148,7 @@ CreateSharedMemoryAndSemaphores(int port)
 		size = add_size(size, BTreeShmemSize());
 		size = add_size(size, SyncScanShmemSize());
 		size = add_size(size, AsyncShmemSize());
-		size = add_size(size, MasterKeyCtlShmemSize());
+		size = add_size(size, KmgrCtlShmemSize());
 #ifdef EXEC_BACKEND
 		size = add_size(size, ShmemBackendArraySize());
 #endif
@@ -257,7 +257,7 @@ CreateSharedMemoryAndSemaphores(int port)
 	WalSndShmemInit();
 	WalRcvShmemInit();
 	ApplyLauncherShmemInit();
-	MasterKeyCtlShmemInit();
+	KmgrCtlShmemInit();
 
 	/*
 	 * Set up other modules that need some shared memory space

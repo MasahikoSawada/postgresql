@@ -61,9 +61,7 @@ KmgrPluginStartup(void)
 		callbacks.startup_cb();
 }
 
-/*
- * Load keyring plugin if provided and invoke startup callback.
- */
+/* Load keyring plugin */
 void
 startupKmgrPlugin(const char *libraryname)
 {

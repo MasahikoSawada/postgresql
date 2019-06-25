@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * masterkey.c
+ * kmgr.c
  *	 This module manages the master encryption key.
  *
  * In transparent data encryption we have one master key for the whole
@@ -55,12 +55,12 @@
 /*
  * Shared memory structer for master key.
  */
-typedef struct MasterKeyCtlData
+typedef struct KmgrCtlData
 {
 	MasterKeySeqNo	seqno;
 	slock_t			mutex;	/* protect above fields */
-} MasterKeyCtlData;
-static MasterKeyCtlData *masterKeyCtl = NULL;
+} KmgrCtlData;
+static KmgrCtlData *kmgrCtl = NULL;
 
 /* GUC variable */
 char *kmgr_plugin_library = NULL;
@@ -82,7 +82,7 @@ processKmgrPlugin(void)
  * but after created shared memory.
  */
 void
-InitializeMasterKey(void)
+InitializeKmgr(void)
 {
 	char id[MAX_MASTER_KEY_ID_LEN] = {0};
 	MasterKeySeqNo seqno;
@@ -91,6 +91,7 @@ InitializeMasterKey(void)
 	if (!TransparentEncryptionEnabled())
 		return;
 
+	/* Invoke startup callback */
 	KmgrPluginStartup();
 
 	/* Read keyring file and get the master key id */
@@ -112,7 +113,7 @@ InitializeMasterKey(void)
 	Assert(seqno >= 0);
 
 #ifdef DEBUG_TDE
-	fprintf(stderr, "keyring::startup mkid %s, systemid %lu, seqno %u\n",
+	fprintf(stderr, "kmtr::initialize startup mkid %s, systemid %lu, seqno %u\n",
 			id, systemid, seqno);
 #endif
 
@@ -127,35 +128,35 @@ InitializeMasterKey(void)
 				(errmsg("could not get the encryption master key via kmgr plugin")));
 
 	/* Save current master key seqno */
-	masterKeyCtl->seqno = seqno;
+	kmgrCtl->seqno = seqno;
 
 #ifdef DEBUG_TDE
-	fprintf(stderr, "masterkey::initialize set id %s, key %s, seq %u\n",
-			id, dk(key), masterKeyCtl->seqno);
+	fprintf(stderr, "kmgr::initialize set id %s, key %s, seq %u\n",
+			id, dk(key), kmgrCtl->seqno);
 #endif
 }
 
 Size
-MasterKeyCtlShmemSize(void)
+KmgrCtlShmemSize(void)
 {
-	return sizeof(MasterKeyCtlData);
+	return sizeof(KmgrCtlData);
 }
 
 void
-MasterKeyCtlShmemInit(void)
+KmgrCtlShmemInit(void)
 {
 	bool		found;
 
 	/* Create shared memory struct for master keyring */
-	masterKeyCtl = (MasterKeyCtlData *)
-		ShmemInitStruct("Encryption key management", MasterKeyCtlShmemSize(),
-						&found);
+	kmgrCtl = (KmgrCtlData *) ShmemInitStruct("Encryption key management",
+											  KmgrCtlShmemSize(),
+											  &found);
 
 	if (!found)
 	{
 		/* Initialize */
-		MemSet(masterKeyCtl, 0, MasterKeyCtlShmemSize());
-		SpinLockInit(&masterKeyCtl->mutex);
+		MemSet(kmgrCtl, 0, KmgrCtlShmemSize());
+		SpinLockInit(&kmgrCtl->mutex);
 	}
 }
 
@@ -164,11 +165,11 @@ GetMasterKeySeqNo(void)
 {
 	MasterKeySeqNo seqno;
 
-	Assert(masterKeyCtl);
+	Assert(kmgrCtl);
 
-	SpinLockAcquire(&masterKeyCtl->mutex);
-	seqno = masterKeyCtl->seqno;
-	SpinLockRelease(&masterKeyCtl->mutex);
+	SpinLockAcquire(&kmgrCtl->mutex);
+	seqno = kmgrCtl->seqno;
+	SpinLockRelease(&kmgrCtl->mutex);
 
 	return seqno;
 }
@@ -212,7 +213,7 @@ pg_rotate_encryption_key(PG_FUNCTION_ARGS)
 	KmgrPluginGetKey(newid, &newkey);
 
 #ifdef DEBUG_TDE
-	fprintf(stderr, "masterkey::rotate new master id %s, key %s, oldseq %u\n",
+	fprintf(stderr, "kmgr::rotate new master id %s, key %s, oldseq %u\n",
 			newid, dk(newkey), seqno);
 #endif
 
@@ -226,9 +227,9 @@ pg_rotate_encryption_key(PG_FUNCTION_ARGS)
 	reencryptKeyring(newid, newkey);
 
 	/* Update master key information */
-	SpinLockAcquire(&masterKeyCtl->mutex);
-	masterKeyCtl->seqno = seqno + 1;
-	SpinLockRelease(&masterKeyCtl->mutex);
+	SpinLockAcquire(&kmgrCtl->mutex);
+	kmgrCtl->seqno = seqno + 1;
+	SpinLockRelease(&kmgrCtl->mutex);
 
 	/* Ok allows processes to read the keyring file */
 	LWLockRelease(KeyringControlLock);

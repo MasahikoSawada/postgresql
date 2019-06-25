@@ -12,6 +12,6 @@ subdir = src/backend/storage/kmgr
 top_builddir = ../../../..
 include $(top_builddir)/src/Makefile.global
 
-OBJS = keyring.o masterkey.o tempkey.o plugin.o
+OBJS = keyring.o kmgr.o tempkey.o plugin.o
 
 include $(top_srcdir)/src/backend/common.mk
