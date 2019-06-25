@@ -303,7 +303,6 @@ KeyringCreateKey(Oid spcOid)
 void
 KeyringDropKey(Oid spcOid)
 {
-	TblspKeyData *key;
 	bool found;
 
 	if (!TransparentEncryptionEnabled())
@@ -317,7 +316,7 @@ KeyringDropKey(Oid spcOid)
 		keyring_invalid = false;
 	}
 
-	key = hash_search(tblspKeyring, (void *) &spcOid, HASH_REMOVE, &found);
+	hash_search(tblspKeyring, (void *) &spcOid, HASH_REMOVE, &found);
 
 	if (!found)
 		ereport(ERROR,

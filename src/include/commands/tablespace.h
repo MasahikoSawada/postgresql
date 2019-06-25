@@ -18,7 +18,6 @@
 #include "catalog/objectaddress.h"
 #include "lib/stringinfo.h"
 #include "nodes/parsenodes.h"
-#include "storage/kmgr.h"
 
 /* XLOG stuff */
 #define XLOG_TBLSPC_CREATE		0x00
@@ -27,8 +26,6 @@
 typedef struct xl_tblspc_create_rec
 {
 	Oid			ts_id;
-	char		ts_key[ENCRYPTION_KEY_SIZE];
-	char		ts_mkeyid[MASTER_KEY_ID_LEN];
 	char		ts_path[FLEXIBLE_ARRAY_MEMBER]; /* null-terminated string */
 } xl_tblspc_create_rec;
 

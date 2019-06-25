@@ -22,7 +22,7 @@
 
 #define MASTER_KEY_ID_LEN NAMEDATALEN
 
-//#define DEBUG_TDE 1
+#define DEBUG_TDE 1
 
 /*
  * masterKeySeqno is the sequence number starting from 0 and get incremented

@@ -49,6 +49,7 @@
  * string length of seqno is 10 (=4294967295).
  */
 #define MASTERKEY_ID_FORMAT "pg_master_key-%7lu-%04u"
+#define MASTERKEY_ID_FORMAT_SCAN "pg_master_key-%lu-%s"
 
 #define FIRST_MASTERKEY_SEQNO	0
 
@@ -105,9 +106,16 @@ InitializeKmgr(void)
 	else
 	{
 		uint64	dummy;
+		char	seqno_str[5];
 
 		/* Got the maste key id, got sequence number */
-		sscanf(id, MASTERKEY_ID_FORMAT, &dummy, &seqno);
+		sscanf(id, MASTERKEY_ID_FORMAT_SCAN,  &dummy, seqno_str);
+		seqno = atoi(seqno_str);
+
+#ifdef DEBUG_TDE
+		fprintf(stderr, "kmgr::initialize found keyring file, id %s seqno_str %s seqno %u\n",
+			id, seqno_str, seqno);
+#endif
 	}
 
 	Assert(seqno >= 0);
@@ -208,13 +216,18 @@ pg_rotate_encryption_key(PG_FUNCTION_ARGS)
 	seqno = GetMasterKeySeqNo();
 	sprintf(newid, MASTERKEY_ID_FORMAT, GetSystemIdentifier(), seqno + 1);
 
+#ifdef DEBUG_TDE
+	fprintf(stderr, "kmgr::rotate new id id %s, oldseq %u\n",
+			newid, seqno);
+#endif
+
 	/* Get new master key */
 	KmgrPluginGenerateKey(newid);
 	KmgrPluginGetKey(newid, &newkey);
 
 #ifdef DEBUG_TDE
-	fprintf(stderr, "kmgr::rotate new master id %s, key %s, oldseq %u\n",
-			newid, dk(newkey), seqno);
+	fprintf(stderr, "kmgr::rotate generated new id id %s, key %s\n",
+			newid, dk(newkey));
 #endif
 
 	/* Block concurrent processes are about to read the keyring file */
