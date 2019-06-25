@@ -34,11 +34,11 @@
 
 PG_MODULE_MAGIC;
 
-typedef char KeyId[MAX_MASTER_KEY_ID_LEN];
+typedef char KeyId[MASTER_KEY_ID_LEN];
 
 typedef struct MyKey
 {
-	char	id[MAX_MASTER_KEY_ID_LEN];
+	char	id[MASTER_KEY_ID_LEN];
 	char	key[ENCRYPTION_KEY_SIZE];
 } MyKey;
 
@@ -144,10 +144,12 @@ load_all_keys(void)
 							path, read_len, (int32) sizeof(MyKey))));
 
 		keycache = hash_search(MyKeys, (void *) key->id, HASH_ENTER, NULL);
+
 		memcpy(keycache->key, key->key, ENCRYPTION_KEY_SIZE);
 #ifdef DEBUG_TDE
-		fprintf(stderr, "keyring_file: load mkid = \"%s\", mk = \"%s\"\n",
-				keycache->id, dk(keycache->key));
+		fprintf(stderr, "keyring_file: load mkid = \"%s\", mk = \"%s\", keyhash = %u\n",
+				keycache->id, dk(keycache->key),
+				tag_hash((void *) &key->id, 64));
 #endif
 	}
 
@@ -187,6 +189,7 @@ save_all_keys(void)
 				key->id, dk(key->key));
 #endif
 		rc = fwrite(key, sizeof(MyKey), 1, fpout);
+		(void) rc;
 	}
 
 	if (ferror(fpout))
@@ -215,7 +218,7 @@ test_startup(void)
 	//LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
 
 	MemSet(&ctl, 0, sizeof(ctl));
-	ctl.keysize = sizeof(char) * MAX_MASTER_KEY_ID_LEN;
+	ctl.keysize = MASTER_KEY_ID_LEN;
 	ctl.entrysize = sizeof(MyKey);
 
 	MyKeys = ShmemInitHash("test_kmgr key shared hash map",
@@ -244,7 +247,7 @@ test_getkey(const char *keyid, char **key)
 
 	if (!found)
 		ereport(ERROR,
-				(errmsg("keyring_file: could not get master key \"%s\"",
+				(errmsg("kmgr_file: could not get master key \"%s\"",
 						keyid)));
 
 	/* Set master key */
@@ -252,7 +255,7 @@ test_getkey(const char *keyid, char **key)
 	memcpy(*key, mykey->key, ENCRYPTION_KEY_SIZE);
 
 #ifdef DEBUG_TDE
-	fprintf(stderr, "keyring_file: get master key, keyid = \"%s\", key = \"%s\"\n",
+	fprintf(stderr, "kmgr_file: get master key, keyid = \"%s\", key = \"%s\"\n",
 			keyid, dk(*key));
 #endif
 

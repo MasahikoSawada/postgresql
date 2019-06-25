@@ -59,7 +59,7 @@ typedef struct TblspKeyData
 } TblspKeyData;
 
 /* The master key written in the keyring file */
-static char	currentMasterKeyId[MAX_MASTER_KEY_ID_LEN];
+static char	currentMasterKeyId[MASTER_KEY_ID_LEN];
 static bool currentMasterKeyId_initialize = false;
 
 /* Tablespace keys */
@@ -331,6 +331,49 @@ KeyringDropKey(Oid spcOid)
 	LWLockRelease(KeyringControlLock);
 }
 
+void
+KeyringAddKey(Oid spcOid, char *encrypted_key, const char *masterkeyid)
+{
+	TblspKeyData *key;
+	char	buf[ENCRYPTION_KEY_SIZE];
+	char	*masterkey;
+	bool	found;
+
+	/* Copy to work buffer */
+	memcpy(buf, encrypted_key, ENCRYPTION_KEY_SIZE);
+
+	masterkey = GetMasterKey(masterkeyid);
+
+	/* Decrypt tablespace key with the master key */
+	decrypt_tblsp_key(spcOid, buf, masterkey);
+
+	LWLockAcquire(KeyringControlLock, LW_EXCLUSIVE);
+
+#ifdef DEBUG_TDE
+	fprintf(stderr, "keyring::add during recov oid %u, dke %s, mkid %s\n",
+			spcOid, dk(encrypted_key), masterkeyid);
+#endif
+
+	key = hash_search(tblspKeyring, (void *) &spcOid, HASH_ENTER, &found);
+
+	if (found)
+	{
+		LWLockRelease(KeyringControlLock);
+		return;
+	}
+//		ereport(ERROR,
+//				(errmsg("encryption key for tablespace %u already exists",
+//						spcOid)));
+
+	/* Store the raw key to the hash */
+	memcpy(key->tblspkey, buf, ENCRYPTION_KEY_SIZE);
+
+	update_keyring_file(currentMasterKeyId,
+						GetMasterKey(currentMasterKeyId));
+
+	LWLockRelease(KeyringControlLock);
+}
+
 /*
  * Load the keyring file into the local cache.
  */
@@ -426,7 +469,7 @@ read_keyring_file(char *masterkeyid)
 	}
 
 	/* Read and set the current master key id */
-	if ((read_len = read(fd, masterkeyid, MAX_MASTER_KEY_ID_LEN)) < 0)
+	if ((read_len = read(fd, masterkeyid, MASTER_KEY_ID_LEN)) < 0)
 			ereport(ERROR,
 					(errcode_for_file_access(),
 					 (errmsg("could not read from file \"%s\": %m", path))));
@@ -486,7 +529,7 @@ update_keyring_file(const char *masterkey_id, const char *masterkey)
 	}
 
 	/* Write the master key id first */
-	rc = fwrite(masterkey_id, MAX_MASTER_KEY_ID_LEN, 1, fpout);
+	rc = fwrite(masterkey_id, MASTER_KEY_ID_LEN, 1, fpout);
 
 	/* Write tablespace key to the file */
 	hash_seq_init(&status, tblspKeyring);

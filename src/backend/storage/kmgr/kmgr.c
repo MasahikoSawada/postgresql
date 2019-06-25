@@ -84,7 +84,7 @@ processKmgrPlugin(void)
 void
 InitializeKmgr(void)
 {
-	char id[MAX_MASTER_KEY_ID_LEN] = {0};
+	char id[MASTER_KEY_ID_LEN] = {0};
 	MasterKeySeqNo seqno;
 	char *key = NULL;
 
@@ -99,7 +99,7 @@ InitializeKmgr(void)
 	{
 		/* First time, create initial identifier */
 		seqno = FIRST_MASTERKEY_SEQNO;
-		snprintf(id, MAX_MASTER_KEY_ID_LEN, MASTERKEY_ID_FORMAT,
+		snprintf(id, MASTER_KEY_ID_LEN, MASTERKEY_ID_FORMAT,
 				 GetSystemIdentifier(), seqno);
 	}
 	else
@@ -113,8 +113,8 @@ InitializeKmgr(void)
 	Assert(seqno >= 0);
 
 #ifdef DEBUG_TDE
-	fprintf(stderr, "kmtr::initialize startup mkid %s, systemid %lu, seqno %u\n",
-			id, systemid, seqno);
+	fprintf(stderr, "kmtr::initialize startup mkid %s, seqno %u\n",
+			id, seqno);
 #endif
 
 	if (!KmgrPluginIsExist(id))
@@ -197,7 +197,7 @@ GetCurrentMasterKeyId(char *keyid)
 Datum
 pg_rotate_encryption_key(PG_FUNCTION_ARGS)
 {
-	char newid[MAX_MASTER_KEY_ID_LEN + 1] = {0};
+	char newid[MASTER_KEY_ID_LEN + 1] = {0};
 	char *newkey = NULL;
 	MasterKeySeqNo seqno;
 

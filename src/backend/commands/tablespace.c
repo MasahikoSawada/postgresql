@@ -379,8 +379,19 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 		xl_tblspc_create_rec xlrec;
 
 		xlrec.ts_id = tablespaceoid;
+
+		/*
+		 * Store encrypted tablespace key and the corresponding master
+		 * key id if the tablespace is encrypted.
+		 */
 		if (tskey != NULL)
+		{
+			char keyid[MASTER_KEY_ID_LEN] = {0};
+
+			GetCurrentMasterKeyId(keyid);
 			memcpy(xlrec.ts_key, tskey, ENCRYPTION_KEY_SIZE);
+			memcpy(xlrec.ts_mkeyid, keyid, MASTER_KEY_ID_LEN);
+		}
 
 		XLogBeginInsert();
 		XLogRegisterData((char *) &xlrec,
@@ -1536,6 +1547,9 @@ tblspc_redo(XLogReaderState *record)
 	{
 		xl_tblspc_create_rec *xlrec = (xl_tblspc_create_rec *) XLogRecGetData(record);
 		char	   *location = xlrec->ts_path;
+
+		/* Add encryption key before redo */
+		//KeyringAddKey(xlrec->ts_id, xlrec->ts_key, xlrec->ts_mkeyid);
 
 		create_tablespace_directories(location, xlrec->ts_id);
 	}
