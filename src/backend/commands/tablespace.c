@@ -484,10 +484,6 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 	/* DROP hook for the tablespace being removed */
 	InvokeObjectDropHook(TableSpaceRelationId, tablespaceoid, 0);
 
-	/* Drop encryption key if enabled */
-	if (tsopts->encryption)
-		KeyringDropKey(tablespaceoid);
-
 	/*
 	 * Remove the pg_tablespace tuple (this will roll back if we fail below)
 	 */
@@ -543,6 +539,10 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 							tablespacename)));
 		}
 	}
+
+	/* Drop encryption key if enabled */
+	if (tsopts->encryption)
+		KeyringDropKey(tablespaceoid);
 
 	/* Record the filesystem change in XLOG */
 	{
