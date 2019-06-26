@@ -30,10 +30,10 @@ static KmgrPluginCallbacks callbacks;
 
 static void load_kmgr_plugin(const char *libraryname);
 
-void
-KmgrPluginGetKey(const char *id, char **key)
+char *
+KmgrPluginGetKey(const char *id)
 {
-	callbacks.getkey_cb(id, key);
+	return callbacks.getkey_cb(id);
 }
 
 void

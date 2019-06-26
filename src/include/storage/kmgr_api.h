@@ -18,7 +18,7 @@ struct KmgrPluginCallbacks;
 
 typedef void (*KmgrPluginInit) (struct KmgrPluginCallbacks *cb);
 typedef void (*Startup_function) (void);
-typedef void (*GetKey_function) (const char *keyid, char **key);
+typedef char *(*GetKey_function) (const char *keyid);
 typedef void (*GenerateKey_function) (const char *keyid);
 typedef bool (*IsExistKey_function) (const char *keyid);
 typedef void (*RemoveKey_function) (const char *keyid);

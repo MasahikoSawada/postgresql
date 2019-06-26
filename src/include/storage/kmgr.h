@@ -20,9 +20,18 @@
 #define TransparentEncryptionEnabled() \
 	(kmgr_plugin_library != NULL && kmgr_plugin_library[0] != '\0')
 
-#define MASTER_KEY_ID_LEN NAMEDATALEN
+/*
+ * The master key format is "pg_master_key-<database systemid>-<seqno>".
+ * The maximum length of database system identifer is
+ * 20 (=18446744073709551615) as it is an uint64 value and the maximum
+ * string length of seqno is 10 (=4294967295).
+ */
+#define MASTER_KEY_ID_FORMAT "pg_master_key-%07lu-%04u"
+#define MASTER_KEY_ID_FORMAT_SCAN "pg_master_key-%lu-%s"
 
-#define DEBUG_TDE 1
+#define MASTER_KEY_ID_LEN (15 + 7 + 4)
+
+//#define DEBUG_TDE 1
 
 /*
  * masterKeySeqno is the sequence number starting from 0 and get incremented
@@ -38,20 +47,12 @@ extern char *KeyringCreateKey(Oid tablespaceoid);
 extern char *KeyringGetKey(Oid spcOid);
 extern void KeyringDropKey(Oid tablespaceoid);
 extern bool KeyringKeyExists(Oid spcOid);
-extern void reencryptKeyring(const char *masterkey_id, const char *masterkrey);
-extern bool getMasterKeyIdFromFile(char *masterkeyid);
 extern void KeyringAddKey(Oid spcOid, char *encrypted_key,
 						  const char *masterkeyid);
 
-/* masterkey.c */
+/* kmgr.c */
 extern void processKmgrPlugin(void);
 extern void InitializeKmgr(void);
-extern Size KmgrCtlShmemSize(void);
-extern void KmgrCtlShmemInit(void);
-extern void SetMasterKeySeqNo(MasterKeySeqNo seqno);
-extern MasterKeySeqNo GetMasterKeySeqNo(void);
-extern char *GetMasterKey(const char *id);
-extern void GetCurrentMasterKeyId(char *keyid);
 
 /* tempkey.c */
 extern char * GetBackendKey(void);

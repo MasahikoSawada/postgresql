@@ -49,7 +49,7 @@ static char *masterkey_filepath;
 /* function prototypes */
 extern void _PG_kmgr_init(KmgrPluginCallbacks *cb);
 static void test_startup(void);
-static void test_getkey(const char *keyid, char **key);
+static char *test_getkey(const char *keyid);
 static void test_generatekey(const char *keyid);
 static void test_removekey(const char *keyid);
 static bool test_isexistkey(const char *keyid);
@@ -233,13 +233,12 @@ test_startup(void)
 	load_all_keys();
 }
 
-static void
-test_getkey(const char *keyid, char **key)
+static char *
+test_getkey(const char *keyid)
 {
+	char *key;
 	MyKey *mykey;
 	bool found;
-
-	Assert(keyid != NULL && key != NULL);
 
 	LWLockAcquire(lock, LW_SHARED);
 
@@ -251,15 +250,17 @@ test_getkey(const char *keyid, char **key)
 						keyid)));
 
 	/* Set master key */
-	*key = palloc0(ENCRYPTION_KEY_SIZE);
-	memcpy(*key, mykey->key, ENCRYPTION_KEY_SIZE);
+	key = palloc0(ENCRYPTION_KEY_SIZE);
+	memcpy(key, mykey->key, ENCRYPTION_KEY_SIZE);
 
 #ifdef DEBUG_TDE
 	fprintf(stderr, "kmgr_file: get master key, keyid = \"%s\", key = \"%s\"\n",
-			keyid, dk(*key));
+			keyid, dk(key));
 #endif
 
 	LWLockRelease(lock);
+
+	return key;
 }
 
 static bool
