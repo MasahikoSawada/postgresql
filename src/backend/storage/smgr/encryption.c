@@ -122,10 +122,9 @@ void
 EncryptBufferBlock(Oid spcOid, const char *tweak, const char *input,
 				   char *output)
 {
-	const char *spckey;
+	char spckey[ENCRYPTION_KEY_SIZE];
 
-	spckey = KeyringGetKey(spcOid);
-	Assert(spckey);
+	KeyringGetKey(spcOid, spckey);
 
 #ifdef DEBUG_TDE
 	fprintf(stderr, "    encryption::encrypt with tskey \"%s\", tw = %s, plain page = %s, %s\n",
@@ -147,10 +146,9 @@ void
 DecryptBufferBlock(Oid spcOid, const char *tweak, const char *input,
 				   char *output)
 {
-	const char *spckey = NULL;
+	char spckey[ENCRYPTION_KEY_SIZE];
 
-	spckey = KeyringGetKey(spcOid);
-	Assert(spckey);
+	KeyringGetKey(spcOid, spckey);
 
 #ifdef DEBUG_TDE
 	fprintf(stderr, "    encryption::decrypt with tskey \"%s\", tw = %s, encrypted page = %s\n",

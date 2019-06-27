@@ -190,18 +190,17 @@ processKmgrPlugin(void)
  * Return the tablespace key string of the given tablespace, or NULL if not
  * found. Returned key string is ENCRYPTION_KEY_SIZE byte.
  */
-char *
-KeyringGetKey(Oid spcOid)
+void
+KeyringGetKey(Oid spcOid, char *key)
 {
 	TblspcKeyData *tskey;
 	bool		found;
-	char		*keystr;
 
 	if (!TransparentEncryptionEnabled())
-		return NULL;
+		return;
 
 	if (!OidIsValid(spcOid))
-		return NULL;
+		return;
 
 #ifdef DEBUG_TDE
 	fprintf(stderr, "keyring::get key oid %u\n", spcOid);
@@ -210,12 +209,9 @@ KeyringGetKey(Oid spcOid)
 	tskey = get_keyring_entry(spcOid, &found);
 
 	if (!found)
-		return NULL;
+		return;
 
-	keystr = (char *) palloc(ENCRYPTION_KEY_SIZE);
-	memcpy(keystr, tskey->tblspckey, ENCRYPTION_KEY_SIZE);
-
-	return keystr;
+	memcpy(key, tskey->tblspckey, ENCRYPTION_KEY_SIZE);
 }
 
 /*
@@ -421,10 +417,10 @@ get_keyring_entry(Oid spcOid, bool *found)
 		(AmCheckpointerProcess() || AmBackgroundWriterProcess()))
 	{
 #ifdef DEBUG_TDE
-	fprintf(stderr, "keyring::not found key, so reload and retry oid %u\n", spcOid);
+		fprintf(stderr, "keyring::not found key, so reload and retry oid %u\n", spcOid);
 #endif
 
-	/*
+		/*
 		 * It's very optimistic. Since it's possible that the local cache
 		 * is out of date we reload the up-to-date keyring and try to find
 		 * again.
@@ -749,7 +745,8 @@ ensure_latest_keyring(bool need_lock)
 	if (need_lock)
 		LWLockAcquire(KeyringControlLock, LW_SHARED);
 
-	AcceptInvalidationMessages();
+	CHECK_FOR_INTERRUPTS();
+	//AcceptInvalidationMessages();
 
 	if (keyring_invalid)
 	{

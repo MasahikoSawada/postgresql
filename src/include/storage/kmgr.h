@@ -44,7 +44,7 @@ extern char *kmgr_plugin_library;
 /* keyring.c */
 extern void KeyringSetup(void);
 extern char *KeyringCreateKey(Oid tablespaceoid);
-extern char *KeyringGetKey(Oid spcOid);
+extern void KeyringGetKey(Oid spcOid, char *key);
 extern void KeyringDropKey(Oid tablespaceoid);
 extern bool KeyringKeyExists(Oid spcOid);
 extern void KeyringAddKey(Oid spcOid, char *encrypted_key,
