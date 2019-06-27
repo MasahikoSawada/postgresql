@@ -130,6 +130,7 @@
 
 #include "utils/memutils.h"
 #include "utils/rel.h"
+#include "utils/spccache.h"
 
 #include "storage/procarray.h"
 
@@ -161,6 +162,7 @@ typedef struct RewriteStateData
 	HTAB	   *rs_old_new_tid_map; /* unmatched B tuples */
 	HTAB	   *rs_logical_mappings;	/* logical remapping files */
 	uint32		rs_num_rewrite_mappings;	/* # in memory mappings */
+	bool		rs_encryption;
 }			RewriteStateData;
 
 /*
@@ -276,6 +278,7 @@ begin_heap_rewrite(Relation old_heap, Relation new_heap, TransactionId oldest_xm
 	state->rs_freeze_xid = freeze_xid;
 	state->rs_cutoff_multi = cutoff_multi;
 	state->rs_cxt = rw_cxt;
+	state->rs_encryption = tablespace_is_encrypted(new_heap->rd_node.spcNode);
 
 	/* Initialize hash tables used to track update chains */
 	memset(&hash_ctl, 0, sizeof(hash_ctl));
@@ -330,6 +333,8 @@ end_heap_rewrite(RewriteState state)
 	/* Write the last page, if any */
 	if (state->rs_buffer_valid)
 	{
+		char *bufToWrite = state->rs_buffer;
+
 		if (state->rs_use_wal)
 			log_newpage(&state->rs_new_rel->rd_node,
 						MAIN_FORKNUM,
@@ -340,8 +345,14 @@ end_heap_rewrite(RewriteState state)
 
 		PageSetChecksumInplace(state->rs_buffer, state->rs_blockno);
 
+		if (state->rs_encryption)
+			bufToWrite = PageEncryptCopy(state->rs_buffer,
+										 state->rs_new_rel->rd_smgr,
+										 MAIN_FORKNUM,
+										 state->rs_blockno);
+
 		smgrextend(state->rs_new_rel->rd_smgr, MAIN_FORKNUM, state->rs_blockno,
-				   (char *) state->rs_buffer, true);
+				   (char *) bufToWrite, true);
 	}
 
 	/*
@@ -692,6 +703,8 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 
 		if (len + saveFreeSpace > pageFreeSpace)
 		{
+			char *bufToWrite = page;
+
 			/* Doesn't fit, so write out the existing page */
 
 			/* XLOG stuff */
@@ -712,8 +725,14 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 
 			PageSetChecksumInplace(page, state->rs_blockno);
 
+			if (state->rs_encryption)
+				bufToWrite = PageEncryptCopy(page,
+											 state->rs_new_rel->rd_smgr,
+											 MAIN_FORKNUM,
+											 state->rs_blockno);
+
 			smgrextend(state->rs_new_rel->rd_smgr, MAIN_FORKNUM,
-					   state->rs_blockno, (char *) page, true);
+					   state->rs_blockno, (char *) bufToWrite, true);
 
 			state->rs_blockno++;
 			state->rs_buffer_valid = false;
