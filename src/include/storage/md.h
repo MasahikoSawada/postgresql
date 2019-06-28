@@ -39,6 +39,10 @@ extern BlockNumber mdnblocks(SMgrRelation reln, ForkNumber forknum);
 extern void mdtruncate(SMgrRelation reln, ForkNumber forknum,
 					   BlockNumber nblocks);
 extern void mdimmedsync(SMgrRelation reln, ForkNumber forknum);
+extern void mdencrypt(SMgrRelation reln, ForkNumber forknum,
+					  BlockNumber blocknum, char *buffer);
+extern void mddecrypt(SMgrRelation reln, ForkNumber forknum,
+					  BlockNumber blocknum, char *buffer);
 
 extern void ForgetDatabaseSyncRequests(Oid dbid);
 extern void DropRelationFiles(RelFileNode *delrels, int ndelrels, bool isRedo);

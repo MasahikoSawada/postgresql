@@ -61,6 +61,10 @@ typedef struct f_smgr
 	void		(*smgr_truncate) (SMgrRelation reln, ForkNumber forknum,
 								  BlockNumber nblocks);
 	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
+	void		(*smgr_encrypt) (SMgrRelation reln, ForkNumber forknum,
+								BlockNumber blocknum, char *buffer);
+	void		(*smgr_decrypt) (SMgrRelation reln, ForkNumber forknum,
+								BlockNumber blocknum, char *buffer);
 } f_smgr;
 
 static const f_smgr smgrsw[] = {
@@ -80,6 +84,8 @@ static const f_smgr smgrsw[] = {
 		.smgr_nblocks = mdnblocks,
 		.smgr_truncate = mdtruncate,
 		.smgr_immedsync = mdimmedsync,
+		.smgr_encrypt = mdencrypt,
+		.smgr_decrypt = mddecrypt,
 	}
 };
 
@@ -696,6 +702,20 @@ void
 smgrimmedsync(SMgrRelation reln, ForkNumber forknum)
 {
 	smgrsw[reln->smgr_which].smgr_immedsync(reln, forknum);
+}
+
+void
+smgrencrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+			char *buffer)
+{
+	smgrsw[reln->smgr_which].smgr_encrypt(reln, forknum, blocknum, buffer);
+}
+
+void
+smgrdecrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+			char *buffer)
+{
+	smgrsw[reln->smgr_which].smgr_decrypt(reln, forknum, blocknum, buffer);
 }
 
 /*

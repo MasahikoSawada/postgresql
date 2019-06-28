@@ -51,6 +51,7 @@
 #include "storage/standby.h"
 #include "utils/rel.h"
 #include "utils/resowner_private.h"
+#include "utils/spccache.h"
 #include "utils/timestamp.h"
 
 
@@ -866,11 +867,37 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 	if (isExtend)
 	{
+		bool encrypt = false;
+
 		/* new buffers are zero-filled */
 		MemSet((char *) bufBlock, 0, BLCKSZ);
+
+		/* If the tablespace is encrypted, encrypt buffer and mark */
+		if (tablespace_is_encrypted(smgr->smgr_rnode.node.spcNode))
+			encrypt = true;
+
+		/*
+		 * If we need to encrypt the block, encrypt bufBlock and write it to
+		 * the disk, and then initialize it to 0 again and mark buffer header
+		 * as need to be encrypted.
+		 */
+		if (encrypt)
+			smgrencrypt(smgr, forkNum, blockNum, bufBlock);
+
 		/* don't set checksum for all-zero page */
 		smgrextend(smgr, forkNum, blockNum, (char *) bufBlock, false);
 
+		if (encrypt)
+		{
+			uint32	buf_state;
+
+			/* Intialize to 0 again since bufBlock has an encrypted data */
+			MemSet((char *) bufBlock, 0, BLCKSZ);
+
+			buf_state = LockBufHdr(bufHdr);
+			buf_state |= BM_ENCRYPTION_NEEDED;
+			UnlockBufHdr(bufHdr, buf_state);
+		}
 		/*
 		 * NB: we're *not* doing a ScheduleBufferTagForWriteback here;
 		 * although we're essentially performing a write. At least on linux
@@ -902,6 +929,20 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				INSTR_TIME_SUBTRACT(io_time, io_start);
 				pgstat_count_buffer_read_time(INSTR_TIME_GET_MICROSEC(io_time));
 				INSTR_TIME_ADD(pgBufferUsage.blk_read_time, io_time);
+			}
+
+			/*
+			 * If the tablespace is encrypted, decrypt the block, and mark the
+			 * buffer as needing to be encrypted when flush.
+			 */
+			if (tablespace_is_encrypted(smgr->smgr_rnode.node.spcNode))
+			{
+				uint32	buf_state;
+
+				smgrdecrypt(smgr, forkNum, blockNum, bufBlock);
+				buf_state = LockBufHdr(bufHdr);
+				buf_state |= BM_ENCRYPTION_NEEDED;
+				UnlockBufHdr(bufHdr, buf_state);
 			}
 
 			/* check for garbage data */
@@ -1308,7 +1349,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	buf->tag = newTag;
 	buf_state &= ~(BM_VALID | BM_DIRTY | BM_JUST_DIRTIED |
 				   BM_CHECKPOINT_NEEDED | BM_IO_ERROR | BM_PERMANENT |
-				   BUF_USAGECOUNT_MASK);
+				   BUF_USAGECOUNT_MASK | BM_ENCRYPTION_NEEDED);
 	if (relpersistence == RELPERSISTENCE_PERMANENT || forkNum == INIT_FORKNUM)
 		buf_state |= BM_TAG_VALID | BM_PERMANENT | BUF_USAGECOUNT_ONE;
 	else
@@ -2749,6 +2790,16 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 	 */
 	bufToWrite = PageSetChecksumCopy((Page) bufBlock, buf->tag.blockNum);
 
+	/*
+	 * Encrypt page if needed. Since pages in shared buffer must not be
+	 * encrypted we copy the page and encrypt it.
+	 */
+	if (buf_state & BM_ENCRYPTION_NEEDED)
+		bufToWrite = PageEncryptCopy(bufToWrite,
+									 reln,
+									 buf->tag.forkNum,
+									 buf->tag.blockNum);
+
 	if (track_io_timing)
 		INSTR_TIME_SET_CURRENT(io_start);
 
@@ -3211,6 +3262,13 @@ FlushRelationBuffers(Relation rel)
 				Page		localpage;
 
 				localpage = (char *) LocalBufHdrGetBlock(bufHdr);
+
+				/* Encrypt buffer and then update checksum */
+				if (buf_state & BM_ENCRYPTION_NEEDED)
+					smgrencrypt(rel->rd_smgr,
+								bufHdr->tag.forkNum,
+								bufHdr->tag.blockNum,
+								localpage);
 
 				/* Setup error traceback support for ereport() */
 				errcallback.callback = local_buffer_write_error_callback;

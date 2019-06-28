@@ -68,6 +68,9 @@ extern char *GetDatabasePath(Oid dbNode, Oid spcNode);
 
 extern char *GetRelationPath(Oid dbNode, Oid spcNode, Oid relNode,
 							 int backendId, ForkNumber forkNumber);
+extern bool ParseRelationPath(const char *path, Oid *dbNode, Oid *spcNode,
+							  Oid *relNode, ForkNumber *forknum,
+							  uint32 *segment);
 
 /*
  * Wrapper macros for GetRelationPath.  Beware of multiple

@@ -94,6 +94,7 @@
 #include "storage/lmgr.h"
 #include "storage/smgr.h"
 #include "utils/inval.h"
+#include "utils/spccache.h"
 
 
 /*#define TRACE_VISIBILITYMAP */
@@ -627,8 +628,6 @@ vm_extend(Relation rel, BlockNumber vm_nblocks)
 	BlockNumber vm_nblocks_now;
 	PGAlignedBlock pg;
 
-	PageInit((Page) pg.data, BLCKSZ, 0);
-
 	/*
 	 * We use the relation extension lock to lock out other backends trying to
 	 * extend the visibility map at the same time. It also locks out extension
@@ -658,7 +657,16 @@ vm_extend(Relation rel, BlockNumber vm_nblocks)
 	/* Now extend the file */
 	while (vm_nblocks_now < vm_nblocks)
 	{
+		/*
+		 * initialize page each time as the page has modified at previous
+		 * cycle.
+		 */
+		PageInit((Page) pg.data, BLCKSZ, 0);
 		PageSetChecksumInplace((Page) pg.data, vm_nblocks_now);
+
+		if (tablespace_is_encrypted(rel->rd_smgr->smgr_rnode.node.spcNode))
+			smgrencrypt(rel->rd_smgr, VISIBILITYMAP_FORKNUM, vm_nblocks_now,
+						pg.data);
 
 		smgrextend(rel->rd_smgr, VISIBILITYMAP_FORKNUM, vm_nblocks_now,
 				   pg.data, false);

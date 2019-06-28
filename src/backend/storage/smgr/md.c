@@ -30,6 +30,7 @@
 #include "access/xlog.h"
 #include "pgstat.h"
 #include "postmaster/bgwriter.h"
+#include "storage/encryption.h"
 #include "storage/fd.h"
 #include "storage/bufmgr.h"
 #include "storage/md.h"
@@ -38,6 +39,7 @@
 #include "storage/sync.h"
 #include "utils/hsearch.h"
 #include "utils/memutils.h"
+#include "utils/spccache.h"
 #include "pg_trace.h"
 
 /*
@@ -86,6 +88,11 @@ typedef struct _MdfdVec
 
 static MemoryContext MdCxt;		/* context for all MdfdVec objects */
 
+/*
+ * encryption_buffer from encryption.h is not used here because of the special
+ * memory context.
+ */
+static char md_encryption_tweak[ENCRYPTION_TWEAK_SIZE];
 
 /* Populate a file tag describing an md.c segment file. */
 #define INIT_MD_FILETAG(a,xx_rnode,xx_forknum,xx_segno) \
@@ -1314,4 +1321,24 @@ mdfiletagmatches(const FileTag *ftag, const FileTag *candidate)
 	 * the ftag from the SYNC_FILTER_REQUEST request, so they're forgotten.
 	 */
 	return ftag->rnode.dbNode == candidate->rnode.dbNode;
+}
+
+void
+mdencrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+		  char *buffer)
+{
+	BufferEncryptionTweak(md_encryption_tweak, &(reln->smgr_rnode.node),
+						  forknum, blocknum);
+	EncryptBufferBlock(reln->smgr_rnode.node.spcNode, md_encryption_tweak,
+					   buffer, buffer);
+}
+
+void
+mddecrypt(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+		  char *buffer)
+{
+	BufferEncryptionTweak(md_encryption_tweak, &(reln->smgr_rnode.node),
+						  forknum, blocknum);
+	DecryptBufferBlock(reln->smgr_rnode.node.spcNode, md_encryption_tweak,
+					   buffer, buffer);
 }
