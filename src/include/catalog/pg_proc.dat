@@ -10701,4 +10701,15 @@
   proname => 'pg_partition_root', prorettype => 'regclass',
   proargtypes => 'regclass', prosrc => 'pg_partition_root' },
 
+{ oid => '4218', descr => 'rotate encryption master key',
+  proname => 'pg_rotate_encryption_key', prorettype => 'text',
+  proargtypes => '', prosrc => 'pg_rotate_encryption_key' },
+
+{ oid => '4219',
+  descr => 'get all tablespace keys',
+  proname => 'pg_get_tablespace_keys', prorows => '5', proisstrict => 'f',
+  proretset => 't', provolatile => 's', proparallel => 'r',
+  prorettype => 'record', proargtypes => '',
+  proallargtypes => '{oid,bytea}', proargmodes => '{o,o}',
+  proargnames => '{spcoid, key}', prosrc => 'pg_get_tablespace_keys' },
 ]
