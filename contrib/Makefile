@@ -49,7 +49,7 @@ SUBDIRS = \
 		tsm_system_time \
 		unaccent	\
 		vacuumlo	\
-		test_keyring
+		kmgr_file
 
 ifeq ($(with_openssl),yes)
 SUBDIRS += sslinfo
