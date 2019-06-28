@@ -1203,3 +1203,17 @@ PageSetChecksumInplace(Page page, BlockNumber blkno)
 
 	((PageHeader) page)->pd_checksum = pg_checksum_page((char *) page, blkno);
 }
+
+char *
+PageEncryptCopy(char *page, SMgrRelation reln, ForkNumber forknum,
+				BlockNumber blocknum)
+{
+	static char *pageCopy = NULL;
+
+	if (pageCopy == NULL)
+		pageCopy = MemoryContextAlloc(TopMemoryContext, BLCKSZ);
+
+	memcpy(pageCopy, (char *) page, BLCKSZ);
+	smgrencrypt(reln, forknum, blocknum, (char *) pageCopy);
+	return pageCopy;
+}

@@ -32,6 +32,7 @@
 #include "storage/smgr.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
+#include "utils/spccache.h"
 
 /*
  * We keep a list of all relations (represented as RelFileNode values)
@@ -311,6 +312,8 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 	bool		copying_initfork;
 	BlockNumber nblocks;
 	BlockNumber blkno;
+	bool	need_decrypt;
+	bool	need_encrypt;
 
 	page = (Page) buf.data;
 
@@ -331,12 +334,18 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 
 	nblocks = smgrnblocks(src, forkNum);
 
+	need_decrypt = tablespace_is_encrypted(src->smgr_rnode.node.spcNode);
+	need_encrypt = tablespace_is_encrypted(dst->smgr_rnode.node.spcNode);
+
 	for (blkno = 0; blkno < nblocks; blkno++)
 	{
 		/* If we got a cancel signal during the copy of the data, quit */
 		CHECK_FOR_INTERRUPTS();
 
 		smgrread(src, forkNum, blkno, buf.data);
+
+		if (need_decrypt)
+			smgrdecrypt(src, forkNum, blkno, buf.data);
 
 		if (!PageIsVerified(page, blkno))
 			ereport(ERROR,
@@ -356,6 +365,9 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 			log_newpage(&dst->smgr_rnode.node, forkNum, blkno, page, false);
 
 		PageSetChecksumInplace(page, blkno);
+
+		if (need_encrypt)
+			smgrencrypt(dst, forkNum, blkno, buf.data);
 
 		/*
 		 * Now write the page.  We say isTemp = true even if it's not a temp

@@ -205,3 +205,69 @@ GetRelationPath(Oid dbNode, Oid spcNode, Oid relNode,
 	}
 	return path;
 }
+
+bool
+ParseRelationPath(const char *path, Oid *dbNode, Oid *spcNode, Oid *relNode,
+				  ForkNumber *forknum, uint32 *segment)
+
+{
+	char *ptr;
+
+	/* Parse spcNode, dbNode and relNode */
+	if (strncmp(path, "global", 6) == 0)
+	{
+		*spcNode = GLOBALTABLESPACE_OID;
+		if (sscanf(path, "global/%u/%u", dbNode, relNode) != 2)
+			return false;
+	}
+	else if (strncmp(path, "base", 4) == 0)
+	{
+		*spcNode = DEFAULTTABLESPACE_OID;
+		if (sscanf(path, "base/%u/%u", dbNode, relNode) != 2)
+			return false;
+	}
+	else if (strncmp(path, "pg_tblspc", 9) == 0)
+	{
+		if (sscanf(path, "pg_tblspc/%u/"TABLESPACE_VERSION_DIRECTORY"/%u/%u",
+				   spcNode, dbNode, relNode) != 3)
+			return false;
+	}
+
+	/* Skip to the end of relNode */
+	ptr = last_dir_separator(path) + 1;
+	for (; isdigit(*ptr); ptr++)
+		;
+
+	/* Parse fork number */
+	if (*ptr != '_')
+		*forknum = MAIN_FORKNUM;
+	else
+	{
+		int forkchar;
+
+		forkchar = forkname_chars(ptr, forknum);
+		if (forkchar <= 0)
+			return false;
+		ptr += forkchar + 1;
+	}
+
+	/* Parse segment number */
+	if (*ptr == '.')
+	{
+		int segchar;
+
+		for (segchar = 1; isdigit(*(ptr + segchar)); segchar++)
+			;
+		if (segchar <= 1)
+			return false;
+		*segment = atoi(ptr + 1);
+		ptr += segchar;
+	}
+	else
+		segment = 0;
+
+	if (ptr == '\0')
+		return false;
+
+	return true;
+}

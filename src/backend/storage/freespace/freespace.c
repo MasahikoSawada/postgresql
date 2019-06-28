@@ -30,6 +30,7 @@
 #include "storage/fsm_internals.h"
 #include "storage/lmgr.h"
 #include "storage/smgr.h"
+#include "utils/spccache.h"
 
 
 /*
@@ -617,8 +618,6 @@ fsm_extend(Relation rel, BlockNumber fsm_nblocks)
 	BlockNumber fsm_nblocks_now;
 	PGAlignedBlock pg;
 
-	PageInit((Page) pg.data, BLCKSZ, 0);
-
 	/*
 	 * We use the relation extension lock to lock out other backends trying to
 	 * extend the FSM at the same time. It also locks out extension of the
@@ -647,7 +646,17 @@ fsm_extend(Relation rel, BlockNumber fsm_nblocks)
 
 	while (fsm_nblocks_now < fsm_nblocks)
 	{
+		/*
+		 * initialize page each time as the page has modified at previous
+		 * cycle.
+		 */
+		PageInit((Page) pg.data, BLCKSZ, 0);
+
 		PageSetChecksumInplace((Page) pg.data, fsm_nblocks_now);
+
+		if (tablespace_is_encrypted(rel->rd_smgr->smgr_rnode.node.spcNode))
+			smgrencrypt(rel->rd_smgr, FSM_FORKNUM, fsm_nblocks_now,
+						pg.data);
 
 		smgrextend(rel->rd_smgr, FSM_FORKNUM, fsm_nblocks_now,
 				   pg.data, false);

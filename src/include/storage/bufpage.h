@@ -18,6 +18,7 @@
 #include "storage/block.h"
 #include "storage/item.h"
 #include "storage/off.h"
+#include "storage/smgr.h"
 
 /*
  * A postgres disk page is an abstraction layered on top of a postgres
@@ -438,5 +439,7 @@ extern bool PageIndexTupleOverwrite(Page page, OffsetNumber offnum,
 									Item newtup, Size newsize);
 extern char *PageSetChecksumCopy(Page page, BlockNumber blkno);
 extern void PageSetChecksumInplace(Page page, BlockNumber blkno);
+extern char *PageEncryptCopy(char *page, SMgrRelation reln,
+							 ForkNumber forknum, BlockNumber blocknum);
 
 #endif							/* BUFPAGE_H */
