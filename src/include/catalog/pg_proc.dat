@@ -10677,4 +10677,6 @@
   proname => 'pg_partition_root', prorettype => 'regclass',
   proargtypes => 'regclass', prosrc => 'pg_partition_root' },
 
-]
+{ oid => '4218', descr => 'rotate encryption master key',
+  proname => 'pg_rotate_encryption_key', prorettype => 'text',
+  proargtypes => '', prosrc => 'pg_rotate_encryption_key' },
