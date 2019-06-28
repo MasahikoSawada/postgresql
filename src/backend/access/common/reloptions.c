@@ -158,6 +158,15 @@ static relopt_bool boolRelOpts[] =
 		},
 		true
 	},
+	{
+		{
+			"encryption",
+			"Enables transparent encryption",
+			RELOPT_KIND_TABLESPACE,
+			ShareUpdateExclusiveLock
+		},
+		false
+	},
 	/* list terminator */
 	{{NULL}}
 };
@@ -1559,7 +1568,8 @@ tablespace_reloptions(Datum reloptions, bool validate)
 	static const relopt_parse_elt tab[] = {
 		{"random_page_cost", RELOPT_TYPE_REAL, offsetof(TableSpaceOpts, random_page_cost)},
 		{"seq_page_cost", RELOPT_TYPE_REAL, offsetof(TableSpaceOpts, seq_page_cost)},
-		{"effective_io_concurrency", RELOPT_TYPE_INT, offsetof(TableSpaceOpts, effective_io_concurrency)}
+		{"effective_io_concurrency", RELOPT_TYPE_INT, offsetof(TableSpaceOpts, effective_io_concurrency)},
+		{"encryption", RELOPT_TYPE_BOOL, offsetof(TableSpaceOpts, encryption)}
 	};
 
 	options = parseRelOptions(reloptions, validate, RELOPT_KIND_TABLESPACE,
