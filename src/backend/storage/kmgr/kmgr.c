@@ -50,134 +50,164 @@
 #include "utils/inval.h"
 #include "utils/syscache.h"
 
+/* Filename of tablespace keyring */
 #define KEYRING_TBLSPC_FILE "pg_tblspc.kr"
 
-#define FIRST_MASTER_KEY_SEQNO	0
+/*
+ * Since we have encryption keys per tablspace, we expect this value is enough
+ * for most usecase.
+ */
+#define KMGR_KEYRING_SIZE 128
+
+/* Struct for one tablespace key, and hash entry */
+typedef struct TblspcKeyData
+{
+	Oid		spcoid;		/* hash key; must be first */
+	char	tblspckey[ENCRYPTION_KEY_SIZE];	/* non-encrypted key */
+} TblspcKeyData;
+
+/*
+ * Shared struct to save master key information written in the keyring file.
+ */
+typedef struct KmgrCtlData
+{
+	char			masterKeyId[MASTER_KEY_ID_LEN];
+	MasterKeySeqNo	masterKeySeqNo;
+} KmgrCtlData;
 
 /* GUC variable */
 char *kmgr_plugin_library = NULL;
 
-/* Struct for one tablespace key */
-typedef struct TblspcKeyData
-{
-	Oid		spcoid;		/* hash key; must be first */
-	char	tblspckey[ENCRYPTION_KEY_SIZE];
-} TblspcKeyData;
-
-/* The master key id and seqno written in the keyring file */
-static char	masterKeyId_cache[MASTER_KEY_ID_LEN];
-static MasterKeySeqNo masterKeySeqNo_cache;
-
-/* Local cache for tablespace keys */
-static HTAB *tblspcKeyring;
-
-static MemoryContext tblspcKeyringContext;
-static bool keyring_invalid = true;
+/*
+ * Shared variables.  The following shared variables are protected by
+ * KeyringControlLock.
+*/
+static KmgrCtlData *KmgrCtl;
+static HTAB			*TblspcKeyring;
 
 PG_FUNCTION_INFO_V1(pg_rotate_encryption_key);
 PG_FUNCTION_INFO_V1(pg_get_tablespace_keys);
 
-static void reset_keyring_cache(void);
-static void reload_keyring_file(void);
+static bool load_keyring_file(void);
 static char *read_keyring_file(List **keylist_p);
-static void update_keyring_file(const char *masterkey_id,
-								const char *masterkey);
-static void reencrypt_keyring_file(const char *masterkey_id,
-								   const char *masterkrey);
-static TblspcKeyData *get_keyring_entry(Oid spcOid, bool *found);
-static void invalidate_keyring(Datum arg, int cacheid, uint32 hashvalue);
+static void update_keyring_file(void);
+static void update_keyring_file_extended(const char *masterkey_id,
+										 const char *masterkey);
 static void key_encryption_tweak(char *tweak, Oid spcoid);
 static void encrypt_tblspc_key(Oid spcoid, char *tblspckey, const char *masterkey);
 static void decrypt_tblspc_key(Oid spcoid, char *tblspckey, const char *masterkey);
-static void ensure_latest_keyring(bool need_lock);
-static MasterKeySeqNo get_seqno_from_keyid(const char *masterkeyid);
-static bool get_masterkey_id_from_file(char *masterkeyid_p,
-									   MasterKeySeqNo *seqno_p);
+static MasterKeySeqNo get_seqno_from_master_key_id(const char *masterkeyid);
+static void create_master_key_id(char *id, MasterKeySeqNo seqno);
+
+Size
+KmgrShmemSize(void)
+{
+	Size size;
+
+	size = MAXALIGN(sizeof(KmgrCtlData));
+	size = add_size(size,
+					hash_estimate_size(KMGR_KEYRING_SIZE, sizeof(TblspcKeyData)));
+
+	return size;
+}
+
+void
+KmgrShmemInit(void)
+{
+	HASHCTL hash_ctl;
+	bool	found;
+
+	KmgrCtl = ShmemInitStruct("KmgrCtl shared",
+							  KmgrShmemSize(),
+							  &found);
+
+	if (!found)
+		MemSet(KmgrCtl, 0, sizeof(KmgrCtlData));
+
+	MemSet(&hash_ctl, 0, sizeof(hash_ctl));
+	hash_ctl.keysize = sizeof(Oid);
+	hash_ctl.entrysize = sizeof(TblspcKeyData);
+
+	TblspcKeyring = ShmemInitHash("kmgr keyring hash",
+								  KMGR_KEYRING_SIZE, KMGR_KEYRING_SIZE,
+								  &hash_ctl,
+								  HASH_ELEM | HASH_BLOBS);
+}
 
 /*
- * Get the master key via kmgr plugin, and store both key and id to the
- * shared memory. This function must be used at postmaster startup time
- * but after created shared memory.
+ * Initialize Kmgr and kmgr plugin. We load the keyring file and set up both
+ * KmgrCtl and TblspcKeyring hash table on shared memory. When first time to
+ * access the keyring file, ie the keyring file does not exist, we create it
+ * with the initial master key id. If the keyring file exists, we load it to
+ * the shared structs. This function must be called by postmaster at startup
+ * time.
  */
 void
 InitializeKmgr(void)
 {
-	MasterKeySeqNo seqno;
 	char *key = NULL;
 
 	if (!TransparentEncryptionEnabled())
 		return;
 
-	/* Invoke startup callback */
-	KmgrPluginStartup();
-
 #ifdef DEBUG_TDE
 	fprintf(stderr, "kmgr::initialize trying to get latest info from file\n");
 #endif
 
-	/* Read keyring file and get the master key id */
-	if (!get_masterkey_id_from_file(masterKeyId_cache, &seqno))
+	/*
+	 * Invoke kmgr plugin startup callback. Since we could get the master key
+	 * during loading the keyring file we have to startup the plugin beforehand.
+	 */
+	ereport(DEBUG1, (errmsg("invoking kmgr plugin startup callback")));
+	KmgrPluginStartup();
+
+	/* Load keyring file and update shmem structs */
+	if (!load_keyring_file())
 	{
-		/* First time, create initial keyring file */
-		seqno = FIRST_MASTER_KEY_SEQNO;
-		snprintf(masterKeyId_cache, MASTER_KEY_ID_LEN, MASTER_KEY_ID_FORMAT,
-				 GetSystemIdentifier(), seqno);
+		/*
+		 * If the keyring doesn't exist this is the first time to access the
+		 * keyring file. We create it with the initial master key id.
+		 */
+		create_master_key_id(KmgrCtl->masterKeyId, FIRST_MASTER_KEY_SEQNO);
+		KmgrCtl->masterKeySeqNo = FIRST_MASTER_KEY_SEQNO;
 
 #ifdef DEBUG_TDE
 		fprintf(stderr, "kmgr::initialize initialize keyring file id %s\n",
-				masterKeyId_cache);
+				KmgrCtl->masterKeyId);
 #endif
-		/* Create keyring file */
-		update_keyring_file(masterKeyId_cache, NULL);
+
+		/* Create keyring file only with only master key id */
+		LWLockAcquire(KeyringControlLock, LW_EXCLUSIVE);
+		update_keyring_file_extended(KmgrCtl->masterKeyId, NULL);
+		LWLockRelease(KeyringControlLock);
 	}
 #ifdef DEBUG_TDE
 	else
 		fprintf(stderr, "kmgr::initialize found keyring file, id %s seqno %u\n",
-				masterKeyId_cache, seqno);
+				KmgrCtl->masterKeyId, KmgrCtl->masterKeySeqNo);
 #endif
-
-	Assert(seqno >= 0);
 
 #ifdef DEBUG_TDE
 	fprintf(stderr, "kmgr::initialize startup mkid %s, seqno %u\n",
-			masterKeyId_cache, seqno);
+			KmgrCtl->masterKeyId, KmgrCtl->masterKeySeqNo);
 #endif
 
-	if (!KmgrPluginIsExist(masterKeyId_cache))
-		KmgrPluginGenerateKey(masterKeyId_cache);
+	/* Create the master key if not exists */
+	if (!KmgrPluginIsExist(KmgrCtl->masterKeyId))
+		KmgrPluginGenerateKey(KmgrCtl->masterKeyId);
 
-	/* Get the master key from plugin */
-	key = KmgrPluginGetKey(masterKeyId_cache);
+	/* Get the master key */
+	key = KmgrPluginGetKey(KmgrCtl->masterKeyId);
 
-	if (key == NULL)
-		elog(ERROR, "could not get the encryption master key via kmgr plugin during startup");
+	Assert(key != NULL);
 
 #ifdef DEBUG_TDE
 	fprintf(stderr, "kmgr::initialize set id %s, key %s, seq %u\n",
-			masterKeyId_cache, dk(key), seqno);
+			KmgrCtl->masterKeyId, dk(key), KmgrCtl->masterKeySeqNo);
 #endif
 }
 
-
-/*
- * Register kerying invalidation callback.
- */
-void
-KeyringSetup(void)
-{
-	if (!TransparentEncryptionEnabled())
-		return;
-
-#ifdef DEBUG_TDE
-	ereport(LOG,
-			(errmsg("keyring::setup pid = %d\n", MyProcPid)));
-#endif
-	CacheRegisterSyscacheCallback(TABLESPACEOID,
-								  invalidate_keyring,
-								  (Datum) 0);
-}
-
-/* process and load kmgr_plugin_library plugin */
+/* process and load kmgr plugin given by kmgr_plugin_library */
 void
 processKmgrPlugin(void)
 {
@@ -186,57 +216,58 @@ processKmgrPlugin(void)
 	process_shared_preload_libraries_in_progress = false;
 }
 
-/*
- * Return the tablespace key string of the given tablespace, or NULL if not
- * found. Returned key string is ENCRYPTION_KEY_SIZE byte.
- */
+/* Set the encryption key of the given tablespace to *key */
 void
 KeyringGetKey(Oid spcOid, char *key)
 {
 	TblspcKeyData *tskey;
 	bool		found;
 
-	if (!TransparentEncryptionEnabled())
-		return;
-
-	if (!OidIsValid(spcOid))
-		return;
+	Assert(OidIsValid(spcOid));
 
 #ifdef DEBUG_TDE
 	fprintf(stderr, "keyring::get key oid %u\n", spcOid);
 #endif
 
-	tskey = get_keyring_entry(spcOid, &found);
+	LWLockAcquire(KeyringControlLock, LW_SHARED);
+
+	tskey = hash_search(TblspcKeyring, (void *) &spcOid,
+						HASH_FIND, &found);
+
+	LWLockRelease(KeyringControlLock);
 
 	if (!found)
-		return;
+		ereport(ERROR, (errmsg("could not find encryption key for tablespace %u",
+							   spcOid)));
 
+	/* Set encryption key */
 	memcpy(key, tskey->tblspckey, ENCRYPTION_KEY_SIZE);
 }
 
 /*
- * Check the tablespace key is exists. Having tablespace key means that
- * the tablespace is encrypted.
+ * Check the tablespace key is exists. Since encrypted tablespaces has its
+ * encryption key this function can be used to check if the tablespace is
+ * encrypted.
  */
 bool
 KeyringKeyExists(Oid spcOid)
 {
 	bool		found;
 
-	if (!TransparentEncryptionEnabled())
-		return false;
+	Assert(OidIsValid(spcOid));
 
-	if (!OidIsValid(spcOid))
-		return false;
+	LWLockAcquire(KeyringControlLock, LW_SHARED);
 
-	(void) get_keyring_entry(spcOid, &found);
+	(void *) hash_search(TblspcKeyring, (void *) &spcOid, HASH_FIND, &found);
+
+	LWLockRelease(KeyringControlLock);
 
 	return found;
 }
 
 /*
  * Generate new tablespace key and update the keyring file. Return encrypted
- * new tablespace key string.
+ * key of new tablespace key.
  */
 char *
 KeyringCreateKey(Oid spcOid)
@@ -247,26 +278,14 @@ KeyringCreateKey(Oid spcOid)
 	bool		found;
 	bool		ret;
 
-	if (!TransparentEncryptionEnabled())
-		return false;
-
 	LWLockAcquire(KeyringControlLock, LW_EXCLUSIVE);
 
-	ensure_latest_keyring(false);
+	key = hash_search(TblspcKeyring, (void *) &spcOid,
+					  HASH_ENTER, &found);
 
-	if (!tblspcKeyring)
-		reset_keyring_cache();
-
-	key = hash_search(tblspcKeyring, (void *) &spcOid, HASH_ENTER, &found);
-
-	/*
-	 * Since tablespace creation can only be done by the backend processes,
-	 * we don't need to check the keyring file again unlike get_keyring_entry.
-	 */
 	if (found)
-		ereport(ERROR,
-				(errmsg("found duplicate tablespace encryption key for tablespace %u",
-						key->spcoid)));
+		elog(ERROR, "found duplicate tablespace encryption key for tablespace %u",
+			 spcOid);
 
 	/* Generate a random tablespace key */
 	retkey = (char *) palloc0(ENCRYPTION_KEY_SIZE);
@@ -277,45 +296,45 @@ KeyringCreateKey(Oid spcOid)
 	memcpy(key->tblspckey, retkey, ENCRYPTION_KEY_SIZE);
 
 	/* Update tablespace key file */
-	masterkey = KmgrPluginGetKey(masterKeyId_cache);
-	update_keyring_file(masterKeyId_cache, masterkey);
+	update_keyring_file();
 
 	LWLockRelease(KeyringControlLock);
 
-	/* The returned key also must be encrypted */
+	/* The returned key must be encrypted */
+	masterkey = KmgrPluginGetKey(KmgrCtl->masterKeyId);
 	encrypt_tblspc_key(spcOid, retkey, masterkey);
 
 	return retkey;
 }
 
 /*
- * Drop one tablespace key from the local cache as well as the keyring file.
+ * Drop one tablespace key from the keyring hash table and update the keyring
+ * file.
  */
 void
 KeyringDropKey(Oid spcOid)
 {
 	bool found;
 
-	if (!TransparentEncryptionEnabled())
-		return;
-
 	LWLockAcquire(KeyringControlLock, LW_EXCLUSIVE);
 
-	ensure_latest_keyring(false);
-
-	hash_search(tblspcKeyring, (void *) &spcOid, HASH_REMOVE, &found);
+	hash_search(TblspcKeyring, (void *) &spcOid, HASH_REMOVE, &found);
 
 	if (!found)
-		ereport(ERROR,
-				(errmsg("could not find tablespace encryption key for tablespace %u",
-						spcOid)));
-
-	/* Update tablespace key file */
-	update_keyring_file(masterKeyId_cache, KmgrPluginGetKey(masterKeyId_cache));
+		elog(ERROR, "could not find tablespace encryption key for tablespace %u",
+			 spcOid);
 
 	LWLockRelease(KeyringControlLock);
+	/* Update tablespace key file */
+	update_keyring_file();
 }
 
+/*
+ * Add a tablespace key of given tablespace to the keyring hash table.
+ * *encrrypted_key is encrypted with the encryption key identified by
+ * masterkeyid. If the encryption key of the tablespace already exists,
+ * we check if these keys are the same.
+ */
 void
 KeyringAddKey(Oid spcOid, char *encrypted_key, const char *masterkeyid)
 {
@@ -327,6 +346,7 @@ KeyringAddKey(Oid spcOid, char *encrypted_key, const char *masterkeyid)
 	/* Copy to work buffer */
 	memcpy(buf, encrypted_key, ENCRYPTION_KEY_SIZE);
 
+	/* Get the master key */
 	masterkey = KmgrPluginGetKey(masterkeyid);
 
 	/* Decrypt tablespace key with the master key */
@@ -339,190 +359,97 @@ KeyringAddKey(Oid spcOid, char *encrypted_key, const char *masterkeyid)
 			spcOid, dk(encrypted_key), masterkeyid);
 #endif
 
-	key = hash_search(tblspcKeyring, (void *) &spcOid, HASH_ENTER, &found);
+	key = hash_search(TblspcKeyring, (void *) &spcOid, HASH_ENTER,
+					  &found);
 
 	if (found)
 	{
 		LWLockRelease(KeyringControlLock);
+
+		if (strncmp(key->tblspckey, buf, ENCRYPTION_KEY_SIZE) != 0)
+			elog(ERROR, "adding encryption key for tablespace %u does not match the exsiting one",
+				spcOid);
+
+		/* The existing key is the same, return */
 		return;
 	}
-//		ereport(ERROR,
-//				(errmsg("encryption key for tablespace %u already exists",
-//						spcOid)));
 
 	/* Store the raw key to the hash */
 	memcpy(key->tblspckey, buf, ENCRYPTION_KEY_SIZE);
 
 	/* Update keyring file */
-	update_keyring_file(masterKeyId_cache, KmgrPluginGetKey(masterKeyId_cache));
+	update_keyring_file();
 
 	LWLockRelease(KeyringControlLock);
 }
 
 /*
- * Initialize keyring memory context and local keyring hash table.
+ * Load the keyring file and update the shared variables. This function is
+ * intended to be used by postmaster at startup time , so lockings are not
+ * needed.
  */
-static void
-reset_keyring_cache(void)
-{
-	HASHCTL hash_ctl;
-
-	/* Destory old keyring if exists */
-	if (tblspcKeyring)
-	{
-		hash_destroy(tblspcKeyring);
-		tblspcKeyring = NULL;
-	}
-
-	if (!tblspcKeyringContext)
-		tblspcKeyringContext = AllocSetContextCreate(TopMemoryContext,
-													"Tablespace keys",
-													ALLOCSET_DEFAULT_SIZES);
-
-	hash_ctl.keysize = sizeof(Oid);
-	hash_ctl.entrysize = sizeof(TblspcKeyData);
-	hash_ctl.hcxt = tblspcKeyringContext;
-
-	tblspcKeyring = hash_create("tablespace key ring",
-							   1000, &hash_ctl,
-							   HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
-}
-
-/*
- * Routine to get tablespace key identified by the given tablespace oid.
- * Return the tablespace key or NULL if not found. For processes who just
- * read and write buffer data on shared memory without using relation cache
- * such as checkpointer and bgwriter, it's quite possible that the local cache
- * is out of date because such processes doesn't get cache invalidations. So
- * we need to check the keyring file again when we could not find the key in
- * the local cache.
- */
-static TblspcKeyData *
-get_keyring_entry(Oid spcOid, bool *found)
-{
-	TblspcKeyData *key;
-
-	ensure_latest_keyring(true);
-
-	/* quick return if the keyring is empty */
-	if (!tblspcKeyring)
-	{
-		*found = false;
-		return NULL;
-	}
-
-	key = hash_search(tblspcKeyring, (void *) &spcOid, HASH_FIND, found);
-
-	if (!(*found) &&
-		(AmCheckpointerProcess() || AmBackgroundWriterProcess()))
-	{
-#ifdef DEBUG_TDE
-		fprintf(stderr, "keyring::not found key, so reload and retry oid %u\n", spcOid);
-#endif
-
-		/*
-		 * It's very optimistic. Since it's possible that the local cache
-		 * is out of date we reload the up-to-date keyring and try to find
-		 * again.
-		 *
-		 * XXX : perhaps this is required only by checkpointer and bgwriter.
-		 */
-		LWLockAcquire(KeyringControlLock, LW_SHARED);
-		reload_keyring_file();
-		LWLockRelease(KeyringControlLock);
-
-		key = hash_search(tblspcKeyring, (void *) &spcOid, HASH_FIND, found);
-	}
-
-	return key;
-}
-
-/*
- * Load the keyring file into the local cache.
- */
-static void
-reload_keyring_file(void)
+static bool
+load_keyring_file(void)
 {
 	List *keylist = NIL;
 	ListCell *lc;
 	char *masterkeyid;
 	char *masterkey;
 
+	/* Read keyring file */
 	masterkeyid = read_keyring_file(&keylist);
 
-	/* There is no key in the file */
-	if (masterkeyid == NULL || keylist == NIL)
+	/* There is no keyring file */
+	if (masterkeyid == NULL)
 	{
+		/* We must not get any keys as well */
+		Assert(keylist == NIL);
 #ifdef DEBUG_TDE
-		fprintf(stderr, "tblspc_key::reload loaded 0 keys by pid %d\n",
+		fprintf(stderr, "kmgr::reload loaded 0 keys by pid %d\n",
 				MyProcPid);
 #endif
-		tblspcKeyring = NULL;
-		return;
+		return false;
 	}
 
-	/* cleanup the existing keyring */
-	reset_keyring_cache();
+	/* We got keyring file. Update the master key id and sequence number */
+	memcpy(KmgrCtl->masterKeyId, masterkeyid, MASTER_KEY_ID_LEN);
+	KmgrCtl->masterKeySeqNo = get_seqno_from_master_key_id(masterkeyid);
 
-	/* Update local master key id */
-	memcpy(masterKeyId_cache, masterkeyid, MASTER_KEY_ID_LEN);
-
-	/* Get the master key by identifier */
-	masterkey = KmgrPluginGetKey(masterKeyId_cache);
+	/* Get the master key */
+	masterkey = KmgrPluginGetKey(masterkeyid);
 
 #ifdef DEBUG_TDE
-	fprintf(stderr, "keyring::reload get master key id %s, key %s\n",
-			masterKeyId_cache, dk(masterkey));
+	fprintf(stderr, "kmgr::reload get master key id %s, key %s\n",
+			masterkeyid, dk(masterkey));
 #endif
 
-	/* Update local keyring cache */
+	/* Loading tablespace keys to shared keyring hash table */
 	foreach (lc, keylist)
 	{
-		TblspcKeyData *key = (TblspcKeyData *) lfirst(lc);
-		TblspcKeyData *cache_key;
+		TblspcKeyData *key_infile = (TblspcKeyData *) lfirst(lc);
+		TblspcKeyData *key;
 
-		cache_key = hash_search(tblspcKeyring, (void *) &key->spcoid,
-								HASH_ENTER, NULL);
+		key = hash_search(TblspcKeyring, (void *) &key_infile->spcoid,
+						  HASH_ENTER, NULL);
 
-		/* Decyrpt tablespace key by the master key before caching */
-		decrypt_tblspc_key(key->spcoid, key->tblspckey, masterkey);
+		/* Decyrpt tablespace key by the master key */
+		decrypt_tblspc_key(key->spcoid, key_infile->tblspckey, masterkey);
+
+		/* Set unencrypted tablespace key to the keyring hash table */
+		memcpy(key->tblspckey, key_infile->tblspckey, ENCRYPTION_KEY_SIZE);
 
 #ifdef DEBUG_TDE
-		fprintf(stderr, "    keyring::reload load oid = %u, mkid = %s, mk = %s, dk = %s\n",
-				key->spcoid, masterKeyId_cache, dk(masterkey), dk(key->tblspckey));
+		fprintf(stderr, "    kmgr::reload load oid = %u, mkid = %s, mk = %s, dk = %s\n",
+				key->spcoid, masterkeyid, dk(masterkey), dk(key->tblspckey));
 #endif
-		memcpy(cache_key, key, sizeof(TblspcKeyData));
 	}
 
 #ifdef DEBUG_TDE
-	fprintf(stderr, "    keyring::reload loaded %d keys by pid %d\n",
+	fprintf(stderr, "    kmgr::reload loaded %d keys by pid %d\n",
 			list_length(keylist), MyProcPid);
 #endif
 
-	/* Update sequence number */
-	masterKeySeqNo_cache = get_seqno_from_keyid(masterKeyId_cache);
-
 	list_free_deep(keylist);
-}
-
-/*
- * Read the keyring file and set *masterkeyid to the master key id.
- */
-static bool
-get_masterkey_id_from_file(char *masterkeyid_p, MasterKeySeqNo *seqno_p)
-{
-	List *dummy = NIL;
-	char *masterkeyid;
-
-	/* Read the latest keyring file */
-	masterkeyid = read_keyring_file(&dummy);
-
-	if (!masterkeyid)
-		return false;
-
-	/* Success */
-	memcpy(masterkeyid_p, masterkeyid, MASTER_KEY_ID_LEN);
-	*seqno_p = get_seqno_from_keyid(masterkeyid);
 
 	return true;
 }
@@ -583,13 +510,22 @@ read_keyring_file(List **keylist_p)
 }
 
 /*
- * Update the keyring file based on the local cache. It the master key is
- * NULL, we get the master key corresponding to each tablespace keys to
- * encrypt them. On the other hand, if specified, we encrypt tablespace keys
- * with it regardless of the master key ID of each tablespace keys.
+ * Update the keyring file with the current master key */
+static void
+update_keyring_file(void)
+{
+	update_keyring_file_extended(KmgrCtl->masterKeyId,
+								 KmgrPluginGetKey(KmgrCtl->masterKeyId));
+}
+
+/*
+ * Update the keyring file with the specified key and id. *masterkey_id will
+ * be written to the beginning of keyring file and tablespace keys encrypted
+ * with *masterkey follows. The caller must hold KeyringControlLock in
+ * exclusive mode to prevent keyring file from concurrent update.
  */
 static void
-update_keyring_file(const char *masterkey_id, const char *masterkey)
+update_keyring_file_extended(const char *masterkey_id, const char *masterkey)
 {
 	HASH_SEQ_STATUS status;
 	TblspcKeyData *key;
@@ -597,6 +533,8 @@ update_keyring_file(const char *masterkey_id, const char *masterkey)
 	char tmppath[MAXPGPATH];
 	FILE *fpout;
 	int	rc;
+
+	Assert(LWLockHeldByMeInMode(KeyringControlLock, LW_EXCLUSIVE));
 
 	sprintf(path, "global/"KEYRING_TBLSPC_FILE);
 	sprintf(tmppath, "global/"KEYRING_TBLSPC_FILE".tmp");
@@ -615,10 +553,10 @@ update_keyring_file(const char *masterkey_id, const char *masterkey)
 	rc = fwrite(masterkey_id, MASTER_KEY_ID_LEN, 1, fpout);
 
 	/* If we have any tablespace keys, write them to the file.  */
-	if (tblspcKeyring)
+	if (hash_get_num_entries(TblspcKeyring) > 0)
 	{
 		/* Write tablespace key to the file */
-		hash_seq_init(&status, tblspcKeyring);
+		hash_seq_init(&status, TblspcKeyring);
 		while ((key = (TblspcKeyData *) hash_seq_search(&status)) != NULL)
 		{
 			TblspcKeyData k;
@@ -668,28 +606,6 @@ update_keyring_file(const char *masterkey_id, const char *masterkey)
 }
 
 /*
- * Reencrypt all tablespace keys with the given key. The caller must
- * holt KeyringControlLock in exclusive mode.
- */
-static void
-reencrypt_keyring_file(const char *masterkey_id, const char *masterkey)
-{
-	update_keyring_file(masterkey_id, masterkey);
-}
-
-/* Invalidation callback to clear all buffered tablespace keys */
-static void
-invalidate_keyring(Datum arg, int cacheid, uint32 hashvalue)
-{
-	elog(DEBUG1, "invalidate tablespace keyring caches");
-
-#ifdef DEBUG_TDE
-	fprintf(stderr, "tblspc_key::invalid tblspckeys %d\n", MyProcPid);
-#endif
-	keyring_invalid = true;
-}
-
-/*
  * Encrypt and decrypt routine for tablespace key
  */
 static void
@@ -723,103 +639,99 @@ key_encryption_tweak(char *tweak, Oid spcoid)
 	memcpy(tweak, &spcoid, sizeof(Oid));
 }
 
+static void
+create_master_key_id(char *id, MasterKeySeqNo seqno)
+{
+	 char sysid[32];
+	 Assert(id != NULL);
+
+	 snprintf(sysid, sizeof(sysid), UINT64_FORMAT, GetSystemIdentifier());
+	 snprintf(id, MASTER_KEY_ID_LEN, MASTER_KEY_ID_FORMAT,
+			  sysid, seqno);
+}
+
+/* Return the sequence number written in the *masterkeyid */
 static MasterKeySeqNo
-get_seqno_from_keyid(const char *masterkeyid)
+get_seqno_from_master_key_id(const char *masterkeyid)
 {
 	MasterKeySeqNo seqno;
-	char	seqno_str[5];
-	uint64	dummy;
+	uint32	dummy;
 
-	/* Got the maste key id, got sequence number */
-	sscanf(masterkeyid, MASTER_KEY_ID_FORMAT_SCAN,  &dummy, seqno_str);
-	seqno = atoi(seqno_str);
+	/* Get the sequence number */
+	sscanf(masterkeyid, MASTER_KEY_ID_FORMAT_SCAN, &dummy, &seqno);
 
+#ifdef DEBUG_TDE
+	fprintf(stderr, "kmgr::extract mkeyid seqno %u, dummy %u\n",
+			seqno, dummy);
+#endif
 	Assert(seqno >= 0);
 
 	return seqno;
 }
 
-static void
-ensure_latest_keyring(bool need_lock)
-{
-	if (need_lock)
-		LWLockAcquire(KeyringControlLock, LW_SHARED);
-
-	CHECK_FOR_INTERRUPTS();
-	//AcceptInvalidationMessages();
-
-	if (keyring_invalid)
-	{
-#ifdef DEBUG_TDE
-		fprintf(stderr, "keyring::ensure cache is invalid, so reload\n");
-#endif
-		reload_keyring_file();
-		keyring_invalid = false;
-	}
-//#ifdef DEBUG_TDE
-//	else
-//		fprintf(stderr, "keyring::ensure no need reload\n");
-//#endif
-
-	if (need_lock)
-		LWLockRelease(KeyringControlLock);
-}
-
 /*
- * Rotate the master key and reencrypt all tablespace keys with new one.
+ * Rotate the master key. This function generate new master key id and
+ * require the kmgr plugin to generate the corresponding key. And then, using
+ * the new master key we update keyring file while encrypt all tablespace keys.
  */
 Datum
 pg_rotate_encryption_key(PG_FUNCTION_ARGS)
 {
-	char masterkeyid[MASTER_KEY_ID_LEN];
-	char newid[MASTER_KEY_ID_LEN + 1] = {0};
+	char newid[MASTER_KEY_ID_LEN] = {0};
+	char retid[MASTER_KEY_ID_LEN + 1];
 	char *newkey;
-	MasterKeySeqNo seqno;
+	MasterKeySeqNo current_seqno;
 
 	/* prevent concurrent process trying key rotation */
 	LWLockAcquire(MasterKeyRotationLock, LW_EXCLUSIVE);
 
-	ensure_latest_keyring(true);
-
-	/* Get latest master key and seqno from file, not cache */
-	if (!get_masterkey_id_from_file(masterkeyid, &seqno))
-		elog(ERROR, "invalid keyring file");
+	/* Get the current sequence number */
+	LWLockAcquire(KeyringControlLock, LW_SHARED);
+	current_seqno = KmgrCtl->masterKeySeqNo;
+	LWLockRelease(KeyringControlLock);
 
 	/* Craft the new master key id */
-	sprintf(newid, MASTER_KEY_ID_FORMAT, GetSystemIdentifier(), seqno + 1);
+	create_master_key_id(newid, current_seqno + 1);
 
 #ifdef DEBUG_TDE
 	fprintf(stderr, "kmgr::rotate new id id %s, oldseq %u\n",
-			newid, seqno);
+			newid, current_seqno);
 #endif
 
-	/* Get new master key */
+	/* Generate the new master key by the new id */
 	KmgrPluginGenerateKey(newid);
 	newkey = KmgrPluginGetKey(newid);
+
+	Assert(newkey);
 
 #ifdef DEBUG_TDE
 	fprintf(stderr, "kmgr::rotate generated new id id %s, key %s\n",
 			newid, dk(newkey));
 #endif
 
-	/* Block concurrent processes are about to read the keyring file */
+	/*
+	 * Update share memory information with the next id and sequence number.
+	 */
 	LWLockAcquire(KeyringControlLock, LW_EXCLUSIVE);
+
+	KmgrCtl->masterKeySeqNo = current_seqno + 1;
+	memcpy(KmgrCtl->masterKeyId, newid, MASTER_KEY_ID_LEN);
 
 	/*
 	 * Reencrypt all tablespace keys with the new master key, and update
 	 * the keyring file.
 	 */
-	reencrypt_keyring_file(newid, newkey);
+	update_keyring_file_extended(newid, newkey);
 
-	/* Invalidate keyring caches before releasing the lock */
-	SysCacheInvalidate(TABLESPACEOID, (Datum) 0);
-
-	/* Ok allows processes to read the keyring file */
 	LWLockRelease(KeyringControlLock);
 
 	LWLockRelease(MasterKeyRotationLock);
 
-	PG_RETURN_TEXT_P(cstring_to_text(newid));
+	/* Craft key id for the return value */
+	memcpy(retid, newid, MASTER_KEY_ID_LEN);
+	retid[MASTER_KEY_ID_LEN] = '\0';
+
+	PG_RETURN_TEXT_P(cstring_to_text(retid));
 }
 
 Datum
@@ -859,12 +771,10 @@ pg_get_tablespace_keys(PG_FUNCTION_ARGS)
 
 	MemoryContextSwitchTo(oldcontext);
 
-	ensure_latest_keyring(true);
-
 	/* Get the master key and encrypt the tablespace key with it */
 
 	/* Get all tablespace keys */
-	hash_seq_init(&status, tblspcKeyring);
+	hash_seq_init(&status, TblspcKeyring);
 	while ((key = (TblspcKeyData *) hash_seq_search(&status)) != NULL)
 	{
 		Datum	values[PG_TABLESPACE_KEYS_COLS];
@@ -876,7 +786,7 @@ pg_get_tablespace_keys(PG_FUNCTION_ARGS)
 		memcpy(buf, key->tblspckey, ENCRYPTION_KEY_SIZE);
 
 		/* Encrypt tablespace key */
-		masterkey = KmgrPluginGetKey(masterKeyId_cache);
+		masterkey = KmgrPluginGetKey(KmgrCtl->masterKeyId);
 		encrypt_tblspc_key(key->spcoid, buf, masterkey);
 		buf[ENCRYPTION_KEY_SIZE] = '\0';
 
@@ -890,7 +800,7 @@ pg_get_tablespace_keys(PG_FUNCTION_ARGS)
 
 #ifdef DEBUG_TDE
 		fprintf(stderr, "keyring::dump oid %u, mkid %s, mk %s, dk %s, edk %s\n",
-				key->spcoid, masterKeyId_cache, dk(masterkey),
+				key->spcoid, KmgrCtl->masterKeyId, dk(masterkey),
 				dk(key->tblspckey), dk(buf));
 #endif
 

@@ -45,7 +45,6 @@
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
-#include "storage/kmgr.h"
 #include "storage/lmgr.h"
 #include "storage/procarray.h"
 #include "storage/procsignal.h"
@@ -1074,9 +1073,6 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 
 	/* Initialize this backend's session state. */
 	InitializeSession();
-
-	/* Set up keyring */
-	KeyringSetup();
 
 	/* report this backend in the PgBackendStatus array */
 	if (!bootstrap)
