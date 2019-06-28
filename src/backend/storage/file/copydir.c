@@ -143,7 +143,7 @@ copy_file(char *fromfile, char *tofile)
 	ForkNumber	forknum;
 	BlockNumber	segment;
 	bool		is_relfile;
-	bool		need_encryption;
+	bool		need_encryption = false;
 
 	/* Size of copy buffer (read and write requests) */
 #define COPY_BUF_SIZE (8 * BLCKSZ)
