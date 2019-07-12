@@ -62,6 +62,7 @@
 #include "postmaster/autovacuum.h"
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/bgwriter.h"
+#include "postmaster/pagerecover.h"
 #include "postmaster/postmaster.h"
 #include "postmaster/syslogger.h"
 #include "postmaster/walwriter.h"
@@ -4210,6 +4211,16 @@ static struct config_string ConfigureNamesString[] =
 		&jit_provider,
 		"llvmjit",
 		NULL, NULL, NULL
+	},
+
+	{
+		{"page_recovery_target_relfiles", PGC_POSTMASTER, WAL_RECOVERY_TARGET,
+			gettext_noop("Sets the relfiles to recovery."),
+			NULL
+		},
+		&pageRecoveryTargetRelFiles_str,
+		"",
+		check_page_recovery_target_relfiles, NULL, NULL
 	},
 
 	/* End-of-list marker */

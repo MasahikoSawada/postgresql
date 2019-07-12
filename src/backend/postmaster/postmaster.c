@@ -112,6 +112,7 @@
 #include "postmaster/autovacuum.h"
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/fork_process.h"
+#include "postmaster/pagerecover.h"
 #include "postmaster/pgarch.h"
 #include "postmaster/postmaster.h"
 #include "postmaster/syslogger.h"
@@ -248,6 +249,7 @@ bool		restart_after_crash = true;
 
 /* PIDs of special child processes; 0 when not running */
 static pid_t StartupPID = 0,
+			PageRecoverPID = 0,
 			BgWriterPID = 0,
 			CheckpointerPID = 0,
 			WalWriterPID = 0,
@@ -425,6 +427,7 @@ static pid_t StartChildProcess(AuxProcType type);
 static void StartAutovacuumWorker(void);
 static void MaybeStartWalReceiver(void);
 static void InitPostmasterDeathWatchHandle(void);
+static void WaitForPageRecovery(void);
 
 /*
  * Archiver is allowed to start up at the current postmaster state?
@@ -543,6 +546,7 @@ static void ShmemBackendArrayRemove(Backend *bn);
 #define StartCheckpointer()		StartChildProcess(CheckpointerProcess)
 #define StartWalWriter()		StartChildProcess(WalWriterProcess)
 #define StartWalReceiver()		StartChildProcess(WalReceiverProcess)
+#define StartPageRecover()		StartChildProcess(PageRecoverProcess)
 
 /* Macros to check exit status of a child process */
 #define EXIT_STATUS_0(st)  ((st) == 0)
@@ -572,6 +576,7 @@ PostmasterMain(int argc, char *argv[])
 	bool		listen_addr_saved = false;
 	int			i;
 	char	   *output_config_variable = NULL;
+	struct stat stat_buf;
 
 	InitProcessGlobals();
 
@@ -1362,6 +1367,23 @@ PostmasterMain(int argc, char *argv[])
 	 * see what's happening.
 	 */
 	AddToDataDirLockFile(LOCK_FILE_LINE_PM_STATUS, PM_STATUS_STARTING);
+
+
+	if (stat(RECOVERY_SIGNAL_FILE, &stat_buf) == 0 &&
+		pageRecoveryTargetRelFiles_str != NULL)
+	{
+		int			fd;
+
+		fd = BasicOpenFilePerm(RECOVERY_SIGNAL_FILE, O_RDWR | PG_BINARY,
+							   S_IRUSR | S_IWUSR);
+		if (fd >= 0)
+		{
+			(void) pg_fsync(fd);
+			close(fd);
+		}
+
+		WaitForPageRecovery();
+	}
 
 	/*
 	 * We're ready to rock and roll...
@@ -5416,6 +5438,10 @@ StartChildProcess(AuxProcType type)
 				ereport(LOG,
 						(errmsg("could not fork WAL receiver process: %m")));
 				break;
+			case PageRecoverProcess:
+				ereport(LOG,
+						(errmsg("could not fork page recover process: %m")));
+				break;
 			default:
 				ereport(LOG,
 						(errmsg("could not fork process: %m")));
@@ -6513,4 +6539,17 @@ InitPostmasterDeathWatchHandle(void)
 				(errmsg_internal("could not duplicate postmaster handle: error code %lu",
 								 GetLastError())));
 #endif							/* WIN32 */
+}
+
+static void
+WaitForPageRecovery(void)
+{
+	PageRecoverPID = StartPageRecover();
+
+	while (PageRecoverPID != 0)
+	{
+			PG_SETMASK(&UnBlockSig);
+			sleep(2);
+			PG_SETMASK(&BlockSig);
+	}
 }

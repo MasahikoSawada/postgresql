@@ -34,6 +34,7 @@
 #include "pg_getopt.h"
 #include "pgstat.h"
 #include "postmaster/bgwriter.h"
+#include "postmaster/pagerecover.h"
 #include "postmaster/startup.h"
 #include "postmaster/walwriter.h"
 #include "replication/walreceiver.h"
@@ -338,6 +339,9 @@ AuxiliaryProcessMain(int argc, char *argv[])
 			case WalReceiverProcess:
 				statmsg = pgstat_get_backend_desc(B_WAL_RECEIVER);
 				break;
+			case PageRecoverProcess:
+				statmsg = pgstat_get_backend_desc(B_PAGE_RECOVER);
+				break;
 			default:
 				statmsg = "??? process";
 				break;
@@ -470,6 +474,11 @@ AuxiliaryProcessMain(int argc, char *argv[])
 		case WalReceiverProcess:
 			/* don't set signals, walreceiver has its own agenda */
 			WalReceiverMain();
+			proc_exit(1);		/* should never return */
+
+		case PageRecoverProcess:
+			/* don't set signals, walreceiver has its own agenda */
+			PageRecoverMain();
 			proc_exit(1);		/* should never return */
 
 		default:
