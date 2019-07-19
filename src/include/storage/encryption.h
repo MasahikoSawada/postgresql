@@ -72,6 +72,14 @@
  */
 #define XLOG_REC_ALIGN(LEN) MAXALIGN(LEN)
 
+enum database_encryption_cipher_kind
+{
+	ENCRYPTION_AES_128 = 0,
+	ENCRYPTION_AES_256
+};
+
+extern int database_encryption_cipher;
+
 extern PGAlignedBlock encrypt_buf;
 
 extern void EncryptBufferBlock(Oid spcOid, const char *tweak,

@@ -42,17 +42,43 @@
 
 PGAlignedBlock encrypt_buf;
 
-static bool		encryption_initialized = false;
-static EVP_CIPHER_CTX *ctx_encrypt;
-static EVP_CIPHER_CTX *ctx_decrypt;
-static EVP_CIPHER_CTX *ctx_encrypt_stream;
-static EVP_CIPHER_CTX *ctx_decrypt_stream;
+/*
+ * prototype for the EVP functions that return an algorithm, e.g.
+ * EVP_aes_128_cbc().
+ */
+typedef const EVP_CIPHER *(*ossl_EVP_cipher_func) (void);
 
+typedef struct
+{
+	ossl_EVP_cipher_func cipher_func_blk;
+	ossl_EVP_cipher_func cipher_func_strm;
+	int					key_len;
+} cipher_info;
+
+cipher_info cipher_info_table[] =
+{
+	{EVP_aes_128_cbc, EVP_aes_128_ctr, 16},
+	{EVP_aes_256_cbc, EVP_aes_256_ctr, 32}
+};
+
+typedef struct CipherCtx
+{
+	EVP_CIPHER_CTX *block_ctx;
+	EVP_CIPHER_CTX *stream_ctx;
+	int				key_len;
+} CipherCtx;
+
+/* GUC parameter */
+int database_encryption_cipher;
+
+CipherCtx *MyCipherCtx = NULL;
+
+static EVP_CIPHER_CTX *create_ossl_encrypt(ossl_EVP_cipher_func func,
+										   int klen);
+static void createcipherContext(void);
 static void setup_encryption_openssl(void);
 static void evp_error(void);
 static void setup_encryption(void) ;
-static void initialize_encryption_context(EVP_CIPHER_CTX **ctx_p, bool stream);
-
 /*
  * Encryption a buffer block on the given tablespace.
  */
@@ -108,11 +134,8 @@ encrypt_block(const char *input, char *output, Size size,
 			size % ENCRYPTION_BLOCK_SIZE == 0) || stream);
 
 	/* Ensure encryption has setup */
-	if (!encryption_initialized)
-	{
+	if (MyCipherCtx == NULL)
 		setup_encryption();
-		encryption_initialized = true;
-	}
 
 	if (!stream && IsAllZero(input, size))
 	{
@@ -120,7 +143,7 @@ encrypt_block(const char *input, char *output, Size size,
 		return;
 	}
 
-	ctx = !stream ? ctx_encrypt : ctx_encrypt_stream;
+	ctx = !stream ? MyCipherCtx->block_ctx : MyCipherCtx->stream_ctx;
 
 	if (EVP_EncryptInit_ex(ctx, NULL, NULL, (unsigned char *) key,
 						   (unsigned char *) tweak) != 1)
@@ -158,11 +181,8 @@ decrypt_block(const char *input, char *output, Size size,
 			size % ENCRYPTION_BLOCK_SIZE == 0) || stream);
 
 	/* Ensure encryption has setup */
-	if (!encryption_initialized)
-	{
+	if (MyCipherCtx == NULL)
 		setup_encryption();
-		encryption_initialized = true;
-	}
 
 	if (!stream && IsAllZero(input, size))
 	{
@@ -170,7 +190,7 @@ decrypt_block(const char *input, char *output, Size size,
 		return;
 	}
 
-	ctx = !stream ? ctx_encrypt : ctx_encrypt_stream;
+	ctx = !stream ? MyCipherCtx->block_ctx : MyCipherCtx->stream_ctx;
 
 	if (EVP_DecryptInit_ex(ctx, NULL, NULL, (unsigned char *) key,
 						   (unsigned char *) tweak) != 1)
@@ -184,19 +204,47 @@ decrypt_block(const char *input, char *output, Size size,
 }
 
 static void
-initialize_encryption_context(EVP_CIPHER_CTX **ctx_p, bool stream)
+createcipherContext(void)
+{
+	cipher_info *cipher = &cipher_info_table[database_encryption_cipher];
+	CipherCtx *cctx = (CipherCtx *) palloc(sizeof(CipherCtx));
+
+	if (MyCipherCtx == NULL)
+	{
+		cctx->block_ctx = create_ossl_encrypt(cipher->cipher_func_blk,
+											  cipher->key_len);
+		cctx->stream_ctx = create_ossl_encrypt(cipher->cipher_func_strm,
+											   cipher->key_len);
+		cctx->key_len = cipher->key_len;
+
+		MyCipherCtx = cctx;
+	}
+}
+
+static EVP_CIPHER_CTX *
+create_ossl_encrypt(ossl_EVP_cipher_func func, int klen)
 {
 	EVP_CIPHER_CTX *ctx;
-	const EVP_CIPHER *cipher;
-	int			block_size;
 
-	cipher = !stream ? EVP_aes_256_cbc() : EVP_aes_256_ctr();
+	/* Craete new openssl cipher context */
+	ctx = EVP_CIPHER_CTX_new();
+	if (ctx == NULL)
+	{
+		EVP_CIPHER_CTX_free(ctx);
+		return NULL;
+	}
 
-	if ((*ctx_p = EVP_CIPHER_CTX_new()) == NULL)
-		evp_error();
-	ctx = *ctx_p;
-	if (EVP_EncryptInit_ex(ctx, cipher, NULL, NULL, NULL) != 1)
-		evp_error();
+	if (!EVP_EncryptInit_ex(ctx, (const EVP_CIPHER *) func(), NULL, NULL, NULL))
+	{
+		EVP_CIPHER_CTX_free(ctx);
+		return NULL;
+	}
+
+	if (!EVP_CIPHER_CTX_set_key_length(ctx, klen))
+	{
+		EVP_CIPHER_CTX_free(ctx);
+		return NULL;
+	}
 
 	/*
 	 * No padding is needed. For a block cipher, the input block size should
@@ -207,16 +255,7 @@ initialize_encryption_context(EVP_CIPHER_CTX **ctx_p, bool stream)
 	 */
 	EVP_CIPHER_CTX_set_padding(ctx, 0);
 
-	Assert(EVP_CIPHER_CTX_iv_length(ctx) == ENCRYPTION_TWEAK_SIZE);
-	Assert(EVP_CIPHER_CTX_key_length(ctx) == ENCRYPTION_KEY_SIZE);
-	block_size = EVP_CIPHER_CTX_block_size(ctx);
-#ifdef USE_ASSERT_CHECKING
-	if (!stream)
-		Assert(block_size == ENCRYPTION_BLOCK_SIZE);
-	else
-		Assert(block_size == 1);
-#endif
-
+	return ctx;
 }
 
 /*
@@ -227,10 +266,7 @@ static void
 setup_encryption(void)
 {
 	setup_encryption_openssl();
-	initialize_encryption_context(&ctx_encrypt, false);
-	initialize_encryption_context(&ctx_decrypt, false);
-	initialize_encryption_context(&ctx_encrypt_stream, true);
-	initialize_encryption_context(&ctx_decrypt_stream, true);
+	createcipherContext();
 }
 
 static void
