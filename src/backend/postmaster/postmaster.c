@@ -989,11 +989,6 @@ PostmasterMain(int argc, char *argv[])
 	process_shared_preload_libraries();
 
 	/*
-	 * Load and invoke startup callback of keyring plugin.
-	 */
-	processKmgrPlugin();
-
-	/*
 	 * Now that loadable modules have had their chance to register background
 	 * workers, calculate MaxBackends.
 	 */
@@ -1322,7 +1317,9 @@ PostmasterMain(int argc, char *argv[])
 	 * Get the master encrption key via kmgr plugin and store into the
 	 * shared memory.
 	 */
+#ifdef USE_SSL
 	InitializeKmgr();
+#endif
 
 	/*
 	 * Load configuration files for client authentication.

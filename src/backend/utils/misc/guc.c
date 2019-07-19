@@ -4179,6 +4179,16 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
+		{"database_encryption_key_passphrase_command", PGC_POSTMASTER, ENCRYPTION,
+			gettext_noop("Command to obtain passphrases for SSL."),
+			NULL
+		},
+		&database_encryption_key_passphrase_command,
+		"",
+		NULL, NULL, NULL
+	},
+
+	{
 		{"application_name", PGC_USERSET, LOGGING_WHAT,
 			gettext_noop("Sets the application name to be reported in statistics and logs."),
 			NULL,

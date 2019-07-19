@@ -40,7 +40,7 @@
 typedef uint32 MasterKeySeqNo;
 
 /* GUC variable */
-extern char *kmgr_plugin_library;
+extern char *database_encryption_key_passphrase_command;
 
 /* kmgr.c */
 extern Size KmgrShmemSize(void);

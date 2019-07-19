@@ -93,11 +93,13 @@ static KmgrCtlData *KmgrCtl;
 static HTAB			*TblspcKeyring;
 
 /* GUC variable */
-char *kmgr_plugin_library = NULL;
+char *database_encryption_key_passphrase_command = NULL;
 
 PG_FUNCTION_INFO_V1(pg_rotate_encryption_key);
 PG_FUNCTION_INFO_V1(pg_get_tablespace_keys);
 
+static void run_database_encryption_key_passpharse_command(const char *prompt,
+														   char *buf, int size);
 static bool load_keyring_file(void);
 static char *read_keyring_file(List **keylist_p);
 static void update_keyring_file(void);
@@ -145,6 +147,97 @@ KmgrShmemInit(void)
 }
 
 /*
+ * Run database_encryption_key_passphrase_command
+ *
+ * prompt will be substituted for %p.
+ *
+ * The result will be put in buffer buf, which is of size size.  The return
+ * value is the length of the actual result.
+ */
+static void
+run_database_encryption_key_passpharse_command(const char *prompt,
+											   char *buf, int size)
+{
+	StringInfoData command;
+	char	   *p;
+	FILE	   *fh;
+	int			pclose_rc;
+	size_t		len = 0;
+
+	Assert(prompt);
+	Assert(size > 0);
+	buf[0] = '\0';
+
+	initStringInfo(&command);
+
+	for (p = database_encryption_key_passphrase_command; *p; p++)
+	{
+		if (p[0] == '%')
+		{
+			switch (p[1])
+			{
+				case 'p':
+					appendStringInfoString(&command, prompt);
+					p++;
+					break;
+				case '%':
+					appendStringInfoChar(&command, '%');
+					p++;
+					break;
+				default:
+					appendStringInfoChar(&command, p[0]);
+			}
+		}
+		else
+			appendStringInfoChar(&command, p[0]);
+	}
+
+	fh = OpenPipeStream(command.data, "r");
+	if (fh == NULL)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not execute command \"%s\": %m",
+						command.data)));
+
+	if (!fgets(buf, size, fh))
+	{
+		if (ferror(fh))
+		{
+			pfree(command.data);
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not read from command \"%s\": %m",
+							command.data)));
+		}
+	}
+
+	pclose_rc = ClosePipeStream(fh);
+	if (pclose_rc == -1)
+	{
+		pfree(command.data);
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not close pipe to external command: %m")));
+	}
+	else if (pclose_rc != 0)
+	{
+		pfree(command.data);
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("command \"%s\" failed",
+						command.data),
+				 errdetail_internal("%s", wait_result_to_str(pclose_rc))));
+	}
+
+	/* strip trailing newline */
+	len = strlen(buf);
+	if (len > 0 && buf[len - 1] == '\n')
+		buf[--len] = '\0';
+
+	pfree(command.data);
+}
+
+/*
  * Initialize Kmgr and kmgr plugin. We load the keyring file and set up both
  * KmgrCtl and TblspcKeyring hash table on shared memory. When first time to
  * access the keyring file, ie the keyring file does not exist, we create it
@@ -156,16 +249,16 @@ void
 InitializeKmgr(void)
 {
 	char *key = NULL;
+	char passphrase[ENCRYPTION_MAX_PASSPHASE];
+	const char *prompt = "SSL_CTX_set_default_passwd_cb:";
 
 	if (!TransparentEncryptionEnabled())
 		return;
 
-	/*
-	 * Invoke kmgr plugin startup callback. Since we could get the master key
-	 * during loading the keyring file we have to startup the plugin beforehand.
-	 */
-	ereport(DEBUG1, (errmsg("invoking kmgr plugin startup callback")));
-	KmgrPluginStartup();
+	/* Get encryption key passphrase */
+	run_database_encryption_key_passpharse_command(prompt,
+												   passphrase,
+												   ENCRYPTION_MAX_PASSPHASE);
 
 	/* Load keyring file and update shmem structs */
 	if (!load_keyring_file())
@@ -193,15 +286,6 @@ InitializeKmgr(void)
 	key = KmgrPluginGetKey(KmgrCtl->masterKeyId);
 
 	Assert(key != NULL);
-}
-
-/* process and load kmgr plugin given by kmgr_plugin_library */
-void
-processKmgrPlugin(void)
-{
-	process_shared_preload_libraries_in_progress = true;
-	startupKmgrPlugin(kmgr_plugin_library);
-	process_shared_preload_libraries_in_progress = false;
 }
 
 /* Set the encryption key of the given tablespace to *key */
