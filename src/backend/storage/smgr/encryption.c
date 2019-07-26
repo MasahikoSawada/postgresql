@@ -48,30 +48,18 @@ PGAlignedBlock encrypt_buf;
  */
 typedef const EVP_CIPHER *(*ossl_EVP_cipher_func) (void);
 
-typedef struct
-{
-	ossl_EVP_cipher_func cipher_func_blk;
-	ossl_EVP_cipher_func cipher_func_strm;
-	int					key_len;
-} cipher_info;
-
-cipher_info cipher_info_table[] =
-{
-	{EVP_aes_128_cbc, EVP_aes_128_ctr, 16},
-	{EVP_aes_256_cbc, EVP_aes_256_ctr, 32}
-};
-
 typedef struct CipherCtx
 {
 	EVP_CIPHER_CTX *block_ctx;
 	EVP_CIPHER_CTX *stream_ctx;
-	int				key_len;
+	EVP_PKEY_CTX   *derive_ctx;
 } CipherCtx;
 
 /* GUC parameter */
 int database_encryption_cipher;
 
 CipherCtx *MyCipherCtx = NULL;
+int		EncryptionKeySize;
 
 static EVP_CIPHER_CTX *create_ossl_encrypt(ossl_EVP_cipher_func func,
 										   int klen);
@@ -109,6 +97,30 @@ DecryptBufferBlock(Oid spcOid, const char *tweak, const char *input,
 	decrypt_block(input, output, BLCKSZ, spckey, tweak, false);
 }
 
+void
+DeriveEncryptionKey(const char *input, char *newkey)
+{
+	char salt[ENCRYPTION_KEY_SALT_LEN];
+	int outlen;
+
+	Assert(input != NULL && output != NULL);
+
+	/* Ensure encryption has setup */
+	if (MyCipherCtx == NULL)
+		setup_encryption();
+
+    if (EVP_PKEY_CTX_set1_hkdf_salt(pctx, salt, ENCRYPTION_KEY_SALT_LEN) <= 0)
+		evp_error();
+
+    if (EVP_PKEY_CTX_set1_hkdf_key(pctx, input, EncryptionKeyLen) <= 0)
+		evp_error();
+
+    if (EVP_PKEY_derive(pctx, newkey, &outlen) <= 0)
+		evp_error();
+
+	Assert(outlen == EncryptionKeyLen);
+}
+
 /*
  * Encrypts one block of data with a specified tweak value. May only be called
  * when encryption_enabled is true.
@@ -125,7 +137,7 @@ DecryptBufferBlock(Oid spcOid, const char *tweak, const char *input,
  */
 void
 encrypt_block(const char *input, char *output, Size size,
-			  const char *key, const char *tweak, bool stream)
+			  const char *key, const char *iv, bool stream)
 {
 	int			out_size;
 	EVP_CIPHER_CTX *ctx;
@@ -172,7 +184,7 @@ encrypt_block(const char *input, char *output, Size size,
  */
 void
 decrypt_block(const char *input, char *output, Size size,
-			  const char *key, const char *tweak, bool stream)
+			  const char *key, const char *iv, bool stream)
 {
 	int			out_size;
 	EVP_CIPHER_CTX *ctx;
@@ -211,18 +223,34 @@ createcipherContext(void)
 
 	if (MyCipherCtx == NULL)
 	{
-		cctx->block_ctx = create_ossl_encrypt(cipher->cipher_func_blk,
-											  cipher->key_len);
-		cctx->stream_ctx = create_ossl_encrypt(cipher->cipher_func_strm,
-											   cipher->key_len);
-		cctx->key_len = cipher->key_len;
-
+		cctx->block_ctx = create_ossl_encrypion_ctx(cipher->cipher_func_blk,
+													cipher->key_len);
+		cctx->stream_ctx = create_ossl_encrypion_ctx(cipher->cipher_func_strm,
+													 cipher->key_len);
+		cctx->derive_ctx = create_ossl_derive_ctx();
 		MyCipherCtx = cctx;
+		EncryptionKeySize = cipher->key_len;
 	}
 }
 
+static EVP_PKEY_CTX *
+create_ossl_derive_ctx(void)
+{
+   EVP_PKEY_CTX *pctx;
+
+   pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, NULL);
+
+   if (EVP_PKEY_derive_init(pctx) <= 0)
+	   return NULL;
+
+   if (EVP_PKEY_CTX_set_hkdf_md(pctx, EVP_sha256()) <= 0)
+	   return NULL;
+
+   return pctx;
+}
+
 static EVP_CIPHER_CTX *
-create_ossl_encrypt(ossl_EVP_cipher_func func, int klen)
+create_ossl_encryption_ctx(ossl_EVP_cipher_func func, int klen)
 {
 	EVP_CIPHER_CTX *ctx;
 
@@ -305,6 +333,19 @@ evp_error(void)
 #endif							/* FRONTEND */
 }
 
+void
+EncryptDMEK(const char *dmek, const char *kek)
+{
+	encrypt_data(dmek, dmek, MyCipherCtx->key_len, kek, iv, false);
+}
+
+void
+DecryptDMEK(const char *dmek, const char *kek)
+{
+	decrypt_data(dmek, dmek, MyCipherCtx->key_len, kek, iv, false);
+}
+
+
 /*
  * Xlog is encrypted page at a time. Each xlog page gets a unique tweak via
  * segment and offset. Unfortunately we can't include timeline because
@@ -330,12 +371,14 @@ XLogEncryptionTweak(char *tweak, XLogSegNo segment, uint32 offset)
  * forks for huge tables.
  */
 void
-BufferEncryptionTweak(char *tweak, RelFileNode *relnode, ForkNumber forknum,
-					  BlockNumber blocknum)
+BufferEncryptionTweak(char *tweak, XLogRecPtr pagelsn, BlockNumber blocknum,
+					  BlockNumber blocknum, Keyid id)
 {
 	uint32		fork_and_block = (forknum << 24) ^ blocknum;
 
 	memset(tweak, 0, ENCRYPTION_TWEAK_SIZE);
-	memcpy(tweak, relnode, sizeof(RelFileNode));
-	memcpy(tweak + sizeof(RelFileNode), &fork_and_block, 4);
+	memcpy(tweak, &pagelsn, sizeof(XLogRecPtr));
+	memcpy(tweak + sizeof(XLogRecPtr), &blocknum, sizeof(uint32));
+
+	/* and encrypt by key */
 }

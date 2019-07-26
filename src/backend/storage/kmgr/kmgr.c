@@ -63,7 +63,7 @@
 #include "utils/syscache.h"
 
 /* Filename of tablespace keyring */
-#define KEYRING_TBLSPC_FILE "pg_tblspc.kr"
+#define KEYRING_TBLSPC_FILE "pg_kmgr"
 
 /*
  * Since we have encryption keys per tablspace, we expect this value is enough
@@ -78,19 +78,29 @@ typedef struct TblspcKeyData
 	char	tblspckey[ENCRYPTION_KEY_SIZE];	/* non-encrypted key */
 } TblspcKeyData;
 
-/*
- * Shared struct to save master key information written in the keyring file.
- * KmgrCtl and TblspcKeyring are protected by KeyringControlFile lightweight
- * lock. If we want to increment master key sequence number when key rotation,
- * we need to acquire MasterKeyRotationLock in addition.
- */
+typedef struct KmgrFileHeaderData
+{
+	int		cipher_kind;
+
+	/* MDEK in encrypted state, NULL-terminated */
+	char	mdek[ENCRYPTION_MAX_KEY_LEN];
+
+	/* salt used for KEK derivation */
+	char	kek_salt[KMGR_KEK_SALT_SIZE];
+
+	/* CRC of all above ... MUST BE LAST! */
+	pg_crc32c	crc;
+} KmgrFileHeaderData;
+#define SizeOfKmgrFileData (offsetof(KmgrFileData, mdek) + sizeof(char))
+
 typedef struct KmgrCtlData
 {
-	char			masterKeyId[MASTER_KEY_ID_LEN];
-	MasterKeySeqNo	masterKeySeqNo;
+	char			mdek[ENCRYPTION_KEY_SIZE];
 } KmgrCtlData;
-static KmgrCtlData *KmgrCtl;
+static KmgrCtlData	*KmgrCtl;
 static HTAB			*TblspcKeyring;
+
+static char KEK_salt[KMGR_KEK_SALT_SIZE];
 
 /* GUC variable */
 char *database_encryption_key_passphrase_command = NULL;
@@ -154,7 +164,7 @@ KmgrShmemInit(void)
  * The result will be put in buffer buf, which is of size size.  The return
  * value is the length of the actual result.
  */
-static void
+static int
 run_database_encryption_key_passpharse_command(const char *prompt,
 											   char *buf, int size)
 {
@@ -235,6 +245,8 @@ run_database_encryption_key_passpharse_command(const char *prompt,
 		buf[--len] = '\0';
 
 	pfree(command.data);
+
+	return len;
 }
 
 /*
@@ -250,42 +262,32 @@ InitializeKmgr(void)
 {
 	char *key = NULL;
 	char passphrase[ENCRYPTION_MAX_PASSPHASE];
+	char salt[KMGR_KEK_SALT_SIZE];
+	char kek[KMGR_KEK_SIZE];
+	KmgrFileHeaderData *kmgrfile;
 	const char *prompt = "SSL_CTX_set_default_passwd_cb:";
 
 	if (!TransparentEncryptionEnabled())
 		return;
+
+	/* Read and load kmgr file */
+	kmgrfile = load_kmgr_file();
 
 	/* Get encryption key passphrase */
 	run_database_encryption_key_passpharse_command(prompt,
 												   passphrase,
 												   ENCRYPTION_MAX_PASSPHASE);
 
-	/* Load keyring file and update shmem structs */
-	if (!load_keyring_file())
-	{
-		/*
-		 * If the keyring doesn't exist this is the first time to access the
-		 * keyring file. We create it with the initial master key id.
-		 */
-		create_master_key_id(KmgrCtl->masterKeyId, FIRST_MASTER_KEY_SEQNO);
-		KmgrCtl->masterKeySeqNo = FIRST_MASTER_KEY_SEQNO;
+	/* Derive KEK from passphrase */
+	PKCS5_PBKDF2_HMAC_SHA1(passphrase, len,
+						   kmgrfile->salt, KMGR_KEK_SALT_SIZE,
+						   KMGR_KEK_ITERATION_COUNT, KMGR_KEK_SIZE, kek);
 
-		/* Create keyring file only with only master key id */
-		LWLockAcquire(KeyringControlLock, LW_EXCLUSIVE);
-		update_keyring_file_extended(KmgrCtl->masterKeyId, NULL);
-		LWLockRelease(KeyringControlLock);
+	/* Get unencrypted MDEK */
+	DecryptEnryptionKey(kmgrfile->mdek, kek);
 
-		ereport(DEBUG3, (errmsg("create initial keyring file with master key id")));
-	}
-
-	/* Create the master key if not exists */
-	if (!KmgrPluginIsExist(KmgrCtl->masterKeyId))
-		KmgrPluginGenerateKey(KmgrCtl->masterKeyId);
-
-	/* Get the master key */
-	key = KmgrPluginGetKey(KmgrCtl->masterKeyId);
-
-	Assert(key != NULL);
+	/* Copy MDEK to shread memory struct */
+	mempcy(KmgrCtl->mdek, kmgrfile->mdek, EncryptionKeyLen);
 }
 
 /* Set the encryption key of the given tablespace to *key */
@@ -445,6 +447,42 @@ KeyringAddKey(Oid spcOid, char *encrypted_key, const char *masterkeyid)
 	update_keyring_file();
 
 	LWLockRelease(KeyringControlLock);
+}
+
+static KmgrFileData *
+load_kmgr_file(List **keylist_p)
+{
+	char *path = "global/"KEYRING_TBLSPC_FILE;
+	KmgrFileHeaderData *kmgrfile;
+	int read_len;
+	int fd;
+
+	fd = OpenTransientFile(path, O_RDONLY | PG_BINARY);
+
+	if (fd < 0)
+	{
+		if (errno == ENOENT)
+			return NULL;
+
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not open file \"%s\": %m", path)));
+	}
+
+	/* Read header data */
+	kmgrfile = (KmgrFileData *) palloc(sizeof(KmgrFileHeaderData));
+	if ((read_len = read(fd, kmgrfile, sizeof(KmgrFileHeaderData))) < 0)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 (errmsg("could not read from file \"%s\": %m", path))));
+
+	if (database_encryption_cipher != kmgrfile->cipher_kind)
+		ereport(ERROR,
+				(errmsg("encryption cipher does not match")));
+
+	CloseTransientFile(fd);
+
+	return kmgrfile;
 }
 
 /*

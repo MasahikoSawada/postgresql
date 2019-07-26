@@ -17,21 +17,8 @@
 #include "storage/encryption.h"
 #include "storage/bufpage.h"
 
-#define TransparentEncryptionEnabled() \
-	(kmgr_plugin_library != NULL && kmgr_plugin_library[0] != '\0')
-
-/*
- * The master key format is "pg_master_key-<database systemid>-<seqno>".
- * The maximum length of database system identifer is
- * 20 (=18446744073709551615) as it is an uint64 value and the maximum
- * string length of seqno is 10 (=4294967295).
- */
-#define MASTER_KEY_ID_FORMAT "pg_master_key-%.7s-%04u"
-#define MASTER_KEY_ID_FORMAT_SCAN "pg_master_key-%u-%u"
-#define MASTER_KEY_ID_LEN (16 + 7 + 4 + 1)
-
-/* The initial master key sequence number */
-#define FIRST_MASTER_KEY_SEQNO	0
+#define KMGR_KEK_INTERATION_COUNT	1000000
+#define KMGR_WDEK_ID				InvalidOid
 
 /*
  * masterKeySeqno is the sequence number starting from FIRST_MASTER_KEY_SEQNO

@@ -23,6 +23,7 @@
  * sure the following constants match if adopting another algorithm.
  */
 #define ENCRYPTION_BLOCK_SIZE 16
+#define ENCRYPTION_IV_SIZE		ENCRYPTION_BLOCK_SIZE
 
 /*
  * The openssl EVP API refers to a block in terms of padding of the output
@@ -31,12 +32,6 @@
  * defined by ENCRYPTION_BLOCK.
  */
 #define ENCRYPTION_BLOCK_OPENSSL 1
-
-/*
- * Encryption key and tweak length for AES-256.
- */
-#define	ENCRYPTION_KEY_SIZE		32
-#define ENCRYPTION_TWEAK_SIZE	16
 
 /*
  * If one XLOG record ended and the following one started in the same block,
@@ -77,6 +72,24 @@ enum database_encryption_cipher_kind
 	ENCRYPTION_AES_128 = 0,
 	ENCRYPTION_AES_256
 };
+
+typedef struct
+{
+	ossl_EVP_cipher_func cipher_func_blk;
+	ossl_EVP_cipher_func cipher_func_strm;
+	int					key_len;
+} cipher_info;
+
+cipher_info cipher_info_table[] =
+{
+	{EVP_aes_128_cbc, EVP_aes_128_ctr, 16},
+	{EVP_aes_256_cbc, EVP_aes_256_ctr, 32}
+};
+#define ENCRYPTION_MAX_KEY_LEN	32
+
+#define ENCRYPTION_KEY_SALT_LEN	16
+
+extern int EncryptionKeyLen;
 
 extern int database_encryption_cipher;
 
