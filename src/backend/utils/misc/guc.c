@@ -71,6 +71,7 @@
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
+#include "storage/encryption.h"
 #include "storage/dsm_impl.h"
 #include "storage/standby.h"
 #include "storage/fd.h"
@@ -454,6 +455,12 @@ const struct config_enum_entry ssl_protocol_versions_info[] = {
 	{"TLSv1.1", PG_TLS1_1_VERSION, false},
 	{"TLSv1.2", PG_TLS1_2_VERSION, false},
 	{"TLSv1.3", PG_TLS1_3_VERSION, false},
+	{NULL, 0, false}
+};
+
+const struct config_enum_entry database_encryption_cipher_options[] = {
+	{"aes-128", ENCRYPTION_AES_128, false},
+	{"aes-256", ENCRYPTION_AES_256, false},
 	{NULL, 0, false}
 };
 
@@ -4547,6 +4554,19 @@ static struct config_enum ConfigureNamesEnum[] =
 		&ssl_max_protocol_version,
 		PG_TLS_ANY,
 		ssl_protocol_versions_info,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"database_encryption_cipher", PGC_INTERNAL, ENCRYPTION,
+		 gettext_noop("Specify encryption algorithms to use."),
+		 NULL,
+		 GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE,
+		 GUC_SUPERUSER_ONLY
+		},
+		&database_encryption_cipher,
+		ENCRYPTION_AES_128,
+		database_encryption_cipher_options,
 		NULL, NULL, NULL
 	},
 
