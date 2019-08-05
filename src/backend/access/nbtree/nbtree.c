@@ -162,6 +162,8 @@ btbuildempty(Relation index)
 	metapage = (Page) palloc(BLCKSZ);
 	_bt_initmetapage(metapage, P_NONE, 0);
 
+	PageEncryptInplace(metapage, INIT_FORKNUM, BTREE_METAPAGE);
+
 	/*
 	 * Write the page and log it.  It might seem that an immediate sync would
 	 * be sufficient to guarantee that the file exists on disk, but recovery
