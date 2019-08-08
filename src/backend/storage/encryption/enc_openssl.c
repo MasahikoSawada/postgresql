@@ -74,7 +74,7 @@ static void decrypt_block(const char *input, char *output, Size size,
 						  const char *key, const char *iv);
 static void createCipherContext(void);
 static EVP_CIPHER_CTX *create_ossl_encryption_ctx(ossl_EVP_cipher_func func,
-												  int klen);
+												  int klen, bool iswrap);
 static EVP_PKEY_CTX *create_ossl_derive_ctx(void);
 static void setup_encryption_openssl(void);
 static void setup_encryption(void) ;
@@ -172,14 +172,11 @@ createCipherContext(void)
 
 	/* Create encryption context */
 	cctx->enc_ctx = create_ossl_encryption_ctx(cipher->cipher_func,
-											   cipher->key_len);
+											   cipher->key_len, false);
 
 	/* Create key wrap context */
 	cctx->wrap_ctx = create_ossl_encryption_ctx(EVP_aes_256_wrap,
-												cipher->key_len);
-
-	/* Enable key wrap algorithm */
-	EVP_CIPHER_CTX_set_flags(cctx->wrap_ctx, EVP_CIPHER_CTX_FLAG_WRAP_ALLOW);
+												cipher->key_len, true);
 
 	/* Create key derivation context */
 	cctx->derive_ctx = create_ossl_derive_ctx();
@@ -198,40 +195,51 @@ create_ossl_derive_ctx(void)
    pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, NULL);
 
    if (EVP_PKEY_derive_init(pctx) <= 0)
-	   return NULL;
+		ereport(ERROR,
+				(errmsg("openssl encountered error during initializing derive context"),
+				 (errdetail("openssl error string: %s",
+							ERR_error_string(ERR_get_error(), NULL)))));
 
    if (EVP_PKEY_CTX_set_hkdf_md(pctx, EVP_sha256()) <= 0)
-	   return NULL;
+		ereport(ERROR,
+				(errmsg("openssl encountered error during setting HKDF context"),
+				 (errdetail("openssl error string: %s",
+							ERR_error_string(ERR_get_error(), NULL)))));
 
    return pctx;
 }
 
 /* Create openssl's encryption context */
 static EVP_CIPHER_CTX *
-create_ossl_encryption_ctx(ossl_EVP_cipher_func func, int klen)
+create_ossl_encryption_ctx(ossl_EVP_cipher_func func, int klen, bool iswrap)
 {
 	EVP_CIPHER_CTX *ctx;
 
 	/* Craete new openssl cipher context */
 	ctx = EVP_CIPHER_CTX_new();
+
+	/* Enable key wrap algorithm */
+	if (iswrap)
+		EVP_CIPHER_CTX_set_flags(ctx, EVP_CIPHER_CTX_FLAG_WRAP_ALLOW);
+
 	if (ctx == NULL)
-	{
-		EVP_CIPHER_CTX_free(ctx);
-		return NULL;
-	}
+		ereport(ERROR,
+				(errmsg("openssl encountered error during creating context"),
+				 (errdetail("openssl error string: %s",
+							ERR_error_string(ERR_get_error(), NULL)))));
 
 	if (!EVP_EncryptInit_ex(ctx, (const EVP_CIPHER *) func(), NULL,
 							NULL, NULL))
-	{
-		EVP_CIPHER_CTX_free(ctx);
-		return NULL;
-	}
+		ereport(ERROR,
+				(errmsg("openssl encountered error during initializing context"),
+				 (errdetail("openssl error string: %s",
+							ERR_error_string(ERR_get_error(), NULL)))));
 
 	if (!EVP_CIPHER_CTX_set_key_length(ctx, klen))
-	{
-		EVP_CIPHER_CTX_free(ctx);
-		return NULL;
-	}
+		ereport(ERROR,
+				(errmsg("openssl encountered error during setting key length"),
+				 (errdetail("openssl error string: %s",
+							ERR_error_string(ERR_get_error(), NULL)))));
 
 	return ctx;
 }
@@ -390,7 +398,7 @@ WrapEncrytionKey(const unsigned char *key, unsigned char *in, Size in_size,
 
 	ctx = MyCipherCtx->wrap_ctx;
 
-	if (EVP_DecryptInit_ex(ctx, NULL, NULL, key, NULL) != 1)
+	if (EVP_EncryptInit_ex(ctx, NULL, NULL, key, NULL) != 1)
 		ereport(ERROR,
 				(errmsg("openssl encountered initialization error during unwrapping key"),
 				 (errdetail("openssl error string: %s",

@@ -17,6 +17,9 @@
 #include "port/pg_crc32c.h"
 #include "storage/smgr.h"
 
+#define DataEncryptionEnabled() \
+	(data_encryption_cipher > 0)
+
 /*
  * The encrypted data is a series of blocks of size
  * ENCRYPTION_BLOCK. Currently we use the EVP_aes_256_xts implementation. Make

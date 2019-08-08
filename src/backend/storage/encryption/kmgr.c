@@ -125,11 +125,11 @@ static bool vefiry_passphrase(KmgrFileData *kmgfile,
 static TblkeyEntry* derive_tdek(RelFileNode rnode);
 
 /*
- * bootstrapping kmgr. derive KEK, generate MDEK and salt, compute hmac,
- write kmgr file etc.
+ * This func must be called ONCE on system install. we erive KEK,
+ * generate MDEK and salt, compute hmac, write kmgr file etc.
  */
 void
-BootstrapKmgr(void)
+BootStrapKmgr(void)
 {
 	const char *prompt = "Enter database encryption pass phrase:";
 	KmgrFileData kmgrfile;
@@ -144,8 +144,8 @@ BootstrapKmgr(void)
 
 	 /* Get encryption key passphrase */
 	len = run_data_encryption_key_passpharse_command(prompt,
-														 passphrase,
-														 TDE_MAX_PASSPHRASE_LEN);
+													 passphrase,
+													 TDE_MAX_PASSPHRASE_LEN);
 
 	/* Generate salt for KEK derivation */
 	ret = pg_strong_random(kek_salt, TDE_KEK_DEVIRATION_SALT_SIZE);
@@ -162,12 +162,17 @@ BootstrapKmgr(void)
 		ereport(ERROR,
 				(errmsg("failed to generate the master encryption key")));
 
+	dp("random mdek", mdek, TDE_MDEK_SIZE);
+
 	/* HHMAC */
 	ComputeHMAC(hmackey, TDE_KEK_HMAC_SIZE, mdek,
 				TDE_MDEK_SIZE, kek_hmac);
 
+
 	/* Encrypt MDEK with KEK */
 	WrapEncrytionKey(kek, mdek, TDE_MDEK_SIZE, mdek);
+
+	dp("encrypted mdek", mdek, TDE_MDEK_SIZE);
 
 	/* Fill out the kmgr file contents */
 	memcpy(kmgrfile.kek_salt, kek_salt, TDE_KEK_DEVIRATION_SALT_SIZE);
@@ -518,6 +523,9 @@ get_kek_and_hmackey_from_passphrase(char *passphrase, char pplen,
 	memcpy(kek, enckey_and_hmackey, sizeof(TDE_KEK_SIZE));
 	memcpy(hmackey, enckey_and_hmackey + TDE_KEK_SIZE,
 		   sizeof(TDE_KEK_HMAC_KEY_SIZE));
+
+	dp("kek", kek, TDE_KEK_SIZE);
+	dp("hmackey", hmackey, TDE_KEK_HMAC_KEY_SIZE);
 }
 
 static bool
@@ -566,4 +574,13 @@ derive_tdek(RelFileNode rnode)
 	DeriveNewKey(KmgrCtl->mdek, TDE_MDEK_SIZE, rnode, tkey->tdek, tdek_len);
 
 	return tkey;
+}
+
+void
+dp(const char *m, unsigned char *d, int l)
+{
+	fprintf(stderr, "%s: ", m);
+	for (int i = 0; i < l; i++)
+		fprintf(stderr, "%02X ", d[i]);
+	fprintf(stderr, "\n");
 }

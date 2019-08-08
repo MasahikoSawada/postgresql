@@ -28,7 +28,7 @@
 #define TDE_KEK_DERIVED_KEY_SIZE	(TDE_KEK_SIZE + TDE_KEK_HMAC_KEY_SIZE)
 
 /* NIST recommends that minimum iteratin count is 1000 */
-#define TDE_KEK_DEVIRATION_ITER_COUNT	10000000
+#define TDE_KEK_DEVIRATION_ITER_COUNT	10000
 
 /* NIST recommended that salt size is at least 16 */
 #define TDE_KEK_DEVIRATION_SALT_SIZE	64
@@ -46,7 +46,7 @@
 /* GUC variable */
 extern char *data_encryption_key_passphrase_command;
 
-extern void BootstrapKmgr(void);
+extern void BootStrapKmgr(void);
 extern Size KmgrShmemSize(void);
 extern void KmgrShmemInit(void);
 extern void InitializeKmgr(void);
@@ -54,5 +54,8 @@ extern void KeyringSetup(void);
 extern void SetupKmgr(void);
 extern void GetRelEncKey(RelFileNode rnode, char *key, bool create);
 extern void DropRelEncKey(RelFileNode rnode);
+
+
+extern void dp (const char *m, unsigned char *d, int l);
 
 #endif /* KMGR_H */
