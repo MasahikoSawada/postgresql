@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * encryption.huffer
+ * encryption.h
  *	  Full database encryption support
  *
  *
@@ -22,8 +22,8 @@
  * ENCRYPTION_BLOCK. Currently we use the EVP_aes_256_xts implementation. Make
  * sure the following constants match if adopting another algorithm.
  */
-#define ENCRYPTION_BLOCK_SIZE 16
-#define ENCRYPTION_IV_SIZE		ENCRYPTION_BLOCK_SIZE
+#define TDE_BLOCK_SIZE 16
+#define TDE_IV_SIZE		(TDE_BLOCK_SIZE)
 
 /*
  * The openssl EVP API refers to a block in terms of padding of the output
@@ -70,26 +70,39 @@
 /*
  * Maximum encryption key size is used by AES-256.
  */
-#define MAX_ENCRYPTION_KEY_SIZE	32
-#define ENCRYPTION_KEY_SALT_LEN	16
+#define TDE_MAX_ENCRYPTION_KEY_SIZE	32
 
-#define ENCRYPTION_WAL_COUNTER_LEN 32
-#define ENCRYPTION_BUFFER_COUNTER_LEN 32
+/*
+ * The size for counter of AES-CTR mode in nonce.
+ */
+#define TDE_WAL_AES_COUNTER_SIZE 32
+#define TDE_BUFFER_AES_COUNTER_SIZE 32
 
 enum database_encryption_cipher_kind
 {
-	ENCRYPTION_AES_128 = 0,
-	ENCRYPTION_AES_256
+	TDE_ENCRYPTION_AES_128 = 0,
+	TDE_ENCRYPTION_AES_256
 };
 
 /* GUC parameter */
 extern int database_encryption_cipher;
-
-extern int EncryptionKeyLen;
 extern PGAlignedBlock encrypt_buf;
+extern int EncryptionKeySize;
 
 extern void EncryptionGetIVForWAL(char *iv, XLogSegNo segment, uint32 offset);
 extern void EncryptionGetIVForBuffer(char *iv, XLogRecPtr pagelsn,
 										 BlockNumber blocknum);
+extern void DeriveKeyFromPassphrase(const char *passphrase, Size pass_size,
+									unsigned char *salt, Size salt_size,
+									int iter_cnt, Size derived_size,
+									unsigned char *derived_key);
+extern void DeriveNewKey(const unsigned char *base_key, Size base_size, RelFileNode rnode,
+						 unsigned char *derived_key, Size derived_size);
+extern void ComputeHMAC(const unsigned char *hmac_key, Size key_size, unsigned char *data,
+						Size data_size,	unsigned char *hmac);
+extern void UnwrapEncrytionKey(const unsigned char *key, unsigned char *in, Size in_size,
+							   unsigned char *out);
+extern void WrapEncrytionKey(const unsigned char *kek, unsigned char *in, Size in_size,
+							 unsigned char *out);
 
 #endif							/* ENCRYPTION_H */

@@ -459,8 +459,8 @@ const struct config_enum_entry ssl_protocol_versions_info[] = {
 };
 
 const struct config_enum_entry database_encryption_cipher_options[] = {
-	{"aes-128", ENCRYPTION_AES_128, false},
-	{"aes-256", ENCRYPTION_AES_256, false},
+	{"aes-128", TDE_ENCRYPTION_AES_128, false},
+	{"aes-256", TDE_ENCRYPTION_AES_256, false},
 	{NULL, 0, false}
 };
 
@@ -4176,6 +4176,16 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
+		{"database_encryption_key_passphrase_command", PGC_POSTMASTER, ENCRYPTION,
+			gettext_noop("Command to obtain passphrases for database encryption."),
+			NULL
+		},
+		&database_encryption_key_passphrase_command,
+		"",
+		NULL, NULL, NULL
+	},
+
+	{
 		{"application_name", PGC_USERSET, LOGGING_WHAT,
 			gettext_noop("Sets the application name to be reported in statistics and logs."),
 			NULL,
@@ -4565,7 +4575,7 @@ static struct config_enum ConfigureNamesEnum[] =
 		 GUC_SUPERUSER_ONLY
 		},
 		&database_encryption_cipher,
-		ENCRYPTION_AES_128,
+		TDE_ENCRYPTION_AES_128,
 		database_encryption_cipher_options,
 		NULL, NULL, NULL
 	},

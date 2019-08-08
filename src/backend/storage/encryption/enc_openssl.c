@@ -24,6 +24,7 @@
 #include "storage/bufpage.h"
 #include "storage/encryption.h"
 #include "storage/fd.h"
+#include "storage/kmgr.h"
 #include "storage/smgr.h"
 #include "utils/memutils.h"
 #include "miscadmin.h"
@@ -34,6 +35,7 @@
 #include <openssl/evp.h>
 #include <openssl/err.h>
 #include <openssl/kdf.h>
+#include <openssl/hmac.h>
 
 /*
  * prototype for the EVP functions that return an algorithm, e.g.
@@ -176,6 +178,9 @@ createCipherContext(void)
 	cctx->wrap_ctx = create_ossl_encryption_ctx(EVP_aes_256_wrap,
 												cipher->key_len);
 
+	/* Enable key wrap algorithm */
+	EVP_CIPHER_CTX_set_flags(cctx->wrap_ctx, EVP_CIPHER_CTX_FLAG_WRAP_ALLOW);
+
 	/* Create key derivation context */
 	cctx->derive_ctx = create_ossl_derive_ctx();
 
@@ -215,7 +220,8 @@ create_ossl_encryption_ctx(ossl_EVP_cipher_func func, int klen)
 		return NULL;
 	}
 
-	if (!EVP_EncryptInit_ex(ctx, (const EVP_CIPHER *) func(), NULL, NULL, NULL))
+	if (!EVP_EncryptInit_ex(ctx, (const EVP_CIPHER *) func(), NULL,
+							NULL, NULL))
 	{
 		EVP_CIPHER_CTX_free(ctx);
 		return NULL;
@@ -264,6 +270,147 @@ setup_encryption_openssl(void)
 }
 
 void
+DeriveKeyFromPassphrase(const char *passphrase, Size pass_size,
+						unsigned char *salt, Size salt_size,
+						int iter_cnt, Size derived_size, unsigned char *derived_key)
+{
+	int rc;
+
+	/* Derive KEK from passphrase */
+	rc = PKCS5_PBKDF2_HMAC(passphrase, pass_size, salt, salt_size, iter_cnt,
+						   EVP_sha256(), derived_size, derived_key);
+
+	if (rc != 1)
+		ereport(ERROR,
+				(errmsg("could not derive key from passphrase"),
+				 (errdetail("openssl error string: %s",
+							ERR_error_string(ERR_get_error(), NULL)))));
+}
+
+void
+DeriveNewKey(const unsigned char *base_key, Size base_size, RelFileNode rnode,
+			 unsigned char *derived_key, Size derived_size)
+{
+   EVP_PKEY_CTX *pctx;
+
+   pctx = MyCipherCtx->derive_ctx;
+
+   if (EVP_PKEY_CTX_set1_hkdf_key(pctx, base_key, base_size) != 1)
+	   ereport(ERROR,
+			   (errmsg("openssl encountered setting key error during key derivation"),
+				(errdetail("openssl error string: %s",
+						   ERR_error_string(ERR_get_error(), NULL)))));
+
+   /*
+	* we don't need to set salt since the input key is already present
+	* as cryptographically strong.
+	*/
+
+   if (EVP_PKEY_CTX_add1_hkdf_info(pctx, (unsigned char *) &rnode,
+								   sizeof(RelFileNode)) != 1)
+	   ereport(ERROR,
+			   (errmsg("openssl encountered setting info error during key derivation"),
+				(errdetail("openssl error string: %s",
+						   ERR_error_string(ERR_get_error(), NULL)))));
+
+   /*
+	* The 'derivedkey_size' should contain the length of the 'derivedkey'
+	* buffer, if the call is sccessful the derived key is written to
+	* 'derivedkey' and the amount of data written to 'derivedkey_size'
+	*/
+   if (EVP_PKEY_derive(pctx, derived_key, &derived_size) != 1)
+	   ereport(ERROR,
+			   (errmsg("openssl encountered error during key derivation"),
+				(errdetail("openssl error string: %s",
+						   ERR_error_string(ERR_get_error(), NULL)))));
+}
+
+void
+ComputeHMAC(const unsigned char *hmac_key, Size key_size, unsigned char *data,
+			Size data_size,	unsigned char *hmac)
+{
+	unsigned char *h;
+	uint32			hmac_size;
+
+	Assert(hmac != NULL);
+
+	h = HMAC(EVP_sha256(), hmac_key, key_size, data, data_size, hmac, &hmac_size);
+
+	if (h == NULL)
+		ereport(ERROR,
+				(errmsg("could not compute HMAC"),
+				 (errdetail("openssl error string: %s",
+							ERR_error_string(ERR_get_error(), NULL)))));
+
+	memcpy(hmac, h, hmac_size);
+}
+
+void
+UnwrapEncrytionKey(const unsigned char *key, unsigned char *in, Size in_size,
+				   unsigned char *out)
+{
+	int			out_size;
+	EVP_CIPHER_CTX *ctx;
+
+	/* Ensure encryption has setup */
+	if (MyCipherCtx == NULL)
+		setup_encryption();
+
+	ctx = MyCipherCtx->wrap_ctx;
+
+	if (EVP_DecryptInit_ex(ctx, NULL, NULL, key, NULL) != 1)
+		ereport(ERROR,
+				(errmsg("openssl encountered initialization error during unwrapping key"),
+				 (errdetail("openssl error string: %s",
+							ERR_error_string(ERR_get_error(), NULL)))));
+
+	if (!EVP_CIPHER_CTX_set_key_length(ctx, in_size))
+		ereport(ERROR,
+				(errmsg("openssl encountered setting key length error during unwrapping key"),
+				 (errdetail("openssl error string: %s",
+							ERR_error_string(ERR_get_error(), NULL)))));
+
+	if (EVP_DecryptUpdate(ctx, out, &out_size, in, in_size) != 1)
+		ereport(ERROR,
+				(errmsg("openssl encountered error during unwrapping key"),
+				 (errdetail("openssl error string: %s",
+							ERR_error_string(ERR_get_error(), NULL)))));
+}
+
+void
+WrapEncrytionKey(const unsigned char *key, unsigned char *in, Size in_size,
+				   unsigned char *out)
+{
+	int			out_size;
+	EVP_CIPHER_CTX *ctx;
+
+	/* Ensure encryption has setup */
+	if (MyCipherCtx == NULL)
+		setup_encryption();
+
+	ctx = MyCipherCtx->wrap_ctx;
+
+	if (EVP_DecryptInit_ex(ctx, NULL, NULL, key, NULL) != 1)
+		ereport(ERROR,
+				(errmsg("openssl encountered initialization error during unwrapping key"),
+				 (errdetail("openssl error string: %s",
+							ERR_error_string(ERR_get_error(), NULL)))));
+
+	if (!EVP_CIPHER_CTX_set_key_length(ctx, in_size))
+		ereport(ERROR,
+				(errmsg("openssl encountered setting key length error during wrapping key"),
+				 (errdetail("openssl error string: %s",
+							ERR_error_string(ERR_get_error(), NULL)))));
+
+	if (EVP_EncryptUpdate(ctx, out, &out_size, in, in_size) != 1)
+		ereport(ERROR,
+				(errmsg("openssl encountered error during unwrapping key"),
+				 (errdetail("openssl error string: %s",
+							ERR_error_string(ERR_get_error(), NULL)))));
+}
+
+
+void
 EncryptionGetIVForWAL(char *iv, XLogSegNo segment, uint32 offset)
 {
 	char *p = iv;
@@ -272,8 +419,8 @@ EncryptionGetIVForWAL(char *iv, XLogSegNo segment, uint32 offset)
 	Assert(iv != NULL);
 
 	/* Space for counter (4 byte) */
-	memset(p, 0, ENCRYPTION_WAL_COUNTER_LEN);
-	p += ENCRYPTION_WAL_COUNTER_LEN;
+	memset(p, 0, TDE_WAL_AES_COUNTER_SIZE);
+	p += TDE_WAL_AES_COUNTER_SIZE;
 
 	/* Segement number (8 byte) */
 	memcpy(p, &segment, sizeof(XLogSegNo));
@@ -292,8 +439,8 @@ EncryptionGetIVForBuffer(char *iv, XLogRecPtr pagelsn, BlockNumber blocknum)
 	Assert(iv != NULL);
 
 	/* Space for counter (4 byte) */
-	memset(p, 0, ENCRYPTION_BUFFER_COUNTER_LEN);
-	p += ENCRYPTION_BUFFER_COUNTER_LEN;
+	memset(p, 0, TDE_BUFFER_AES_COUNTER_SIZE);
+	p += TDE_BUFFER_AES_COUNTER_SIZE;
 
 	/* page lsn (8 byte) */
 	memcpy(p, &pagelsn, sizeof(XLogRecPtr));
