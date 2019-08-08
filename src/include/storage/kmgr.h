@@ -44,7 +44,7 @@
 
 
 /* GUC variable */
-extern char *database_encryption_key_passphrase_command;
+extern char *data_encryption_key_passphrase_command;
 
 extern void BootstrapKmgr(void);
 extern Size KmgrShmemSize(void);

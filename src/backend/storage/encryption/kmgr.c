@@ -107,11 +107,11 @@ static MemoryContext	KmgrContext;
 static HTAB				*TblKeyring;
 
 /* GUC variable */
-char *database_encryption_key_passphrase_command = NULL;
+char *data_encryption_key_passphrase_command = NULL;
 
 PG_FUNCTION_INFO_V1(pg_rotate_encryption_key);
 
-static int run_database_encryption_key_passpharse_command(const char *prompt,
+static int run_data_encryption_key_passpharse_command(const char *prompt,
 														  char *buf, int size);
 static KmgrFileData *read_kmgr_file(void);
 static void write_kmgr_file(KmgrFileData *filedata);
@@ -143,7 +143,7 @@ BootstrapKmgr(void)
 	int ret;
 
 	 /* Get encryption key passphrase */
-	len = run_database_encryption_key_passpharse_command(prompt,
+	len = run_data_encryption_key_passpharse_command(prompt,
 														 passphrase,
 														 TDE_MAX_PASSPHRASE_LEN);
 
@@ -202,7 +202,7 @@ KmgrShmemInit(void)
 }
 
 /*
- * Run database_encryption_key_passphrase_command
+ * Run data_encryption_key_passphrase_command
  *
  * prompt will be substituted for %p.
  *
@@ -210,7 +210,7 @@ KmgrShmemInit(void)
  * value is the length of the actual result.
  */
 static int
-run_database_encryption_key_passpharse_command(const char *prompt,
+run_data_encryption_key_passpharse_command(const char *prompt,
 											   char *buf, int size)
 {
 	StringInfoData command;
@@ -225,7 +225,7 @@ run_database_encryption_key_passpharse_command(const char *prompt,
 
 	initStringInfo(&command);
 
-	for (p = database_encryption_key_passphrase_command; *p; p++)
+	for (p = data_encryption_key_passphrase_command; *p; p++)
 	{
 		if (p[0] == '%')
 		{
@@ -312,7 +312,7 @@ InitializeKmgr(void)
 	kmgrfile = read_kmgr_file();
 
 	/* Get encryption key passphrase */
-	len = run_database_encryption_key_passpharse_command(prompt,
+	len = run_data_encryption_key_passpharse_command(prompt,
 														 passphrase,
 														 TDE_MAX_PASSPHRASE_LEN);
 

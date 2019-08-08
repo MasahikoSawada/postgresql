@@ -80,12 +80,13 @@
 
 enum database_encryption_cipher_kind
 {
-	TDE_ENCRYPTION_AES_128 = 0,
+	TDE_ENCRYPTION_OFF = 0,
+	TDE_ENCRYPTION_AES_128,
 	TDE_ENCRYPTION_AES_256
 };
 
 /* GUC parameter */
-extern int database_encryption_cipher;
+extern int data_encryption_cipher;
 extern PGAlignedBlock encrypt_buf;
 extern int EncryptionKeySize;
 
@@ -104,5 +105,7 @@ extern void UnwrapEncrytionKey(const unsigned char *key, unsigned char *in, Size
 							   unsigned char *out);
 extern void WrapEncrytionKey(const unsigned char *kek, unsigned char *in, Size in_size,
 							 unsigned char *out);
+extern char *EncryptionCipherString(int value);
+extern int EncryptionCipherValue(const char *name);
 
 #endif							/* ENCRYPTION_H */

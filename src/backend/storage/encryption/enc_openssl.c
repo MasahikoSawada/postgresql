@@ -62,7 +62,7 @@ typedef struct CipherCtx
 } CipherCtx;
 
 /* GUC parameter */
-int database_encryption_cipher;
+int data_encryption_cipher;
 
 CipherCtx *MyCipherCtx = NULL;
 int		EncryptionKeySize;
@@ -162,7 +162,7 @@ decrypt_block(const char *input, char *output, Size size,
 static void
 createCipherContext(void)
 {
-	cipher_info *cipher = &cipher_info_table[database_encryption_cipher];
+	cipher_info *cipher = &cipher_info_table[data_encryption_cipher];
 	CipherCtx *cctx;
 
 	if (MyCipherCtx != NULL)
@@ -451,3 +451,29 @@ EncryptionGetIVForBuffer(char *iv, XLogRecPtr pagelsn, BlockNumber blocknum)
 	p += sizeof(BlockNumber);
 }
 
+int
+EncryptionCipherValue(const char *name)
+{
+	if (strcmp(name, "aes-128") == 0)
+		return TDE_ENCRYPTION_AES_128;
+	else if (strcmp(name, "aes-256") == 0)
+		return TDE_ENCRYPTION_AES_256;
+	else
+		return TDE_ENCRYPTION_OFF;
+}
+
+char *
+EncryptionCipherString(int value)
+{
+	switch (value)
+	{
+		case TDE_ENCRYPTION_OFF :
+			return "off";
+		case TDE_ENCRYPTION_AES_128:
+			return "aes-128";
+		case TDE_ENCRYPTION_AES_256:
+			return "aes-256";
+	}
+
+	return "unknown";
+}

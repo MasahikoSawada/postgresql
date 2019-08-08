@@ -114,6 +114,11 @@ static const char *const auth_methods_local[] = {
 	NULL
 };
 
+static const char *const encryption_ciphers[] = {
+	"aes-128",
+	"aes-256"
+};
+
 /*
  * these values are passed in by makefile defines
  */
@@ -145,6 +150,8 @@ static bool data_checksums = false;
 static char *xlog_dir = NULL;
 static char *str_wal_segment_size_mb = NULL;
 static int	wal_segment_size_mb;
+static char *enc_cipher = NULL;
+static char *enc_passphrase = NULL;
 
 
 /* internal vars */
@@ -1220,6 +1227,13 @@ setup_config(void)
 								  "password_encryption = scram-sha-256");
 	}
 
+	if (enc_passphrase)
+	{
+		snprintf(repltok, sizeof(repltok), "data_encryption_key_passphrase_command = '%s'",
+				 escape_quotes(enc_passphrase));
+		conflines = replace_token(conflines, "#data_encryption_key_passphrase_command = ''", repltok);
+	}
+
 	/*
 	 * If group access has been enabled for the cluster then it makes sense to
 	 * ensure that the log files also allow group access.  Otherwise a backup
@@ -1447,10 +1461,12 @@ bootstrap_template1(void)
 	unsetenv("PGCLIENTENCODING");
 
 	snprintf(cmd, sizeof(cmd),
-			 "\"%s\" --boot -x1 -X %u %s %s %s",
+			 "\"%s\" --boot -x1 -X %u %s %s %s %s %s",
 			 backend_exec,
 			 wal_segment_size_mb * (1024 * 1024),
 			 data_checksums ? "-k" : "",
+			 enc_cipher ? "-e" : "",
+			 enc_cipher ? enc_cipher : "",
 			 boot_options,
 			 debug ? "-d 5" : "");
 
@@ -2361,6 +2377,9 @@ usage(const char *progname)
 	printf(_("      --auth-local=METHOD   default authentication method for local-socket connections\n"));
 	printf(_(" [-D, --pgdata=]DATADIR     location for this database cluster\n"));
 	printf(_("  -E, --encoding=ENCODING   set default encoding for new databases\n"));
+	printf(_("      --encryption=MODE     set encryption cipher for data encryption\n"));
+	printf(_("      --encryption-key-passphrase-command=COMMAND\n"
+			 "                            set command to obtain passphrase for data encryption key\n"));
 	printf(_("  -g, --allow-group-access  allow group read/execute on data directory\n"));
 	printf(_("      --locale=LOCALE       set default locale for new databases\n"));
 	printf(_("      --lc-collate=, --lc-ctype=, --lc-messages=LOCALE\n"
@@ -2442,6 +2461,37 @@ check_need_password(const char *authmethodlocal, const char *authmethodhost)
 	}
 }
 
+static void
+check_encryption_cipher(const char *cipher, const char *passphrase,
+						const char *const *valid_ciphers)
+{
+	const char *const *p;
+
+	if (!cipher && !passphrase)
+		return;
+
+	/* Check both options must be specified at the same time */
+	if (cipher && !passphrase)
+	{
+		pg_log_error("encryption passphrase command must be specified when encryption cipher is specified");
+		exit(1);
+	}
+
+	if (!cipher && passphrase)
+	{
+		pg_log_error("encryption cipher must be specified when encryption passphrase command is specified");
+		exit(1);
+	}
+
+	for (p = valid_ciphers; *p; p++)
+	{
+		if (strcmp(cipher, *p) == 0)
+			return;
+	}
+
+	pg_log_error("invalid encryption cipher \"%s\"", cipher);
+	exit(1);
+}
 
 void
 setup_pgdata(void)
@@ -3055,6 +3105,8 @@ main(int argc, char *argv[])
 		{"wal-segsize", required_argument, NULL, 12},
 		{"data-checksums", no_argument, NULL, 'k'},
 		{"allow-group-access", no_argument, NULL, 'g'},
+		{"encryption", required_argument, NULL, 13},
+		{"encryption-key-passphrase-command", required_argument, NULL, 14},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -3178,6 +3230,12 @@ main(int argc, char *argv[])
 			case 9:
 				pwfilename = pg_strdup(optarg);
 				break;
+			case 13:
+				enc_cipher = pg_strdup(optarg);
+				break;
+			case 14:
+				enc_passphrase = pg_strdup(optarg);
+				break;
 			case 's':
 				show_setting = true;
 				break;
@@ -3256,6 +3314,8 @@ main(int argc, char *argv[])
 
 	check_need_password(authmethodlocal, authmethodhost);
 
+	check_encryption_cipher(enc_cipher, enc_passphrase, encryption_ciphers);
+
 	/* set wal segment size */
 	if (str_wal_segment_size_mb == NULL)
 		wal_segment_size_mb = (DEFAULT_XLOG_SEG_SIZE) / (1024 * 1024);
@@ -3314,6 +3374,11 @@ main(int argc, char *argv[])
 		printf(_("Data page checksums are enabled.\n"));
 	else
 		printf(_("Data page checksums are disabled.\n"));
+
+	if (enc_cipher)
+		printf(_("Data encryption is enabled.\n"));
+	else
+		printf(_("Data encryption is disabled.\n"));
 
 	if (pwprompt || pwfilename)
 		get_su_pwd();
