@@ -3016,8 +3016,8 @@ pgstat_bestart(void)
 #endif
 
 	lbeentry.st_state = STATE_UNDEFINED;
-	lbeentry.st_progress_command = PROGRESS_COMMAND_INVALID;
-	lbeentry.st_progress_command_target = InvalidOid;
+	MemSet(lbeentry.st_progress_cmds, 0,
+		   sizeof(PgBackendProgressInfo) * PGSTAT_MAX_PROGRESS_INFO);
 
 	/*
 	 * we don't zero st_progress_param here to save cycles; nobody should
@@ -3203,10 +3203,21 @@ pgstat_progress_start_command(ProgressCommandType cmdtype, Oid relid)
 	if (!beentry || !pgstat_track_activities)
 		return;
 
+	/* The given command is already started */
+	if (beentry->st_progress_cmds[beentry->st_current_cmd].command == cmdtype)
+		return;
+
+	/* The command quese is full */
+	if (beentry->st_current_cmd >= PGSTAT_MAX_PROGRESS_INFO - 1)
+		return;
+
 	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
-	beentry->st_progress_command = cmdtype;
-	beentry->st_progress_command_target = relid;
-	MemSet(&beentry->st_progress_param, 0, sizeof(beentry->st_progress_param));
+	beentry->st_current_cmd++;
+	beentry->st_progress_cmds[beentry->st_current_cmd].command = cmdtype;
+	beentry->st_progress_cmds[beentry->st_current_cmd].target = relid;
+	MemSet(&(beentry->st_progress_cmds[beentry->st_current_cmd]),
+		   0,
+		   sizeof(beentry->st_progress_cmds[beentry->st_current_cmd].params));
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
 }
 
@@ -3227,7 +3238,7 @@ pgstat_progress_update_param(int index, int64 val)
 		return;
 
 	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
-	beentry->st_progress_param[index] = val;
+	beentry->st_progress_cmds[beentry->st_current_cmd].params[index] = val;
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
 }
 
@@ -3254,7 +3265,8 @@ pgstat_progress_update_multi_param(int nparam, const int *index,
 	{
 		Assert(index[i] >= 0 && index[i] < PGSTAT_NUM_PROGRESS_PARAM);
 
-		beentry->st_progress_param[index[i]] = val[i];
+		beentry->st_progress_cmds[beentry->st_current_cmd].params[index[i]] =
+			val[i];
 	}
 
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
@@ -3274,13 +3286,17 @@ pgstat_progress_end_command(void)
 
 	if (!beentry)
 		return;
-	if (!pgstat_track_activities
-		&& beentry->st_progress_command == PROGRESS_COMMAND_INVALID)
+	if (!pgstat_track_activities &&
+		beentry->st_progress_cmds[beentry->st_current_cmd].command ==
+		PROGRESS_COMMAND_INVALID)
 		return;
 
 	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
-	beentry->st_progress_command = PROGRESS_COMMAND_INVALID;
-	beentry->st_progress_command_target = InvalidOid;
+	beentry->st_progress_cmds[beentry->st_current_cmd].command =
+		PROGRESS_COMMAND_INVALID;
+	beentry->st_progress_cmds[beentry->st_current_cmd].target =
+		InvalidOid;
+	beentry->st_current_cmd--;
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
 }
 

@@ -953,13 +953,14 @@ typedef enum
  */
 typedef enum ProgressCommandType
 {
-	PROGRESS_COMMAND_INVALID,
+	PROGRESS_COMMAND_INVALID = 0,
 	PROGRESS_COMMAND_VACUUM,
 	PROGRESS_COMMAND_CLUSTER,
 	PROGRESS_COMMAND_CREATE_INDEX
 } ProgressCommandType;
 
 #define PGSTAT_NUM_PROGRESS_PARAM	20
+#define PGSTAT_MAX_PROGRESS_INFO	4
 
 /* ----------
  * Shared-memory data structures
@@ -1010,6 +1011,21 @@ typedef struct PgBackendGSSStatus
 
 } PgBackendGSSStatus;
 
+typedef struct PgBackendProgressInfo
+{
+	/*
+	 * Command progress reporting.  Any command which wishes can advertise
+	 * that it is running by setting st_progress_command,
+	 * st_progress_command_target, and st_progress_param[].
+	 * st_progress_command_target should be the OID of the relation which the
+	 * command targets (we assume there's just one, as this is meant for
+	 * utility commands), but the meaning of each element in the
+	 * st_progress_param array is command-specific.
+	 */
+	ProgressCommandType command;
+	Oid			target;
+	int64		params[PGSTAT_NUM_PROGRESS_PARAM];
+} PgBackendProgressInfo;
 
 /* ----------
  * PgBackendStatus
@@ -1084,18 +1100,8 @@ typedef struct PgBackendStatus
 	 */
 	char	   *st_activity_raw;
 
-	/*
-	 * Command progress reporting.  Any command which wishes can advertise
-	 * that it is running by setting st_progress_command,
-	 * st_progress_command_target, and st_progress_param[].
-	 * st_progress_command_target should be the OID of the relation which the
-	 * command targets (we assume there's just one, as this is meant for
-	 * utility commands), but the meaning of each element in the
-	 * st_progress_param array is command-specific.
-	 */
-	ProgressCommandType st_progress_command;
-	Oid			st_progress_command_target;
-	int64		st_progress_param[PGSTAT_NUM_PROGRESS_PARAM];
+	int	st_current_cmd;
+	PgBackendProgressInfo st_progress_cmds[PGSTAT_MAX_PROGRESS_INFO];
 } PgBackendStatus;
 
 /*

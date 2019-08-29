@@ -494,6 +494,7 @@ pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 		PgBackendStatus *beentry;
 		Datum		values[PG_STAT_GET_PROGRESS_COLS];
 		bool		nulls[PG_STAT_GET_PROGRESS_COLS];
+		int			cmdidx;
 		int			i;
 
 		MemSet(values, 0, sizeof(values));
@@ -510,7 +511,16 @@ pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 		 * Report values for only those backends which are running the given
 		 * command.
 		 */
-		if (!beentry || beentry->st_progress_command != cmdtype)
+		if (!beentry)
+			continue;
+
+		for (cmdidx = 0; cmdidx < beentry->st_current_cmd; cmdidx++)
+		{
+			if (beentry->st_progress_cmds[cmdidx].command == cmdtype)
+				break;
+		}
+
+		if (cmdidx >= beentry->st_current_cmd)
 			continue;
 
 		/* Value available to all callers */
@@ -520,9 +530,11 @@ pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 		/* show rest of the values including relid only to role members */
 		if (has_privs_of_role(GetUserId(), beentry->st_userid))
 		{
-			values[2] = ObjectIdGetDatum(beentry->st_progress_command_target);
+			values[2] =
+				ObjectIdGetDatum(beentry->st_progress_cmds[cmdidx].target);
 			for (i = 0; i < PGSTAT_NUM_PROGRESS_PARAM; i++)
-				values[i + 3] = Int64GetDatum(beentry->st_progress_param[i]);
+				values[i + 3] =
+					Int64GetDatum(beentry->st_progress_cmds[cmdidx].params[i]);
 		}
 		else
 		{
