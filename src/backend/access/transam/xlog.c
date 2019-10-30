@@ -55,8 +55,10 @@
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
+#include "storage/encryption.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
+#include "storage/kmgr.h"
 #include "storage/large_object.h"
 #include "storage/latch.h"
 #include "storage/pmsignal.h"
@@ -77,6 +79,7 @@
 #include "pg_trace.h"
 
 extern uint32 bootstrap_data_checksum_version;
+extern uint32 bootstrap_data_encryption_cipher;
 
 /* Unsupported old recovery command file names (relative to $PGDATA) */
 #define RECOVERY_COMMAND_FILE	"recovery.conf"
@@ -4783,6 +4786,10 @@ ReadControlFile(void)
 	/* Make the initdb settings visible as GUC variables, too */
 	SetConfigOption("data_checksums", DataChecksumsEnabled() ? "yes" : "no",
 					PGC_INTERNAL, PGC_S_OVERRIDE);
+
+	SetConfigOption("data_encryption_cipher",
+					EncryptionCipherString(GetDataEncryptionCipher()),
+					PGC_INTERNAL, PGC_S_OVERRIDE);
 }
 
 /*
@@ -4815,6 +4822,34 @@ GetMockAuthenticationNonce(void)
 	return ControlFile->mock_authentication_nonce;
 }
 
+WrappedEncKeyWithHmac *
+GetTDERelationEncryptionKey(void)
+{
+	Assert(ControlFile != NULL);
+	return &(ControlFile->tde_rdek);
+}
+
+WrappedEncKeyWithHmac *
+GetTDEWALEncryptionKey(void)
+{
+	Assert(ControlFile != NULL);
+	return &(ControlFile->tde_wdek);
+}
+
+void
+SetTDEWALEncryptionKey(const WrappedEncKeyWithHmac *key)
+{
+	Assert(ControlFile != NULL);
+	memcpy(&(ControlFile->tde_wdek), key, sizeof(WrappedEncKeyWithHmac));
+}
+
+void
+SetTDERelationEncryptionKey(const WrappedEncKeyWithHmac *key)
+{
+	Assert(ControlFile != NULL);
+	memcpy(&(ControlFile->tde_rdek), key, sizeof(WrappedEncKeyWithHmac));
+}
+
 /*
  * Are checksums enabled for data pages?
  */
@@ -4823,6 +4858,13 @@ DataChecksumsEnabled(void)
 {
 	Assert(ControlFile != NULL);
 	return (ControlFile->data_checksum_version > 0);
+}
+
+int
+GetDataEncryptionCipher(void)
+{
+	Assert(ControlFile != NULL);
+	return ControlFile->data_encryption_cipher;
 }
 
 /*
@@ -5091,6 +5133,7 @@ BootStrapXLOG(void)
 	XLogPageHeader page;
 	XLogLongPageHeader longpage;
 	XLogRecord *record;
+	KmgrBootstrapInfo *kmgrinfo;
 	char	   *recptr;
 	bool		use_existent;
 	uint64		sysidentifier;
@@ -5168,6 +5211,12 @@ BootStrapXLOG(void)
 	SetMultiXactIdLimit(checkPoint.oldestMulti, checkPoint.oldestMultiDB, true);
 	SetCommitTsLimit(InvalidTransactionId, InvalidTransactionId);
 
+	/*
+	 * Bootstrap key management module beforehand in order to encrypt the first
+	 * xlog record.
+	 */
+	kmgrinfo = BootStrapKmgr(bootstrap_data_encryption_cipher);
+
 	/* Set up the XLOG page header */
 	page->xlp_magic = XLOG_PAGE_MAGIC;
 	page->xlp_info = XLP_LONG_HEADER;
@@ -5243,6 +5292,11 @@ BootStrapXLOG(void)
 	ControlFile->checkPoint = checkPoint.redo;
 	ControlFile->checkPointCopy = checkPoint;
 	ControlFile->unloggedLSN = FirstNormalUnloggedLSN;
+	if (kmgrinfo)
+	{
+		memcpy(&(ControlFile->tde_rdek), &(kmgrinfo->relEncKey), sizeof(WrappedEncKeyWithHmac));
+		memcpy(&(ControlFile->tde_wdek), &(kmgrinfo->walEncKey), sizeof(WrappedEncKeyWithHmac));
+	}
 
 	/* Set important parameter values for use when replaying WAL */
 	ControlFile->MaxConnections = MaxConnections;
@@ -5254,6 +5308,7 @@ BootStrapXLOG(void)
 	ControlFile->wal_log_hints = wal_log_hints;
 	ControlFile->track_commit_timestamp = track_commit_timestamp;
 	ControlFile->data_checksum_version = bootstrap_data_checksum_version;
+	ControlFile->data_encryption_cipher = bootstrap_data_encryption_cipher;
 
 	/* some additional ControlFile fields are set in WriteControlFile() */
 

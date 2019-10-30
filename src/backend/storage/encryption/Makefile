@@ -12,7 +12,9 @@ subdir = src/backend/storage/encryption/
 top_builddir = ../../../..
 include $(top_builddir)/src/Makefile.global
 
-OBJS = kmgr.o bufenc.o walenc.o enc_cipher.o
+OBJS = \
+	enc_cipher.o \
+	kmgr.o
 
 ifeq ($(with_openssl),yes)
 OBJS += enc_openssl.o
