@@ -20,6 +20,10 @@
 #define DataEncryptionEnabled() \
 	(data_encryption_cipher > TDE_ENCRYPTION_OFF)
 
+/* Cluster encryption encrypts only main fork */
+#define EncryptForkNum(forknum) \
+	((forknum) == MAIN_FORKNUM || (forknum) == INIT_FORKNUM)
+
 /*
  * The encrypted data is a series of blocks of size ENCRYPTION_BLOCK.
  * Initialization vector(IV) is the same size of cipher block.
@@ -31,6 +35,11 @@
  * Maximum encryption key size is used by AES-256.
  */
 #define ENC_MAX_ENCRYPTION_KEY_SIZE	32
+
+/*
+ * The size in byte for counter of AES-CTR mode in nonce.
+ */
+#define ENC_BUFFER_AES_COUNTER_SIZE 4
 
 /* bufenc.c */
 extern void DecryptBufferBlock(BlockNumber blocknum, Page page);
