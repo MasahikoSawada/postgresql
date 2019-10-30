@@ -911,6 +911,7 @@ static void WriteControlFile(void);
 static void ReadControlFile(void);
 static char *str_time(pg_time_t tnow);
 static bool CheckForStandbyTrigger(void);
+static void XLogWritePages(char *from, Size nbytes, uint32 startoffset);
 
 #ifdef WAL_DEBUG
 static void xlog_outrec(StringInfo buf, XLogReaderState *record);
@@ -2487,34 +2488,33 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 		{
 			char	   *from;
 			Size		nbytes;
-			Size		nleft;
-			int			written;
 
 			/* OK to write the page(s) */
 			from = XLogCtl->pages + startidx * (Size) XLOG_BLCKSZ;
 			nbytes = npages * (Size) XLOG_BLCKSZ;
-			nleft = nbytes;
-			do
+
+			if (DataEncryptionEnabled())
 			{
-				errno = 0;
-				pgstat_report_wait_start(WAIT_EVENT_WAL_WRITE);
-				written = pg_pwrite(openLogFile, from, nleft, startoffset);
-				pgstat_report_wait_end();
-				if (written <= 0)
+				int i;
+
+				/* Encrypt xlog pages one by one */
+				for (i = 0; i < npages; i++)
 				{
-					if (errno == EINTR)
-						continue;
-					ereport(PANIC,
-							(errcode_for_file_access(),
-							 errmsg("could not write to log file %s "
-									"at offset %u, length %zu: %m",
-									XLogFileNameP(ThisTimeLineID, openLogSegNo),
-									startoffset, nleft)));
+					char	*buftowrite;
+					Size	nwrite = Min(nbytes, XLOG_BLCKSZ);
+
+					buftowrite = EncryptXLog(from, nwrite, openLogSegNo,
+											 startoffset);
+					XLogWritePages(buftowrite, nwrite, startoffset);
+					startoffset += nwrite;
+					from += XLOG_BLCKSZ;
 				}
-				nleft -= written;
-				from += written;
-				startoffset += written;
-			} while (nleft > 0);
+			}
+			else
+			{
+				XLogWritePages(from, npages * (Size) XLOG_BLCKSZ, startoffset);
+				startoffset +=  npages * (Size) XLOG_BLCKSZ;
+			}
 
 			npages = 0;
 
@@ -2628,6 +2628,39 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 			XLogCtl->LogwrtRqst.Flush = LogwrtResult.Flush;
 		SpinLockRelease(&XLogCtl->info_lck);
 	}
+}
+
+/*
+ * Write XLOG pages starting from 'startoffset'.
+ */
+static void
+XLogWritePages(char *from, Size nbytes, uint32 startoffset)
+{
+	Size	nleft;
+	Size	nwritten;
+
+	nleft = nbytes;
+	do
+	{
+		errno = 0;
+		pgstat_report_wait_start(WAIT_EVENT_WAL_WRITE);
+		nwritten = pg_pwrite(openLogFile, from, nleft, startoffset);
+		pgstat_report_wait_end();
+		if (nwritten <= 0)
+		{
+			if (errno == EINTR)
+				continue;
+			ereport(PANIC,
+					(errcode_for_file_access(),
+					 errmsg("could not write to log file %s "
+							"at offset %u, length %zu: %m",
+							XLogFileNameP(ThisTimeLineID, openLogSegNo),
+							startoffset, nleft)));
+		}
+		nleft -= nwritten;
+		from += nwritten;
+		startoffset += nwritten;
+	} while (nleft > 0);
 }
 
 /*
@@ -5252,6 +5285,11 @@ BootStrapXLOG(void)
 	/* Create first XLOG segment file */
 	use_existent = false;
 	openLogFile = XLogFileInit(1, &use_existent, false);
+
+	/* Encrypt the first xlog record if necessary */
+	if (bootstrap_data_encryption_cipher > TDE_ENCRYPTION_OFF)
+		page = (XLogPageHeader) EncryptXLog((char *) page,
+											recptr - (char *) page, 1, 0);
 
 	/* Write the first page with the initial record */
 	errno = 0;
@@ -11715,6 +11753,16 @@ retry:
 	Assert(reqLen <= readLen);
 
 	xlogreader->seg.ws_tli = curFileTLI;
+
+	/*
+	 * Decrypt read record so that we can validate page both short header
+	 * and possibly long header.
+	 */
+	if (DataEncryptionEnabled())
+	{
+		DecryptXLog(readBuf, XLOG_BLCKSZ, readSegNo, readOff);
+		xlogreader->encrypted = false;
+	}
 
 	/*
 	 * Check the page header immediately, so that we can retry immediately if

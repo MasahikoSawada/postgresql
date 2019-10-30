@@ -40,9 +40,16 @@
  * The size in byte for counter of AES-CTR mode in nonce.
  */
 #define ENC_BUFFER_AES_COUNTER_SIZE 4
+#define ENC_WAL_AES_COUNTER_SIZE 4
 
 /* bufenc.c */
 extern void DecryptBufferBlock(BlockNumber blocknum, Page page);
 extern void EncryptBufferBlock(BlockNumber blocknum, Page page);
+
+/* walenc.c */
+extern char *EncryptXLog(char *page, Size nbytes, XLogSegNo segno,
+						uint32 offset);
+extern void DecryptXLog(char *page, Size nbytes, XLogSegNo segno,
+						uint32 offset);
 
 #endif							/* ENCRYPTION_H */

@@ -15,7 +15,8 @@ include $(top_builddir)/src/Makefile.global
 OBJS = \
 	enc_cipher.o \
 	kmgr.o \
-	bufenc.o
+	bufenc.o \
+	walenc.o
 
 ifeq ($(with_openssl),yes)
 OBJS += enc_openssl.o
