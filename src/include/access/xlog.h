@@ -19,6 +19,7 @@
 #include "lib/stringinfo.h"
 #include "nodes/pg_list.h"
 #include "storage/fd.h"
+#include "storage/kmgr.h"
 
 
 /* Sync methods */
@@ -291,8 +292,13 @@ extern TimestampTz GetCurrentChunkReplayStartTime(void);
 
 extern void UpdateControlFile(void);
 extern uint64 GetSystemIdentifier(void);
+extern WrappedEncKeyWithHmac *GetRelationEncryptionKey(void);
+extern WrappedEncKeyWithHmac *GetWALEncryptionKey(void);
+extern void SetRelationEncryptionKey(const WrappedEncKeyWithHmac *key);
+extern void SetWALEncryptionKey(const WrappedEncKeyWithHmac *key);
 extern char *GetMockAuthenticationNonce(void);
 extern bool DataChecksumsEnabled(void);
+extern int	GetDataEncryptionCipher(void);
 extern XLogRecPtr GetFakeLSNForUnloggedRel(void);
 extern Size XLOGShmemSize(void);
 extern void XLOGShmemInit(void);

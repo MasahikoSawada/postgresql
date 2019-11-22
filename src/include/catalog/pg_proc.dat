@@ -10729,4 +10729,9 @@
   proname => 'pg_partition_root', prorettype => 'regclass',
   proargtypes => 'regclass', prosrc => 'pg_partition_root' },
 
+# function for key managements
+{ oid => '8200', descr => 'rotate cluter encryption key',
+  proname => 'pg_rotate_encryption_key',
+  provolatile => 'v', prorettype => 'bool',
+  proargtypes => '', prosrc => 'pg_rotate_encryption_key' },
 ]
