@@ -57,6 +57,7 @@
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
+#include "crypto/kmgr.h"
 #include "storage/large_object.h"
 #include "storage/latch.h"
 #include "storage/pmsignal.h"
@@ -12246,3 +12247,11 @@ XLogRequestWalReceiverReply(void)
 {
 	doRequestWalReceiverReply = true;
 }
+
+WrappedEncKeyWithHmac *
+GetMaterKey(void)
+{
+	Assert(ControlFile != NULL);
+	return &(ControlFile->master_dek);
+}
+
