@@ -15,11 +15,11 @@
 #include "access/xlogdefs.h"
 #include "access/xloginsert.h"
 #include "access/xlogreader.h"
+#include "crypto/kmgr.h"
 #include "datatype/timestamp.h"
 #include "lib/stringinfo.h"
 #include "nodes/pg_list.h"
 #include "storage/fd.h"
-#include "storage/kmgr.h"
 
 
 /* Sync methods */
@@ -292,10 +292,7 @@ extern TimestampTz GetCurrentChunkReplayStartTime(void);
 
 extern void UpdateControlFile(void);
 extern uint64 GetSystemIdentifier(void);
-extern WrappedEncKeyWithHmac *GetRelationEncryptionKey(void);
-extern WrappedEncKeyWithHmac *GetWALEncryptionKey(void);
-extern void SetRelationEncryptionKey(const WrappedEncKeyWithHmac *key);
-extern void SetWALEncryptionKey(const WrappedEncKeyWithHmac *key);
+extern WrappedEncKeyWithHmac *GetMasterEncryptionKey(void);
 extern char *GetMockAuthenticationNonce(void);
 extern bool DataChecksumsEnabled(void);
 extern int	GetDataEncryptionCipher(void);

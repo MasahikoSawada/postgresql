@@ -41,6 +41,7 @@
 #include "catalog/pg_database.h"
 #include "commands/tablespace.h"
 #include "common/controldata_utils.h"
+#include "crypto/kmgr.h"
 #include "miscadmin.h"
 #include "pg_trace.h"
 #include "pgstat.h"
@@ -58,7 +59,6 @@
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
-#include "storage/kmgr.h"
 #include "storage/large_object.h"
 #include "storage/latch.h"
 #include "storage/pmsignal.h"
@@ -4819,31 +4819,10 @@ GetMockAuthenticationNonce(void)
 }
 
 WrappedEncKeyWithHmac *
-GetRelationEncryptionKey(void)
+GetMasterEncryptionKey(void)
 {
 	Assert(ControlFile != NULL);
-	return &(ControlFile->tde_rdek);
-}
-
-WrappedEncKeyWithHmac *
-GetWALEncryptionKey(void)
-{
-	Assert(ControlFile != NULL);
-	return &(ControlFile->tde_wdek);
-}
-
-void
-SetWALEncryptionKey(const WrappedEncKeyWithHmac *key)
-{
-	Assert(ControlFile != NULL);
-	memcpy(&(ControlFile->tde_wdek), key, sizeof(WrappedEncKeyWithHmac));
-}
-
-void
-SetRelationEncryptionKey(const WrappedEncKeyWithHmac *key)
-{
-	Assert(ControlFile != NULL);
-	memcpy(&(ControlFile->tde_rdek), key, sizeof(WrappedEncKeyWithHmac));
+	return &(ControlFile->master_dek);
 }
 
 /*
@@ -5129,7 +5108,7 @@ BootStrapXLOG(void)
 	XLogPageHeader page;
 	XLogLongPageHeader longpage;
 	XLogRecord *record;
-	KmgrBootstrapInfo *kmgrinfo;
+	WrappedEncKeyWithHmac *masterkey;
 	char	   *recptr;
 	bool		use_existent;
 	uint64		sysidentifier;
@@ -5211,7 +5190,7 @@ BootStrapXLOG(void)
 	 * Bootstrap key management module beforehand in order to encrypt the first
 	 * xlog record.
 	 */
-	kmgrinfo = BootStrapKmgr(bootstrap_data_encryption_cipher);
+	masterkey = BootStrapKmgr(bootstrap_data_encryption_cipher);
 
 	/* Set up the XLOG page header */
 	page->xlp_magic = XLOG_PAGE_MAGIC;
@@ -5288,11 +5267,9 @@ BootStrapXLOG(void)
 	ControlFile->checkPoint = checkPoint.redo;
 	ControlFile->checkPointCopy = checkPoint;
 	ControlFile->unloggedLSN = FirstNormalUnloggedLSN;
-	if (kmgrinfo)
-	{
-		memcpy(&(ControlFile->tde_rdek), &(kmgrinfo->relEncKey), sizeof(WrappedEncKeyWithHmac));
-		memcpy(&(ControlFile->tde_wdek), &(kmgrinfo->walEncKey), sizeof(WrappedEncKeyWithHmac));
-	}
+	if (masterkey)
+		memcpy(&(ControlFile->master_dek), masterkey,
+			   sizeof(WrappedEncKeyWithHmac));
 
 	/* Set important parameter values for use when replaying WAL */
 	ControlFile->MaxConnections = MaxConnections;

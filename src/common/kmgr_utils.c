@@ -42,8 +42,8 @@ initialize_keywrap_ctx(void)
  */
 void
 kmgr_derive_keys(char *passphrase, Size passlen,
-				 uint8 kek[KMGR_KEK_SIZE],
-				 uint8 hmackey[AES256_HMAC_KEY_SIZE])
+				 uint8 kek[KMGR_KEK_LEN],
+				 uint8 hmackey[KMGR_HMAC_KEY_LEN])
 {
 	uint8 keys[PG_SHA512_DIGEST_LENGTH];
 	pg_sha512_ctx ctx;
@@ -57,9 +57,9 @@ kmgr_derive_keys(char *passphrase, Size passlen,
 	 * each 32 bytes.
 	 */
 	if (kek)
-		memcpy(kek, keys, KMGR_KEK_SIZE);
+		memcpy(kek, keys, KMGR_KEK_LEN);
 	if (hmackey)
-		memcpy(hmackey, keys + KMGR_KEK_SIZE, AES256_HMAC_KEY_SIZE);
+		memcpy(hmackey, keys + KMGR_KEK_LEN, KMGR_HMAC_KEY_LEN);
 }
 
 /*
@@ -71,24 +71,19 @@ kmgr_derive_keys(char *passphrase, Size passlen,
  */
 bool
 kmgr_verify_passphrase(char *passphrase, int passlen,
-					   WrappedEncKeyWithHmac **keys, int nkeys,
-					   int keysize)
+					   WrappedEncKeyWithHmac *kh, int keylen)
 {
-	uint8 user_kek[KMGR_KEK_SIZE];
-	uint8 user_hmackey[AES256_HMAC_KEY_SIZE];
-	uint8 result_hmac[AES256_HMAC_SIZE];
-	int	i;
+	uint8 user_kek[KMGR_KEK_LEN];
+	uint8 user_hmackey[KMGR_HMAC_KEY_LEN];
+	uint8 result_hmac[KMGR_HMAC_LEN];
 
 	kmgr_derive_keys(passphrase, passlen, user_kek, user_hmackey);
 
-	/* Verify both HMACs of RDEK and WDEK */
-	for (i = 0; i < nkeys; i++)
-	{
-		kmgr_compute_HMAC(user_hmackey, keys[i]->key, keysize,
-						  result_hmac);
-		if (memcmp(result_hmac, keys[i]->hmac, AES256_HMAC_SIZE) != 0)
-			return false;
-	}
+	/* Verify both HMAC */
+	kmgr_compute_HMAC(user_hmackey, kh->key, keylen, result_hmac);
+
+	if (memcmp(result_hmac, kh->hmac, KMGR_HMAC_LEN) != 0)
+		return false;
 
 	return true;
 }

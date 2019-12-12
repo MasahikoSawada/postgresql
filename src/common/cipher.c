@@ -26,6 +26,7 @@ pg_cipher_ctx_create(void)
 #ifdef USE_OPENSSL
 	return ossl_cipher_ctx_create();
 #endif
+	return NULL;
 }
 
 void
@@ -58,7 +59,7 @@ pg_cipher_encrypt(pg_cipher_ctx *ctx, const uint8 *key,
 				   const uint8 *iv, uint8 *dest, int *dest_size)
 
 {
-	bool r;
+	bool r = true;
 #ifdef USE_OPENSSL
 	r = ossl_cipher_encrypt(ctx, key, input, input_size, iv,
 							dest, dest_size);
@@ -71,7 +72,7 @@ pg_cipher_decrypt(pg_cipher_ctx *ctx, const uint8 *key,
 				   const uint8 *input, int input_size,
 				   const uint8 *iv, uint8 *dest, int *dest_size)
 {
-	bool r;
+	bool r = true;
 #ifdef USE_OPENSSL
 	r = ossl_cipher_decrypt(ctx, key, input, input_size, iv,
 							dest, dest_size);
@@ -88,7 +89,7 @@ bool
 pg_compute_HMAC(const uint8 *key, const uint8 *data,
 				 int data_size, uint8 *result, int *result_size)
 {
-	bool r;
+	bool r = true;
 #ifdef USE_OPENSSL
 	r = ossl_compute_HMAC(key, data, data_size, result,
 						  result_size);

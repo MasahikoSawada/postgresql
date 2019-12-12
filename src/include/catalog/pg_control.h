@@ -17,9 +17,9 @@
 
 #include "access/transam.h"
 #include "access/xlogdefs.h"
+#include "crypto/kmgr.h"
 #include "pgtime.h"				/* for pg_time_t */
 #include "port/pg_crc32c.h"
-#include "storage/kmgr.h"
 
 
 /* Version identifier for this pg_control format */
@@ -233,8 +233,7 @@ typedef struct ControlFileData
 	/*
 	 * Key information for data encryption.
 	 */
-	WrappedEncKeyWithHmac tde_rdek;
-	WrappedEncKeyWithHmac tde_wdek;
+	WrappedEncKeyWithHmac master_dek;
 
 	/* CRC of all above ... MUST BE LAST! */
 	pg_crc32c	crc;

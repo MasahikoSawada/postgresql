@@ -5,7 +5,7 @@
  *
  * Portions Copyright (c) 2019, PostgreSQL Global Development Group
  *
- * src/include/storage/kmgr.h
+ * src/include/crypto/kmgr.h
  *
  *-------------------------------------------------------------------------
  */
@@ -24,30 +24,20 @@
 	(data_encryption_cipher > KMGR_ENCRYPTION_OFF)
 
 #define SizeOfWrappedDEK() \
-	(EncryptionKeySize + AES256_KEY_WRAP_VALUE_SIZE)
+	(EncryptionKeyLen + AES256_KEY_WRAP_VALUE_LEN)
 
 /* GUC parameter */
 extern PGDLLIMPORT int data_encryption_cipher;
 
-/* Encryption keys (TDEK and WDEK) size */
-extern int EncryptionKeySize;
-
-/* Struct for bootstrap information passing to the bootstrap routine */
-typedef struct KmgrBootstrapInfo
-{
-	WrappedEncKeyWithHmac relEncKey;
-	WrappedEncKeyWithHmac walEncKey;
-} KmgrBootstrapInfo;
+/* Encryption keys (TDEK and WDEK) length */
+extern int EncryptionKeyLen;
 
 /* GUC variable */
 extern char *cluster_passphrase_command;
 
-extern KmgrBootstrapInfo *BootStrapKmgr(int bootstrap_data_encryption_cipher);
+extern WrappedEncKeyWithHmac *BootStrapKmgr(int bootstrap_data_encryption_cipher);
 extern void InitializeKmgr(void);
-extern void KmgrGetRelationEncryptionKey(uint8 *key);
-extern void KmgrGetWALEncryptionKey(uint8 *key);
-extern char *KmgrCipherString(int value);
-extern int KmgrCipherValue(const char *name);
+extern const char *KmgrGetMasterEncryptionKey(void);
 extern void assign_data_encryption_cipher(int new_encryption_cipher,
 										  void *extra);
 

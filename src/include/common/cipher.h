@@ -20,8 +20,8 @@
 #endif
 
 /* Key lengths for AES */
-#define AES128_KEY_SIZE		16
-#define AES256_KEY_SIZE		32
+#define AES128_KEY_LEN		16
+#define AES256_KEY_LEN		32
 
 /*
  * The encrypted data is a series of blocks of size ENCRYPTION_BLOCK.
@@ -34,14 +34,14 @@
  * Key wrapping appends the initial 8 bytes value. Therefore
  * wappred key size gets larger than original one.
  */
-#define AES256_KEY_WRAP_VALUE_SIZE		8
-#define AES256_MAX_WRAPPED_KEY_SIZE		(AES256_KEY_SIZE + AES256_KEY_WRAP_VALUE_SIZE)
+#define AES256_KEY_WRAP_VALUE_LEN		8
+#define AES256_MAX_WRAPPED_KEY_LEN		(AES256_KEY_LEN + AES256_KEY_WRAP_VALUE_LEN)
 
 /* Size of HMAC key is the same as the length of hash, we use SHA-256 */
-#define AES256_HMAC_KEY_SIZE		32
+#define AES256_HMAC_KEY_LEN		32
 
 /* SHA-256 results 256 bits HMAC */
-#define AES256_HMAC_SIZE	32
+#define AES256_HMAC_LEN	32
 
 
 #ifdef USE_OPENSSL

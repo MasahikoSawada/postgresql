@@ -1,0 +1,301 @@
+/*-------------------------------------------------------------------------
+ *
+ * kmgr.c
+ *	 Encryption key management module.
+ *
+ * Copyright (c) 2019, PostgreSQL Global Development Group
+ *
+ * IDENTIFICATION
+ *	  src/backend/storage/encryption/kmgr.c
+ *
+ *-------------------------------------------------------------------------
+ */
+
+#include "postgres.h"
+
+#include <unistd.h>
+
+#include "funcapi.h"
+#include "miscadmin.h"
+#include "pgstat.h"
+
+#include "access/xlog.h"
+#include "common/sha2.h"
+#include "common/kmgr_utils.h"
+#include "crypto/kmgr.h"
+#include "storage/fd.h"
+#include "storage/shmem.h"
+#include "utils/builtins.h"
+#include "utils/guc.h"
+#include "utils/memutils.h"
+
+#define KMGR_PROMPT_MSG "Enter database encryption pass phrase:"
+
+/*
+ * Key encryption key.  This key is derived from the passphrase provided
+ * by user when startup.  This variable is set during verification
+ * of user given passphrase. After verified, the plain key data
+ * is set to this variable.
+ */
+static uint8 keyEncKey[KMGR_KEK_LEN + 1];
+
+/*
+ * Mater encryption key.  Similar to key encryption key, this
+ * store the plain key data.
+ */
+static uint8 masterEncKey[KMGR_MAX_DEK_LEN + 1];
+
+/* GUC variable */
+char *cluster_passphrase_command = NULL;
+
+int data_encryption_cipher;
+int EncryptionKeyLen;
+
+static int run_cluster_passphrase_command(char *buf, int size);
+
+/*
+ * This func must be called ONCE on system install. we retrive KEK,
+ * generate RDEK and WDEK etc.
+ */
+WrappedEncKeyWithHmac *
+BootStrapKmgr(int bootstrap_data_encryption_cipher)
+{
+	WrappedEncKeyWithHmac *ret_mk;
+	char passphrase[KMGR_MAX_PASSPHRASE_LEN];
+	uint8 hmackey[KMGR_HMAC_KEY_LEN];
+	int	passlen;
+
+	if (bootstrap_data_encryption_cipher == KMGR_ENCRYPTION_OFF)
+		return NULL;
+
+#ifndef USE_OPENSSL
+	ereport(ERROR,
+			(errcode(ERRCODE_CONFIG_FILE_ERROR),
+			 (errmsg("cluster encryption is not supported because OpenSSL is not supported by this build"),
+			  errhint("Compile with --with-openssl to use cluster encryption."))));
+#endif
+
+	ret_mk = palloc0(sizeof(WrappedEncKeyWithHmac));
+
+	/*
+	 * Set data encryption cipher so that subsequent bootstrapping process
+	 * can proceed.
+	 */
+	SetConfigOption("data_encryption_cipher",
+					kmgr_cipher_string(bootstrap_data_encryption_cipher),
+					PGC_INTERNAL, PGC_S_OVERRIDE);
+
+	/* Get key encryption key fro command */
+	passlen = run_cluster_passphrase_command(passphrase, KMGR_MAX_PASSPHRASE_LEN);
+
+	/* Get key encryption key and HMAC key from passphrase */
+	kmgr_derive_keys(passphrase, passlen, keyEncKey, hmackey);
+
+	/* Generate the master encryption key */
+	if (!pg_strong_random(masterEncKey, EncryptionKeyLen))
+		ereport(ERROR,
+				(errmsg("failed to generate cluster encryption key")));
+	masterEncKey[EncryptionKeyLen] = '\0';
+
+	/* Wrap the master key by KEK */
+	kmgr_wrap_key(keyEncKey, masterEncKey, EncryptionKeyLen, ret_mk->key);
+
+	/* Compute HMAC of the master key */
+	kmgr_compute_HMAC(hmackey, ret_mk->key, SizeOfWrappedDEK(),
+					  ret_mk->hmac);
+
+	/* return keys and HMACs generated during bootstrap */
+	return ret_mk;
+}
+
+/*
+ * Run cluster_passphrase_command
+ *
+ * prompt will be substituted for %p.
+ *
+ * The result will be put in buffer buf, which is of size size.
+ * The return value is the length of the actual result.
+ */
+static int
+run_cluster_passphrase_command(char *buf, int size)
+{
+	StringInfoData command;
+	char	   *p;
+	FILE	   *fh;
+	int			pclose_rc;
+	size_t		len = 0;
+
+	Assert(size > 0);
+	buf[0] = '\0';
+
+	initStringInfo(&command);
+
+	for (p = cluster_passphrase_command; *p; p++)
+	{
+		if (p[0] == '%')
+		{
+			switch (p[1])
+			{
+				case 'p':
+					appendStringInfoString(&command, KMGR_PROMPT_MSG);
+					p++;
+					break;
+				case '%':
+					appendStringInfoChar(&command, '%');
+					p++;
+					break;
+				default:
+					appendStringInfoChar(&command, p[0]);
+			}
+		}
+		else
+			appendStringInfoChar(&command, p[0]);
+	}
+
+	fh = OpenPipeStream(command.data, "r");
+	if (fh == NULL)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not execute command \"%s\": %m",
+						command.data)));
+
+	if (!fgets(buf, size, fh))
+	{
+		if (ferror(fh))
+		{
+			pfree(command.data);
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not read from command \"%s\": %m",
+							command.data)));
+		}
+	}
+
+	pclose_rc = ClosePipeStream(fh);
+	if (pclose_rc == -1)
+	{
+		pfree(command.data);
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not close pipe to external command: %m")));
+	}
+	else if (pclose_rc != 0)
+	{
+		pfree(command.data);
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("command \"%s\" failed",
+						command.data),
+				 errdetail_internal("%s", wait_result_to_str(pclose_rc))));
+	}
+
+	/* strip trailing newline */
+	len = strlen(buf);
+	if (len > 0 && buf[len - 1] == '\n')
+		buf[--len] = '\0';
+
+	pfree(command.data);
+
+	return len;
+}
+
+/*
+ * Get encryption key passphrase and verify it, then get the un-encrypted
+ * RDEK and WDEK. This function is called by postmaster at startup time.
+ */
+void
+InitializeKmgr(void)
+{
+	WrappedEncKeyWithHmac *wrapped_mk;
+	char	passphrase[KMGR_MAX_PASSPHRASE_LEN];
+	int		passlen;
+
+	if (!DataEncryptionEnabled())
+		return;
+
+	/* Get cluster passphrase */
+	passlen = run_cluster_passphrase_command(passphrase, KMGR_MAX_PASSPHRASE_LEN);
+
+	/* Get two wrapped keys stored in control file */
+	wrapped_mk = GetMasterEncryptionKey();
+
+	/* Verify the correctness of given passphrase */
+	if (!kmgr_verify_passphrase(passphrase, passlen, wrapped_mk,
+								SizeOfWrappedDEK()))
+		ereport(ERROR,
+				(errmsg("cluster passphrase does not match expected passphrase")));
+
+	kmgr_derive_keys(passphrase, passlen, keyEncKey, NULL);
+
+	/* The passphrase is correct, unwrap both RDEK and WDEK */
+	kmgr_unwrap_key(keyEncKey, wrapped_mk->key, SizeOfWrappedDEK(),
+					masterEncKey);
+	masterEncKey[EncryptionKeyLen] = '\0';
+}
+
+/* Return plain cluster encryption key */
+const char *
+KmgrGetMasterEncryptionKey(void)
+{
+	return DataEncryptionEnabled() ?
+		pstrdup((const char *) masterEncKey) : NULL;
+}
+
+extern
+void assign_data_encryption_cipher(int new_encryption_cipher,
+								   void *extra)
+{
+	switch (new_encryption_cipher)
+	{
+		case KMGR_ENCRYPTION_OFF :
+			EncryptionKeyLen = 0;
+			break;
+		case KMGR_ENCRYPTION_AES128:
+			EncryptionKeyLen = 16;
+			break;
+		case KMGR_ENCRYPTION_AES256:
+			EncryptionKeyLen = 32;
+			break;
+	}
+}
+
+/*
+ * SQL function to rotate the cluster encryption key. This function
+ * assumes that the cluster_passphrase_command is already reloaded
+ * to the new value.
+ */
+Datum
+pg_rotate_encryption_key(PG_FUNCTION_ARGS)
+{
+	WrappedEncKeyWithHmac new_masterkey;
+	WrappedEncKeyWithHmac *cur_masterkey;
+	char    passphrase[KMGR_MAX_PASSPHRASE_LEN];
+	uint8   new_kek[KMGR_KEK_LEN];
+	uint8   new_hmackey[KMGR_HMAC_KEY_LEN];
+	int     passlen;
+
+	passlen = run_cluster_passphrase_command(passphrase,
+										 KMGR_MAX_PASSPHRASE_LEN);
+	kmgr_derive_keys(passphrase, passlen, new_kek, new_hmackey);
+
+	/* Copy the current master encrpytion key */
+	memcpy(&(new_masterkey.key), masterEncKey, EncryptionKeyLen);
+
+	/*
+	 * Wrap and compute HMAC of the master key by the new key
+	 * encryption key.
+	 */
+	kmgr_wrap_key(new_kek, new_masterkey.key, EncryptionKeyLen,
+				  new_masterkey.key);
+	kmgr_compute_HMAC(new_hmackey, new_masterkey.key,
+					  SizeOfWrappedDEK(), new_masterkey.hmac);
+
+	/* Update control file */
+	LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
+	cur_masterkey = GetMasterEncryptionKey();
+	memcpy(cur_masterkey, &new_masterkey, sizeof(WrappedEncKeyWithHmac));
+	UpdateControlFile();
+	LWLockRelease(ControlFileLock);
+
+	PG_RETURN_BOOL(true);
+}

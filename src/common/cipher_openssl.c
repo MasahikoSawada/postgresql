@@ -45,7 +45,7 @@ ossl_aes256_ctr_wrap_init(pg_cipher_ctx *ctx)
 {
 	EVP_CIPHER_CTX_set_flags(ctx, EVP_CIPHER_CTX_FLAG_WRAP_ALLOW);
 	EVP_EncryptInit_ex(ctx, EVP_aes_256_wrap(), NULL, NULL, NULL);
-	EVP_CIPHER_CTX_set_key_length(ctx, AES256_KEY_SIZE);
+	EVP_CIPHER_CTX_set_key_length(ctx, AES256_KEY_LEN);
 }
 
 void
@@ -53,7 +53,7 @@ ossl_aes256_ctr_unwrap_init(pg_cipher_ctx *ctx)
 {
 	EVP_CIPHER_CTX_set_flags(ctx, EVP_CIPHER_CTX_FLAG_WRAP_ALLOW);
 	EVP_DecryptInit_ex(ctx, EVP_aes_256_wrap(), NULL, NULL, NULL);
-	EVP_CIPHER_CTX_set_key_length(ctx, AES256_KEY_SIZE);
+	EVP_CIPHER_CTX_set_key_length(ctx, AES256_KEY_LEN);
 }
 
 bool
@@ -81,6 +81,6 @@ ossl_compute_HMAC(const uint8 *key, const uint8 *data,
 				  int data_size, uint8 *result,
 				  int *result_size)
 {
-	return HMAC(EVP_sha256(), key, AES256_KEY_SIZE, data,
+	return HMAC(EVP_sha256(), key, AES256_KEY_LEN, data,
 				(uint32) data_size, result, (uint32 *) result_size);
 }
