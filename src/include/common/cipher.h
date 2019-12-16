@@ -52,8 +52,8 @@ typedef void pg_cipher_ctx;
 
 extern pg_cipher_ctx *pg_cipher_ctx_create(void);
 extern void pg_cipher_setup(void);
-extern void pg_aes256_ctr_wrap_init(pg_cipher_ctx *ctx);
-extern void pg_aes256_ctr_unwrap_init(pg_cipher_ctx *ctx);
+extern bool pg_aes256_ctr_wrap_init(pg_cipher_ctx *ctx);
+extern bool pg_aes256_ctr_unwrap_init(pg_cipher_ctx *ctx);
 
 extern bool pg_cipher_encrypt(pg_cipher_ctx *ctx, const uint8 *key,
 							   const uint8 *input, int input_size,

@@ -22,9 +22,9 @@
 #include "common/cipher.h"
 
 extern pg_cipher_ctx *ossl_cipher_ctx_create(void);
-extern void ossl_cipher_setup(void);
-extern void ossl_aes256_ctr_wrap_init(pg_cipher_ctx *ctx);
-extern void ossl_aes256_ctr_unwrap_init(pg_cipher_ctx *ctx);
+extern bool ossl_cipher_setup(void);
+extern bool ossl_aes256_ctr_wrap_init(pg_cipher_ctx *ctx);
+extern bool ossl_aes256_ctr_unwrap_init(pg_cipher_ctx *ctx);
 extern bool ossl_cipher_encrypt(pg_cipher_ctx *ctx, const uint8 *key,
 								const uint8 *input, int input_size,
 								const uint8 *iv, uint8 *dest,

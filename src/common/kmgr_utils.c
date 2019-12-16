@@ -24,16 +24,25 @@ static pg_cipher_ctx *wrapctx = NULL;
 static pg_cipher_ctx *unwrapctx = NULL;
 static bool keywrap_initialized = false;
 
-static void
+static bool
 initialize_keywrap_ctx(void)
 {
 	wrapctx = pg_cipher_ctx_create();
-	unwrapctx = pg_cipher_ctx_create();
+	if (wrapctx == NULL)
+		return false;
 
-	pg_aes256_ctr_wrap_init(wrapctx);
-	pg_aes256_ctr_wrap_init(unwrapctx);
+	unwrapctx = pg_cipher_ctx_create();
+	if (unwrapctx == NULL)
+		return false;
+
+	if (!pg_aes256_ctr_wrap_init(wrapctx))
+		return false;
+
+	if (!pg_aes256_ctr_wrap_init(unwrapctx))
+		return false;
 
 	keywrap_initialized = true;
+	return true;
 }
 
 /*
@@ -94,7 +103,8 @@ kmgr_wrap_key(uint8 *key, const uint8 *in, int insize, uint8 *out)
 	int outsize;
 
 	if (!keywrap_initialized)
-		initialize_keywrap_ctx();
+		if (!initialize_keywrap_ctx())
+			return false;
 
 	return pg_cipher_encrypt(wrapctx, key, in , insize,
 							 NULL, out, &outsize);
@@ -106,7 +116,8 @@ kmgr_unwrap_key(uint8 *key, const uint8 *in, int insize, uint8 *out)
 	int outsize;
 
 	if (!keywrap_initialized)
-		initialize_keywrap_ctx();
+		if (!initialize_keywrap_ctx())
+			return false;
 
 	return pg_cipher_decrypt(unwrapctx, key, in, insize,
 							 NULL, out, &outsize);
@@ -125,12 +136,13 @@ kmgr_compute_HMAC(uint8 *key, const uint8 *data, int size,
 int
 kmgr_cipher_value(const char *name)
 {
-	if (strcmp(name, "aes-128") == 0)
+	if (strcasecmp(name, "aes-128") == 0)
 		return KMGR_ENCRYPTION_AES128;
-	else if (strcmp(name, "aes-256") == 0)
+
+	if (strcasecmp(name, "aes-256") == 0)
 		return KMGR_ENCRYPTION_AES256;
-	else
-		return KMGR_ENCRYPTION_OFF;
+
+	return KMGR_ENCRYPTION_OFF;
 }
 
 /* Convert integer value to cipher name string */
@@ -145,7 +157,9 @@ kmgr_cipher_string(int value)
 			return "aes-128";
 		case KMGR_ENCRYPTION_AES256:
 			return "aes-256";
+		default:
+			return "unknown";
 	}
-
 	return "unknown";
 }
+
