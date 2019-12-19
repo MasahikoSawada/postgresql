@@ -37,20 +37,22 @@ pg_cipher_setup(void)
 #endif
 }
 
-void
+bool
 pg_aes256_ctr_wrap_init(pg_cipher_ctx *ctx)
 {
 #ifdef USE_OPENSSL
-	ossl_aes256_ctr_wrap_init(ctx);
+	return ossl_aes256_ctr_wrap_init(ctx);
 #endif
+	return false;
 }
 
-void
+bool
 pg_aes256_ctr_unwrap_init(pg_cipher_ctx *ctx)
 {
 #ifdef USE_OPENSSL
-	ossl_aes256_ctr_unwrap_init(ctx);
+	return ossl_aes256_ctr_unwrap_init(ctx);
 #endif
+	return false;
 }
 
 bool

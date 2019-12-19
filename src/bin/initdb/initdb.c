@@ -2365,7 +2365,7 @@ usage(const char *progname)
 	printf(_("      --wal-segsize=SIZE    size of WAL segments, in megabytes\n"));
 	printf(_("\nLess commonly used options:\n"));
 	printf(_("  -d, --debug               generate lots of debugging output\n"));
-	printf(_("  -e  --enc-cipher=MODE     set encryption cipher for data encryption\n"));
+	printf(_("  -e  --enc-cipher=TYPE     set encryption cipher (AES-128/AES-256) for data encryption\n"));
 	printf(_("  -c  --cluster-passphrase-command=COMMAND\n"
 			 "                            set command to obtain passphrase for data encryption key\n"));
 	printf(_("  -k, --data-checksums      use data page checksums\n"));
@@ -2462,11 +2462,11 @@ check_encryption_cipher(const char *cipher, const char *passphrase,
 
 	for (p = valid_ciphers; *p; p++)
 	{
-		if (strcmp(cipher, *p) == 0)
+		if (strcasecmp(cipher, *p) == 0)
 			return;
 	}
 
-	pg_log_error("invalid encryption cipher \"%s\"", cipher);
+	pg_log_error("invalid encryption cipher \"%s\"\nencryption cipher options are AES-128 and AES-256", cipher);
 	exit(1);
 }
 

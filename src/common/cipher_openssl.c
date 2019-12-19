@@ -31,29 +31,38 @@ ossl_cipher_ctx_create(void)
 	return EVP_CIPHER_CTX_new();
 }
 
-void
+bool
 ossl_cipher_setup(void)
 {
 #ifdef HAVE_OPENSSL_INIT_CRYPTO
 	/* Setup OpenSSL */
-	OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CONFIG, NULL);
+	if (!OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CONFIG, NULL))
+		return false;
+	return true;
 #endif
+	return false;
 }
 
-void
+bool
 ossl_aes256_ctr_wrap_init(pg_cipher_ctx *ctx)
 {
 	EVP_CIPHER_CTX_set_flags(ctx, EVP_CIPHER_CTX_FLAG_WRAP_ALLOW);
-	EVP_EncryptInit_ex(ctx, EVP_aes_256_wrap(), NULL, NULL, NULL);
+	if (!EVP_EncryptInit_ex(ctx, EVP_aes_256_wrap(), NULL, NULL, NULL))
+		return false;
+
 	EVP_CIPHER_CTX_set_key_length(ctx, AES256_KEY_LEN);
+	return true;
 }
 
-void
+bool
 ossl_aes256_ctr_unwrap_init(pg_cipher_ctx *ctx)
 {
 	EVP_CIPHER_CTX_set_flags(ctx, EVP_CIPHER_CTX_FLAG_WRAP_ALLOW);
-	EVP_DecryptInit_ex(ctx, EVP_aes_256_wrap(), NULL, NULL, NULL);
+	if (!EVP_DecryptInit_ex(ctx, EVP_aes_256_wrap(), NULL, NULL, NULL))
+		return false;
+
 	EVP_CIPHER_CTX_set_key_length(ctx, AES256_KEY_LEN);
+	return true;
 }
 
 bool
@@ -62,7 +71,9 @@ ossl_cipher_encrypt(pg_cipher_ctx *ctx, const uint8 *key,
 					const uint8 *iv, uint8 *dest,
 					int *dest_size)
 {
-	EVP_EncryptInit_ex(ctx, NULL, NULL, key, iv);
+	if (!EVP_EncryptInit_ex(ctx, NULL, NULL, key, iv))
+		return false;
+
 	return EVP_EncryptUpdate(ctx, dest, dest_size, input, input_size);
 }
 
@@ -72,7 +83,9 @@ ossl_cipher_decrypt(pg_cipher_ctx *ctx, const uint8 *key,
 					const uint8 *iv, uint8 *dest,
 					int *dest_size)
 {
-	EVP_DecryptInit_ex(ctx, NULL, NULL, key, iv);
+	if (!EVP_DecryptInit_ex(ctx, NULL, NULL, key, iv))
+		return false;
+
 	return EVP_DecryptUpdate(ctx, dest, dest_size, input, input_size);
 }
 
