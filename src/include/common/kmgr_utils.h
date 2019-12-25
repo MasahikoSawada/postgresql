@@ -55,6 +55,8 @@ extern bool kmgr_unwrap_key(uint8 *key, const uint8 *in, int insize,
 							uint8 *out);
 extern bool kmgr_compute_HMAC(uint8 *key, const uint8 *data, int size,
 							  uint8 *result);
+extern int kmgr_run_cluster_passphrase_command(char *passphrase_command,
+											   char *buf, int size);
 extern int kmgr_cipher_value(const char *name);
 extern char * kmgr_cipher_string(int value);
 

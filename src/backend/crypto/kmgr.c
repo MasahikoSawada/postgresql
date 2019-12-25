@@ -29,8 +29,6 @@
 #include "utils/guc.h"
 #include "utils/memutils.h"
 
-#define KMGR_PROMPT_MSG "Enter database encryption pass phrase:"
-
 /*
  * Key encryption key.  This key is derived from the passphrase provided
  * by user when startup.  This variable is set during verification
@@ -50,8 +48,6 @@ char *cluster_passphrase_command = NULL;
 
 int data_encryption_cipher;
 int EncryptionKeyLen;
-
-static int run_cluster_passphrase_command(char *buf, int size);
 
 /*
  * This func must be called ONCE on system install. we retrive KEK,
@@ -86,7 +82,8 @@ BootStrapKmgr(int bootstrap_data_encryption_cipher)
 					PGC_INTERNAL, PGC_S_OVERRIDE);
 
 	/* Get key encryption key fro command */
-	passlen = run_cluster_passphrase_command(passphrase, KMGR_MAX_PASSPHRASE_LEN);
+	passlen = kmgr_run_cluster_passphrase_command(cluster_passphrase_command,
+												  passphrase, KMGR_MAX_PASSPHRASE_LEN);
 
 	/* Get key encryption key and HMAC key from passphrase */
 	kmgr_derive_keys(passphrase, passlen, keyEncKey, hmackey);
@@ -109,97 +106,6 @@ BootStrapKmgr(int bootstrap_data_encryption_cipher)
 }
 
 /*
- * Run cluster_passphrase_command
- *
- * prompt will be substituted for %p.
- *
- * The result will be put in buffer buf, which is of size size.
- * The return value is the length of the actual result.
- */
-static int
-run_cluster_passphrase_command(char *buf, int size)
-{
-	StringInfoData command;
-	char	   *p;
-	FILE	   *fh;
-	int			pclose_rc;
-	size_t		len = 0;
-
-	Assert(size > 0);
-	buf[0] = '\0';
-
-	initStringInfo(&command);
-
-	for (p = cluster_passphrase_command; *p; p++)
-	{
-		if (p[0] == '%')
-		{
-			switch (p[1])
-			{
-				case 'p':
-					appendStringInfoString(&command, KMGR_PROMPT_MSG);
-					p++;
-					break;
-				case '%':
-					appendStringInfoChar(&command, '%');
-					p++;
-					break;
-				default:
-					appendStringInfoChar(&command, p[0]);
-			}
-		}
-		else
-			appendStringInfoChar(&command, p[0]);
-	}
-
-	fh = OpenPipeStream(command.data, "r");
-	if (fh == NULL)
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not execute command \"%s\": %m",
-						command.data)));
-
-	if (!fgets(buf, size, fh))
-	{
-		if (ferror(fh))
-		{
-			pfree(command.data);
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read from command \"%s\": %m",
-							command.data)));
-		}
-	}
-
-	pclose_rc = ClosePipeStream(fh);
-	if (pclose_rc == -1)
-	{
-		pfree(command.data);
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not close pipe to external command: %m")));
-	}
-	else if (pclose_rc != 0)
-	{
-		pfree(command.data);
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("command \"%s\" failed",
-						command.data),
-				 errdetail_internal("%s", wait_result_to_str(pclose_rc))));
-	}
-
-	/* strip trailing newline */
-	len = strlen(buf);
-	if (len > 0 && buf[len - 1] == '\n')
-		buf[--len] = '\0';
-
-	pfree(command.data);
-
-	return len;
-}
-
-/*
  * Get encryption key passphrase and verify it, then get the un-encrypted
  * RDEK and WDEK. This function is called by postmaster at startup time.
  */
@@ -214,7 +120,8 @@ InitializeKmgr(void)
 		return;
 
 	/* Get cluster passphrase */
-	passlen = run_cluster_passphrase_command(passphrase, KMGR_MAX_PASSPHRASE_LEN);
+	passlen = kmgr_run_cluster_passphrase_command(cluster_passphrase_command,
+												  passphrase, KMGR_MAX_PASSPHRASE_LEN);
 
 	/* Get two wrapped keys stored in control file */
 	wrapped_mk = GetMasterEncryptionKey();
@@ -274,8 +181,9 @@ pg_rotate_encryption_key(PG_FUNCTION_ARGS)
 	uint8   new_hmackey[KMGR_HMAC_KEY_LEN];
 	int     passlen;
 
-	passlen = run_cluster_passphrase_command(passphrase,
-										 KMGR_MAX_PASSPHRASE_LEN);
+	passlen = kmgr_run_cluster_passphrase_command(cluster_passphrase_command,
+												  passphrase,
+												  KMGR_MAX_PASSPHRASE_LEN);
 	kmgr_derive_keys(passphrase, passlen, new_kek, new_hmackey);
 
 	/* Copy the current master encrpytion key */
