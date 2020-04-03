@@ -17,6 +17,7 @@ override CPPFLAGS := -I. -I$(srcdir) $(CPPFLAGS)
 OBJS = \
 	backup_manifest.o \
 	basebackup.o \
+	pagetransfer.o \
 	repl_gram.o \
 	slot.o \
 	slotfuncs.o \

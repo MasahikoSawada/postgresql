@@ -49,6 +49,7 @@
 #include <signal.h>
 #include <unistd.h>
 
+#include "access/relation.h"
 #include "access/printtup.h"
 #include "access/timeline.h"
 #include "access/transam.h"
@@ -70,6 +71,7 @@
 #include "replication/basebackup.h"
 #include "replication/decode.h"
 #include "replication/logical.h"
+#include "replication/pagetransfer.h"
 #include "replication/slot.h"
 #include "replication/snapbuild.h"
 #include "replication/syncrep.h"
@@ -77,11 +79,13 @@
 #include "replication/walsender.h"
 #include "replication/walsender_private.h"
 #include "storage/condition_variable.h"
+#include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
+#include "storage/smgr.h"
 #include "tcop/dest.h"
 #include "tcop/tcopprot.h"
 #include "utils/acl.h"
@@ -235,6 +239,7 @@ static void StartLogicalReplication(StartReplicationCmd *cmd);
 static void ProcessStandbyMessage(void);
 static void ProcessStandbyReplyMessage(void);
 static void ProcessStandbyHSFeedbackMessage(void);
+static void ProcessStandbyPageMessage(void);
 static void ProcessRepliesIfAny(void);
 static void WalSndKeepalive(bool requestReply);
 static void WalSndKeepaliveIfNecessary(void);
@@ -252,6 +257,9 @@ static int	WalSndSegmentOpen(XLogSegNo nextSegNo, WALSegmentContext *segcxt,
 							  TimeLineID *tli_p);
 static void UpdateSpillStats(LogicalDecodingContext *ctx);
 
+static void WalSndRequestPageTxf(RelFileNode rnode, ForkNumber forknum,
+								 BlockNumber blknum, XLogRecPtr lsn);
+static void ProcessPageTxfRequestIfAny(void);
 
 /* Initialize walsender process before entering the main command loop */
 void
@@ -1795,6 +1803,10 @@ ProcessStandbyMessage(void)
 			ProcessStandbyHSFeedbackMessage();
 			break;
 
+		case 'p':
+			ProcessStandbyPageMessage();
+			break;
+
 		default:
 			ereport(COMMERROR,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),
@@ -2140,6 +2152,31 @@ ProcessStandbyHSFeedbackMessage(void)
 }
 
 /*
+ * Process page transfer message.
+ */
+static void
+ProcessStandbyPageMessage(void)
+{
+	RelFileNode	rnode;
+	BlockNumber	blknum;
+	ForkNumber	forknum;
+	char		remote_page[BLCKSZ];
+
+	/* RelFileNode */
+	memcpy(&rnode, &reply_message.data[reply_message.cursor], sizeof(RelFileNode));
+	reply_message.cursor += sizeof(RelFileNode);
+
+	/* Forknum and blocknum */
+	forknum = pq_getmsgint(&reply_message, 4);
+	blknum = pq_getmsgint(&reply_message, 4);
+
+	/* Remote page */
+	memcpy(remote_page, &reply_message.data[reply_message.cursor], BLCKSZ);
+
+	PageTxfReleaseWaiter(rnode, forknum, blknum, remote_page);
+}
+
+/*
  * Compute how long send/receive loops should sleep.
  *
  * If wal_sender_timeout is enabled we want to wake up in time to send
@@ -2274,6 +2311,14 @@ WalSndLoop(WalSndSendDataCallback send_data)
 			send_data();
 		else
 			WalSndCaughtUp = false;
+
+		/*
+		 * Process page requests by backend if exists.  Since page transfer is supported
+		 * only under physical replication we process them only if we can know this
+		 * wal sender works for physical standby.
+		 */
+		if (!MyReplicationSlot || SlotIsPhysical(MyReplicationSlot))
+			ProcessPageTxfRequestIfAny();
 
 		/* Try to flush pending output to the client */
 		if (pq_flush_if_writable() != 0)
@@ -3066,6 +3111,8 @@ WalSndShmemInit(void)
 		for (i = 0; i < NUM_SYNC_REP_WAIT_MODE; i++)
 			SHMQueueInit(&(WalSndCtl->SyncRepQueue[i]));
 
+		SHMQueueInit(&(WalSndCtl->pageTxfQueue));
+
 		for (i = 0; i < max_wal_senders; i++)
 		{
 			WalSnd	   *walsnd = &WalSndCtl->walsnds[i];
@@ -3449,6 +3496,50 @@ WalSndKeepalive(bool requestReply)
 }
 
 /*
+ * This functio nis used to send a page transfer request to physical standby.
+ */
+static void
+WalSndRequestPageTxf(RelFileNode rnode, ForkNumber forknum,
+					 BlockNumber blknum, XLogRecPtr lsn)
+{
+	resetStringInfo(&output_message);
+	enlargeStringInfo(&output_message,
+					  sizeof(RelFileNode) + sizeof(ForkNumber) +
+					  sizeof(BlockNumber) + sizeof(XLogRecPtr));
+
+	pq_sendbyte(&output_message, 'r');
+	memcpy(&output_message.data[output_message.len], &rnode, sizeof(RelFileNode));
+	output_message.len += sizeof(RelFileNode);
+	pq_sendint32(&output_message, forknum);
+	pq_sendint32(&output_message, blknum);
+	pq_sendint64(&output_message, lsn);
+
+	pq_putmessage_noblock('d', output_message.data, output_message.len);
+}
+
+/*
+ * Mark the waiting processes as "being processed".
+ */
+static void
+ProcessPageTxfRequestIfAny(void)
+{
+	PGPROC	   *proc = NULL;
+
+	LWLockAcquire(PageTxfLock, LW_EXCLUSIVE);
+
+	while ((proc = PageTxfGetWaitingRequest()) != NULL)
+	{
+		proc->pageTxfState = PAGE_TXF_BEING_PROCESSED;
+		WalSndRequestPageTxf(proc->pageTxfNode,
+							 proc->pageTxfForkNum,
+							 proc->pageTxfBlknum,
+							 proc->pageTxfLSN);
+	}
+
+	LWLockRelease(PageTxfLock);
+}
+
+/*
  * Send keepalive message if too much time has elapsed.
  */
 static void
@@ -3671,4 +3762,47 @@ UpdateSpillStats(LogicalDecodingContext *ctx)
 		 (long long) rb->spillBytes);
 
 	SpinLockRelease(&MyWalSnd->mutex);
+}
+
+/*
+ * This function is used to restore the given valid page. 'valid_page' is the page
+ * transfered from the physical standby and doesn't have any corruption.
+ */
+void
+WalSndRestorePage(RelFileNode rnode, ForkNumber forknum, BlockNumber blknum,
+				  Page remote_page)
+{
+	Buffer			buffer;
+	Page			local_page;
+
+	Assert(PageIsVerified(remote_page, blknum));
+
+	StartTransactionCommand();
+
+	/*
+	 * Forcibly ignore checksum failure so that we can read the corrupted block
+	 * from the disk wihtout erroring out.
+	 */
+	SetConfigOption("ignore_checksum_failure", "on",
+					PGC_SUSET, PGC_S_SESSION);
+
+	smgropen(rnode, InvalidBackendId);
+
+	buffer = ReadBufferWithoutRelcache(rnode, forknum, blknum,
+									   RBM_NORMAL, NULL);
+	Assert(BufferIsValid(buffer));
+
+	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+	local_page = BufferGetPage(buffer);
+
+	START_CRIT_SECTION();
+
+	memcpy((char *) local_page, (char *) remote_page,
+		   PageGetPageSize(remote_page));
+	MarkBufferDirty(buffer);
+
+	END_CRIT_SECTION();
+
+	UnlockReleaseBuffer(buffer);
+	CommitTransactionCommand();
 }

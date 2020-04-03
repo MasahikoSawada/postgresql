@@ -14,6 +14,9 @@
 
 #include <signal.h>
 
+#include "storage/bufmgr.h"
+#include "storage/smgr.h"
+
 /*
  * What to do with a snapshot in create replication slot command.
  */
@@ -47,6 +50,8 @@ extern void WalSndInitStopping(void);
 extern void WalSndWaitStopping(void);
 extern void HandleWalSndInitStopping(void);
 extern void WalSndRqstFileReload(void);
+extern void WalSndRestorePage(RelFileNode rnode, ForkNumber forknum, BlockNumber blknum,
+							  Page remote_page);
 
 /*
  * Remember that we want to wakeup walsenders later

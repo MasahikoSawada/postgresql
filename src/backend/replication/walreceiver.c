@@ -65,12 +65,15 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postmaster/interrupt.h"
+#include "replication/pagetransfer.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "storage/ipc.h"
 #include "storage/pmsignal.h"
 #include "storage/procarray.h"
 #include "storage/procsignal.h"
+#include "storage/smgr.h"
+#include "storage/bufmgr.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
@@ -121,6 +124,19 @@ static struct
 	XLogRecPtr	Flush;			/* last byte + 1 flushed in the standby */
 }			LogstreamResult;
 
+/*
+ * Struct for page transfer request sent by wal sender.
+ */
+typedef struct PageRequestInfo
+{
+	RelFileNode rnode;
+	ForkNumber	forknum;
+	BlockNumber	blknum;
+	XLogRecPtr	lsn;
+} PageRequestInfo;
+static List *requsted_pages = NIL;
+static MemoryContext pageReqCtx = NULL;
+
 static StringInfoData reply_message;
 static StringInfoData incoming_message;
 
@@ -134,6 +150,8 @@ static void XLogWalRcvFlush(bool dying);
 static void XLogWalRcvSendReply(bool force, bool requestReply);
 static void XLogWalRcvSendHSFeedback(bool immed);
 static void ProcessWalSndrMessage(XLogRecPtr walEnd, TimestampTz sendTime);
+static void WalRcvProcessPageRequstMessage(PageRequestInfo *req);
+static void WalRcvSendPageIfAny(void);
 
 /* Signal handlers */
 static void WalRcvSigHupHandler(SIGNAL_ARGS);
@@ -496,6 +514,9 @@ WalReceiverMain(void)
 					 */
 					XLogWalRcvFlush(false);
 				}
+
+				/* Reply to pending page transfer requests if any */
+				WalRcvSendPageIfAny();
 
 				/* Check if we need to exit the streaming loop. */
 				if (endofwal)
@@ -879,6 +900,30 @@ XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len)
 				/* If the primary requested a reply, send one immediately */
 				if (replyRequested)
 					XLogWalRcvSendReply(true, false);
+				break;
+			}
+		case 'r':				/* PageRequest */
+			{
+				PageRequestInfo *info = palloc(sizeof(PageRequestInfo));
+
+				/* copy message to StringInfo */
+				hdrlen = sizeof(RelFileNode) + sizeof(ForkNumber) +
+					sizeof(BlockNumber) + sizeof(XLogRecPtr);
+
+				if (len != hdrlen)
+					ereport(ERROR,
+							(errcode(ERRCODE_PROTOCOL_VIOLATION),
+							 errmsg_internal("invalid page request message received from primary")));
+				appendBinaryStringInfo(&incoming_message, buf, hdrlen);
+
+				memcpy(&(info->rnode), incoming_message.data, sizeof(RelFileNode));
+				incoming_message.cursor += sizeof(RelFileNode);
+				info->forknum = pq_getmsgint(&incoming_message, 4);
+				info->blknum = pq_getmsgint(&incoming_message, 4);
+				info->lsn = pq_getmsgint64(&incoming_message);
+
+				WalRcvProcessPageRequstMessage(info);
+
 				break;
 			}
 		default:
@@ -1306,6 +1351,103 @@ WalRcvForceReply(void)
 	SpinLockRelease(&WalRcv->mutex);
 	if (latch)
 		SetLatch(latch);
+}
+
+/*
+ * Send physical page image to wal sender.
+ */
+static void
+WalRcvSendRequestedPage(PageRequestInfo *info)
+{
+	SMgrRelation smgr;
+	Buffer		buffer;
+	Page		page;
+
+	smgr = smgropen(info->rnode, InvalidBackendId);
+
+	Assert(info->blknum < smgrnblocks(smgr, info->forknum));
+
+	/*
+	 * Since we need to send the latest status of the page we have to read the
+	 * page image from the buffer, not from the disk.
+	 */
+	buffer = ReadBufferWithoutRelcache(info->rnode, info->forknum,
+									   info->blknum, RBM_NORMAL, NULL);
+	Assert(BufferIsValid(buffer));
+	page = BufferGetPage(buffer);
+
+	resetStringInfo(&reply_message);
+	pq_sendbyte(&reply_message, 'p');
+	enlargeStringInfo(&reply_message,
+					  1 + sizeof(RelFileNode) + sizeof(ForkNumber) +
+					  sizeof(BlockNumber) + BLCKSZ);
+
+	/* RelFileNode */
+	memcpy(&reply_message.data[reply_message.len], &info->rnode,
+		   sizeof(RelFileNode));
+	reply_message.len += sizeof(RelFileNode);
+
+	/* ForkNumber */
+	pq_sendint32(&reply_message, info->forknum);
+
+	/* BlockNumber */
+	pq_sendint32(&reply_message, info->blknum);
+
+	/* Page image */
+	memcpy(&reply_message.data[reply_message.len], page, BLCKSZ);
+	reply_message.len += BLCKSZ;
+
+	walrcv_send(wrconn, reply_message.data, reply_message.len);
+
+	smgrclose(smgr);
+}
+
+static void
+WalRcvProcessPageRequstMessage(PageRequestInfo *req)
+{
+	MemoryContext oldctx;
+
+	if (pageReqCtx == NULL)
+		pageReqCtx = AllocSetContextCreate(TopMemoryContext,
+										   "page request context",
+										   ALLOCSET_DEFAULT_SIZES);
+	oldctx = MemoryContextSwitchTo(pageReqCtx);
+
+	requsted_pages = lappend(requsted_pages, req);
+	MemoryContextSwitchTo(oldctx);
+
+	elog(DEBUG3, "received page request rel (%u,%u,%u), fork %u, blkk %u, lsn %x/%x",
+		 req->rnode.spcNode, req->rnode.dbNode, req->rnode.relNode,
+		 req->forknum, req->blknum,
+		 (uint32) (req->lsn >> 32), (uint32) req->lsn);
+}
+
+/*
+ * Send the physical page to the wal sender if the apply lsn passes page
+ * request's lsn.
+ */
+static void
+WalRcvSendPageIfAny(void)
+{
+	ListCell	*lc;
+	XLogRecPtr	applyPtr;
+
+	if (requsted_pages == NIL)
+		return;
+
+	/* Get current apply lsn */
+	applyPtr = GetXLogReplayRecPtr(NULL);
+
+	foreach (lc, requsted_pages)
+	{
+		PageRequestInfo *info = (PageRequestInfo *) lfirst(lc);
+
+		if (applyPtr < info->lsn)
+			continue;
+
+		WalRcvSendRequestedPage(info);
+		requsted_pages = foreach_delete_current(requsted_pages, lc);
+	}
 }
 
 /*

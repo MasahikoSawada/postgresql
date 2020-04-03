@@ -10938,4 +10938,8 @@
   proname => 'is_normalized', prorettype => 'bool',
   proargtypes => 'text text', prosrc => 'unicode_is_normalized' },
 
+{ oid => '80192', descr => 'repair_page',
+  proname => 'repair_page', provolatile => 'v', prorettype => 'int4',
+  proargtypes => 'oid int4', prosrc => 'repair_page' },
+
 ]

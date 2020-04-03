@@ -3849,6 +3849,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_PROCARRAY_GROUP_UPDATE:
 			event_name = "ProcArrayGroupUpdate";
 			break;
+		case WAIT_EVENT_PAGE_TRANSFER:
+			event_name = "PageTransfer";
+			break;
 		case WAIT_EVENT_PROMOTE:
 			event_name = "Promote";
 			break;

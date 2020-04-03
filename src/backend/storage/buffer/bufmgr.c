@@ -43,6 +43,7 @@
 #include "pg_trace.h"
 #include "pgstat.h"
 #include "postmaster/bgwriter.h"
+#include "replication/walsender.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
@@ -686,9 +687,9 @@ ReadBufferExtended(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
  *		a relcache entry for the relation.
  *
  * NB: At present, this function may only be used on permanent relations, which
- * is OK, because we only use it during XLOG replay.  If in the future we
- * want to use it on temporary or unlogged relations, we could pass additional
- * parameters.
+ * is OK, because we only use it during either XLOG replay or page transfer which
+ * support only permanent relations.  If in the future we want to use it on temporary
+ * or unlogged relations, we could pass additional parameters.
  */
 Buffer
 ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
@@ -699,7 +700,7 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
 
 	SMgrRelation smgr = smgropen(rnode, InvalidBackendId);
 
-	Assert(InRecovery);
+	Assert(InRecovery || AmWalReceiverProcess() || am_walsender);
 
 	return ReadBuffer_common(smgr, RELPERSISTENCE_PERMANENT, forkNum, blockNum,
 							 mode, strategy, &hit);

@@ -154,6 +154,13 @@ struct PGPROC
 	int			syncRepState;	/* wait state for sync rep */
 	SHM_QUEUE	syncRepLinks;	/* list link if process is in syncrep queue */
 
+	XLogRecPtr	pageTxfLSN;
+	RelFileNode	pageTxfNode;
+	ForkNumber	pageTxfForkNum;
+	BlockNumber	pageTxfBlknum;
+	int			pageTxfState;
+	SHM_QUEUE	pageTxfLinks;
+
 	/*
 	 * All PROCLOCK objects for locks held or awaited by this backend are
 	 * linked into one of these lists, according to the partition number of

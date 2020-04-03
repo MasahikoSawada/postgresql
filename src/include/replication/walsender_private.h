@@ -96,6 +96,8 @@ typedef struct
 	 */
 	SHM_QUEUE	SyncRepQueue[NUM_SYNC_REP_WAIT_MODE];
 
+	SHM_QUEUE	pageTxfQueue;
+
 	/*
 	 * Current location of the head of the queue. All waiters should have a
 	 * waitLSN that follows this value. Protected by SyncRepLock.
