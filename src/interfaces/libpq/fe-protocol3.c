@@ -1922,7 +1922,7 @@ pqEndcopy3(PGconn *conn)
 PGresult *
 pqFunctionCall3(PGconn *conn, Oid fnid,
 				int *result_buf, int *actual_result_len,
-				int result_is_int,
+				int result_is_int, int result_format,
 				const PQArgBlock *args, int nargs)
 {
 	bool		needInput = false;
@@ -1930,6 +1930,7 @@ pqFunctionCall3(PGconn *conn, Oid fnid,
 	char		id;
 	int			msgLength;
 	int			avail;
+	int			format;
 	int			i;
 
 	/* PQfn already validated connection state */
@@ -1963,7 +1964,8 @@ pqFunctionCall3(PGconn *conn, Oid fnid,
 		}
 	}
 
-	if (pqPutInt(1, 2, conn) < 0)	/* result format code: BINARY */
+	format = result_is_int ? 1 : result_format;
+	if (pqPutInt(format, 2, conn) < 0)	/* 0: TEXT, 1: BINARY */
 		return NULL;
 
 	if (pqPutMsgEnd(conn) < 0 ||

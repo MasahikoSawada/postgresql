@@ -27,6 +27,7 @@
 #include "libpq-fe.h"
 #include "libpq-int.h"
 #include "mb/pg_wchar.h"
+#include "common/aead.h"
 
 /* keep this in same order as ExecStatusType in libpq-fe.h */
 char	   *const pgresStatus[] = {
@@ -69,6 +70,13 @@ static bool PQexecStart(PGconn *conn);
 static PGresult *PQexecFinish(PGconn *conn);
 static int	PQsendDescribe(PGconn *conn, char desc_type,
 						   const char *desc_target);
+static PGresult *PQfnText(PGconn *conn,
+						  int fnid,
+						  int *result_buf,
+						  int *result_len,
+						  int result_is_int,
+						  const PQArgBlock *args,
+						  int nargs);
 static int	check_field_number(const PGresult *res, int field_num);
 
 
@@ -2677,6 +2685,7 @@ PQfn(PGconn *conn,
 		return pqFunctionCall3(conn, fnid,
 							   result_buf, result_len,
 							   result_is_int,
+							   1,	/* output format is binary */
 							   args, nargs);
 	else
 		return pqFunctionCall2(conn, fnid,
@@ -2685,6 +2694,45 @@ PQfn(PGconn *conn,
 							   args, nargs);
 }
 
+static PGresult *
+PQfnText(PGconn *conn,
+		 int fnid,
+		 int *result_buf,
+		 int *result_len,
+		 int result_is_int,
+		 const PQArgBlock *args,
+		 int nargs)
+{
+	*result_len = 0;
+
+	if (!conn)
+		return NULL;
+
+	/* This isn't gonna work on a 2.0 server */
+	if (PG_PROTOCOL_MAJOR(conn->pversion) < 3)
+	{
+		printfPQExpBuffer(&conn->errorMessage,
+						  libpq_gettext("function requires at least protocol version 3.0\n"));
+		return NULL;
+	}
+
+	/* clear the error string */
+	resetPQExpBuffer(&conn->errorMessage);
+
+	if (conn->sock == PGINVALID_SOCKET || conn->asyncStatus != PGASYNC_IDLE ||
+		conn->result != NULL)
+	{
+		printfPQExpBuffer(&conn->errorMessage,
+						  libpq_gettext("connection in wrong state\n"));
+		return NULL;
+	}
+
+	return pqFunctionCall3(conn, fnid,
+						   result_buf, result_len,
+						   result_is_int,
+						   0,	/* output format is text */
+						   args, nargs);
+}
 
 /* ====== accessor funcs for PGresult ======== */
 
@@ -3857,4 +3905,75 @@ PQunescapeBytea(const unsigned char *strtext, size_t *retbuflen)
 
 	*retbuflen = buflen;
 	return tmpbuf;
+}
+
+char *
+PQencrypt(PGconn *conn, const char *token)
+{
+	static Oid	foid = InvalidOid;
+	PQArgBlock	argv[1];
+	PGresult	*res;
+	int			reslen;
+	int			tokenlen;
+	int			*buf;
+
+	/* This isn't gonna work on a 2.0 server */
+	if (PG_PROTOCOL_MAJOR(conn->pversion) < 3)
+	{
+		printfPQExpBuffer(&conn->errorMessage,
+						  libpq_gettext("function requires at least protocol version 3.0\n"));
+		return 0;
+	}
+
+	if (!OidIsValid(foid))
+	{
+		const char *query;
+		char *fname;
+
+		query = "select proname, oid from pg_proc "
+			"where proname = 'pg_encrypt'";
+		res = PQexec(conn, query);
+
+		if (res == NULL)
+		{
+			PQclear(res);
+			printfPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("query to initialize encryption functions did not return data\n"));
+			return NULL;
+		}
+
+		fname = PQgetvalue(res, 0, 0);
+
+		if (PQntuples(res) > 1 || strcmp(fname, "pg_encrypt") != 0)
+		{
+			PQclear(res);
+			printfPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("query to initialize encryption functions returned invalid data\n"));
+			return NULL;
+		}
+
+		/* get OID of pg_encrypt function */
+		foid = (Oid) atoi(PQgetvalue(res, 0, 1));
+
+		PQclear(res);
+	}
+
+	tokenlen = strlen(token);
+	buf = (int *) malloc(AEADSizeOfCipherText(tokenlen));
+
+	argv[0].isint = 0;
+	argv[0].len = strlen(token);
+	argv[0].u.ptr = (int *) token;
+	res = PQfnText(conn, foid, buf, &reslen, 0, argv, 1);
+
+	if (PQresultStatus(res) == PGRES_COMMAND_OK)
+	{
+		PQclear(res);
+		return (char *) buf;
+	}
+	else
+	{
+		PQclear(res);
+		return NULL;
+	}
 }

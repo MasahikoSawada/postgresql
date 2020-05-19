@@ -129,6 +129,8 @@ static backslashResult exec_command_write(PsqlScanState scan_state, bool active_
 										  PQExpBuffer query_buf, PQExpBuffer previous_buf);
 static backslashResult exec_command_watch(PsqlScanState scan_state, bool active_branch,
 										  PQExpBuffer query_buf, PQExpBuffer previous_buf);
+static backslashResult exec_command_cipher(PsqlScanState scan_state, bool active_branch,
+										   bool for_enc);
 static backslashResult exec_command_x(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_z(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_shell_escape(PsqlScanState scan_state, bool active_branch);
@@ -398,6 +400,8 @@ exec_command(const char *cmd,
 	else if (strcmp(cmd, "watch") == 0)
 		status = exec_command_watch(scan_state, active_branch,
 									query_buf, previous_buf);
+	else if (strcmp(cmd, "encrypt") == 0)
+		status = exec_command_cipher(scan_state, active_branch, true);
 	else if (strcmp(cmd, "x") == 0)
 		status = exec_command_x(scan_state, active_branch);
 	else if (strcmp(cmd, "z") == 0)
@@ -2649,6 +2653,48 @@ exec_command_watch(PsqlScanState scan_state, bool active_branch,
 		/* Reset the query buffer as though for \r */
 		resetPQExpBuffer(query_buf);
 		psql_scan_reset(scan_state);
+	}
+	else
+		ignore_slash_options(scan_state);
+
+	return success ? PSQL_CMD_SKIP_LINE : PSQL_CMD_ERROR;
+}
+
+static backslashResult
+exec_command_cipher(PsqlScanState scan_state, bool active_branch, bool for_enc)
+{
+	bool success = true;
+
+	if (active_branch)
+	{
+		char token1[128];
+		char token2[128];
+		char *res;
+
+		simple_prompt("Enter data: ", token1, sizeof(token1), false);
+		simple_prompt("Enter it again: ", token2, sizeof(token2), false);
+
+		if (strcmp(token1, token2) != 0)
+		{
+			pg_log_error("Data didn't match.");
+			success = false;
+		}
+		else
+		{
+			res = PQencrypt(pset.db, token1);
+
+			if (!res)
+			{
+				pg_log_info("%s", PQerrorMessage(pset.db));
+				success = false;
+			}
+			else
+			{
+				fprintf(stdout, "encrypted data: %s\n", res);
+				fflush(stdout);
+				free(res);
+			}
+		}
 	}
 	else
 		ignore_slash_options(scan_state);

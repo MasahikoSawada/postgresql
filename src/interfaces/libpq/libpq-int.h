@@ -643,7 +643,7 @@ extern int	pqGetlineAsync3(PGconn *conn, char *buffer, int bufsize);
 extern int	pqEndcopy3(PGconn *conn);
 extern PGresult *pqFunctionCall3(PGconn *conn, Oid fnid,
 								 int *result_buf, int *actual_result_len,
-								 int result_is_int,
+								 int result_is_int, int result_format,
 								 const PQArgBlock *args, int nargs);
 
 /* === in fe-misc.c === */
