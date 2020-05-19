@@ -384,6 +384,14 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       </entry>
      </row>
 
+     <row>
+      <entry><structname>pg_stat_foreign_xact</structname><indexterm><primary>pg_stat_fdw_xact_resolver</primary></indexterm></entry>
+      <entry>One row per foreign transaction resolver process, showing statistics about
+       foreign transaction resolution. See <xref linkend="pg-stat-foreign-xact-view"/> for
+       details.
+      </entry>
+     </row>
+
     </tbody>
    </tgroup>
   </table>
@@ -1028,6 +1036,18 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       <entry>Waiting in main loop of checkpointer process.</entry>
      </row>
      <row>
+      <entry><literal>FdwXactLauncherMain</literal></entry>
+      <entry>Waiting in main loop of foreign transaction resolution launcher process.</entry>
+     </row>
+     <row>
+      <entry><literal>FdwXactResolverMain</literal></entry>
+      <entry>Waiting in main loop of foreign transaction resolution worker process.</entry>
+     </row>
+     <row>
+      <entry><literal>LogicalLauncherMain</literal></entry>
+      <entry>Waiting in main loop of logical launcher process.</entry>
+     </row>
+     <row>
       <entry><literal>LogicalApplyMain</literal></entry>
       <entry>Waiting in main loop of logical replication apply process.</entry>
      </row>
@@ -1247,6 +1267,18 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
      <row>
       <entry><literal>DataFileWrite</literal></entry>
       <entry>Waiting for a write to a relation data file.</entry>
+     </row>
+     <row>
+      <entry><literal>FdwXactFileRead</literal></entry>
+      <entry>Waiting for a read of a foreign transaction state file.</entry>
+     </row>
+     <row>
+      <entry><literal>FdwXactFileSync</literal></entry>
+      <entry>Waiting for a foreign transaction state file to reach stable storage.</entry>
+     </row>
+     <row>
+      <entry><literal>FdwXactFileWrite</literal></entry>
+      <entry>Waiting for a write of a foreign transaction state file.</entry>
      </row>
      <row>
       <entry><literal>LockFileAddToDataDirRead</literal></entry>
@@ -1524,6 +1556,11 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       <entry><literal>ExecuteGather</literal></entry>
       <entry>Waiting for activity from a child process while
        executing a <literal>Gather</literal> plan node.</entry>
+     </row>
+     <row>
+      <entry><literal>FdwXactResolution</literal></entry>
+      <entry>Waiting for all foreign transaction participants to be resolved during
+       atomic commit among foreign servers.</entry>
      </row>
      <row>
       <entry><literal>HashBatchAllocate</literal></entry>
@@ -1835,6 +1872,19 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       <entry><literal>DynamicSharedMemoryControl</literal></entry>
       <entry>Waiting to read or update dynamic shared memory allocation
        information.</entry>
+     </row>
+     <row>
+      <entry><literal>FdwXactLock</literal></entry>
+      <entry>Waiting to read or update the state of foreign transactions.</entry>
+     </row>
+     <row>
+      <entry><literal>FdwXactResolutionLock</literal></entry>
+      <entry>Waiting to read or update information of foreign trasnaction
+       resolution.</entry>
+     </row>
+     <row>
+      <entry><literal>LogicalRepWorkerLock</literal></entry>
+      <entry>Waiting for action on logical replication worker to finish.</entry>
      </row>
      <row>
       <entry><literal>LockFastPath</literal></entry>
@@ -2971,6 +3021,42 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
    connection.
   </para>
 
+  <table id="pg-stat-foreign-xact-view" xreflabel="pg_stat_foreign_xact">
+   <title><structname>pg_stat_foreign_xact</structname> View</title>
+   <tgroup cols="3">
+    <thead>
+    <row>
+      <entry>Column</entry>
+      <entry>Type</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+   <tbody>
+    <row>
+     <entry><structfield>pid</structfield></entry>
+     <entry><type>integer</type></entry>
+     <entry>Process ID of a foreign transaction resolver process</entry>
+    </row>
+    <row>
+     <entry><structfield>dbid</structfield></entry>
+     <entry><type>oid</type></entry>
+     <entry>OID of the database to which the foreign transaction resolver is connected</entry>
+    </row>
+    <row>
+     <entry><structfield>last_resolved_time</structfield></entry>
+     <entry><type>timestamp with time zone</type></entry>
+     <entry>Time at which the process last resolved a foreign transaction</entry>
+    </row>
+   </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+   The <structname>pg_stat_fdw_xact_resolver</structname> view will contain one
+   row per foreign transaction resolver process, showing state of resolution
+   of foreign transactions.
+  </para>
 
   <table id="pg-stat-archiver-view" xreflabel="pg_stat_archiver">
    <title><structname>pg_stat_archiver</structname> View</title>
