@@ -77,6 +77,7 @@
 #include <unistd.h>
 
 #include "access/commit_ts.h"
+#include "access/fdwxact.h"
 #include "access/htup_details.h"
 #include "access/subtrans.h"
 #include "access/transam.h"
@@ -848,6 +849,35 @@ TwoPhaseGetGXact(TransactionId xid, bool lock_held)
 	cached_gxact = result;
 
 	return result;
+}
+
+/*
+ * TwoPhaseExists
+ *		Return true if there is a prepared transaction specified by XID
+ */
+bool
+TwoPhaseExists(TransactionId xid)
+{
+	int		i;
+	bool	found = false;
+
+	LWLockAcquire(TwoPhaseStateLock, LW_SHARED);
+
+	for (i = 0; i < TwoPhaseState->numPrepXacts; i++)
+	{
+		GlobalTransaction gxact = TwoPhaseState->prepXacts[i];
+		PGXACT	*pgxact = &ProcGlobal->allPgXact[gxact->pgprocno];
+
+		if (pgxact->xid == xid)
+		{
+			found = true;
+			break;
+		}
+	}
+
+	LWLockRelease(TwoPhaseStateLock);
+
+	return found;
 }
 
 /*
@@ -2196,6 +2226,9 @@ RecordTransactionCommitPrepared(TransactionId xid,
 	XLogRecPtr	recptr;
 	TimestampTz committs = GetCurrentTimestamp();
 	bool		replorigin;
+	bool		need_fdwxact_commit;
+
+	need_fdwxact_commit = PrepareFdwXactParticipants(xid);
 
 	/*
 	 * Are we using the replication origins feature?  Or, in other words, are
@@ -2266,6 +2299,16 @@ RecordTransactionCommitPrepared(TransactionId xid,
 	 * in the procarray and continue to hold locks.
 	 */
 	SyncRepWaitForLSN(recptr, true);
+
+	/*
+	 * Wait for foreign transaction prepared as part of this prepared
+	 * transaction to be committed.
+	 */
+	if (need_fdwxact_commit)
+	{
+		SetFdwXactParticipants(xid, true);
+		FdwXactWaitForResolution(xid);
+	}
 }
 
 /*
@@ -2285,6 +2328,9 @@ RecordTransactionAbortPrepared(TransactionId xid,
 							   const char *gid)
 {
 	XLogRecPtr	recptr;
+	bool		need_fdwxact_commit;
+
+	need_fdwxact_commit = PrepareFdwXactParticipants(xid);
 
 	/*
 	 * Catch the scenario where we aborted partway through
@@ -2325,6 +2371,16 @@ RecordTransactionAbortPrepared(TransactionId xid,
 	 * in the procarray and continue to hold locks.
 	 */
 	SyncRepWaitForLSN(recptr, false);
+
+	/*
+	 * Wait for foreign transaction prepared as part of this prepared
+	 * transaction to be rolled back.
+	 */
+	if (need_fdwxact_commit)
+	{
+		SetFdwXactParticipants(xid, false);
+		FdwXactWaitForResolution(xid);
+	}
 }
 
 /*
