@@ -37,6 +37,7 @@
 
 #include "postgres.h"
 
+#include "access/fdwxact.h"
 #include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/tableam.h"
@@ -47,6 +48,7 @@
 #include "executor/executor.h"
 #include "executor/nodeModifyTable.h"
 #include "foreign/fdwapi.h"
+#include "foreign/foreign.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
 #include "rewrite/rewriteHandler.h"
@@ -2418,6 +2420,10 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 			resultRelInfo->ri_FdwRoutine->BeginForeignModify != NULL)
 		{
 			List	   *fdw_private = (List *) list_nth(node->fdwPrivLists, i);
+			Oid			relid = RelationGetRelid(resultRelInfo->ri_RelationDesc);
+
+			/* Remember the transaction modifies data on a foreign server*/
+			RegisterFdwXactByRelId(relid, true);
 
 			resultRelInfo->ri_FdwRoutine->BeginForeignModify(mtstate,
 															 resultRelInfo,
