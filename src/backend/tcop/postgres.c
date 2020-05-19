@@ -75,6 +75,8 @@
 #include "tcop/pquery.h"
 #include "tcop/tcopprot.h"
 #include "tcop/utility.h"
+#include "utils/builtins.h"
+#include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
@@ -457,6 +459,15 @@ SocketBackend(StringInfo inBuf)
 		case 'd':				/* copy data */
 		case 'c':				/* copy done */
 		case 'f':				/* copy fail */
+			doing_extended_query_message = false;
+			/* these are only legal in protocol 3 */
+			if (PG_PROTOCOL_MAJOR(FrontendProtocol) < 3)
+				ereport(FATAL,
+						(errcode(ERRCODE_PROTOCOL_VIOLATION),
+						 errmsg("invalid frontend message type %d", qtype)));
+			break;
+
+		case 'W':
 			doing_extended_query_message = false;
 			/* these are only legal in protocol 3 */
 			if (PG_PROTOCOL_MAJOR(FrontendProtocol) < 3)
@@ -2271,6 +2282,35 @@ exec_execute_message(const char *portal_name, long max_rows)
 		ShowUsage("EXECUTE MESSAGE STATISTICS");
 
 	debug_query_string = NULL;
+}
+
+/*
+ * exec_keywrap_message
+ *
+ * Process an "Key Wrap" message
+ */
+static void
+exec_keywrap_message(const char *key)
+{
+	StringInfoData buf;
+	Datum		wrappedkey;
+	char		*outputstr;
+
+	start_xact_command();
+
+	/* Switch back to message context */
+	MemoryContextSwitchTo(MessageContext);
+
+	pq_beginmessage(&buf, 'w');
+
+	wrappedkey = DirectFunctionCall1(pg_wrap,
+									 CStringGetDatum(cstring_to_text(key)));
+	outputstr = OidOutputFunctionCall(F_BYTEAOUT, wrappedkey);
+
+	pq_sendstring(&buf, outputstr);
+	pq_endmessage(&buf);
+
+	finish_xact_command();
 }
 
 /*
@@ -4541,6 +4581,16 @@ PostgresMain(int argc, char *argv[],
 				 */
 				break;
 
+			case 'W':
+			{
+				const char *target_key;
+
+				target_key = pq_getmsgstring(&input_message);
+				pq_getmsgend(&input_message);
+				exec_keywrap_message(target_key);
+				send_ready_for_query = true;
+				break;
+			}
 			default:
 				ereport(FATAL,
 						(errcode(ERRCODE_PROTOCOL_VIOLATION),

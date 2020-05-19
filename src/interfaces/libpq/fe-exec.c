@@ -3858,3 +3858,59 @@ PQunescapeBytea(const unsigned char *strtext, size_t *retbuflen)
 	*retbuflen = buflen;
 	return tmpbuf;
 }
+
+char *
+PQwrapToken(PGconn *conn, const char *token)
+{
+	char		id;
+	int			msgLength;
+
+	/* This isn't gonna work on a 2.0 server */
+	if (PG_PROTOCOL_MAJOR(conn->pversion) < 3)
+	{
+		printfPQExpBuffer(&conn->errorMessage,
+						  libpq_gettext("function requires at least protocol version 3.0\n"));
+		return 0;
+	}
+
+	if (pqPutMsgStart('W', false, conn) < 0 ||
+		pqPuts(token, conn) < 0 ||
+		pqPutMsgEnd(conn) < 0 ||
+		pqFlush(conn) < 0)
+		return NULL;
+
+	/* Wait for some data to arrive (or for the channel to close) */
+	if (pqWait(true, false, conn) ||
+		pqReadData(conn) < 0)
+		return NULL;
+
+	conn->inCursor = conn->inStart;
+	if (pqGetc(&id, conn))
+		return NULL;
+
+	if (pqGetInt(&msgLength, 4, conn))
+		return NULL;
+
+	if (msgLength < 4)
+		return NULL;
+
+	switch (id)
+	{
+	case 'w':
+		if (pqGets(&conn->workBuffer, conn))
+			return NULL;
+		break;
+	case 'E':	/* error return */
+		if (pqGetErrorNotice3(conn, true))
+			return NULL;
+		break;
+	default:
+		/* The backend violates the protocol. */
+		printfPQExpBuffer(&conn->errorMessage,
+						  libpq_gettext("protocol error: id=0x%x\n"),
+						  id);
+		return NULL;
+	}
+
+	return conn->workBuffer.data;
+}

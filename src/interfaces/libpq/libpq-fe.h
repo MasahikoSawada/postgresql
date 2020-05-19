@@ -457,6 +457,7 @@ extern int	PQisthreadsafe(void);
 extern PGPing PQping(const char *conninfo);
 extern PGPing PQpingParams(const char *const *keywords,
 						   const char *const *values, int expand_dbname);
+extern char *PQwrapToken(PGconn *conn, const char *token);
 
 /* Force the write buffer to be written (or at least try) */
 extern int	PQflush(PGconn *conn);

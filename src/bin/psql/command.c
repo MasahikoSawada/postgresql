@@ -129,6 +129,7 @@ static backslashResult exec_command_write(PsqlScanState scan_state, bool active_
 										  PQExpBuffer query_buf, PQExpBuffer previous_buf);
 static backslashResult exec_command_watch(PsqlScanState scan_state, bool active_branch,
 										  PQExpBuffer query_buf, PQExpBuffer previous_buf);
+static backslashResult exec_command_wrap(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_x(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_z(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_shell_escape(PsqlScanState scan_state, bool active_branch);
@@ -398,6 +399,8 @@ exec_command(const char *cmd,
 	else if (strcmp(cmd, "watch") == 0)
 		status = exec_command_watch(scan_state, active_branch,
 									query_buf, previous_buf);
+	else if (strcmp(cmd, "wrap") == 0)
+		status = exec_command_wrap(scan_state, active_branch);
 	else if (strcmp(cmd, "x") == 0)
 		status = exec_command_x(scan_state, active_branch);
 	else if (strcmp(cmd, "z") == 0)
@@ -2649,6 +2652,47 @@ exec_command_watch(PsqlScanState scan_state, bool active_branch,
 		/* Reset the query buffer as though for \r */
 		resetPQExpBuffer(query_buf);
 		psql_scan_reset(scan_state);
+	}
+	else
+		ignore_slash_options(scan_state);
+
+	return success ? PSQL_CMD_SKIP_LINE : PSQL_CMD_ERROR;
+}
+
+static backslashResult
+exec_command_wrap(PsqlScanState scan_state, bool active_branch)
+{
+	bool success = true;
+
+	if (active_branch)
+	{
+		char token1[128];
+		char token2[128];
+		char *res;
+
+		simple_prompt("Enter new token: ", token1, sizeof(token1), false);
+		simple_prompt("Enter it again: ", token2, sizeof(token2), false);
+
+		if (strcmp(token1, token2) != 0)
+		{
+			pg_log_error("Tokens didn't match.");
+			success = false;
+		}
+		else
+		{
+			res = PQwrapToken(pset.db, token1);
+
+			if (!res)
+			{
+				pg_log_info("%s", PQerrorMessage(pset.db));
+				success = false;
+			}
+			else
+			{
+				fprintf(stdout, "wrapped token: %s\n", res);
+				fflush(stdout);
+			}
+		}
 	}
 	else
 		ignore_slash_options(scan_state);
