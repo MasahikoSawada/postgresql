@@ -21,6 +21,7 @@
 #include <unistd.h>
 
 #include "access/commit_ts.h"
+#include "access/fdwxact.h"
 #include "access/multixact.h"
 #include "access/parallel.h"
 #include "access/subtrans.h"
@@ -1223,6 +1224,7 @@ RecordTransactionCommit(void)
 	SharedInvalidationMessage *invalMessages = NULL;
 	bool		RelcacheInitFileInval = false;
 	bool		wrote_xlog;
+	bool		need_commit_globally;
 
 	/* Get data needed for commit record */
 	nrels = smgrGetPendingDeletes(true, &rels);
@@ -1231,6 +1233,7 @@ RecordTransactionCommit(void)
 		nmsgs = xactGetCommittedInvalidationMessages(&invalMessages,
 													 &RelcacheInitFileInval);
 	wrote_xlog = (XactLastRecEnd != 0);
+	need_commit_globally = FdwXactIsForeignTwophaseCommitRequired();
 
 	/*
 	 * If we haven't been assigned an XID yet, we neither can, nor do we want
@@ -1269,12 +1272,13 @@ RecordTransactionCommit(void)
 		}
 
 		/*
-		 * If we didn't create XLOG entries, we're done here; otherwise we
-		 * should trigger flushing those entries the same as a commit record
+		 * If we didn't create XLOG entries and the transaction does not need
+		 * to be committed using two-phase commit. we're done here; otherwise
+		 * we should trigger flushing those entries the same as a commit record
 		 * would.  This will primarily happen for HOT pruning and the like; we
 		 * want these to be flushed to disk in due time.
 		 */
-		if (!wrote_xlog)
+		if (!wrote_xlog && !need_commit_globally)
 			goto cleanup;
 	}
 	else
@@ -1421,16 +1425,37 @@ RecordTransactionCommit(void)
 	latestXid = TransactionIdLatest(xid, nchildren, children);
 
 	/*
-	 * Wait for synchronous replication, if required. Similar to the decision
-	 * above about using committing asynchronously we only want to wait if
-	 * this backend assigned an xid and wrote WAL.  No need to wait if an xid
-	 * was assigned due to temporary/unlogged tables or due to HOT pruning.
+	 * Wait for both synchronous replication and prepared foreign transaction
+	 * to be committed, if required.  We must wait for synchrnous replication
+	 * first because we need to make sure that the fate of the current
+	 * transaction is consistent between the primary and sync replicas before
+	 * resolving foreign transaction.  Otherwise, we will end up violating
+	 * atomic commit if a fail-over happens after some of foreign transactions
+	 * are committed.
 	 *
 	 * Note that at this stage we have marked clog, but still show as running
 	 * in the procarray and continue to hold locks.
 	 */
-	if (wrote_xlog && markXidCommitted)
-		SyncRepWaitForLSN(XactLastRecEnd, true);
+	if (markXidCommitted)
+	{
+		bool canceled = false;
+
+		/*
+		 * Similar to the decision above about using committing asynchronously
+		 * we only want to wait if this backend assigned an xid, wrote WAL,
+		 * and not received a query cancel.  No need to wait if an xid was
+		 * assigned due to temporary/unlogged tables or due to HOT pruning.
+		 */
+		if (wrote_xlog)
+			canceled = SyncRepWaitForLSN(XactLastRecEnd, true);
+
+		/*
+		 * We only want to wait if we prepared foreign transactions in this
+		 * transaction and not received query cancel.
+		 */
+		if (!canceled && need_commit_globally)
+			FdwXactWaitForResolution(xid, true);
+	}
 
 	/* remember end of last commit record */
 	XactLastCommitEnd = XactLastRecEnd;
@@ -2091,6 +2116,9 @@ CommitTransaction(void)
 			break;
 	}
 
+	/* Pre-commit step for foreign transactions */
+	PreCommit_FdwXact();
+
 	CallXactCallbacks(is_parallel_worker ? XACT_EVENT_PARALLEL_PRE_COMMIT
 					  : XACT_EVENT_PRE_COMMIT);
 
@@ -2258,6 +2286,7 @@ CommitTransaction(void)
 	AtEOXact_PgStat(true, is_parallel_worker);
 	AtEOXact_Snapshot(true, false);
 	AtEOXact_ApplyLauncher(true);
+	AtEOXact_FdwXact(true);
 	pgstat_report_xact_timestamp(0);
 
 	CurrentResourceOwner = NULL;
@@ -2344,6 +2373,9 @@ PrepareTransaction(void)
 	 * of this stuff could still throw an error, which would switch us into
 	 * the transaction-abort path.
 	 */
+
+	/* Prepare foreign trasactions */
+	AtPrepare_FdwXact();
 
 	/* Shut down the deferred-trigger manager */
 	AfterTriggerEndXact(true);
@@ -2535,6 +2567,9 @@ PrepareTransaction(void)
 	 * backend.  The rest is just non-critical cleanup of backend-local state.
 	 */
 	PostPrepare_Twophase();
+
+	/* Release held FdwXact entries */
+	PostPrepare_FdwXact();
 
 	/* PREPARE acts the same as COMMIT as far as GUC is concerned */
 	AtEOXact_GUC(true, 1);
@@ -2755,6 +2790,7 @@ AbortTransaction(void)
 		AtEOXact_HashTables(false);
 		AtEOXact_PgStat(false, is_parallel_worker);
 		AtEOXact_ApplyLauncher(false);
+		AtEOXact_FdwXact(false);
 		pgstat_report_xact_timestamp(0);
 	}
 
