@@ -49,6 +49,7 @@ OBJS_COMMON = \
 	archive.o \
 	base64.o \
 	checksum_helper.o \
+	cipher.o \
 	config_info.o \
 	controldata_utils.o \
 	d2s.o \
@@ -79,6 +80,7 @@ OBJS_COMMON = \
 
 ifeq ($(with_openssl),yes)
 OBJS_COMMON += \
+	cipher_openssl.o \
 	protocol_openssl.o \
 	sha2_openssl.o
 else
