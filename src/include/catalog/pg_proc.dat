@@ -10941,5 +10941,13 @@
   proname => 'pg_rotate_cluster_passphrase',
   provolatile => 'v', prorettype => 'bool',
   proargtypes => '', prosrc => 'pg_rotate_cluster_passphrase' },
+{ oid => '8201', descr => 'encrypt the given data with internal key',
+  proname => 'pg_encrypt',
+  provolatile => 'v', prorettype => 'bytea',
+  proargtypes => 'text', prosrc => 'pg_encrypt' },
+{ oid => '8202', descr => 'decrypt the given data with internal key',
+  proname => 'pg_decrypt',
+  provolatile => 'v', prorettype => 'text',
+  proargtypes => 'bytea', prosrc => 'pg_decrypt' },
 
 ]
