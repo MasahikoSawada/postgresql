@@ -62,6 +62,7 @@ OBJS_COMMON = \
 	ip.o \
 	jsonapi.o \
 	keywords.o \
+	kmgr_utils.o \
 	kwlookup.o \
 	link-canary.o \
 	md5.o \
