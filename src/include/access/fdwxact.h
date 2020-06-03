@@ -37,6 +37,7 @@
 typedef enum
 {
 	FOREIGN_TWOPHASE_COMMIT_DISABLED,	/* disable foreign twophase commit */
+	FOREIGN_TWOPHASE_COMMIT_PREFER, /* use twophase commit where available */
 	FOREIGN_TWOPHASE_COMMIT_REQUIRED	/* all foreign servers have to support
 										 * twophase commit */
 }			ForeignTwophaseCommitLevel;

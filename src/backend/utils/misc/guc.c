@@ -428,11 +428,12 @@ static const struct config_enum_entry synchronous_commit_options[] = {
 };
 
 /*
- * Although only "required" and "disabled" are documented, we accept all
- * the likely variants of "on" and "off".
+ * Although only "required", "prefer", and "disabled" are documented,
+ *  we accept all the likely variants of "on" and "off".
  */
 static const struct config_enum_entry foreign_twophase_commit_options[] = {
 	{"required", FOREIGN_TWOPHASE_COMMIT_REQUIRED, false},
+	{"prefer", FOREIGN_TWOPHASE_COMMIT_PREFER, false},
 	{"disabled", FOREIGN_TWOPHASE_COMMIT_DISABLED, false},
 	{"on", FOREIGN_TWOPHASE_COMMIT_REQUIRED, false},
 	{"off", FOREIGN_TWOPHASE_COMMIT_DISABLED, false},

@@ -358,7 +358,7 @@
 							# foreign transactions
 							# after a failed attempt
 #foreign_twophase_commit = disabled	# use two-phase commit for distributed transactions:
-					# disabled or required
+					# disabled, prefer or required
 
 #------------------------------------------------------------------------------
 # QUERY TUNING

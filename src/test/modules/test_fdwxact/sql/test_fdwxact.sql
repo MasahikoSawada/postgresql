@@ -191,3 +191,31 @@ PREPARE TRANSACTION 'global_x1';
 BEGIN;
 INSERT INTO ft_1 VALUES (1);
 PREPARE TRANSACTION 'global_x1';
+
+
+-- Test 'prefer' mode.
+-- The cases where failed in 'required' mode should pass in 'prefer' mode.
+-- We simply commit/rollback a transaction in one-phase on a server
+-- that doesn't support two-phase commit, instead of error.
+SET foreign_twophase_commit TO 'prefer';
+
+BEGIN;
+INSERT INTO ft_1 VALUES (1);
+INSERT INTO ft_2pc_1 VALUES (1);
+COMMIT;
+BEGIN;
+INSERT INTO ft_no2pc_1 VALUES (1);
+INSERT INTO ft_2pc_1 VALUES (1);
+COMMIT;
+BEGIN;
+INSERT INTO ft_1 VALUES (1);
+INSERT INTO ft_2 VALUES (1);
+COMMIT;
+BEGIN;
+INSERT INTO ft_no2pc_1 VALUES (1);
+INSERT INTO ft_no2pc_2 VALUES (1);
+COMMIT;
+BEGIN;
+INSERT INTO t VALUES (1);
+INSERT INTO ft_no2pc_1 VALUES (1);
+COMMIT;
