@@ -48,11 +48,11 @@
        prepares all transaction on the foreign servers if two-phase commit is
        required. Two-phase commit is required when the transaction modifies
        data on two or more servers including the local server itself and
-       <xref linkend="guc-foreign-twophase-commit"/> is
-       <literal>required</literal>. If the prepare on all foreign servers is
-       successful then go to the next step.  If there is any failure in the
-       prepare phase, the server will rollback all the transactions on both
-       local and foreign servers.
+       <xref linkend="guc-foreign-twophase-commit"/> is either
+       <literal>required</literal> or <literal>prefer</literal>. If the prepare
+       on all foreign servers is successful then go to the next step.  If
+       there is any failure in the prepare phase, the server will rollback
+       all the transactions on both local and foreign servers.
       </para>
      </listitem>
      <listitem>

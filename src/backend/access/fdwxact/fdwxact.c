@@ -427,7 +427,9 @@ create_fdwxact_participant(Oid serverid, Oid userid, FdwRoutine *routine)
  * When foreign twophase commit is enabled, the behavior depends on the value
  * of foreign_twophase_commit; when 'required' we strictly require for all
  * foreign servers' FDW to support two-phase commit protocol and ask them to
- * prepare foreign transactions, and when 'disabled' we ask all foreign servers
+ * prepare foreign transactions, when 'prefer' we ask only foreign servers
+ * that are capable of two-phase commit to prepare foreign transactions and ask
+ * for other servers to commit, and when 'disabled' we ask all foreign servers
  * to commit foreign transaction in one-phase. If we failed to commit any of
  * them we change to aborting.
  *
@@ -509,7 +511,9 @@ checkForeignTwophaseCommitRequired(bool local_modified)
 {
 	ListCell   *lc;
 	bool		have_notwophase = false;
+	bool		need_twophase_commit;
 	int			nserverswritten = 0;
+	int			nserverstwophase = 0;
 
 	if (!IsForeignTwophaseCommitRequested())
 		return false;
@@ -521,24 +525,42 @@ checkForeignTwophaseCommitRequired(bool local_modified)
 		if (!fdw_part->modified)
 			continue;
 
-		if (!SeverSupportTwophaseCommit(fdw_part))
-			have_notwophase = true;
+		if (SeverSupportTwophaseCommit(fdw_part))
+			nserverstwophase++;
 
 		nserverswritten++;
 	}
+	Assert(nserverswritten >= nserverstwophase);
+
+	/* check if there is any servers that don't support two-phase commit */
+	have_notwophase = (nserverswritten != nserverstwophase);
 
 	/* Did we modify the local non-temporary data? */
 	if (local_modified)
 		nserverswritten++;
 
-	/*
-	 * Two-phase commit is not required if the number of servers performed
-	 * writes is less than 2.
-	 */
-	if (nserverswritten < 2)
-		return false;
+	if (foreign_twophase_commit == FOREIGN_TWOPHASE_COMMIT_REQUIRED)
+	{
+		/*
+		 * In 'required' case, we require for all modified server to support
+		 * two-phase commit.
+		 */
+		need_twophase_commit = (nserverswritten >= 2);
+	}
+	else
+	{
+		Assert(foreign_twophase_commit == FOREIGN_TWOPHASE_COMMIT_PREFER);
 
-	Assert(foreign_twophase_commit == FOREIGN_TWOPHASE_COMMIT_REQUIRED);
+		/*
+		 * In 'prefer' case, we use two-phase commit when this transaction modified
+		 * two or more servers including the local server or servers that support
+		 * two-phase commit.
+		 */
+		need_twophase_commit = (nserverstwophase >= 2);
+	}
+
+	if (!need_twophase_commit)
+		return false;
 
 	/* Two-phase commit is required. Check parameters */
 	if (max_prepared_foreign_xacts == 0)
@@ -553,7 +575,8 @@ checkForeignTwophaseCommitRequired(bool local_modified)
 				 errmsg("foreign two-phase commit is required but prepared foreign transactions are disabled"),
 				 errhint("Set max_foreign_transaction_resolvers to a nonzero value.")));
 
-	if (have_notwophase)
+	if (have_notwophase &&
+		foreign_twophase_commit == FOREIGN_TWOPHASE_COMMIT_REQUIRED)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot process a distributed transaction that has operated on a foreign server that does not support two-phase commit protocol"),

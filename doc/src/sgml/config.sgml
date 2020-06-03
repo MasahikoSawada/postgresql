@@ -9115,18 +9115,19 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
         <para>
          Specifies whether distributed transaction commits ensures that all
          involved changes on foreign servers are committed or not. Valid
-         values are <literal>required</literal> and <literal>disabled</literal>.
-         The default setting is <literal>disabled</literal>. Setting to
-         <literal>disabled</literal> don't use two-phase commit protocol to
-         commit or rollback distributed transactions. When set to
-         <literal>required</literal> distributed transactions strictly requires
-         that all written servers can use two-phase commit protocol.  That is,
-         the distributed transaction cannot commit if even one server does not
-         support the prepare callback routine
+         values are <literal>required</literal>, <literal>prefer</literal> and
+         <literal>disabled</literal>. The default setting is
+         <literal>disabled</literal>. Setting to <literal>disabled</literal>
+         don't use two-phase commit protocol to commit or rollback distributed
+         transactions. When set to <literal>required</literal> distributed
+         transactions strictly requires that all written servers can use
+         two-phase commit protocol.  That is, the distributed transaction cannot
+         commit if even one server does not support the prepare callback routine
          (described in <xref linkend="fdw-callbacks-transaction-management"/>).
-         In <literal>required</literal> case, distributed transaction commit will
-         wait for all involving foreign transaction to be committed before the
-         command return a "success" indication to the client.
+         In <literal>prefer</literal> and <literal>required</literal> case,
+         distributed transaction commit will wait for all involving foreign
+         transaction to be committed before the command return a "success"
+         indication to the client.
         </para>
 
         <para>
@@ -9136,9 +9137,9 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
 
         <note>
          <para>
-          When <literal>disabled</literal> there can be risk of database
-          consistency if one or more foreign servers crashes while committing
-          the distributed transactions.
+          When <literal>disabled</literal> or <literal>prefer</literal>  there
+          can be risk of database consistency if one or more foreign servers
+          crashes while committing the distributed transactions.
          </para>
         </note>
        </listitem>
