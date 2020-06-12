@@ -1060,6 +1060,28 @@ AlterForeignServer(AlterForeignServerStmt *stmt)
 	return address;
 }
 
+/*
+ * Drop foreign server by OID
+ */
+void
+RemoveForeignServerById(Oid srvId)
+{
+	HeapTuple	tp;
+	Relation	rel;
+
+	rel = table_open(ForeignServerRelationId, RowExclusiveLock);
+
+	tp = SearchSysCache1(FOREIGNSERVEROID, ObjectIdGetDatum(srvId));
+
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for foreign server %u", srvId);
+
+	CatalogTupleDelete(rel, &tp->t_self);
+
+	ReleaseSysCache(tp);
+
+	table_close(rel, RowExclusiveLock);
+}
 
 /*
  * Common routine to check permission for user-mapping-related DDL
