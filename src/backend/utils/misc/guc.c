@@ -44,6 +44,7 @@
 #include "commands/vacuum.h"
 #include "commands/variable.h"
 #include "common/string.h"
+#include "crypto/kmgr.h"
 #include "funcapi.h"
 #include "jit/jit.h"
 #include "libpq/auth.h"
@@ -740,6 +741,8 @@ const char *const config_group_names[] =
 	gettext_noop("Statistics / Monitoring"),
 	/* STATS_COLLECTOR */
 	gettext_noop("Statistics / Query and Index Statistics Collector"),
+	/* ENCRYPTION */
+	gettext_noop("Encryption"),
 	/* AUTOVACUUM */
 	gettext_noop("Autovacuum"),
 	/* CLIENT_CONN */
@@ -4316,7 +4319,7 @@ static struct config_string ConfigureNamesString[] =
 		{"ssl_ciphers", PGC_SIGHUP, CONN_AUTH_SSL,
 			gettext_noop("Sets the list of allowed SSL ciphers."),
 			NULL,
-			GUC_SUPERUSER_ONLY
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
 		},
 		&SSLCipherSuites,
 #ifdef USE_OPENSSL
@@ -4360,6 +4363,16 @@ static struct config_string ConfigureNamesString[] =
 			GUC_SUPERUSER_ONLY
 		},
 		&ssl_passphrase_command,
+		"",
+		NULL, NULL, NULL
+	},
+
+	{
+		{"cluster_passphrase_command", PGC_POSTMASTER, ENCRYPTION,
+			gettext_noop("Command to obtain passphrase for database encryption."),
+			NULL
+		},
+		&cluster_passphrase_command,
 		"",
 		NULL, NULL, NULL
 	},

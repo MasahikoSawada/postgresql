@@ -19,6 +19,7 @@
 #include "access/xlogdefs.h"
 #include "pgtime.h"				/* for pg_time_t */
 #include "port/pg_crc32c.h"
+#include "crypto/kmgr.h"
 
 
 /* Version identifier for this pg_control format */
@@ -225,6 +226,8 @@ typedef struct ControlFileData
 	 * failed at an early stage.
 	 */
 	char		mock_authentication_nonce[MOCK_AUTH_NONCE_LEN];
+
+	WrappedEncKeyWithHmac master_dek;
 
 	/* CRC of all above ... MUST BE LAST! */
 	pg_crc32c	crc;

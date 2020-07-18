@@ -145,6 +145,7 @@ static bool data_checksums = false;
 static char *xlog_dir = NULL;
 static char *str_wal_segment_size_mb = NULL;
 static int	wal_segment_size_mb;
+static char *cluster_passphrase = NULL;
 
 
 /* internal vars */
@@ -1218,6 +1219,13 @@ setup_config(void)
 								  "password_encryption = md5");
 	}
 
+	if (cluster_passphrase)
+	{
+		snprintf(repltok, sizeof(repltok), "cluster_passphrase_command = '%s'",
+				 escape_quotes(cluster_passphrase));
+		conflines = replace_token(conflines, "#cluster_passphrase_command = ''", repltok);
+	}
+
 	/*
 	 * If group access has been enabled for the cluster then it makes sense to
 	 * ensure that the log files also allow group access.  Otherwise a backup
@@ -1434,7 +1442,6 @@ bootstrap_template1(void)
 			 data_checksums ? "-k" : "",
 			 boot_options,
 			 debug ? "-d 5" : "");
-
 
 	PG_CMD_OPEN;
 
@@ -2323,6 +2330,8 @@ usage(const char *progname)
 	printf(_("      --wal-segsize=SIZE    size of WAL segments, in megabytes\n"));
 	printf(_("\nLess commonly used options:\n"));
 	printf(_("  -d, --debug               generate lots of debugging output\n"));
+	printf(_("  -c  --cluster-passphrase-command=COMMAND\n"
+			 "                            set command to obtain passphrase for data encryption key\n"));
 	printf(_("  -k, --data-checksums      use data page checksums\n"));
 	printf(_("  -L DIRECTORY              where to find the input files\n"));
 	printf(_("  -n, --no-clean            do not clean up after errors\n"));
@@ -2383,7 +2392,6 @@ check_need_password(const char *authmethodlocal, const char *authmethodhost)
 		exit(1);
 	}
 }
-
 
 void
 setup_pgdata(void)
@@ -2991,6 +2999,7 @@ main(int argc, char *argv[])
 		{"wal-segsize", required_argument, NULL, 12},
 		{"data-checksums", no_argument, NULL, 'k'},
 		{"allow-group-access", no_argument, NULL, 'g'},
+		{"cluster-passphrase-command", required_argument, NULL, 'c'},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -3032,7 +3041,7 @@ main(int argc, char *argv[])
 
 	/* process command-line options */
 
-	while ((c = getopt_long(argc, argv, "dD:E:kL:nNU:WA:sST:X:g", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "c:dD:E:e:kL:nNU:WA:sST:X:g", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
@@ -3114,6 +3123,9 @@ main(int argc, char *argv[])
 			case 9:
 				pwfilename = pg_strdup(optarg);
 				break;
+			case 'c':
+				cluster_passphrase = pg_strdup(optarg);
+				break;
 			case 's':
 				show_setting = true;
 				break;
@@ -3191,6 +3203,7 @@ main(int argc, char *argv[])
 	check_authmethod_valid(authmethodhost, auth_methods_host, "host");
 
 	check_need_password(authmethodlocal, authmethodhost);
+
 
 	/* set wal segment size */
 	if (str_wal_segment_size_mb == NULL)
