@@ -22,8 +22,6 @@
  */
 #include "postgres.h"
 
-#include "access/fdwxact.h"
-#include "access/xact.h"
 #include "executor/executor.h"
 #include "executor/nodeForeignscan.h"
 #include "foreign/fdwapi.h"

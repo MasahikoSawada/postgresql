@@ -37,7 +37,6 @@
 
 #include "postgres.h"
 
-#include "access/fdwxact.h"
 #include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/tableam.h"
@@ -48,7 +47,6 @@
 #include "executor/executor.h"
 #include "executor/nodeModifyTable.h"
 #include "foreign/fdwapi.h"
-#include "foreign/foreign.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
 #include "rewrite/rewriteHandler.h"
