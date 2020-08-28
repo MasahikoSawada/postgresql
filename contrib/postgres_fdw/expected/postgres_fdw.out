@@ -8984,7 +8984,7 @@ SELECT count(*) FROM ft1;
 
 -- error here
 PREPARE TRANSACTION 'fdw_tpc';
-ERROR:  cannot PREPARE a transaction that has operated on postgres_fdw foreign tables
+ERROR:  cannot PREPARE a transaction that has operated on foreign tables
 ROLLBACK;
 WARNING:  there is no transaction in progress
 -- ===================================================================

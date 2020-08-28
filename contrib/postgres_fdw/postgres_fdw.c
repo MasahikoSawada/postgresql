@@ -559,6 +559,10 @@ postgres_fdw_handler(PG_FUNCTION_ARGS)
 	/* Support functions for upper relation push-down */
 	routine->GetForeignUpperPaths = postgresGetForeignUpperPaths;
 
+	/* Support functions for foreign transactions */
+	routine->CommitForeignTransaction = postgresCommitForeignTransaction;
+	routine->RollbackForeignTransaction = postgresRollbackForeignTransaction;
+
 	PG_RETURN_POINTER(routine);
 }
 
