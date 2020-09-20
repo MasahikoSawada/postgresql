@@ -846,6 +846,34 @@ TwoPhaseGetGXact(TransactionId xid, bool lock_held)
 }
 
 /*
+ * TwoPhaseExists
+ *		Return true if there is a prepared transaction specified by XID
+ */
+bool
+TwoPhaseExists(TransactionId xid)
+{
+	int		i;
+	bool	found = false;
+
+	LWLockAcquire(TwoPhaseStateLock, LW_SHARED);
+
+	for (i = 0; i < TwoPhaseState->numPrepXacts; i++)
+	{
+		GlobalTransaction gxact = TwoPhaseState->prepXacts[i];
+
+		if (gxact->xid == xid)
+		{
+			found = true;
+			break;
+		}
+	}
+
+	LWLockRelease(TwoPhaseStateLock);
+
+	return found;
+}
+
+/*
  * TwoPhaseGetDummyBackendId
  *		Get the dummy backend ID for prepared transaction specified by XID
  *

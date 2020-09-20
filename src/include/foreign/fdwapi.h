@@ -171,6 +171,7 @@ typedef List *(*ReparameterizeForeignPathByChild_function) (PlannerInfo *root,
 															List *fdw_private,
 															RelOptInfo *child_rel);
 
+typedef void (*PrepareForeignTransaction_function) (FdwXactRslvState *frstate);
 typedef void (*CommitForeignTransaction_function) (FdwXactRslvState *frstate);
 typedef void (*RollbackForeignTransaction_function) (FdwXactRslvState *frstate);
 
@@ -254,6 +255,7 @@ typedef struct FdwRoutine
 	/* Support functions for transaction management */
 	CommitForeignTransaction_function CommitForeignTransaction;
 	RollbackForeignTransaction_function RollbackForeignTransaction;
+	PrepareForeignTransaction_function PrepareForeignTransaction;
 } FdwRoutine;
 
 

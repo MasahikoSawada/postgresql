@@ -4137,6 +4137,15 @@ pgstat_get_wait_io(WaitEventIO w)
 		case WAIT_EVENT_DSM_FILL_ZERO_WRITE:
 			event_name = "DSMFillZeroWrite";
 			break;
+		case WAIT_EVENT_FDWXACT_FILE_WRITE:
+			event_name = "FdwXactFileWrite";
+			break;
+		case WAIT_EVENT_FDWXACT_FILE_READ:
+			event_name = "FdwXactFileRead";
+			break;
+		case WAIT_EVENT_FDWXACT_FILE_SYNC:
+			event_name = "FdwXactFileSync";
+			break;
 		case WAIT_EVENT_LOCK_FILE_ADDTODATADIR_READ:
 			event_name = "LockFileAddToDataDirRead";
 			break;

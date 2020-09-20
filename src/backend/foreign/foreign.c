@@ -332,6 +332,12 @@ GetFdwRoutine(Oid fdwhandler)
 	Assert((routine->CommitForeignTransaction && routine->RollbackForeignTransaction) ||
 		   (!routine->CommitForeignTransaction && !routine->RollbackForeignTransaction));
 
+	/* FDW supporting prepare API must support also commit and rollback APIs */
+	Assert((routine->PrepareForeignTransaction &&
+			routine->CommitForeignTransaction &&
+			routine->RollbackForeignTransaction) ||
+		   !routine->PrepareForeignTransaction);
+
 	return routine;
 }
 

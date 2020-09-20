@@ -93,6 +93,7 @@
 #include <pthread.h>
 #endif
 
+#include "access/fdwxact.h"
 #include "access/transam.h"
 #include "access/xlog.h"
 #include "bootstrap/bootstrap.h"

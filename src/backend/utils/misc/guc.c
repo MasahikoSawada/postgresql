@@ -30,6 +30,7 @@
 #include <unistd.h>
 
 #include "access/commit_ts.h"
+#include "access/fdwxact.h"
 #include "access/gin.h"
 #include "access/rmgr.h"
 #include "access/tableam.h"
@@ -2455,6 +2456,16 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_prepared_xacts,
 		0, 0, MAX_BACKENDS,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_prepared_foreign_transactions", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the maximum number of simultaneously prepared transactions on foreign servers."),
+			NULL
+		},
+		&max_prepared_foreign_xacts,
+		0, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 
