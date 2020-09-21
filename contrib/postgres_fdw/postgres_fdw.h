@@ -140,6 +140,7 @@ extern void pgfdw_report_error(int elevel, PGresult *res, PGconn *conn,
 							   bool clear, const char *sql);
 extern void postgresCommitForeignTransaction(FdwXactRslvState *frstate);
 extern void postgresRollbackForeignTransaction(FdwXactRslvState *frstate);
+extern void postgresPrepareForeignTransaction(FdwXactRslvState *frstate);
 
 /* in option.c */
 extern int	ExtractConnectionOptions(List *defelems,

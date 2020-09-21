@@ -96,6 +96,8 @@ static bool pgfdw_get_cleanup_result(PGconn *conn, TimestampTz endtime,
 static bool UserMappingPasswordRequired(UserMapping *user);
 static void pgfdw_cleanup_after_transaction(ConnCacheEntry *entry);
 static ConnCacheEntry *GetConnectionCacheEntry(Oid umid);
+static void pgfdw_end_prepared_xact(ConnCacheEntry *entry, UserMapping *usermapping,
+									char *fdwxact_id, bool is_commit);
 
 /*
  * Get a PGconn which can be used to execute queries on the remote PostgreSQL
@@ -1158,11 +1160,18 @@ void
 postgresCommitForeignTransaction(FdwXactRslvState *frstate)
 {
 	ConnCacheEntry *entry;
+	bool		is_onephase = (frstate->flags & FDWXACT_FLAG_ONEPHASE) != 0;
 	PGresult   *res;
 
-	Assert((frstate->flags & FDWXACT_FLAG_ONEPHASE) != 0);
-
 	entry = GetConnectionCacheEntry(frstate->usermapping->umid);
+
+	if (!is_onephase)
+	{
+		/* COMMIT PREPARED the transaction and cleanup */
+		pgfdw_end_prepared_xact(entry, frstate->usermapping,
+								frstate->fdwxact_id, true);
+		return;
+	}
 
 	Assert(entry->conn);
 
@@ -1209,9 +1218,8 @@ void
 postgresRollbackForeignTransaction(FdwXactRslvState *frstate)
 {
 	ConnCacheEntry *entry = NULL;
+	bool is_onephase = (frstate->flags & FDWXACT_FLAG_ONEPHASE) != 0;
 	bool abort_cleanup_failure = false;
-
-	Assert((frstate->flags & FDWXACT_FLAG_ONEPHASE) != 0);
 
 	/*
 	 * In simple rollback case, we must have a connection to the foreign server
@@ -1219,6 +1227,15 @@ postgresRollbackForeignTransaction(FdwXactRslvState *frstate)
 	 * entry from the cache.
 	 */
 	entry = GetConnectionCacheEntry(frstate->usermapping->umid);
+
+	if (!is_onephase)
+	{
+		/* ROLLBACK PREPARED the transaction and cleanup */
+		pgfdw_end_prepared_xact(entry, frstate->usermapping,
+								frstate->fdwxact_id, false);
+		return;
+	}
+
 	Assert(entry);
 
 	/*
@@ -1295,6 +1312,46 @@ postgresRollbackForeignTransaction(FdwXactRslvState *frstate)
 	return;
 }
 
+/*
+ * Prepare a transaction on foreign server.
+ */
+void
+postgresPrepareForeignTransaction(FdwXactRslvState *frstate)
+{
+	ConnCacheEntry *entry = NULL;
+	PGresult	*res;
+	StringInfo	command;
+
+	/* The transaction should have started already get the cache entry */
+	entry = GetConnectionCacheEntry(frstate->usermapping->umid);
+	Assert(entry->conn);
+
+	pgfdw_reject_incomplete_xact_state_change(entry);
+
+	command = makeStringInfo();
+	appendStringInfo(command, "PREPARE TRANSACTION '%s'", frstate->fdwxact_id);
+
+	/* Do prepare foreign transaction */
+	entry->changing_xact_state = true;
+	res = pgfdw_exec_query(entry->conn, command->data);
+	entry->changing_xact_state = false;
+
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		ereport(ERROR, (errmsg("could not prepare transaction on server %s with ID %s",
+							   frstate->server->servername, frstate->fdwxact_id)));
+
+	elog(DEBUG1, "prepared foreign transaction on server %s with ID %s",
+		 frstate->server->servername, frstate->fdwxact_id);
+
+	if (entry->have_prep_stmt && entry->have_error)
+	{
+		res = PQexec(entry->conn, "DEALLOCATE ALL");
+		PQclear(res);
+	}
+
+	pgfdw_cleanup_after_transaction(entry);
+}
+
 /* Cleanup at main-transaction end */
 static void
 pgfdw_cleanup_after_transaction(ConnCacheEntry *entry)
@@ -1320,4 +1377,76 @@ pgfdw_cleanup_after_transaction(ConnCacheEntry *entry)
 
 	/* Also reset cursor numbering for next transaction */
 	cursor_number = 0;
+}
+
+/*
+ * Commit or rollback prepared transaction on the foreign server.
+ */
+static void
+pgfdw_end_prepared_xact(ConnCacheEntry *entry, UserMapping *usermapping,
+						char *fdwxact_id, bool is_commit)
+{
+	StringInfo	command;
+	PGresult	*res;
+
+	/*
+	 * Check the connection status for the case the previous attempt
+	 * failed.
+	 */
+	if (entry->conn && PQstatus(entry->conn) != CONNECTION_OK)
+		disconnect_pg_server(entry);
+
+	/*
+	 * In two-phase commit case, since the transaction is about to be
+	 * resolved by a different process than the process who prepared it,
+	 * we might not have a connection yet.
+	 */
+	if (!entry->conn)
+		make_new_connection(entry, usermapping);
+
+	command = makeStringInfo();
+	appendStringInfo(command, "%s PREPARED '%s'",
+					 is_commit ? "COMMIT" : "ROLLBACK",
+					 fdwxact_id);
+
+	/*
+	 * Once the transaction is prepared, further transaction callback is not
+	 * called even when an error occurred during resolving it.  Therefore, we
+	 * don't need to set changing_xact_state here.  On failure the new connection
+	 * will be established either when the new transaction is started or when
+	 * checking the connection status above.
+	 */
+	res = pgfdw_exec_query(entry->conn, command->data);
+
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+	{
+		int		sqlstate;
+		char	*diag_sqlstate = PQresultErrorField(res, PG_DIAG_SQLSTATE);
+
+		if (diag_sqlstate)
+		{
+			sqlstate = MAKE_SQLSTATE(diag_sqlstate[0],
+									 diag_sqlstate[1],
+									 diag_sqlstate[2],
+									 diag_sqlstate[3],
+									 diag_sqlstate[4]);
+		}
+		else
+			sqlstate = ERRCODE_CONNECTION_FAILURE;
+
+		/*
+		 * As core global transaction manager states, it's possible that the
+		 * given foreign transaction doesn't exist on the foreign server. So
+		 * we should accept an UNDEFINED_OBJECT error.
+		 */
+		if (sqlstate != ERRCODE_UNDEFINED_OBJECT)
+			pgfdw_report_error(ERROR, res, entry->conn, false, command->data);
+	}
+
+	elog(DEBUG1, "%s prepared foreign transaction with ID %s",
+		 is_commit ? "commit" : "rollback",
+		 fdwxact_id);
+
+	/* Cleanup transaction status */
+	pgfdw_cleanup_after_transaction(entry);
 }

@@ -562,6 +562,7 @@ postgres_fdw_handler(PG_FUNCTION_ARGS)
 	/* Support functions for foreign transactions */
 	routine->CommitForeignTransaction = postgresCommitForeignTransaction;
 	routine->RollbackForeignTransaction = postgresRollbackForeignTransaction;
+	routine->PrepareForeignTransaction = postgresPrepareForeignTransaction;
 
 	PG_RETURN_POINTER(routine);
 }
