@@ -22,10 +22,10 @@
  * At PREPARE TRANSACTION, we prepare all transactions on foreign servers by executing
  * PrepareForeignTransaction() API regardless of data on the foreign server having been
  * modified.  At COMMIT PREPARED and ROLLBACK PREPARED, we commit or rollback only the
- * local transaction but not do anything for involved foreign transactions.  To resolve
- * these foreign transactions the user needs to use pg_resolve_foreign_xact() SQL
- * function that resolve a foreign transaction according to the result of the
- * corresponding local transaction.
+ * local transaction but not do anything for involved foreign transactions.  The preapred
+ * foreign transactions are resolved by a resolver process asynchronously.  Also, the
+ * user can use pg_resolve_foreign_xact() SQL function to resolve a foreign transaction
+ * manually.
  *
  * LOCKING
  *
@@ -76,7 +76,10 @@
 #include <unistd.h>
 
 #include "access/fdwxact.h"
+#include "access/fdwxact_resolver.h"
+#include "access/fdwxact_launcher.h"
 #include "access/twophase.h"
+#include "access/resolver_internal.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
@@ -157,6 +160,7 @@ static bool fdwXactExitRegistered = false;
 
 /* Guc parameter */
 int			max_prepared_foreign_xacts = 0;
+int			max_foreign_xact_resolvers = 0;
 
 static void AtProcExit_FdwXact(int code, Datum arg);
 static void FdwXactPrepareForeignTransactions(TransactionId xid);
@@ -165,7 +169,6 @@ static void FdwXactParticipantEndTransaction(FdwXactParticipant *fdw_part,
 											 bool commit);
 static FdwXact FdwXactInsertFdwXactEntry(TransactionId xid,
 										 FdwXactParticipant *fdw_part);
-static void FdwXactResolveFdwXacts(int *fdwxact_idxs, int nfdwxacts);
 static void FdwXactComputeRequiredXmin(void);
 static FdwXactStatus FdwXactGetTransactionFate(TransactionId xid);
 static void FdwXactResolveOneFdwXact(FdwXact fdwxact);
@@ -772,12 +775,13 @@ ForgetAllFdwXactParticipants(void)
 
 	/*
 	 * If we leave any FdwXact entries, update the oldest local transaction of
-	 * unresolved distributed transaction.
+	 * unresolved distributed transaction and notify the launcher.
 	 */
 	if (nlefts > 0)
 	{
 		elog(DEBUG1, "left %u foreign transactions", nlefts);
 		FdwXactComputeRequiredXmin();
+		FdwXactLaunchOrWakeupResolver();
 	}
 
 	list_free_deep(FdwXactParticipants);
@@ -785,7 +789,9 @@ ForgetAllFdwXactParticipants(void)
 }
 
 /*
- * Commit or rollback all foreign transactions.
+ * Close in-progress involved foreign transactions.  We don't perform the second
+ * phase of two-phase commit protocol here.  All prepared foreign transactions
+ * enter in-doubt state and a resolver process will process them.
  */
 void
 AtEOXact_FdwXact(bool is_commit)
@@ -889,7 +895,7 @@ PrePrepare_FdwXact(void)
  * The caller must hold the given foreign transactions in advance to prevent
  * concurrent update.
  */
-static void
+void
 FdwXactResolveFdwXacts(int *fdwxact_idxs, int nfdwxacts)
 {
 	for (int i = 0; i < nfdwxacts; i++)
@@ -920,6 +926,17 @@ FdwXactExists(Oid dbid, Oid serverid, Oid userid)
 
 	LWLockAcquire(FdwXactLock, LW_SHARED);
 	idx = get_fdwxact(dbid, InvalidTransactionId, serverid, userid);
+	LWLockRelease(FdwXactLock);
+
+	return (idx >= 0);
+}
+bool
+FdwXactExistsXid(TransactionId xid)
+{
+	int			idx;
+
+	LWLockAcquire(FdwXactLock, LW_SHARED);
+	idx = get_fdwxact(InvalidOid, xid, InvalidOid, InvalidOid);
 	LWLockRelease(FdwXactLock);
 
 	return (idx >= 0);

@@ -77,6 +77,8 @@
 #include <unistd.h>
 
 #include "access/commit_ts.h"
+#include "access/fdwxact.h"
+#include "access/fdwxact_launcher.h"
 #include "access/htup_details.h"
 #include "access/subtrans.h"
 #include "access/transam.h"
@@ -2286,6 +2288,13 @@ RecordTransactionCommitPrepared(TransactionId xid,
 	 * in the procarray and continue to hold locks.
 	 */
 	SyncRepWaitForLSN(recptr, true);
+
+	/*
+	 * If the prepared transaciton was a part of a distributed transaction
+	 * notify a resolver process to handle it.
+	 */
+	if (FdwXactExistsXid(xid))
+		FdwXactLaunchOrWakeupResolver();
 }
 
 /*
@@ -2345,6 +2354,13 @@ RecordTransactionAbortPrepared(TransactionId xid,
 	 * in the procarray and continue to hold locks.
 	 */
 	SyncRepWaitForLSN(recptr, false);
+
+	/*
+	 * If the prepared transaciton was a part of a distributed transaction
+	 * notify a resolver process to handle it.
+	 */
+	if (FdwXactExistsXid(xid))
+		FdwXactLaunchOrWakeupResolver();
 }
 
 /*

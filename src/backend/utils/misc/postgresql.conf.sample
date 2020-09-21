@@ -734,6 +734,18 @@
 
 
 #------------------------------------------------------------------------------
+# FOREIGN TRANSACTION
+#------------------------------------------------------------------------------
+
+#max_foreign_transaction_resolvers = 0		# max number of resolver process
+						# (change requires restart)
+#foreign_transaction_resolver_timeout = 60s	# in milliseconds; 0 disables
+#foreign_transaction_resolution_retry_interval = 5s	# time to wait before
+							# retrying to resolve
+							# foreign transactions
+							# after a failed attempt
+
+#------------------------------------------------------------------------------
 # VERSION AND PLATFORM COMPATIBILITY
 #------------------------------------------------------------------------------
 

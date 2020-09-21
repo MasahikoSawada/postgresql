@@ -3809,6 +3809,12 @@ pgstat_get_wait_activity(WaitEventActivity w)
 		case WAIT_EVENT_CHECKPOINTER_MAIN:
 			event_name = "CheckpointerMain";
 			break;
+		case WAIT_EVENT_FDWXACT_RESOLVER_MAIN:
+			event_name = "FdwXactResolverMain";
+			break;
+		case WAIT_EVENT_FDWXACT_LAUNCHER_MAIN:
+			event_name = "FdwXactLauncherMain";
+			break;
 		case WAIT_EVENT_LOGICAL_APPLY_MAIN:
 			event_name = "LogicalApplyMain";
 			break;

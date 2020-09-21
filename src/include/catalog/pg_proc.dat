@@ -6155,6 +6155,11 @@
   proname => 'pg_walfile_name', prorettype => 'text', proargtypes => 'pg_lsn',
   prosrc => 'pg_walfile_name' },
 
+{ oid => '9709',
+  descr => 'stop a foreign transaction resolver process running on the given database',
+  proname => 'pg_stop_foreign_xact_resolver', provolatile => 'v', prorettype => 'bool',
+  proargtypes => 'oid', prosrc => 'pg_stop_foreign_xact_resolver'},
+
 { oid => '3165', descr => 'difference in bytes, given two wal locations',
   proname => 'pg_wal_lsn_diff', prorettype => 'numeric',
   proargtypes => 'pg_lsn pg_lsn', prosrc => 'pg_wal_lsn_diff' },

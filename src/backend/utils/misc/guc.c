@@ -760,6 +760,10 @@ const char *const config_group_names[] =
 	gettext_noop("Client Connection Defaults / Other Defaults"),
 	/* LOCK_MANAGEMENT */
 	gettext_noop("Lock Management"),
+	/* FOREIGN_TRANSACTION */
+	gettext_noop("Foreign Transaction"),
+	/* FOREIGN_TRANSACTION_RESOLVER */
+	gettext_noop("Foreign Transaction / Resolver"),
 	/* COMPAT_OPTIONS */
 	gettext_noop("Version and Platform Compatibility"),
 	/* COMPAT_OPTIONS_PREVIOUS */
@@ -2466,6 +2470,39 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_prepared_foreign_xacts,
 		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"foreign_transaction_resolver_timeout", PGC_SIGHUP, FOREIGN_TRANSACTION_RESOLVER,
+			gettext_noop("Sets the maximum time to wait for foreign transaction resolution."),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&foreign_xact_resolver_timeout,
+		60 * 1000, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_foreign_transaction_resolvers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Maximum number of foreign transaction resolution processes."),
+			NULL
+		},
+		&max_foreign_xact_resolvers,
+		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"foreign_transaction_resolution_retry_interval", PGC_SIGHUP, FOREIGN_TRANSACTION_RESOLVER,
+		 gettext_noop("Sets the time to wait before retrying to resolve foreign transaction "
+					  "after a failed attempt."),
+		 NULL,
+		 GUC_UNIT_MS
+		},
+		&foreign_xact_resolution_retry_interval,
+		5000, 1, INT_MAX,
 		NULL, NULL, NULL
 	},
 

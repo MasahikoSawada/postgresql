@@ -104,13 +104,19 @@ typedef struct FdwXactRslvState
 
 /* GUC parameters */
 extern int	max_prepared_foreign_xacts;
+extern int	max_foreign_xact_resolvers;
+extern int	foreign_xact_resolution_retry_interval;
+extern int	foreign_xact_resolver_timeout;
 
 /* Function declarations */
 extern Size FdwXactShmemSize(void);
 extern void FdwXactShmemInit(void);
 extern void AtEOXact_FdwXact(bool is_commit);
 extern void PrePrepare_FdwXact(void);
+extern bool FdwXactIsForeignTwophaseCommitRequired(void);
+extern void FdwXactResolveFdwXacts(int *fdwxact_idxs, int nfdwxacts);
 extern bool FdwXactExists(Oid dbid, Oid serverid, Oid userid);
+extern bool FdwXactExistsXid(TransactionId xid);
 extern void CheckPointFdwXacts(XLogRecPtr redo_horizon);
 extern void RecreateFdwXactFile(Oid dbid, TransactionId xid, Oid serverid,
 								Oid userid, void *content, int len);
