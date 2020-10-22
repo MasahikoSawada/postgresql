@@ -846,6 +846,9 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 	indstats = (IndexBulkDeleteResult **)
 		palloc0(nindexes * sizeof(IndexBulkDeleteResult *));
 
+	if (params->options & VACOPT_VERBOSE)
+		elog(WARNING, "start vacuum");
+
 	nblocks = RelationGetNumberOfBlocks(onerel);
 	vacrelstats->rel_pages = nblocks;
 	vacrelstats->scanned_pages = 0;
@@ -898,6 +901,9 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 	initprog_val[1] = nblocks;
 	initprog_val[2] = dead_tuples->max_tuples;
 	pgstat_progress_update_multi_param(3, initprog_index, initprog_val);
+
+	if (params->options & VACOPT_VERBOSE)
+		elog(WARNING, "start scan heap");
 
 	/*
 	 * Except when aggressive is set, we want to skip pages that are
@@ -1708,6 +1714,9 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 			RecordPageWithFreeSpace(onerel, blkno, freespace);
 	}
 
+	if (params->options & VACOPT_VERBOSE)
+		elog(WARNING, "end scan heap");
+
 	/* report that everything is scanned and vacuumed */
 	pgstat_progress_update_param(PROGRESS_VACUUM_HEAP_BLKS_SCANNED, blkno);
 
@@ -1747,11 +1756,19 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 	if (get_num_dead_tuples(dead_tuples) > 0)
 	{
 		/* Work on all the indexes, and then the heap */
+		if (params->options & VACOPT_VERBOSE)
+			elog(WARNING, "start index vacuum");
 		lazy_vacuum_all_indexes(onerel, Irel, indstats, vacrelstats,
 								lps, nindexes);
+		if (params->options & VACOPT_VERBOSE)
+			elog(WARNING, "end index vacuum");
 
 		/* Remove tuples from heap */
+		if (params->options & VACOPT_VERBOSE)
+			elog(WARNING, "start table vacuum");
 		lazy_vacuum_heap(onerel, vacrelstats);
+		if (params->options & VACOPT_VERBOSE)
+			elog(WARNING, "end table vacuum");
 	}
 
 	/*
@@ -1784,6 +1801,9 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 				(errmsg("\"%s\": removed %.0f row versions in %u pages",
 						vacrelstats->relname,
 						tups_vacuumed, vacuumed_pages)));
+
+	if (params->options & VACOPT_VERBOSE)
+		elog(WARNING, "end vacuum");
 
 	/*
 	 * This is pretty messy, but we split it up so that we can skip emitting
@@ -1986,14 +2006,14 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
 		vmbuffer = InvalidBuffer;
 	}
 
-	ereport(elevel,
-			(errmsg("%s memory usage %lu",
-					xx_vacuum == VACUUM_INTSET ? "INTSET":
-					xx_vacuum == VACUUM_ARRAY_MINMAX ? "ARRAY_MINMAX":
-					"ARRAY",
-					xx_vacuum == VACUUM_INTSET ?
-					intset_memory_usage(vacrelstats->dead_tuples->intset)
-					: (sizeof(ItemPointerData) * vacrelstats->dead_tuples->num_tuples))));
+	elog(WARNING,
+		 "%s memory usage %lu",
+		 xx_vacuum == VACUUM_INTSET ? "INTSET":
+		 xx_vacuum == VACUUM_ARRAY_MINMAX ? "ARRAY_MINMAX":
+		 "ARRAY",
+		 xx_vacuum == VACUUM_INTSET ?
+		 intset_memory_usage(vacrelstats->dead_tuples->intset)
+		 : (sizeof(ItemPointerData) * vacrelstats->dead_tuples->num_tuples));
 	ereport(elevel,
 			(errmsg("\"%s\": removed %d row versions in %d pages",
 					vacrelstats->relname,
