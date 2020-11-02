@@ -58,6 +58,7 @@ typedef struct ConnCacheEntry
 	bool		have_error;		/* have any subxacts aborted in this xact? */
 	bool		changing_xact_state;	/* xact state change in process */
 	bool		invalidated;	/* true if reconnect is pending */
+	bool		modified;		/* true if data on the foreign server is modified */
 	uint32		server_hashvalue;	/* hash value of foreign server OID */
 	uint32		mapping_hashvalue;	/* hash value of user mapping OID */
 } ConnCacheEntry;
@@ -289,6 +290,7 @@ make_new_connection(ConnCacheEntry *entry, UserMapping *user)
 	entry->have_error = false;
 	entry->changing_xact_state = false;
 	entry->invalidated = false;
+	entry->modified = false;
 	entry->server_hashvalue =
 		GetSysCacheHashValue1(FOREIGNSERVEROID,
 							  ObjectIdGetDatum(server->serverid));
@@ -301,6 +303,20 @@ make_new_connection(ConnCacheEntry *entry, UserMapping *user)
 
 	elog(DEBUG3, "new postgres_fdw connection %p for server \"%s\" (user mapping oid %u, userid %u)",
 		 entry->conn, server->servername, user->umid, user->userid);
+}
+
+void
+MarkConnectionModified(UserMapping *user)
+{
+	ConnCacheEntry *entry;
+
+	entry = GetConnectionCacheEntry(user->umid);
+
+	if (entry && !entry->modified)
+	{
+		FdwXactRegisterXact(user->serverid, user->userid, true);
+		entry->modified = true;
+	}
 }
 
 /*
@@ -574,7 +590,7 @@ begin_remote_xact(ConnCacheEntry *entry, UserMapping *user)
 			 entry->conn);
 
 		/* Register the foreign server to the transaction */
-		FdwXactRegisterXact(user->serverid, user->userid);
+		FdwXactRegisterXact(user->serverid, user->userid, false);
 
 		if (IsolationIsSerializable())
 			sql = "START TRANSACTION ISOLATION LEVEL SERIALIZABLE";
@@ -583,6 +599,7 @@ begin_remote_xact(ConnCacheEntry *entry, UserMapping *user)
 		entry->changing_xact_state = true;
 		do_sql_command(entry->conn, sql);
 		entry->xact_depth = 1;
+		entry->modified = false;
 		entry->changing_xact_state = false;
 	}
 
