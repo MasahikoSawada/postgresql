@@ -273,7 +273,7 @@ extern bool IsImportableForeignTable(const char *tablename,
 extern Path *GetExistingLocalJoinPath(RelOptInfo *joinrel);
 
 /* Functions in fdwxact/fdwxact.c */
-extern void FdwXactRegisterXact(Oid serverid, Oid userid);
+extern void FdwXactRegisterXact(Oid serverid, Oid userid, bool modified);
 extern void FdwXactUnregisterXact(Oid serverid, Oid userid);
 
 #endif							/* FDWAPI_H */

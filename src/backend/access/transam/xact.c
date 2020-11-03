@@ -22,6 +22,7 @@
 
 #include "access/commit_ts.h"
 #include "access/fdwxact.h"
+#include "access/fdwxact_launcher.h"
 #include "access/multixact.h"
 #include "access/parallel.h"
 #include "access/subtrans.h"
@@ -1456,6 +1457,9 @@ RecordTransactionCommit(void)
 	if (wrote_xlog && markXidCommitted)
 		SyncRepWaitForLSN(XactLastRecEnd, true);
 
+	if (FdwXactIsForeignTwophaseCommitRequired())
+		FdwXactLaunchOrWakeupResolver();
+
 	/* remember end of last commit record */
 	XactLastCommitEnd = XactLastRecEnd;
 
@@ -2114,6 +2118,9 @@ CommitTransaction(void)
 		if (!PreCommit_Portals(false))
 			break;
 	}
+
+	/* Pre-commit step for foreign transactions */
+	PreCommit_FdwXact();
 
 	CallXactCallbacks(is_parallel_worker ? XACT_EVENT_PARALLEL_PRE_COMMIT
 					  : XACT_EVENT_PRE_COMMIT);

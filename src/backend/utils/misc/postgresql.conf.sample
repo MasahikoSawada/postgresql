@@ -744,6 +744,8 @@
 							# retrying to resolve
 							# foreign transactions
 							# after a failed attempt
+#foreign_twophase_commit = disabled	# use two-phase commit for distributed transactions:
+					# disabled or required
 
 #------------------------------------------------------------------------------
 # VERSION AND PLATFORM COMPATIBILITY
