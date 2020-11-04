@@ -174,6 +174,8 @@ typedef List *(*ReparameterizeForeignPathByChild_function) (PlannerInfo *root,
 typedef void (*PrepareForeignTransaction_function) (FdwXactRslvState *frstate);
 typedef void (*CommitForeignTransaction_function) (FdwXactRslvState *frstate);
 typedef void (*RollbackForeignTransaction_function) (FdwXactRslvState *frstate);
+typedef char *(*GetPrepareId_function) (TransactionId xid, Oid serverid,
+										Oid userid, int *prep_id_len);
 
 /*
  * FdwRoutine is the struct returned by a foreign-data wrapper's handler
@@ -256,6 +258,7 @@ typedef struct FdwRoutine
 	CommitForeignTransaction_function CommitForeignTransaction;
 	RollbackForeignTransaction_function RollbackForeignTransaction;
 	PrepareForeignTransaction_function PrepareForeignTransaction;
+	GetPrepareId_function GetPrepareId;
 } FdwRoutine;
 
 
