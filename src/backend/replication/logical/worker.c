@@ -136,6 +136,7 @@
 #include "access/xact.h"
 #include "access/xlog_internal.h"
 #include "catalog/catalog.h"
+#include "catalog/indexing.h"
 #include "catalog/namespace.h"
 #include "catalog/partition.h"
 #include "catalog/pg_inherits.h"
@@ -189,6 +190,7 @@
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/pg_lsn.h"
 #include "utils/rel.h"
 #include "utils/rls.h"
 #include "utils/syscache.h"
@@ -261,6 +263,21 @@ static bool in_streamed_transaction = false;
 
 static TransactionId stream_xid = InvalidTransactionId;
 
+/*
+ * We enable skipping all data modification changes (INSERT, UPDATE, etc.) for
+ * the subscription if the remote transaction's commit LSN matches the subskiplsn.
+ * Once we start skipping changes, we don't stop it until we skip all changes of
+ * the transaction even if pg_subscription is updated and MySubscription->skiplsn
+ * gets changed or reset during that.  Also, in streaming transaction cases, we
+ * don't skip receiving and spooling the changes, since we decide whether or not
+ * to skip applying the changes when starting to apply changes.  The subskiplsn is
+ * cleared after successfully skipping the transaction or applying non-empty
+ * transaction, where the later avoids the mistakenly specified subskiplsn from
+ * being left.
+ */
+static XLogRecPtr skip_xact_commit_lsn = InvalidXLogRecPtr;
+#define is_skipping_changes() (!XLogRecPtrIsInvalid(skip_xact_commit_lsn))
+
 /* BufFile handle of the current streaming file */
 static BufFile *stream_fd = NULL;
 
@@ -307,10 +324,13 @@ static void store_flush_position(XLogRecPtr remote_lsn);
 
 static void maybe_reread_subscription(void);
 
+static void apply_worker_post_transaction(bool empty_tx, XLogRecPtr origin_lsn,
+										  TimestampTz origin_ts);
+
 /* prototype needed because of stream_commit */
 static void apply_dispatch(StringInfo s);
 
-static void apply_handle_commit_internal(LogicalRepCommitData *commit_data);
+static bool apply_handle_commit_internal(LogicalRepCommitData *commit_data);
 static void apply_handle_insert_internal(ApplyExecutionData *edata,
 										 ResultRelInfo *relinfo,
 										 TupleTableSlot *remoteslot);
@@ -335,6 +355,12 @@ static void TwoPhaseTransactionGid(Oid subid, TransactionId xid, char *gid, int 
 
 /* Common streaming function to apply all the spooled messages */
 static void apply_spooled_messages(TransactionId xid, XLogRecPtr lsn);
+
+/* Functions for skipping changes */
+static void maybe_start_skipping_changes(XLogRecPtr lsn);
+static void stop_skipping_changes(XLogRecPtr origin_lsn, TimestampTz origin_ts);
+static void clear_subscription_skip_lsn(XLogRecPtr skiplsn, XLogRecPtr origin_lsn,
+										TimestampTz origin_ts);
 
 /* Functions for apply error callback */
 static void apply_error_callback(void *arg);
@@ -797,6 +823,8 @@ apply_handle_begin(StringInfo s)
 
 	remote_final_lsn = begin_data.final_lsn;
 
+	maybe_start_skipping_changes(begin_data.final_lsn);
+
 	in_remote_transaction = true;
 
 	pgstat_report_activity(STATE_RUNNING, NULL);
@@ -811,6 +839,7 @@ static void
 apply_handle_commit(StringInfo s)
 {
 	LogicalRepCommitData commit_data;
+	bool		committed;
 
 	logicalrep_read_commit(s, &commit_data);
 
@@ -821,13 +850,10 @@ apply_handle_commit(StringInfo s)
 								 LSN_FORMAT_ARGS(commit_data.commit_lsn),
 								 LSN_FORMAT_ARGS(remote_final_lsn))));
 
-	apply_handle_commit_internal(&commit_data);
+	committed = apply_handle_commit_internal(&commit_data);
 
-	/* Process any tables that are being synchronized in parallel. */
-	process_syncing_tables(commit_data.end_lsn);
-
-	pgstat_report_activity(STATE_IDLE, NULL);
-	reset_apply_error_context_info();
+	apply_worker_post_transaction(committed, commit_data.end_lsn,
+								  commit_data.committime);
 }
 
 /*
@@ -849,6 +875,8 @@ apply_handle_begin_prepare(StringInfo s)
 								 begin_data.prepare_time);
 
 	remote_final_lsn = begin_data.prepare_lsn;
+
+	maybe_start_skipping_changes(begin_data.prepare_lsn);
 
 	in_remote_transaction = true;
 
@@ -908,9 +936,9 @@ apply_handle_prepare(StringInfo s)
 
 	/*
 	 * Unlike commit, here, we always prepare the transaction even though no
-	 * change has happened in this transaction. It is done this way because at
-	 * commit prepared time, we won't know whether we have skipped preparing a
-	 * transaction because of no change.
+	 * change has happened in this transaction or all changes are skipped. It
+	 * is done this way because at commit prepared time, we won't know whether
+	 * we have skipped preparing a transaction because of no change.
 	 *
 	 * XXX, We can optimize such that at commit prepared time, we first check
 	 * whether we have prepared the transaction or not but that doesn't seem
@@ -924,15 +952,14 @@ apply_handle_prepare(StringInfo s)
 	CommitTransactionCommand();
 	pgstat_report_stat(false);
 
-	store_flush_position(prepare_data.end_lsn);
-
-	in_remote_transaction = false;
-
-	/* Process any tables that are being synchronized in parallel. */
-	process_syncing_tables(prepare_data.end_lsn);
-
-	pgstat_report_activity(STATE_IDLE, NULL);
-	reset_apply_error_context_info();
+	/*
+	 * Do the post transaction work and cleanup.  Since we already have
+	 * prepared the transaction, in a case where the server crashes before
+	 * clearing the subskiplsn, it will be left but the transaction won't be
+	 * resent.  But that's okay because it will be cleared when starting to
+	 * apply the next transaction.
+	 */
+	apply_worker_post_transaction(false, prepare_data.end_lsn, prepare_data.prepare_time);
 }
 
 /*
@@ -965,16 +992,8 @@ apply_handle_commit_prepared(StringInfo s)
 	FinishPreparedTransaction(gid, true);
 	end_replication_step();
 	CommitTransactionCommand();
-	pgstat_report_stat(false);
 
-	store_flush_position(prepare_data.end_lsn);
-	in_remote_transaction = false;
-
-	/* Process any tables that are being synchronized in parallel. */
-	process_syncing_tables(prepare_data.end_lsn);
-
-	pgstat_report_activity(STATE_IDLE, NULL);
-	reset_apply_error_context_info();
+	apply_worker_post_transaction(true, prepare_data.end_lsn, prepare_data.commit_time);
 }
 
 /*
@@ -985,6 +1004,7 @@ apply_handle_rollback_prepared(StringInfo s)
 {
 	LogicalRepRollbackPreparedTxnData rollback_data;
 	char		gid[GIDSIZE];
+	bool		finish_prepared = false;
 
 	logicalrep_read_rollback_prepared(s, &rollback_data);
 	set_apply_error_context_xact(rollback_data.xid, rollback_data.rollback_end_lsn,
@@ -1015,18 +1035,12 @@ apply_handle_rollback_prepared(StringInfo s)
 		FinishPreparedTransaction(gid, false);
 		end_replication_step();
 		CommitTransactionCommand();
+		finish_prepared = true;
 	}
 
-	pgstat_report_stat(false);
-
-	store_flush_position(rollback_data.rollback_end_lsn);
-	in_remote_transaction = false;
-
-	/* Process any tables that are being synchronized in parallel. */
-	process_syncing_tables(rollback_data.rollback_end_lsn);
-
-	pgstat_report_activity(STATE_IDLE, NULL);
-	reset_apply_error_context_info();
+	apply_worker_post_transaction(finish_prepared,
+								  rollback_data.rollback_end_lsn,
+								  rollback_data.rollback_time);
 }
 
 /*
@@ -1066,21 +1080,10 @@ apply_handle_stream_prepare(StringInfo s)
 
 	CommitTransactionCommand();
 
-	pgstat_report_stat(false);
-
-	store_flush_position(prepare_data.end_lsn);
-
-	in_remote_transaction = false;
-
 	/* unlink the files with serialized changes and subxact info. */
 	stream_cleanup_files(MyLogicalRepWorker->subid, prepare_data.xid);
 
-	/* Process any tables that are being synchronized in parallel. */
-	process_syncing_tables(prepare_data.end_lsn);
-
-	pgstat_report_activity(STATE_IDLE, NULL);
-
-	reset_apply_error_context_info();
+	apply_worker_post_transaction(false, prepare_data.end_lsn, prepare_data.prepare_time);
 }
 
 /*
@@ -1341,6 +1344,8 @@ apply_spooled_messages(TransactionId xid, XLogRecPtr lsn)
 
 	remote_final_lsn = lsn;
 
+	maybe_start_skipping_changes(lsn);
+
 	/*
 	 * Make sure the handle apply_dispatch methods are aware we're in a remote
 	 * transaction.
@@ -1429,6 +1434,7 @@ apply_handle_stream_commit(StringInfo s)
 {
 	TransactionId xid;
 	LogicalRepCommitData commit_data;
+	bool		committed;
 
 	if (in_streamed_transaction)
 		ereport(ERROR,
@@ -1442,23 +1448,20 @@ apply_handle_stream_commit(StringInfo s)
 
 	apply_spooled_messages(xid, commit_data.commit_lsn);
 
-	apply_handle_commit_internal(&commit_data);
+	committed = apply_handle_commit_internal(&commit_data);
 
 	/* unlink the files with serialized changes and subxact info */
 	stream_cleanup_files(MyLogicalRepWorker->subid, xid);
 
-	/* Process any tables that are being synchronized in parallel. */
-	process_syncing_tables(commit_data.end_lsn);
-
-	pgstat_report_activity(STATE_IDLE, NULL);
-
-	reset_apply_error_context_info();
+	apply_worker_post_transaction(committed, commit_data.end_lsn,
+								  commit_data.committime);
 }
 
 /*
  * Helper function for apply_handle_commit and apply_handle_stream_commit.
+ * Return true if the transaction was committed, otherwise return false.
  */
-static void
+static bool
 apply_handle_commit_internal(LogicalRepCommitData *commit_data)
 {
 	if (IsTransactionState())
@@ -1471,18 +1474,14 @@ apply_handle_commit_internal(LogicalRepCommitData *commit_data)
 		replorigin_session_origin_timestamp = commit_data->committime;
 
 		CommitTransactionCommand();
-		pgstat_report_stat(false);
-
-		store_flush_position(commit_data->end_lsn);
-	}
-	else
-	{
-		/* Process any invalidation messages that might have accumulated. */
-		AcceptInvalidationMessages();
-		maybe_reread_subscription();
+		return true;
 	}
 
-	in_remote_transaction = false;
+	/* Process any invalidation messages that might have accumulated. */
+	AcceptInvalidationMessages();
+	maybe_reread_subscription();
+
+	return false;
 }
 
 /*
@@ -2375,6 +2374,17 @@ apply_dispatch(StringInfo s)
 {
 	LogicalRepMsgType action = pq_getmsgbyte(s);
 	LogicalRepMsgType saved_command;
+
+	/*
+	 * Skip all data-modification changes if we're skipping changes of this
+	 * transaction.
+	 */
+	if (is_skipping_changes() &&
+		(action == LOGICAL_REP_MSG_INSERT ||
+		 action == LOGICAL_REP_MSG_UPDATE ||
+		 action == LOGICAL_REP_MSG_DELETE ||
+		 action == LOGICAL_REP_MSG_TRUNCATE))
+		return;
 
 	/*
 	 * Set the current command being applied. Since this function can be
@@ -3670,6 +3680,196 @@ bool
 IsLogicalWorker(void)
 {
 	return MyLogicalRepWorker != NULL;
+}
+
+/*
+ * Post-transaction work for apply workers.
+ *
+ * tx_finished is true if the caller have finished the transaction with updating
+ * the replication origin so the same transaction won't be resent in case of
+ * a crash.  Both origin_lsn and origin_timestamp are the remote transaction's
+ * end_lsn and commit timestamp, respectively.
+ */
+static void
+apply_worker_post_transaction(bool tx_finished, XLogRecPtr origin_lsn,
+							  TimestampTz origin_ts)
+{
+	if (unlikely(is_skipping_changes()))
+	{
+		/*
+		 * If we are skipping all changes of this transaction, we stop it and
+		 * clear subskiplsn of pg_subscription.
+		 */
+		stop_skipping_changes(origin_lsn, origin_ts);
+	}
+	else if (unlikely(tx_finished && !XLogRecPtrIsInvalid(MySubscription->skiplsn)))
+	{
+		/*
+		 * The subskiplsn was specified but we successfully finished non-empty
+		 * transaction. In this case, it's possible that the user mistakenly
+		 * specified the wrong subskiplsn so raise an warning and clear it.
+		 */
+		ereport(WARNING,
+				errmsg("remote transaction's commit WAL location (LSN) %X/%X did not match skip-LSN %X/%X",
+					   LSN_FORMAT_ARGS(origin_lsn),
+					   LSN_FORMAT_ARGS(MySubscription->skiplsn)));
+
+		clear_subscription_skip_lsn(MySubscription->skiplsn, origin_lsn, origin_ts);
+	}
+
+	Assert(!IsTransactionState());
+	Assert(!is_skipping_changes());
+
+	pgstat_report_stat(false);
+
+	store_flush_position(origin_lsn);
+
+	in_remote_transaction = false;
+
+	/* Process any tables that are being synchronized in parallel. */
+	process_syncing_tables(origin_lsn);
+
+	pgstat_report_activity(STATE_IDLE, NULL);
+
+	reset_apply_error_context_info();
+}
+
+/*
+ * Start skipping changes of the transaction if the given commit LSN matches the
+ * LSN specified by subscription's skiplsn.
+ */
+static void
+maybe_start_skipping_changes(XLogRecPtr lsn)
+{
+	Assert(!is_skipping_changes());
+	Assert(!in_remote_transaction);
+	Assert(!in_streamed_transaction);
+
+	if (likely(XLogRecPtrIsInvalid(MySubscription->skiplsn)))
+		return;
+
+	if (likely(MySubscription->skiplsn != lsn))
+	{
+		/*
+		 * It's a rare case; a past subskiplsn was left because the server
+		 * crashed after preparing the transaction and before clearing the
+		 * subskiplsn. We clear it without a warning message so as not confuse
+		 * the user.
+		 */
+		if (unlikely(MySubscription->skiplsn < lsn))
+			clear_subscription_skip_lsn(MySubscription->skiplsn, InvalidXLogRecPtr, 0);
+
+		return;
+	}
+
+	/* Start skipping all changes of this transaction */
+	skip_xact_commit_lsn = lsn;
+
+	ereport(LOG,
+			errmsg("start skipping logical replication transaction which committed at %X/%X",
+				   LSN_FORMAT_ARGS(skip_xact_commit_lsn)));
+}
+
+/*
+ * Stop skipping changes by resetting skip_xact_commit_lsn.  Both origin_lsn and
+ * origin_timestamp are used to update origin state when clearing subskiplsn so
+ * that we can restart streaming from correct position in case of crash.
+ */
+static void
+stop_skipping_changes(XLogRecPtr origin_lsn, TimestampTz origin_ts)
+{
+	Assert(is_skipping_changes());
+
+	clear_subscription_skip_lsn(skip_xact_commit_lsn, origin_lsn, origin_ts);
+
+	/* Make sure that clearing subskiplsn is committed */
+	if (IsTransactionState())
+		CommitTransactionCommand();
+
+	ereport(LOG,
+			(errmsg("done skipping logical replication transaction which committed at %X/%X",
+					LSN_FORMAT_ARGS(skip_xact_commit_lsn))));
+
+	/* Stop skipping changes */
+	skip_xact_commit_lsn = InvalidXLogRecPtr;
+}
+
+/* Clear subskiplsn of pg_subscription catalog */
+static void
+clear_subscription_skip_lsn(XLogRecPtr skiplsn, XLogRecPtr origin_lsn, TimestampTz origin_ts)
+{
+	Relation	rel;
+	Form_pg_subscription subform;
+	HeapTuple	tup;
+	bool		started_tx = false;
+
+	if (!IsTransactionState())
+	{
+		StartTransactionCommand();
+		started_tx = true;
+	}
+
+	/*
+	 * Protect subskiplsn of pg_subscription from being concurrently updated
+	 * while clearing it.
+	 */
+	LockSharedObject(SubscriptionRelationId, MySubscription->oid, 0,
+					 AccessShareLock);
+
+	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
+
+	/* Fetch the existing tuple. */
+	tup = SearchSysCacheCopy1(SUBSCRIPTIONOID,
+							  ObjectIdGetDatum(MySubscription->oid));
+
+	if (!HeapTupleIsValid(tup))
+		elog(ERROR, "subscription \"%s\" does not exist", MySubscription->name);
+
+	subform = (Form_pg_subscription) GETSTRUCT(tup);
+
+	/*
+	 * Update the subskiplsn of the tuple to InvalidXLogRecPtr.  If user has
+	 * already changed subskiplsn before clearing it we don't update the
+	 * catalog and don't advance the replication origin state.  So in the
+	 * worst case, if the server crashes before sending an acknowledgment of
+	 * the flush position the transaction will be sent again and the user
+	 * needs to set subskiplsn again.  We can reduce the possibility by
+	 * logging a replication origin WAL record to advance the origin LSN
+	 * instead but there is no way to advance the origin timestamp and it
+	 * doesn't seem to be worth doing anything about it since it's a very rare
+	 * case.
+	 */
+	if (subform->subskiplsn == skiplsn)
+	{
+		bool		nulls[Natts_pg_subscription];
+		bool		replaces[Natts_pg_subscription];
+		Datum		values[Natts_pg_subscription];
+
+		memset(values, 0, sizeof(values));
+		memset(nulls, false, sizeof(nulls));
+		memset(replaces, false, sizeof(replaces));
+
+		/* reset subskiplsn */
+		values[Anum_pg_subscription_subskiplsn - 1] = LSNGetDatum(InvalidXLogRecPtr);
+		replaces[Anum_pg_subscription_subskiplsn - 1] = true;
+
+		/*
+		 * Update origin state so we can restart streaming from correct
+		 * position in case of crash.
+		 */
+		replorigin_session_origin_lsn = origin_lsn;
+		replorigin_session_origin_timestamp = origin_ts;
+
+		tup = heap_modify_tuple(tup, RelationGetDescr(rel), values, nulls,
+								replaces);
+		CatalogTupleUpdate(rel, &tup->t_self, tup);
+	}
+
+	heap_freetuple(tup);
+	table_close(rel, NoLock);
+
+	if (started_tx)
+		CommitTransactionCommand();
 }
 
 /* Error callback to give more context info about the change being applied */

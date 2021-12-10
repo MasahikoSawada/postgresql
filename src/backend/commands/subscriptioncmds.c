@@ -45,6 +45,7 @@
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/pg_lsn.h"
 #include "utils/syscache.h"
 
 /*
@@ -61,6 +62,7 @@
 #define SUBOPT_BINARY				0x00000080
 #define SUBOPT_STREAMING			0x00000100
 #define SUBOPT_TWOPHASE_COMMIT		0x00000200
+#define SUBOPT_LSN					0x00000400
 
 /* check if the 'val' has 'bits' set */
 #define IsSet(val, bits)  (((val) & (bits)) == (bits))
@@ -82,6 +84,8 @@ typedef struct SubOpts
 	bool		binary;
 	bool		streaming;
 	bool		twophase;
+	XLogRecPtr	lsn;			/* InvalidXLogRecPtr for resetting purpose,
+								 * otherwise a valid LSN */
 } SubOpts;
 
 static List *fetch_table_list(WalReceiverConn *wrconn, List *publications);
@@ -248,6 +252,35 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 
 			opts->specified_opts |= SUBOPT_TWOPHASE_COMMIT;
 			opts->twophase = defGetBoolean(defel);
+		}
+		else if (IsSet(supported_opts, SUBOPT_LSN) &&
+				 strcmp(defel->defname, "lsn") == 0)
+		{
+			char	   *lsn_str = defGetString(defel);
+			XLogRecPtr	lsn;
+
+			if (IsSet(opts->specified_opts, SUBOPT_LSN))
+				errorConflictingDefElem(defel, pstate);
+
+			if (strcmp(lsn_str, "none") == 0)
+			{
+				/* Setting lsn = NONE is treated as resetting LSN */
+				lsn = InvalidXLogRecPtr;
+			}
+			else
+			{
+				/* Parse the argument as LSN */
+				lsn = DatumGetTransactionId(DirectFunctionCall1(pg_lsn_in,
+																CStringGetDatum(lsn_str)));
+
+				if (XLogRecPtrIsInvalid(lsn))
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("invalid WAL location (LSN): %s", lsn_str)));
+			}
+
+			opts->specified_opts |= SUBOPT_LSN;
+			opts->lsn = lsn;
 		}
 		else
 			ereport(ERROR,
@@ -464,6 +497,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 		CharGetDatum(opts.twophase ?
 					 LOGICALREP_TWOPHASE_STATE_PENDING :
 					 LOGICALREP_TWOPHASE_STATE_DISABLED);
+	values[Anum_pg_subscription_subskiplsn - 1] = LSNGetDatum(InvalidXLogRecPtr);
 	values[Anum_pg_subscription_subconninfo - 1] =
 		CStringGetTextDatum(conninfo);
 	if (opts.slot_name)
@@ -1080,6 +1114,42 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 
 				AlterSubscription_refresh(sub, opts.copy_data);
 
+				break;
+			}
+
+		case ALTER_SUBSCRIPTION_SKIP:
+			{
+				parse_subscription_options(pstate, stmt->options, SUBOPT_LSN, &opts);
+
+				/* ALTER SUBSCRIPTION ... SKIP supports only LSN option */
+				Assert(IsSet(opts.specified_opts, SUBOPT_LSN));
+
+				/*
+				 * If the user set subskiplsn, we do a sanity check to make
+				 * sure that the specified LSN is a probable value.
+				 */
+				if (!XLogRecPtrIsInvalid(opts.lsn))
+				{
+					RepOriginId originid;
+					char		originname[NAMEDATALEN];
+					XLogRecPtr	remote_lsn;
+
+					snprintf(originname, sizeof(originname), "pg_%u", subid);
+					originid = replorigin_by_name(originname, false);
+					remote_lsn = replorigin_get_progress(originid, false);
+
+					/* Check the given LSN is at least a future LSN */
+					if (!XLogRecPtrIsInvalid(remote_lsn) && opts.lsn < remote_lsn)
+						ereport(ERROR,
+								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+								 errmsg("skip WAL location (LSN) must be greater than origin LSN %X/%X",
+										LSN_FORMAT_ARGS(remote_lsn))));
+				}
+
+				values[Anum_pg_subscription_subskiplsn - 1] = LSNGetDatum(opts.lsn);
+				replaces[Anum_pg_subscription_subskiplsn - 1] = true;
+
+				update_tuple = true;
 				break;
 			}
 

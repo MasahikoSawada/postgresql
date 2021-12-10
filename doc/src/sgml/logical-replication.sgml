@@ -361,13 +361,25 @@ CONTEXT:  processing remote data during "INSERT" for replication target relation
 </screen>
    The LSN of the transaction that contains the change violating the constraint and
    the replication origin name can be found from those outputs (LSN 0/14C0378 and
-   replication origin <literal>pg_16395</literal> in the above case).  The transaction
-   can be skipped by calling the <link linkend="pg-replication-origin-advance">
-   <function>pg_replication_origin_advance()</function></link> function with
-   the <parameter>node_name</parameter> and the next LSN of the commit LSN
-   (i.e., 0/14C0379) from those outputs.  The current position of origins can be
-   seen in the <link linkend="view-pg-replication-origin-status">
-   <structname>pg_replication_origin_status</structname></link> system view.
+   replication origin <literal>pg_16395</literal> in the above case).
+  </para>
+
+  <para>
+   The resolution can be done by changing data or permissions on the subscriber so
+   that it does not conflict with incoming changes, by dropping the conflicting constraint
+   or unique index, or by writing a trigger on the subscriber to suppress or redirect
+   conflicting incoming changes, or as a last resort, by skipping the whole transaction.
+  </para>
+
+  <para>
+   The whole transaction can be skipped by using <command>ALTER SUBSCRIPTION ... SKIP</command>
+   with the commit LSN on the subscription.  Alternatively, the transaction can also be
+   skipped by calling the <link linkend="pg-replication-origin-advance">
+   <function>pg_replication_origin_advance()</function></link> function with the
+   <parameter>node_name</parameter> and the next LSN of the commit LSN
+   (i.e., 0/14C0379) from those outputs.  Please note that skipping the whole transaction
+   include skipping changes that might not violate any constraint.  This can easily make
+   the subscriber inconsistent.
   </para>
  </sect1>
 
