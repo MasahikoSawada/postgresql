@@ -858,6 +858,40 @@ sub start
 	return 1;
 }
 
+sub start_single_user_mode
+{
+    my ($self, $dbname, $stdin, $stdout, $timer) = @_;
+    my $name = $self->name;
+
+    BAIL_OUT("node \"$name\" is already running") if defined $self->{_pid};
+
+    print("### Starting node \"$name\" in single-user mode\n");
+
+    local %ENV = $self->_get_env();
+
+    my @postgres_params = (
+	$self->installed_command('postgres'),
+	'--single', '-D', $self->data_dir, 'postgres');
+
+    # Ensure there is no data waiting to be sent:
+    $$stdin = "" if ref($stdin);
+    # IPC::Run would otherwise append to existing contents:
+    $$stdout = "" if ref($stdout);
+
+    my $harness = IPC::Run::start \@postgres_params,
+	'<pty<', $stdin, '>pty>', $stdout, $timer;
+
+    # Pump until we see the startup banner.  This ensures that callers won't
+    # write write anything to the ptr before it's ready, avoiding an
+    # implementation issue in IPC::RUN.
+    pump $harness
+	until $$stdout =~ /PostgreSQL stand-alone backend/ || $timer->is_expired;
+
+    die "postgres --single startup timed out" if $timer->is_expired;
+
+    return $harness;
+}
+
 =pod
 
 =item $node->kill9()
