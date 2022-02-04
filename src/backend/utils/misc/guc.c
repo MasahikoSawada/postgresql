@@ -7611,19 +7611,27 @@ set_config_option(const char *name, const char *value,
 												  &newval_union, &newextra))
 						return 0;
 				}
-				else if (source == PGC_S_DEFAULT)
+				else
 				{
-					newval = conf->boot_val;
+					if (source != PGC_S_DEFAULT)
+						newval = conf->reset_val;
+					else
+						newval = conf->boot_val;
+
 					if (!call_bool_check_hook(conf, &newval, &newextra,
 											  source, elevel))
 						return 0;
-				}
-				else
-				{
-					newval = conf->reset_val;
-					newextra = conf->reset_extra;
-					source = conf->gen.reset_source;
-					context = conf->gen.reset_scontext;
+
+					if (source != PGC_S_DEFAULT)
+					{
+						/* Release newextra as we use reset_extra */
+						if (newextra)
+							free(newextra);
+
+						newextra = conf->reset_extra;
+						source = conf->gen.reset_source;
+						context = conf->gen.reset_scontext;
+					}
 				}
 
 				if (prohibitValueChange)
@@ -7705,19 +7713,30 @@ set_config_option(const char *name, const char *value,
 												  &newval_union, &newextra))
 						return 0;
 				}
-				else if (source == PGC_S_DEFAULT)
+				else
 				{
-					newval = conf->boot_val;
+					if (source != PGC_S_DEFAULT)
+						newval = conf->reset_val;
+					else
+						newval = conf->boot_val;
+
 					if (!call_int_check_hook(conf, &newval, &newextra,
 											 source, elevel))
 						return 0;
-				}
-				else
-				{
-					newval = conf->reset_val;
-					newextra = conf->reset_extra;
-					source = conf->gen.reset_source;
-					context = conf->gen.reset_scontext;
+
+					if (source != PGC_S_DEFAULT)
+					{
+						/* Release newextra as we use reset_extra */
+						if (newextra)
+						{
+							Assert(!extra_field_used(&conf->gen, newextra));
+							free(newextra);
+						}
+
+						newextra = conf->reset_extra;
+						source = conf->gen.reset_source;
+						context = conf->gen.reset_scontext;
+					}
 				}
 
 				if (prohibitValueChange)
@@ -7799,19 +7818,27 @@ set_config_option(const char *name, const char *value,
 												  &newval_union, &newextra))
 						return 0;
 				}
-				else if (source == PGC_S_DEFAULT)
+				else
 				{
-					newval = conf->boot_val;
+					if (source != PGC_S_DEFAULT)
+						newval = conf->reset_val;
+					else
+						newval = conf->boot_val;
+
 					if (!call_real_check_hook(conf, &newval, &newextra,
 											  source, elevel))
 						return 0;
-				}
-				else
-				{
-					newval = conf->reset_val;
-					newextra = conf->reset_extra;
-					source = conf->gen.reset_source;
-					context = conf->gen.reset_scontext;
+
+					if (source != PGC_S_DEFAULT)
+					{
+						/* Release newextra as we use reset_extra */
+						if (newextra)
+							free(newextra);
+
+						newextra = conf->reset_extra;
+						source = conf->gen.reset_source;
+						context = conf->gen.reset_scontext;
+					}
 				}
 
 				if (prohibitValueChange)
@@ -7893,12 +7920,19 @@ set_config_option(const char *name, const char *value,
 												  &newval_union, &newextra))
 						return 0;
 				}
-				else if (source == PGC_S_DEFAULT)
+				else
 				{
-					/* non-NULL boot_val must always get strdup'd */
-					if (conf->boot_val != NULL)
+					const char *val;
+
+					if (source != PGC_S_DEFAULT)
+						val = conf->reset_val;
+					else
+						val = conf->boot_val;
+
+					/* non-NULL value must always get strdup'd */
+					if (val)
 					{
-						newval = guc_strdup(elevel, conf->boot_val);
+						newval = guc_strdup(elevel, val);
 						if (newval == NULL)
 							return 0;
 					}
@@ -7911,17 +7945,27 @@ set_config_option(const char *name, const char *value,
 						free(newval);
 						return 0;
 					}
-				}
-				else
-				{
-					/*
-					 * strdup not needed, since reset_val is already under
-					 * guc.c's control
-					 */
-					newval = conf->reset_val;
-					newextra = conf->reset_extra;
-					source = conf->gen.reset_source;
-					context = conf->gen.reset_scontext;
+
+					if (source != PGC_S_DEFAULT)
+					{
+						/*
+						 * Release both newval and newextra as we use
+						 * reset_val and reset_extra.
+						 */
+						if (newextra)
+							free(newextra);
+						if (newval)
+							free(newval);
+
+						/*
+						 * strdup not needed, since reset_val is already under
+						 * guc.c's control
+						 */
+						newval = conf->reset_val;
+						newextra = conf->reset_extra;
+						source = conf->gen.reset_source;
+						context = conf->gen.reset_scontext;
+					}
 				}
 
 				if (prohibitValueChange)
@@ -8018,19 +8062,27 @@ set_config_option(const char *name, const char *value,
 												  &newval_union, &newextra))
 						return 0;
 				}
-				else if (source == PGC_S_DEFAULT)
+				else
 				{
-					newval = conf->boot_val;
+					if (source != PGC_S_DEFAULT)
+						newval = conf->reset_val;
+					else
+						newval = conf->boot_val;
+
 					if (!call_enum_check_hook(conf, &newval, &newextra,
 											  source, elevel))
 						return 0;
-				}
-				else
-				{
-					newval = conf->reset_val;
-					newextra = conf->reset_extra;
-					source = conf->gen.reset_source;
-					context = conf->gen.reset_scontext;
+
+					if (source != PGC_S_DEFAULT)
+					{
+						/* Release newextra as we use reset_extra */
+						if (newextra)
+							free(newextra);
+
+						newextra = conf->reset_extra;
+						source = conf->gen.reset_source;
+						context = conf->gen.reset_scontext;
+					}
 				}
 
 				if (prohibitValueChange)

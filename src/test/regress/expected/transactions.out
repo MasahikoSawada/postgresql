@@ -40,6 +40,38 @@ SELECT * FROM aggtest;
   42 |  324.78
 (4 rows)
 
+-- Test that we disallow changing transaction characteristics after the
+-- first snapshot acquisition.
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE; -- ok
+SELECT count(*) FROM xacttest; -- ok
+ count 
+-------
+     5
+(1 row)
+
+RESET transaction_isolation; -- fail
+ERROR:  SET TRANSACTION ISOLATION LEVEL must be called before any query
+COMMIT;
+BEGIN TRANSACTION READ ONLY; -- ok
+SELECT count(*) FROM xacttest; -- ok
+ count 
+-------
+     5
+(1 row)
+
+RESET transaction_read_only; -- fail
+ERROR:  transaction read-write mode must be set before any query
+COMMIT;
+BEGIN TRANSACTION DEFERRABLE; -- ok
+SELECT count(*) FROM xacttest; -- ok
+ count 
+-------
+     5
+(1 row)
+
+RESET transaction_deferrable; -- fail
+ERROR:  SET TRANSACTION [NOT] DEFERRABLE must be called before any query
+COMMIT;
 -- Read-only tests
 CREATE TABLE writetest (a int);
 CREATE TEMPORARY TABLE temptest (a int);

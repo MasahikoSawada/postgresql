@@ -33,6 +33,22 @@ SELECT oid FROM pg_class WHERE relname = 'disappear';
 -- should have members again
 SELECT * FROM aggtest;
 
+-- Test that we disallow changing transaction characteristics after the
+-- first snapshot acquisition.
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE; -- ok
+SELECT count(*) FROM xacttest; -- ok
+RESET transaction_isolation; -- fail
+COMMIT;
+
+BEGIN TRANSACTION READ ONLY; -- ok
+SELECT count(*) FROM xacttest; -- ok
+RESET transaction_read_only; -- fail
+COMMIT;
+
+BEGIN TRANSACTION DEFERRABLE; -- ok
+SELECT count(*) FROM xacttest; -- ok
+RESET transaction_deferrable; -- fail
+COMMIT;
 
 -- Read-only tests
 
