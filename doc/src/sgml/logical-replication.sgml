@@ -352,12 +352,21 @@
   <para>
    The resolution can be done either by changing data or permissions on the subscriber so
    that it does not conflict with the incoming change or by skipping the
-   transaction that conflicts with the existing data.  The transaction can be
-   skipped by calling the <link linkend="pg-replication-origin-advance">
+   transaction that conflicts with the existing data.  When a conflict produces
+   an error, it is shown in the subscriber's server logs as follows:
+<screen>
+ERROR:  duplicate key value violates unique constraint "test_pkey"
+DETAIL:  Key (c)=(1) already exists.
+CONTEXT:  processing remote data during "INSERT" for replication target relation "public.test" in transaction 725 committed at LSN 0/14BFA88 and timestamp 2022-02-28 20:58:27.964238+00 from replication origin "pg_16395"
+</screen>
+   The LSN of the transaction that contains the change violating the constraint and
+   the replication origin name can be found from those outputs (LSN 0/14C0378 and
+   replication origin <literal>pg_16395</literal> in the above case).  The transaction
+   can be skipped by calling the <link linkend="pg-replication-origin-advance">
    <function>pg_replication_origin_advance()</function></link> function with
-   a <parameter>node_name</parameter> corresponding to the subscription name,
-   and a position.  The current position of origins can be seen in the
-   <link linkend="view-pg-replication-origin-status">
+   the <parameter>node_name</parameter> and the next LSN of the commit LSN
+   (i.e., 0/14C0379) from those outputs.  The current position of origins can be
+   seen in the <link linkend="view-pg-replication-origin-status">
    <structname>pg_replication_origin_status</structname></link> system view.
   </para>
  </sect1>
