@@ -3648,38 +3648,37 @@ IsLogicalWorker(void)
 static void
 apply_error_callback(void *arg)
 {
-	StringInfoData buf;
 	ApplyErrorCallbackArg *errarg = &apply_error_callback_arg;
 
 	if (apply_error_callback_arg.command == 0)
 		return;
 
-	initStringInfo(&buf);
-	appendStringInfo(&buf, _("processing remote data during \"%s\""),
-					 logicalrep_message_type(errarg->command));
-
-	/* append relation information */
-	if (errarg->rel)
+	if (errarg->rel == NULL)
 	{
-		appendStringInfo(&buf, _(" for replication target relation \"%s.%s\""),
-						 errarg->rel->remoterel.nspname,
-						 errarg->rel->remoterel.relname);
-		if (errarg->remote_attnum >= 0)
-			appendStringInfo(&buf, _(" column \"%s\""),
-							 errarg->rel->remoterel.attnames[errarg->remote_attnum]);
+		if (!TransactionIdIsValid(errarg->remote_xid))
+			errcontext("processing remote data during \"%s\"",
+					   logicalrep_message_type(errarg->command));
+		else
+			errcontext("processing remote data during \"%s\" in transaction %u at %s",
+					   logicalrep_message_type(errarg->command),
+					   errarg->remote_xid,
+					   (errarg->ts != 0) ? timestamptz_to_str(errarg->ts) : "(not-set)");
 	}
-
-	/* append transaction information */
-	if (TransactionIdIsNormal(errarg->remote_xid))
-	{
-		appendStringInfo(&buf, _(" in transaction %u"), errarg->remote_xid);
-		if (errarg->ts != 0)
-			appendStringInfo(&buf, _(" at %s"),
-							 timestamptz_to_str(errarg->ts));
-	}
-
-	errcontext("%s", buf.data);
-	pfree(buf.data);
+	else if (errarg->remote_attnum < 0)
+		errcontext("processing remote data during \"%s\" for replication target relation \"%s.%s\" in transaction %u at %s",
+				   logicalrep_message_type(errarg->command),
+				   errarg->rel->remoterel.nspname,
+				   errarg->rel->remoterel.relname,
+				   errarg->remote_xid,
+				   (errarg->ts != 0) ? timestamptz_to_str(errarg->ts) : "(not-set)");
+	else
+		errcontext("processing remote data during \"%s\" for replication target relation \"%s.%s\" column \"%s\" in transaction %u at %s",
+				   logicalrep_message_type(errarg->command),
+				   errarg->rel->remoterel.nspname,
+				   errarg->rel->remoterel.relname,
+				   errarg->rel->remoterel.attnames[errarg->remote_attnum],
+				   errarg->remote_xid,
+				   (errarg->ts != 0) ? timestamptz_to_str(errarg->ts) : "(not-set)");
 }
 
 /* Set transaction information of apply error callback */
