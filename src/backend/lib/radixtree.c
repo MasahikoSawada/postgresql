@@ -19,6 +19,10 @@
 #include "lib/radixtree.h"
 #include "lib/stringinfo.h"
 
+#if defined(__SSE2__)
+#include <emmintrin.h> // x86 SSE2 intrinsics
+#endif
+
 /* How many bits are encoded in one tree level */
 #define RADIX_TREE_NODE_FANOUT	8
 
@@ -155,7 +159,7 @@ static void radix_tree_update_iter_stack(radix_tree_iter *iter, int from);
 
 #define RADIX_TREE_NODE_256_SET_BYTE(v) ((v) / RADIX_TREE_NODE_FANOUT)
 #define RADIX_TREE_NODE_256_SET_BIT(v) (UINT64_C(1) << ((v) % RADIX_TREE_NODE_FANOUT))
-inline static bool
+static inline bool
 node_256_isset(radix_tree_node_256 *node, uint8 chunk)
 {
 	return (node->set[RADIX_TREE_NODE_256_SET_BYTE(chunk)] &
@@ -163,23 +167,83 @@ node_256_isset(radix_tree_node_256 *node, uint8 chunk)
 
 }
 
-inline static void
+static inline void
 node_256_set(radix_tree_node_256 *node, uint8 chunk, Datum slot)
 {
 	node->slots[chunk] = slot;
 	node->set[RADIX_TREE_NODE_256_SET_BYTE(chunk)] |= RADIX_TREE_NODE_256_SET_BIT(chunk);
 }
 
-inline static int
+static inline int
 node_48_get_slot_pos(radix_tree_node_48 *node, uint8 chunk)
 {
 	return node->slot_idxs[chunk] - 1;
 }
 
-inline static bool
+static inline bool
 node_48_is_slot_used(radix_tree_node_48 *node, uint8 chunk)
 {
 	return (node_48_get_slot_pos(node, chunk) >= 0);
+}
+
+static inline int
+node_16_search_eq(radix_tree_node_16 *node, uint8 chunk)
+{
+#ifdef __SSE2__
+	__m128i	_key = _mm_set1_epi8(chunk);
+	__m128i _data = _mm_loadu_si128((__m128i_u *) node->chunks);
+	__m128i _cmp = _mm_cmpeq_epi8(_key, _data);
+	uint32	bitfield = _mm_movemask_epi8(_cmp);
+
+	bitfield &= ((1 << node->n.count) - 1);
+
+	return (bitfield) ? __builtin_ctz(bitfield) : -1;
+
+#else
+	for (int i = 0; i < node->n.count; i++)
+	{
+		if (node->chunks[i] > chunk)
+			return -1;
+
+		if (node->chunks[i] == chunk)
+			return i;
+	}
+
+	return -1;
+#endif	/* __SSE2__ */
+}
+
+/*
+ * This is a bit more complicated than search_chunk_array_16_eq(), because
+ * until recently no unsigned uint8 comparison instruction existed on x86. So
+ * we need to play some trickery using _mm_min_epu8() to effectively get
+ * <=. There never will be any equal elements in the current uses, but that's
+ * what we get here...
+ */
+static inline int
+node_16_search_le(radix_tree_node_16 *node, uint8 chunk)
+{
+#ifdef __SSE2__
+	__m128i _key = _mm_set1_epi8(chunk);
+	__m128i _data = _mm_loadu_si128((__m128i_u*) node->chunks);
+	__m128i _min = _mm_min_epu8(_key, _data);
+	__m128i cmp = _mm_cmpeq_epi8(_key, _min);
+	uint32_t bitfield=_mm_movemask_epi8(cmp);
+
+	bitfield &= ((1 << node->n.count) - 1);
+
+	return (bitfield) ? __builtin_ctz(bitfield) : node->n.count;
+#else
+	int index;
+
+	for (index = 0; index < node->n.count; index++)
+	{
+		if (node->chunks[index] >= chunk)
+			break;
+	}
+
+	return index;
+#endif	/* __SSE2__ */
 }
 
 /*
@@ -320,17 +384,14 @@ radix_tree_find_slot_ptr(radix_tree_node *node, uint8 chunk)
 		case RADIX_TREE_NODE_KIND_16:
 		{
 			radix_tree_node_16 *n16 = (radix_tree_node_16 *) node;
-			for (int i = 0; i < n16->n.count; i++)
-			{
-				if (n16->chunks[i] > chunk)
-					break;
+			int ret;
 
-				if (n16->chunks[i] == chunk)
-					return &(n16->slots[i]);
-			}
+			ret = node_16_search_eq(n16, chunk);
 
-			return NULL;
+			if (ret < 0)
+				return NULL;
 
+			return &(n16->slots[ret]);
 			break;
 		}
 		case RADIX_TREE_NODE_KIND_48:
@@ -457,13 +518,9 @@ radix_tree_insert_val(radix_tree *tree, radix_tree_node *parent, radix_tree_node
 		case RADIX_TREE_NODE_KIND_16:
 		{
 			radix_tree_node_16 *n16 = (radix_tree_node_16 *) node;
-			int i;
+			int idx;
 
-			for (i = 0; i < n16->n.count; i++)
-			{
-				if (n16->chunks[i] >= chunk)
-					break;
-			}
+			idx = node_16_search_le(n16, chunk);
 
 			if (NodeHasFreeSlot(n16))
 			{
@@ -471,7 +528,7 @@ radix_tree_insert_val(radix_tree *tree, radix_tree_node *parent, radix_tree_node
 				{
 					/* first key for this node */
 				}
-				else if (n16->chunks[i] == chunk)
+				else if (n16->chunks[idx] == chunk)
 				{
 					/* found the key */
 					replaced = true;
@@ -479,14 +536,14 @@ radix_tree_insert_val(radix_tree *tree, radix_tree_node *parent, radix_tree_node
 				else
 				{
 					/* make space for the new key */
-					memmove(&(n16->chunks[i + 1]), &(n16->chunks[i]),
-							sizeof(uint8) * (n16->n.count - i));
-					memmove(&(n16->slots[i + 1]), &(n16->slots[i]),
-							sizeof(radix_tree_node *) * (n16->n.count - i));
+					memmove(&(n16->chunks[idx + 1]), &(n16->chunks[idx]),
+							sizeof(uint8) * (n16->n.count - idx));
+					memmove(&(n16->slots[idx + 1]), &(n16->slots[idx]),
+							sizeof(radix_tree_node *) * (n16->n.count - idx));
 				}
 
-				n16->chunks[i] = chunk;
-				n16->slots[i] = val;
+				n16->chunks[idx] = chunk;
+				n16->slots[idx] = val;
 				break;
 			}
 
@@ -613,16 +670,18 @@ radix_tree_node_grow(radix_tree *tree, radix_tree_node *parent, radix_tree_node 
 			radix_tree_node_48 *n48 = (radix_tree_node_48 *) node;
 			radix_tree_node_256 *new256 =
 				(radix_tree_node_256 *) radix_tree_alloc_node(tree,RADIX_TREE_NODE_KIND_256);
+			int cnt = 0;
 
 			radix_tree_copy_node_common((radix_tree_node *) n48,
 										(radix_tree_node *) new256);
 
-			for (int i = 0; i < 256; i++)
+			for (int i = 0; i < 256 && cnt < n48->n.count; i++)
 			{
 				if (!node_48_is_slot_used(n48, i))
 					continue;
 
 				node_256_set(new256, i, n48->slots[node_48_get_slot_pos(n48, i)]);
+				cnt++;
 			}
 
 			/* test */

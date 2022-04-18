@@ -25,4 +25,6 @@ OBJS = \
 	radixtree.o \
 	rbtree.o \
 
+radixtree.o: CFLAGS+=-msse2
+
 include $(top_srcdir)/src/backend/common.mk
