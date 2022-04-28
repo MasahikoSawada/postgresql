@@ -196,6 +196,22 @@ FullTransactionIdAdvance(FullTransactionId *dest)
 #define FirstUnpinnedObjectId	12000
 #define FirstNormalObjectId		16384
 
+typedef struct XidLSNRange
+{
+	XLogRecPtr		beginlsn;
+
+	TransactionId	minxid;
+	TransactionId	maxxid;
+
+	TransactionId	minmxid;
+	TransactionId	maxmxid;
+
+	TransactionId	expirationXmin;
+} XidLSNRange;
+
+#define NUM_XID_LSN_RANGES		100
+#define XID_LSN_RANGE_INTERVAL	1000000
+
 /*
  * VariableCache is a data structure in shared memory that is used to track
  * OID and XID assignment state.  For largely historical reasons, there is
@@ -226,6 +242,22 @@ typedef struct VariableCacheData
 	TransactionId xidWrapLimit; /* where the world ends */
 	Oid			oldestXidDB;	/* database with minimum datfrozenxid */
 
+	XidLSNRange		xidlsnranges[NUM_XID_LSN_RANGES];
+	int				numranges;
+
+	/*
+	 * These are used to switch to a new range.
+	 */
+	TransactionId	rangeSwitchMinXid;
+	MultiXactId		rangeSwitchMinMultiXid;
+	TransactionId	switchFinishXmin;
+
+	/* A new range should be created when we reach this XID */
+	TransactionId	nextSwitchXid;
+
+	bool		xidlsnranges_dirty;
+	bool		xidlsnranges_recently_dirtied;
+
 	/*
 	 * These fields are protected by CommitTsLock
 	 */
@@ -252,6 +284,16 @@ typedef struct VariableCacheData
 	 */
 	TransactionId oldestClogXid;	/* oldest it's safe to look up in clog */
 
+	/*
+	 * Pages with LSN older than this are considered "mature". That means that
+	 * all tuples on the page are known to be visible to everyone, and the XIDs
+	 * on the page must not be looked at, because they might not be present
+	 * in clog anymore, and might come from a previous XID epoch.
+	 */
+	XLogRecPtr		pageMatureLSN;
+
+	/* Pages with LSN older than this must be frozen before updating */
+	XLogRecPtr		rangeSwitchLSN;
 } VariableCacheData;
 
 typedef VariableCacheData *VariableCache;

@@ -15,16 +15,19 @@
 
 #include "access/clog.h"
 #include "access/commit_ts.h"
+#include "access/multixact.h"
 #include "access/subtrans.h"
 #include "access/transam.h"
 #include "access/varsup_internal.h"
 #include "access/xact.h"
+#include "access/xloginsert.h"
 #include "access/xlogutils.h"
 #include "commands/dbcommands.h"
 #include "miscadmin.h"
 #include "postmaster/autovacuum.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
+#include "storage/procarray.h"
 #include "utils/syscache.h"
 
 
@@ -34,6 +37,10 @@
 /* pointer to "variable cache" in shared memory (set up by shmem.c) */
 VariableCache ShmemVariableCache = NULL;
 
+static void BeginXidLSNRangeSwitch(void);
+static void FinishXidLSNRangeSwitch(void);
+static XLogRecPtr XLogPutXidLSNRanges(void);
+static XLogRecPtr XLogPutXidLSNRanges(void);
 
 /*
  * Allocate the next FullTransactionId for a new transaction or
@@ -628,6 +635,131 @@ StopGeneratingPinnedObjectIds(void)
 	SetNextObjectId(FirstUnpinnedObjectId);
 }
 
+static void
+BeginXidLSNRangeSwitch(void)
+{
+	XLogRecPtr lsn;
+	TransactionId	minxid;
+	MultiXactId		minmxid;
+
+	minxid = GetOldestTransactionIdConsideredRunning();
+
+	/*
+	 * We have to acquire both ProcArrayLock and XidGenLock at the
+	 * same time. This is quite nasty from concurrency point of
+	 * view, but happens very seldom. GetRunningTransactionData()
+	 * also acquires both locks at the same time, so make sure we
+	 * acquire them in the same order to avoid deadlocks!
+	 */
+	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+	LWLockAcquire(XidGenLock, LW_EXCLUSIVE);
+
+	/*
+	 * Re-check with the lock that someone else didn't already begin
+	 * a new xid-lsn range.
+	 */
+	if (!TransactionIdIsValid(ShmemVariableCache->nextSwitchXid))
+	{
+		LWLockRelease(XidGenLock);
+		LWLockRelease(ProcArrayLock);
+		return;
+	}
+
+	/* Create new open range */
+	lsn = GetXLogInsertRecPtr();
+	minmxid = GetOldestMultiXactId();
+	ShmemVariableCache->rangeSwitchLSN = lsn;
+	ShmemVariableCache->rangeSwitchMinXid = minxid;
+	ShmemVariableCache->rangeSwitchMinMultiXid = minmxid;
+	ShmemVariableCache->switchFinishXmin = ShmemVariableCache->nextSwitchXid;
+
+	LWLockRelease(XidGenLock);
+	LWLockRelease(ProcArrayLock);
+
+	ereport(LOG,
+			(errmsg("start new XID range %u-, MultiXIDs %u-, tentative LSN %X/%X",
+					minxid, minmxid,
+					LSN_FORMAT_ARGS(lsn))));
+}
+
+/*
+ *
+ * Caller must hold XidGenLock.
+ */
+static void
+FinishXidLSNRangeSwitch(void)
+{
+	XLogRecPtr		lsn;
+	int		numranges;
+
+	Assert(TransactionIdIsValid(ShmemVariableCache->nextSwitchXid));
+
+	numranges = ShmemVariableCache->numranges;
+	if (numranges >= NUM_XID_LSN_RANGES)
+	{
+		elog(WARNING, "out of XID-LSN range slots, will retry later");
+
+		ShmemVariableCache->nextSwitchXid += 50;
+		TransactionIdAdvance(ShmemVariableCache->nextSwitchXid);
+		return;
+	}
+
+	/* Make space for new xid-lsn range at index 0 */
+	numranges++;
+	memmove(&ShmemVariableCache->xidlsnranges[1],
+			&ShmemVariableCache->xidlsnranges[0],
+			sizeof(XidLSNRange) * (numranges - 1));
+
+	/* Mark the latest used XID as the maxXid of the currently open range */
+	ShmemVariableCache->xidlsnranges[1].maxxid = XidFromFullTransactionId(ShmemVariableCache->nextXid);
+	ShmemVariableCache->xidlsnranges[1].maxmxid = ReadNextMultiXactId();
+
+	/* Create new open range */
+	ShmemVariableCache->xidlsnranges[0].minxid = ShmemVariableCache->rangeSwitchMinXid;
+	ShmemVariableCache->xidlsnranges[0].maxxid = InvalidTransactionId;
+	ShmemVariableCache->xidlsnranges[0].minmxid = ShmemVariableCache->rangeSwitchMinMultiXid;
+	ShmemVariableCache->xidlsnranges[0].maxmxid = InvalidMultiXactId;
+	ShmemVariableCache->xidlsnranges[0].beginlsn = InvalidXLogRecPtr;
+	ShmemVariableCache->numranges = numranges;
+
+	lsn = XLogPutXidLSNRanges();
+
+	ShmemVariableCache->xidlsnranges[0].beginlsn = lsn;
+
+	ShmemVariableCache->xidlsnranges_dirty = true;
+	ShmemVariableCache->xidlsnranges_recently_dirtied = true;
+
+	ShmemVariableCache->switchFinishXmin = InvalidTransactionId;
+
+	/* Next switch is X XIDs from here */
+	ShmemVariableCache->nextSwitchXid =
+		XidFromFullTransactionId(ShmemVariableCache->nextXid) + XID_LSN_RANGE_INTERVAL;
+
+	ereport(LOG,
+			(errmsg("closed old XID range at %u (LSN %X/%X)",
+					ShmemVariableCache->xidlsnranges[1].maxxid,
+					LSN_FORMAT_ARGS(lsn))));
+}
+
+/*
+ * Log the current XID-LSN ranges.
+ */
+static XLogRecPtr
+XLogPutXidLSNRanges(void)
+{
+	xl_varsup_xid_lsn_ranges xlrec;
+	int numranges = ShmemVariableCache->numranges;
+
+	xlrec.numranges = numranges;
+
+	XLogBeginInsert();
+	XLogRegisterData((char *) &xlrec, sizeof(xlrec));
+	XLogRegisterData((char *) (ShmemVariableCache->xidlsnranges),
+					 sizeof(XidLSNRange) * numranges);
+
+	return XLogInsert(RM_VARSUP_ID, XLOG_VARSUP_XID_LSN_RANGES);
+}
+
 void
 varsup_redo(XLogReaderState *record)
 {
@@ -635,7 +767,6 @@ varsup_redo(XLogReaderState *record)
 
 	if (info == XLOG_VARSUP_XID_LSN_RANGES)
 	{
-
 	}
 }
 

@@ -17,6 +17,12 @@
 /* XLOG info values for varsup rmgr */
 #define XLOG_VARSUP_XID_LSN_RANGES			0x10
 
+typedef struct xl_varsup_xid_lsn_ranges
+{
+	int		numranges;
+	XidLSNRange	ranges[FLEXIBLE_ARRAY_MEMBER];
+} xl_varsup_xid_lsn_ranges;
+
 /* in varsup.c */
 extern void varsup_redo(XLogReaderState *record);
 
