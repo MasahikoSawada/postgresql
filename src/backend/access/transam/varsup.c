@@ -17,6 +17,7 @@
 #include "access/commit_ts.h"
 #include "access/subtrans.h"
 #include "access/transam.h"
+#include "access/varsup_internal.h"
 #include "access/xact.h"
 #include "access/xlogutils.h"
 #include "commands/dbcommands.h"
@@ -627,6 +628,16 @@ StopGeneratingPinnedObjectIds(void)
 	SetNextObjectId(FirstUnpinnedObjectId);
 }
 
+void
+varsup_redo(XLogReaderState *record)
+{
+	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+
+	if (info == XLOG_VARSUP_XID_LSN_RANGES)
+	{
+
+	}
+}
 
 #ifdef USE_ASSERT_CHECKING
 

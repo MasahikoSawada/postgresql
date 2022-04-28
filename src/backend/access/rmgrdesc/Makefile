@@ -28,6 +28,7 @@ OBJS = \
 	spgdesc.o \
 	standbydesc.o \
 	tblspcdesc.o \
+	varsupdesc.o \
 	xactdesc.o \
 	xlogdesc.o
 
