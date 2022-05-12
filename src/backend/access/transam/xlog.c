@@ -4637,6 +4637,7 @@ BootStrapXLOG(void)
 
 	/* Bootstrap the commit log, too */
 	BootStrapCLOG();
+	BootStrapVarsup();
 	BootStrapCommitTs();
 	BootStrapSUBTRANS();
 	BootStrapMultiXact();
@@ -5017,6 +5018,7 @@ StartupXLOG(void)
 	/* initialize shared memory variables from the checkpoint record */
 	ShmemVariableCache->nextXid = checkPoint.nextXid;
 	ShmemVariableCache->nextOid = checkPoint.nextOid;
+	ShmemVariableCache->pageMatureLSN = checkPoint.pageMatureLSN;
 	ShmemVariableCache->oidCount = 0;
 	MultiXactSetNextMXact(checkPoint.nextMulti, checkPoint.nextMultiOffset);
 	AdvanceOldestClogXid(checkPoint.oldestXid);
@@ -5057,6 +5059,9 @@ StartupXLOG(void)
 	 * been initialized and before we accept connections or begin WAL replay.
 	 */
 	StartupCLOG();
+
+	/* Startup Varsup. */
+	StartupVarsup();
 
 	/*
 	 * Startup MultiXact. We need to do this early to be able to replay
@@ -6460,6 +6465,10 @@ CreateCheckPoint(int flags)
 	checkPoint.newestCommitTsXid = ShmemVariableCache->newestCommitTsXid;
 	LWLockRelease(CommitTsLock);
 
+	LWLockAcquire(ProcArrayLock, LW_SHARED);
+	checkPoint.pageMatureLSN = ShmemVariableCache->pageMatureLSN;
+	LWLockRelease(ProcArrayLock);
+
 	LWLockAcquire(OidGenLock, LW_SHARED);
 	checkPoint.nextOid = ShmemVariableCache->nextOid;
 	if (!shutdown)
@@ -7572,6 +7581,13 @@ xlog_redo(XLogReaderState *record)
 		ShmemVariableCache->nextOid = checkPoint.nextOid;
 		ShmemVariableCache->oidCount = 0;
 		LWLockRelease(OidGenLock);
+
+		/* Likewise treat the pageMatureLSN as a maximum */
+		LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+		if (ShmemVariableCache->pageMatureLSN < checkPoint.pageMatureLSN)
+			ShmemVariableCache->pageMatureLSN = checkPoint.pageMatureLSN;
+		LWLockRelease(ProcArrayLock);
+
 		MultiXactSetNextMXact(checkPoint.nextMulti,
 							  checkPoint.nextMultiOffset);
 

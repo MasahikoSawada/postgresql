@@ -343,6 +343,8 @@ extern void AdvanceOldestClogXid(TransactionId oldest_datfrozenxid);
 extern bool ForceTransactionIdLimitUpdate(void);
 extern Oid	GetNewObjectId(void);
 extern void StopGeneratingPinnedObjectIds(void);
+extern void BootStrapVarsup(void);
+extern void StartupVarsup(void);
 
 #ifdef USE_ASSERT_CHECKING
 extern void AssertTransactionIdInAllowableRange(TransactionId xid);

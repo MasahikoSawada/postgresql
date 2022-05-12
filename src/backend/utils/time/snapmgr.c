@@ -112,6 +112,9 @@ static Snapshot HistoricSnapshot = NULL;
 TransactionId TransactionXmin = FirstNormalTransactionId;
 TransactionId RecentXmin = FirstNormalTransactionId;
 
+XLogRecPtr	PageMatureLSN = InvalidXLogRecPtr;
+XLogRecPtr	RangeSwitchLSN = InvalidXLogRecPtr;
+
 /* (table, ctid) => (cmin, cmax) mapping during timetravel */
 static HTAB *tuplecid_data = NULL;
 
@@ -949,6 +952,12 @@ SnapshotResetXmin(void)
 	if (pairingheap_is_empty(&RegisteredSnapshots))
 	{
 		MyProc->xmin = InvalidTransactionId;
+
+		/*
+		 * Also reset PageMatureLSN and rangeSwitchLSN. As soon as we clear
+		 * out xmin, they might move forward.
+		 */
+		PageMatureLSN = RangeSwitchLSN = InvalidXLogRecPtr;
 		return;
 	}
 

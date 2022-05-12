@@ -53,6 +53,7 @@ typedef struct CheckPoint
 										 * timestamp */
 	TransactionId newestCommitTsXid;	/* newest Xid with valid commit
 										 * timestamp */
+	XLogRecPtr	pageMatureLSN;
 
 	/*
 	 * Oldest XID still running. This is only needed to initialize hot standby

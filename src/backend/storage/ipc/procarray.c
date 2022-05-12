@@ -2291,6 +2291,12 @@ GetSnapshotData(Snapshot snapshot)
 	oldestxid = ShmemVariableCache->oldestXid;
 	curXactCompletionCount = ShmemVariableCache->xactCompletionCount;
 
+	/* any page older than this is considered all-visible */
+	PageMatureLSN = ShmemVariableCache->pageMatureLSN;
+
+	/* any page older than this must be frozen before modifying */
+	RangeSwitchLSN = ShmemVariableCache->rangeSwitchLSN;
+
 	/* xmax is always latestCompletedXid + 1 */
 	xmax = XidFromFullTransactionId(latest_completed);
 	TransactionIdAdvance(xmax);

@@ -58,6 +58,9 @@ extern PGDLLIMPORT bool FirstSnapshotSet;
 extern PGDLLIMPORT TransactionId TransactionXmin;
 extern PGDLLIMPORT TransactionId RecentXmin;
 
+extern PGDLLIMPORT XLogRecPtr	PageMatureLSN;
+extern PGDLLIMPORT XLogRecPtr	RangeSwitchLSN;
+
 /* Variables representing various special snapshot semantics */
 extern PGDLLIMPORT SnapshotData SnapshotSelfData;
 extern PGDLLIMPORT SnapshotData SnapshotAnyData;

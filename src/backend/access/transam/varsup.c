@@ -44,9 +44,15 @@ typedef struct XidLSNRangesFile
 {
 	uint32		magic;
 	pg_crc32c	checksum;
+
+	/* data covered by checksum */
 	uint32		numranges;
 	XidLSNRange	ranges[FLEXIBLE_ARRAY_MEMBER];
 } XidLSNRangesFile;
+#define XidLSNRangesFileContentSize \
+	(offsetof(XidLSNRangesFile, ranges))
+#define XidLSNRangesFileNotChecksummedSize \
+	(offsetof(XidLSNRangesFile, numranges))
 #define SizeOfXidLSNRangesFile(numranges) \
 	(offsetof(XidLSNRangesFile, ranges) + (numranges) * sizeof(XidLSNRange))
 
@@ -787,7 +793,7 @@ WriteXidLSNRangesFile(void)
 	int	fd;
 	XidLSNRangesFile *content;
 	int			numranges;
-	off_t		sz;
+	uint32		sz;
 
 	/* Copy to local memory first, to avoid holding the lock for a long time */
 	LWLockAcquire(XidGenLock, LW_SHARED);
@@ -803,7 +809,9 @@ WriteXidLSNRangesFile(void)
 	content->magic = XID_LSN_RANGES_FILEMAGIC;
 	content->numranges = numranges;
 	INIT_CRC32C(content->checksum);
-	COMP_CRC32C(content->checksum, (char *) content, sz);
+	COMP_CRC32C(content->checksum,
+				(char *) content + XidLSNRangesFileNotChecksummedSize,
+				sz - XidLSNRangesFileNotChecksummedSize);
 	FIN_CRC32C(content->checksum);
 
 	fd = OpenTransientFile(XID_LSN_RANGES_FILENAME, O_CREAT | O_EXCL | O_WRONLY | PG_BINARY);
@@ -919,11 +927,15 @@ LoadXidLSNRangesFile(void)
 						XID_LSN_RANGES_FILENAME)));
 
 	INIT_CRC32C(calc_crc);
-	COMP_CRC32C(calc_crc, (char *) content, stat.st_size);
+	COMP_CRC32C(calc_crc,
+				(char *) content + XidLSNRangesFileNotChecksummedSize,
+				stat.st_size - XidLSNRangesFileNotChecksummedSize);
 	FIN_CRC32C(calc_crc);
 
 	file_crc = content->checksum;
 
+	fprintf(stderr, "READ file_crc %X calc_crc %X",
+			content->checksum, calc_crc);
 	if (calc_crc != file_crc)
 		ereport(ERROR,
 				(errmsg("XID LSN range file \"%s\" contain invalid checksum",
@@ -964,6 +976,34 @@ LoadXidLSNRangesFile(void)
 	LWLockRelease(ProcArrayLock);
 
 	elog(DEBUG1, "loaded XID LSN ranges file with %d ranges", content->numranges);
+}
+
+void
+BootStrapVarsup(void)
+{
+	ShmemVariableCache->xidlsnranges[0].minxid = FirstNormalTransactionId;
+	ShmemVariableCache->xidlsnranges[0].minmxid = FirstMultiXactId;
+	/* the range is still open */
+	ShmemVariableCache->xidlsnranges[0].maxxid = InvalidTransactionId;
+	ShmemVariableCache->xidlsnranges[0].maxmxid = InvalidMultiXactId;
+	ShmemVariableCache->xidlsnranges[0].expirationXmin = InvalidTransactionId;
+	ShmemVariableCache->numranges = 1;
+	ShmemVariableCache->pageMatureLSN = InvalidXLogRecPtr;
+
+	ShmemVariableCache->rangeSwitchLSN = InvalidXLogRecPtr;
+	ShmemVariableCache->rangeSwitchMinXid = FirstNormalTransactionId;
+	ShmemVariableCache->rangeSwitchMinMultiXid = FirstMultiXactId;
+
+	ShmemVariableCache->nextSwitchXid = FirstNormalTransactionId + XID_LSN_RANGE_INTERVAL;;
+	ShmemVariableCache->switchFinishXmin = InvalidTransactionId;
+
+	WriteXidLSNRangesFile();
+}
+
+void
+StartupVarsup(void)
+{
+	LoadXidLSNRangesFile();
 }
 
 void
