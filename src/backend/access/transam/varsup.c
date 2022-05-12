@@ -38,6 +38,7 @@
 #include "utils/builtins.h"
 
 #define XID_LSN_RANGES_FILENAME		"global/pg_xidlsnranges"
+#define XID_LSN_RANGES_FILENAME_TMP	"global/pg_xidlsnranges.tmp"
 #define XID_LSN_RANGES_FILEMAGIC	0x255cb384
 
 typedef struct XidLSNRangesFile
@@ -283,6 +284,58 @@ GetNewTransactionId(bool isSubXact)
 	}
 
 	LWLockRelease(XidGenLock);
+
+	if (xid % 128 == 0)
+	{
+		TransactionId switchFinishXmin = ShmemVariableCache->switchFinishXmin;
+		TransactionId nextSwitchXid = ShmemVariableCache->nextSwitchXid;
+
+		/*
+		 * Create a new XID-LSN range, if we've consumed all the XIDs from the
+		 * current range.
+		 */
+		if (!XLogRecPtrIsInvalid(nextSwitchXid))
+		{
+			if (TransactionIdFollowsOrEquals(xid, nextSwitchXid))
+			{
+				BeginXidLSNRangeSwitch();
+
+				MultiXactIdSetOldestMember();
+				MultiXactIdCreate(xid, MultiXactStatusForUpdate,
+								  xid, MultiXactStatusForShare);
+			}
+		}
+
+		/*
+		 * If a range switch is pending, try to finish it now. This is fairly
+		 * expensive, as it has to scan the proc array to see if there are
+		 * any old transactions still live from before the switch was started.
+		 */
+		if (!XLogRecPtrIsInvalid(switchFinishXmin))
+		{
+			int	n_old_snapshots;
+			VirtualTransactionId	*old_snapshots;
+
+			old_snapshots = GetCurrentVirtualXIDs(switchFinishXmin, true, true,
+												  PROC_IS_AUTOVACUUM | PROC_IN_VACUUM,
+												  &n_old_snapshots);
+			pfree(old_snapshots);
+
+			if (n_old_snapshots == 0)
+			{
+				LWLockAcquire(XidGenLock, LW_EXCLUSIVE);
+
+				/*
+				 * check that someone else didn't finish the switch while we were
+				 * not holding the lock.
+				 */
+				if (ShmemVariableCache->switchFinishXmin == switchFinishXmin)
+					FinishXidLSNRangeSwitch();
+
+				LWLockRelease(XidGenLock);
+			}
+		}
+	}
 
 	return full_xid;
 }
@@ -704,7 +757,7 @@ BeginXidLSNRangeSwitch(void)
 	LWLockRelease(ProcArrayLock);
 
 	ereport(LOG,
-			(errmsg("start new XID range %u-, MultiXIDs %u-, tentative LSN %X/%X",
+			(errmsg("start new XID range %u -, MultiXIDs %u -, tentative LSN %X/%X",
 					minxid, minmxid,
 					LSN_FORMAT_ARGS(lsn))));
 }
@@ -758,12 +811,13 @@ FinishXidLSNRangeSwitch(void)
 
 	ShmemVariableCache->switchFinishXmin = InvalidTransactionId;
 
-	/* Next switch is X XIDs from here */
+	/* Next switch is XID_LSN_RANGE_INTERVAL XIDs from here */
 	ShmemVariableCache->nextSwitchXid =
 		XidFromFullTransactionId(ShmemVariableCache->nextXid) + XID_LSN_RANGE_INTERVAL;
 
 	ereport(LOG,
-			(errmsg("closed old XID range at %u (LSN %X/%X)",
+			(errmsg("closed old XID range [%u, %u) (LSN %X/%X)",
+					ShmemVariableCache->xidlsnranges[1].minxid,
 					ShmemVariableCache->xidlsnranges[1].maxxid,
 					LSN_FORMAT_ARGS(lsn))));
 }
@@ -790,7 +844,9 @@ XLogPutXidLSNRanges(void)
 static void
 WriteXidLSNRangesFile(void)
 {
-	int	fd;
+	const char *tmppath = XID_LSN_RANGES_FILENAME_TMP;
+	const char *path = XID_LSN_RANGES_FILENAME;
+	int			tmpfd;
 	XidLSNRangesFile *content;
 	int			numranges;
 	uint32		sz;
@@ -814,50 +870,51 @@ WriteXidLSNRangesFile(void)
 				sz - XidLSNRangesFileNotChecksummedSize);
 	FIN_CRC32C(content->checksum);
 
-	fd = OpenTransientFile(XID_LSN_RANGES_FILENAME, O_CREAT | O_EXCL | O_WRONLY | PG_BINARY);
-	if (fd < 0)
+	tmpfd = OpenTransientFile(tmppath, O_CREAT | O_EXCL | O_WRONLY | PG_BINARY);
+	if (tmpfd < 0)
 		ereport(FATAL,
 				(errcode_for_file_access(),
 				 errmsg("could not write to XID LSN range file \"%s\": %m",
-						XID_LSN_RANGES_FILENAME)));
+						tmppath)));
 
 	pgstat_report_wait_start(WAIT_EVENT_XID_LSN_RANGES_WRITE);
-	if (write(fd, content, sz) != sz)
+	if (write(tmpfd, content, sz) != sz)
 	{
 		int	save_errno = errno;
 
 		pgstat_report_wait_end();
-		CloseTransientFile(fd);
+		CloseTransientFile(tmpfd);
 
 		errno = save_errno ? save_errno : ENOSPC;
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not write to file \"%s\": %m",
-						XID_LSN_RANGES_FILENAME)));
+				 errmsg("could not write to file \"%s\": %m", tmppath)));
 	}
 	pgstat_report_wait_end();
 
 	pgstat_report_wait_start(WAIT_EVENT_XID_LSN_RANGES_SYNC);
-	if (pg_fsync(fd) != 0)
+	if (pg_fsync(tmpfd) != 0)
 	{
 		int	save_errno = errno;
 
 		pgstat_report_wait_end();
-		CloseTransientFile(fd);
+		CloseTransientFile(tmpfd);
 
 		errno = save_errno ? save_errno : ENOSPC;
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not fsync to file \"%s\": %m",
-						XID_LSN_RANGES_FILENAME)));
+				 errmsg("could not fsync to file \"%s\": %m", tmppath)));
 	}
 	pgstat_report_wait_end();
 
-	if (CloseTransientFile(fd) != 0)
+	if (CloseTransientFile(tmpfd) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not close to file \"%s\": %m",
-						XID_LSN_RANGES_FILENAME)));
+				 errmsg("could not close to file \"%s\": %m", tmppath)));
+
+	/* fsync, rename to permanent file, fsync file and directory */
+	durable_rename(tmppath, path, PANIC);
+
 	pfree(content);
 }
 
@@ -934,8 +991,6 @@ LoadXidLSNRangesFile(void)
 
 	file_crc = content->checksum;
 
-	fprintf(stderr, "READ file_crc %X calc_crc %X",
-			content->checksum, calc_crc);
 	if (calc_crc != file_crc)
 		ereport(ERROR,
 				(errmsg("XID LSN range file \"%s\" contain invalid checksum",
@@ -1004,6 +1059,33 @@ void
 StartupVarsup(void)
 {
 	LoadXidLSNRangesFile();
+}
+
+void
+CheckPointVarsup(void)
+{
+	bool dirty;
+
+	LWLockAcquire(XidGenLock, LW_EXCLUSIVE);
+	dirty = ShmemVariableCache->xidlsnranges_dirty;
+	ShmemVariableCache->xidlsnranges_recently_dirtied = false;
+	LWLockRelease(XidGenLock);
+
+	if (dirty)
+	{
+		WriteXidLSNRangesFile();
+
+		/*
+		 * Clear the dirty flag, unless someone modified the ranges again,
+		 * while we were writing them. What we wrote is still valid and is
+		 * enough for this checkpoint, but keep the dirty flag so that we'll
+		 * write out the new changes on next checkpoint.
+		 */
+		LWLockAcquire(XidGenLock, LW_EXCLUSIVE);
+		if (!ShmemVariableCache->xidlsnranges_recently_dirtied)
+			ShmemVariableCache->xidlsnranges_dirty = false;
+		LWLockRelease(XidGenLock);
+	}
 }
 
 void

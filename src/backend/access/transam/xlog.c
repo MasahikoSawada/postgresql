@@ -6851,6 +6851,7 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 	CheckPointCommitTs();
 	CheckPointSUBTRANS();
 	CheckPointMultiXact();
+	CheckPointVarsup();
 	CheckPointPredicate();
 	CheckPointBuffers(flags);
 

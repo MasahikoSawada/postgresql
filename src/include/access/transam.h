@@ -210,7 +210,7 @@ typedef struct XidLSNRange
 } XidLSNRange;
 
 #define NUM_XID_LSN_RANGES		100
-#define XID_LSN_RANGE_INTERVAL	1000000
+#define XID_LSN_RANGE_INTERVAL	1000 //1000000
 
 /*
  * VariableCache is a data structure in shared memory that is used to track
@@ -345,6 +345,7 @@ extern Oid	GetNewObjectId(void);
 extern void StopGeneratingPinnedObjectIds(void);
 extern void BootStrapVarsup(void);
 extern void StartupVarsup(void);
+extern void CheckPointVarsup(void);
 
 #ifdef USE_ASSERT_CHECKING
 extern void AssertTransactionIdInAllowableRange(TransactionId xid);
