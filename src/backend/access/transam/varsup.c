@@ -763,10 +763,53 @@ XLogPutXidLSNRanges(void)
 void
 varsup_redo(XLogReaderState *record)
 {
+	XLogRecPtr	lsn = record->EndRecPtr;
 	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
 
 	if (info == XLOG_VARSUP_XID_LSN_RANGES)
 	{
+		XLogRecPtr	pageMatureLSN;
+		xl_varsup_xid_lsn_ranges *xlrec = (xl_varsup_xid_lsn_ranges *)
+			XLogRecGetData(record);
+
+		LWLockAcquire(XidGenLock, LW_EXCLUSIVE);
+		ShmemVariableCache->numranges = xlrec->numranges;
+		memcpy(ShmemVariableCache->xidlsnranges, xlrec->ranges,
+			   xlrec->numranges * sizeof(XidLSNRange));
+
+		/* The expiration xmins are not relevant across restarts */
+		for (int i = 0; i < ShmemVariableCache->numranges; i++)
+			ShmemVariableCache->xidlsnranges[i].expirationXmin = InvalidTransactionId;
+
+		if (XLogRecPtrIsInvalid(ShmemVariableCache->xidlsnranges[0].beginlsn))
+			ShmemVariableCache->xidlsnranges[0].beginlsn = lsn;
+
+		/* initialize the range-switch variables from the latest range. */
+		ShmemVariableCache->rangeSwitchLSN = ShmemVariableCache->xidlsnranges[0].beginlsn;
+		ShmemVariableCache->rangeSwitchMinXid = ShmemVariableCache->xidlsnranges[0].minxid;
+		ShmemVariableCache->rangeSwitchMinMultiXid = ShmemVariableCache->xidlsnranges[0].minmxid;
+		ShmemVariableCache->switchFinishXmin = InvalidTransactionId;
+
+		/* Next switch is due in X XIDs from the beginning of the open range. */
+		ShmemVariableCache->nextSwitchXid =
+			XidFromFullTransactionId(ShmemVariableCache->nextXid) + XID_LSN_RANGE_INTERVAL;
+		while(!TransactionIdIsNormal(ShmemVariableCache->nextSwitchXid))
+			ShmemVariableCache->nextSwitchXid++;
+
+		pageMatureLSN = ShmemVariableCache->xidlsnranges[xlrec->numranges - 1].beginlsn;
+
+		/*
+		 * Mark the ranges as dirty, so that they will be flushed to disk on
+		 * next restartpoint.
+		 */
+		ShmemVariableCache->xidlsnranges_dirty = true;
+		ShmemVariableCache->xidlsnranges_recently_dirtied = true;
+
+		LWLockRelease(XidGenLock);
+
+		LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+		ShmemVariableCache->pageMatureLSN = pageMatureLSN;
+		LWLockRelease(ProcArrayLock);
 	}
 }
 

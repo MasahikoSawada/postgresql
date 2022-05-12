@@ -200,11 +200,11 @@ typedef struct XidLSNRange
 {
 	XLogRecPtr		beginlsn;
 
-	TransactionId	minxid;
-	TransactionId	maxxid;
+	TransactionId	minxid;	/* inclusive */
+	TransactionId	maxxid;	/* exclusive */
 
-	TransactionId	minmxid;
-	TransactionId	maxmxid;
+	TransactionId	minmxid; /* inclusive */
+	TransactionId	maxmxid; /* exclusive */
 
 	TransactionId	expirationXmin;
 } XidLSNRange;
@@ -289,10 +289,16 @@ typedef struct VariableCacheData
 	 * all tuples on the page are known to be visible to everyone, and the XIDs
 	 * on the page must not be looked at, because they might not be present
 	 * in clog anymore, and might come from a previous XID epoch.
+	 *
+	 * This field is protected by ProcArrayLock.
 	 */
 	XLogRecPtr		pageMatureLSN;
 
-	/* Pages with LSN older than this must be frozen before updating */
+	/*
+	 * Pages with LSN older than this must be frozen before updating.
+	 *
+	 * This field is protected by ProcArrayLock.
+	 */
 	XLogRecPtr		rangeSwitchLSN;
 } VariableCacheData;
 
