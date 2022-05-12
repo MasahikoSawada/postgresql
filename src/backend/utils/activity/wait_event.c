@@ -741,6 +741,15 @@ pgstat_get_wait_io(WaitEventIO w)
 		case WAIT_EVENT_WAL_WRITE:
 			event_name = "WALWrite";
 			break;
+		case WAIT_EVENT_XID_LSN_RANGES_READ:
+			event_name = "XidLSNRangesRead";
+			break;
+		case WAIT_EVENT_XID_LSN_RANGES_WRITE:
+			event_name = "XidLSNRangesWrite";
+			break;
+		case WAIT_EVENT_XID_LSN_RANGES_SYNC:
+			event_name = "XidLSNRangesSync";
+			break;
 
 			/* no default case, so that compiler will warn */
 	}

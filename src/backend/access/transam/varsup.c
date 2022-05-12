@@ -13,6 +13,9 @@
 
 #include "postgres.h"
 
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include "access/clog.h"
 #include "access/commit_ts.h"
 #include "access/multixact.h"
@@ -25,11 +28,27 @@
 #include "commands/dbcommands.h"
 #include "miscadmin.h"
 #include "postmaster/autovacuum.h"
+#include "pgstat.h"
+#include "storage/fd.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "utils/syscache.h"
+#include "utils/wait_event.h"
+#include "utils/builtins.h"
 
+#define XID_LSN_RANGES_FILENAME		"global/pg_xidlsnranges"
+#define XID_LSN_RANGES_FILEMAGIC	0x255cb384
+
+typedef struct XidLSNRangesFile
+{
+	uint32		magic;
+	pg_crc32c	checksum;
+	uint32		numranges;
+	XidLSNRange	ranges[FLEXIBLE_ARRAY_MEMBER];
+} XidLSNRangesFile;
+#define SizeOfXidLSNRangesFile(numranges) \
+	(offsetof(XidLSNRangesFile, ranges) + (numranges) * sizeof(XidLSNRange))
 
 /* Number of OIDs to prefetch (preallocate) per XLOG write */
 #define VAR_OID_PREFETCH		8192
@@ -635,6 +654,8 @@ StopGeneratingPinnedObjectIds(void)
 	SetNextObjectId(FirstUnpinnedObjectId);
 }
 
+/************************************************************************/
+
 static void
 BeginXidLSNRangeSwitch(void)
 {
@@ -758,6 +779,191 @@ XLogPutXidLSNRanges(void)
 					 sizeof(XidLSNRange) * numranges);
 
 	return XLogInsert(RM_VARSUP_ID, XLOG_VARSUP_XID_LSN_RANGES);
+}
+
+static void
+WriteXidLSNRangesFile(void)
+{
+	int	fd;
+	XidLSNRangesFile *content;
+	int			numranges;
+	off_t		sz;
+
+	/* Copy to local memory first, to avoid holding the lock for a long time */
+	LWLockAcquire(XidGenLock, LW_SHARED);
+	numranges = ShmemVariableCache->numranges;
+	sz = SizeOfXidLSNRangesFile(numranges);
+	content = palloc0(sz);
+	memcpy(content->ranges, ShmemVariableCache->xidlsnranges,
+		   sizeof(XidLSNRange) * numranges);
+	LWLockRelease(XidGenLock);
+
+	Assert(numranges > 0);
+
+	content->magic = XID_LSN_RANGES_FILEMAGIC;
+	content->numranges = numranges;
+	INIT_CRC32C(content->checksum);
+	COMP_CRC32C(content->checksum, (char *) content, sz);
+	FIN_CRC32C(content->checksum);
+
+	fd = OpenTransientFile(XID_LSN_RANGES_FILENAME, O_CREAT | O_EXCL | O_WRONLY | PG_BINARY);
+	if (fd < 0)
+		ereport(FATAL,
+				(errcode_for_file_access(),
+				 errmsg("could not write to XID LSN range file \"%s\": %m",
+						XID_LSN_RANGES_FILENAME)));
+
+	pgstat_report_wait_start(WAIT_EVENT_XID_LSN_RANGES_WRITE);
+	if (write(fd, content, sz) != sz)
+	{
+		int	save_errno = errno;
+
+		pgstat_report_wait_end();
+		CloseTransientFile(fd);
+
+		errno = save_errno ? save_errno : ENOSPC;
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not write to file \"%s\": %m",
+						XID_LSN_RANGES_FILENAME)));
+	}
+	pgstat_report_wait_end();
+
+	pgstat_report_wait_start(WAIT_EVENT_XID_LSN_RANGES_SYNC);
+	if (pg_fsync(fd) != 0)
+	{
+		int	save_errno = errno;
+
+		pgstat_report_wait_end();
+		CloseTransientFile(fd);
+
+		errno = save_errno ? save_errno : ENOSPC;
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not fsync to file \"%s\": %m",
+						XID_LSN_RANGES_FILENAME)));
+	}
+	pgstat_report_wait_end();
+
+	if (CloseTransientFile(fd) != 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not close to file \"%s\": %m",
+						XID_LSN_RANGES_FILENAME)));
+	pfree(content);
+}
+
+/*
+ * Reads Xid-LSN-ranges file and initialize ShmemVariableCache data.
+ *
+ * XXX: recover from the case where loading the file fails (e.g., someone deleted
+ * it manually).
+ */
+static void
+LoadXidLSNRangesFile(void)
+{
+	int		fd;
+	struct stat stat;
+	int		read_bytes;
+	pg_crc32c	calc_crc,
+				file_crc;
+	XidLSNRangesFile	*content;
+
+	fd = OpenTransientFile(XID_LSN_RANGES_FILENAME, O_RDONLY | PG_BINARY);
+	if (fd < 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not open XID LSN range file \"%s\": %m",
+						XID_LSN_RANGES_FILENAME)));
+
+	/* Check file length */
+	if (fstat(fd, &stat))
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not stat file \"%s\": %m",
+						XID_LSN_RANGES_FILENAME)));
+
+	if (stat.st_size < sizeof(XidLSNRangesFile))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg_plural("incorrect size of file \"%s\": %lld byte",
+							   "incorrect size of file \"%s\": %lld bytes",
+							   (long long int) stat.st_size, XID_LSN_RANGES_FILENAME,
+							   (long long int) stat.st_size)));
+
+	/* slurp the file into memory */
+	content = palloc(stat.st_size);
+
+	pgstat_report_wait_start(WAIT_EVENT_XID_LSN_RANGES_READ);
+	read_bytes = read(fd, content, stat.st_size);
+	if (read_bytes != stat.st_size)
+	{
+		if (read_bytes < 0)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not read file \"%s\": %m",
+							XID_LSN_RANGES_FILENAME)));
+		else
+			ereport(ERROR,
+					(errmsg("could not read file \"%s\": read %d of %lld",
+							XID_LSN_RANGES_FILENAME, read_bytes,
+							(long long int) stat.st_size)));
+	}
+	pgstat_report_wait_end();
+
+	/* don't need the file anymore */
+	if (CloseTransientFile(fd))
+		ereport(LOG,
+				(errcode_for_file_access(),
+				 errmsg("could not close XID LSN range file \"%s\": %m",
+						XID_LSN_RANGES_FILENAME)));
+
+	INIT_CRC32C(calc_crc);
+	COMP_CRC32C(calc_crc, (char *) content, stat.st_size);
+	FIN_CRC32C(calc_crc);
+
+	file_crc = content->checksum;
+
+	if (calc_crc != file_crc)
+		ereport(ERROR,
+				(errmsg("XID LSN range file \"%s\" contain invalid checksum",
+						XID_LSN_RANGES_FILENAME)));
+
+	/*
+	 * The contents seem to be valid. Load into shared memory.
+	 *
+	 * XXX: remove duplicate code of varsup_redo.
+	 */
+	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+	LWLockAcquire(XidGenLock, LW_EXCLUSIVE);
+	memcpy(ShmemVariableCache->xidlsnranges, content->ranges,
+		   sizeof(XidLSNRange) * content->numranges);
+	ShmemVariableCache->numranges = content->numranges;
+	ShmemVariableCache->pageMatureLSN =
+		content->ranges[content->numranges - 1].beginlsn;
+
+	/* The expiration xmins are not relevant across restarts. */
+	for (int i = 0; i < ShmemVariableCache->numranges; i++)
+		ShmemVariableCache->xidlsnranges[i].expirationXmin = InvalidTransactionId;
+
+	ShmemVariableCache->xidlsnranges_dirty = false;
+	ShmemVariableCache->xidlsnranges_recently_dirtied = false;
+
+	/* initialize the range-switch variables from the open range. */
+	ShmemVariableCache->rangeSwitchLSN = ShmemVariableCache->xidlsnranges[0].beginlsn;
+	ShmemVariableCache->rangeSwitchMinXid = ShmemVariableCache->xidlsnranges[0].minxid;
+	ShmemVariableCache->rangeSwitchMinMultiXid = ShmemVariableCache->xidlsnranges[0].minmxid;
+	ShmemVariableCache->switchFinishXmin = InvalidTransactionId;
+
+	/* Next switch is due in X XIDs from the beginning of the open range. */
+	ShmemVariableCache->nextSwitchXid = ShmemVariableCache->xidlsnranges[0].minxid + XID_LSN_RANGE_INTERVAL;
+	while(!TransactionIdIsNormal(ShmemVariableCache->nextSwitchXid))
+		ShmemVariableCache->nextSwitchXid++;
+
+	LWLockRelease(XidGenLock);
+	LWLockRelease(ProcArrayLock);
+
+	elog(DEBUG1, "loaded XID LSN ranges file with %d ranges", content->numranges);
 }
 
 void
