@@ -816,7 +816,8 @@ FinishXidLSNRangeSwitch(void)
 		XidFromFullTransactionId(ShmemVariableCache->nextXid) + XID_LSN_RANGE_INTERVAL;
 
 	ereport(LOG,
-			(errmsg("closed old XID range [%u, %u) (LSN %X/%X)",
+			(errmsg("closed old XID range %u [%u, %u) (LSN %X/%X)",
+					numranges - 1,
 					ShmemVariableCache->xidlsnranges[1].minxid,
 					ShmemVariableCache->xidlsnranges[1].maxxid,
 					LSN_FORMAT_ARGS(lsn))));
@@ -995,6 +996,16 @@ LoadXidLSNRangesFile(void)
 		ereport(ERROR,
 				(errmsg("XID LSN range file \"%s\" contain invalid checksum",
 						XID_LSN_RANGES_FILENAME)));
+
+	ereport(LOG, (errmsg("load xid-lsn-range file:")));
+	for (int i = 0; i < content->numranges; i++)
+	{
+		ereport(LOG, (errmsg("   range %d: [%u,  %u) %X/%X",
+							 i,
+							content->ranges[i].minxid,
+							content->ranges[i].maxxid,
+							LSN_FORMAT_ARGS(content->ranges[i].beginlsn))));
+	}
 
 	/*
 	 * The contents seem to be valid. Load into shared memory.
