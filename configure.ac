@@ -2300,6 +2300,12 @@ else
 fi
 AC_SUBST(PG_CRC32C_OBJS)
 
+# Check for Intel AVX2 intrinsics.
+PGAC_AVX2_INTRINSICS([])
+if test x"pgac_avx2_intrinsics" != x"yes"; then
+  PGAC_AVX2_INTRINSICS([-mavx2])
+fi
+AC_SUBST(CFLAGS_AVX2)
 
 # Select semaphore implementation type.
 if test "$PORTNAME" != "win32"; then

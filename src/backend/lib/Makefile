@@ -22,6 +22,10 @@ OBJS = \
 	integerset.o \
 	knapsack.o \
 	pairingheap.o \
+	radixtree.o \
 	rbtree.o \
+
+# radixtree.o need CFLAGS_AVX2
+radixtree.o: CFLAGS+=$(CFLAGS_AVX2)
 
 include $(top_srcdir)/src/backend/common.mk

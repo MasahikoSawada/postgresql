@@ -645,6 +645,7 @@ XGETTEXT
 MSGMERGE
 MSGFMT_FLAGS
 MSGFMT
+CFLAGS_AVX2
 PG_CRC32C_OBJS
 CFLAGS_ARMV8_CRC32C
 CFLAGS_SSE42
@@ -18828,6 +18829,82 @@ $as_echo "slicing-by-8" >&6; }
   fi
 fi
 
+
+# Check for Intel AVX2 intrinsics.
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for _mm256i CFLAGS=" >&5
+$as_echo_n "checking for _mm256i CFLAGS=... " >&6; }
+if ${pgac_cv_avx2_intrinsics_+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  pgac_save_CFLAGS=$CFLAGS
+CFLAGS="$pgac_save_CFLAGS "
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <immintrin.h>
+int
+main ()
+{
+__m256i vec = _mm256_set1_epi8(0);
+   __m256i cmp = _mm256_cmpeq_epi8(vec, vec);
+   return _mm256_movemask_epi8(cmp) > 0;
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  pgac_cv_avx2_intrinsics_=yes
+else
+  pgac_cv_avx2_intrinsics_=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+CFLAGS="$pgac_save_CFLAGS"
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $pgac_cv_avx2_intrinsics_" >&5
+$as_echo "$pgac_cv_avx2_intrinsics_" >&6; }
+if test x"$pgac_cv_avx2_intrinsics_" = x"yes"; then
+  CFLAGS_AVX2=""
+  pgac_avx2_intrinsics=yes
+fi
+
+if test x"pgac_avx2_intrinsics" != x"yes"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for _mm256i CFLAGS=-mavx2" >&5
+$as_echo_n "checking for _mm256i CFLAGS=-mavx2... " >&6; }
+if ${pgac_cv_avx2_intrinsics__mavx2+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  pgac_save_CFLAGS=$CFLAGS
+CFLAGS="$pgac_save_CFLAGS -mavx2"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <immintrin.h>
+int
+main ()
+{
+__m256i vec = _mm256_set1_epi8(0);
+   __m256i cmp = _mm256_cmpeq_epi8(vec, vec);
+   return _mm256_movemask_epi8(cmp) > 0;
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  pgac_cv_avx2_intrinsics__mavx2=yes
+else
+  pgac_cv_avx2_intrinsics__mavx2=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+CFLAGS="$pgac_save_CFLAGS"
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $pgac_cv_avx2_intrinsics__mavx2" >&5
+$as_echo "$pgac_cv_avx2_intrinsics__mavx2" >&6; }
+if test x"$pgac_cv_avx2_intrinsics__mavx2" = x"yes"; then
+  CFLAGS_AVX2="-mavx2"
+  pgac_avx2_intrinsics=yes
+fi
+
+fi
 
 
 # Select semaphore implementation type.

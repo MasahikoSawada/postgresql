@@ -676,3 +676,27 @@ if test x"$Ac_cachevar" = x"yes"; then
 fi
 undefine([Ac_cachevar])dnl
 ])# PGAC_ARMV8_CRC32C_INTRINSICS
+
+# PGAC_AVX2_INTRINSICS
+# --------------------
+# Check if the compiler supports the Intel AVX2 instructinos.
+#
+# If the intrinsics are supported, sets pgac_avx2_intrinsics, and CFLAGS_AVX2.
+AC_DEFUN([PGAC_AVX2_INTRINSICS],
+[define([Ac_cachevar], [AS_TR_SH([pgac_cv_avx2_intrinsics_$1])])dnl
+AC_CACHE_CHECK([for _mm256_set_1_epi8 _mm256_cmpeq_epi8 _mm256_movemask_epi8 CFLAGS=$1], [Ac_cachevar],
+[pgac_save_CFLAGS=$CFLAGS
+CFLAGS="$pgac_save_CFLAGS $1"
+AC_LINK_IFELSE([AC_LANG_PROGRAM([#include <immintrin.h>],
+  [__m256i vec = _mm256_set1_epi8(0);
+   __m256i cmp = _mm256_cmpeq_epi8(vec, vec);
+   return _mm256_movemask_epi8(cmp) > 0;])],
+  [Ac_cachevar=yes],
+  [Ac_cachevar=no])
+CFLAGS="$pgac_save_CFLAGS"])
+if test x"$Ac_cachevar" = x"yes"; then
+  CFLAGS_AVX2="$1"
+  pgac_avx2_intrinsics=yes
+fi
+undefine([Ac_cachevar])dnl
+])# PGAC_AVX2_INTRINSICS
