@@ -115,7 +115,11 @@ GetNewTransactionId(bool isSubXact)
 		 * plenty of chances before we get into real trouble.
 		 */
 		if (IsUnderPostmaster && (xid % 65536) == 0)
+		{
+			ereport(LOG,
+					(errmsg("XXX: GetNewTransactionId requested starting new AV launcher xid %u", xid)));
 			SendPostmasterSignal(PMSIGNAL_START_AUTOVAC_LAUNCHER);
+		}
 
 		if (IsUnderPostmaster &&
 			TransactionIdFollowsOrEquals(xid, xidStopLimit))
@@ -437,7 +441,12 @@ SetTransactionIdLimit(TransactionId oldest_datfrozenxid, Oid oldest_datoid)
 	 */
 	if (TransactionIdFollowsOrEquals(curXid, xidVacLimit) &&
 		IsUnderPostmaster && !InRecovery)
+	{
+		ereport(LOG,
+				(errmsg("XXX: SetTransactionIdLimit requested to starting AV launcher, curXid %u xidVacLimit %u",
+						curXid, xidVacLimit)));
 		SendPostmasterSignal(PMSIGNAL_START_AUTOVAC_LAUNCHER);
+	}
 
 	/* Give an immediate warning if past the wrap warn point */
 	if (TransactionIdFollowsOrEquals(curXid, xidWarnLimit) && !InRecovery)

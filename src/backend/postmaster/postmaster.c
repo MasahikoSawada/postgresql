@@ -1855,6 +1855,7 @@ ServerLoop(void)
 			AutoVacPID = StartAutoVacLauncher();
 			if (AutoVacPID != 0)
 				start_autovac_launcher = false; /* signal processed */
+			ereport(LOG, (errmsg("PM: started av launcher")));
 		}
 
 		/* If we have lost the archiver, try to start a new one. */
@@ -5229,6 +5230,7 @@ sigusr1_handler(SIGNAL_ARGS)
 		 * that by launching another iteration as soon as the current one
 		 * completes.
 		 */
+		ereport(LOG, (errmsg("PM: requested start AV launcher")));
 		start_autovac_launcher = true;
 	}
 

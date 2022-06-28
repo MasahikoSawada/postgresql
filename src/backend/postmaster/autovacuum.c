@@ -611,8 +611,10 @@ AutoVacLauncherMain(int argc, char *argv[])
 	 */
 	if (!AutoVacuumingActive())
 	{
+		ereport(LOG, (errmsg("AVL: in emergency mode!!")));
 		if (!ShutdownRequestPending)
 			do_start_worker();
+		ereport(LOG, (errmsg("AVL: done emergency mode")));
 		proc_exit(0);			/* done */
 	}
 
@@ -643,6 +645,9 @@ AutoVacLauncherMain(int argc, char *argv[])
 
 		launcher_determine_sleep(!dlist_is_empty(&AutoVacuumShmem->av_freeWorkers),
 								 false, &nap);
+
+		ereport(WARNING, (errmsg("AVL: sleep %ld.%d",
+							 nap.tv_sec, nap.tv_usec)));
 
 		/*
 		 * Wait until naptime expires or we get some type of signal (all the
@@ -957,6 +962,8 @@ rebuild_database_list(Oid newdb)
 	HTAB	   *dbhash;
 	dlist_iter	iter;
 
+	ereport(LOG, (errmsg("AVL: start rebuilding database list")));
+
 	newcxt = AllocSetContextCreate(AutovacMemCxt,
 								   "Autovacuum database list",
 								   ALLOCSET_DEFAULT_SIZES);
@@ -1108,6 +1115,11 @@ rebuild_database_list(Oid newdb)
 													   millis_increment);
 			db->adl_next_worker = current_time;
 
+			ereport(LOG,
+					(errmsg("AVL: rebuild database [%d] dbid %u adl_next_worker %s",
+							i, db->adl_datid,
+							timestamptz_to_str(db->adl_next_worker))));
+
 			/* later elements should go closer to the head of the list */
 			dlist_push_head(&DatabaseList, &db->adl_node);
 		}
@@ -1163,6 +1175,7 @@ do_start_worker(void)
 	if (dlist_is_empty(&AutoVacuumShmem->av_freeWorkers))
 	{
 		LWLockRelease(AutovacuumLock);
+		ereport(LOG, (errmsg("AVL: do nothing due to no free workers")));
 		return InvalidOid;
 	}
 	LWLockRelease(AutovacuumLock);
@@ -1197,6 +1210,10 @@ do_start_worker(void)
 	if (multiForceLimit < FirstMultiXactId)
 		multiForceLimit -= FirstMultiXactId;
 
+	ereport(LOG,
+			(errmsg("AVL: recentXid %u freeze_max_age %u xidForceLimit %u",
+					recentXid, autovacuum_freeze_max_age, xidForceLimit)));
+
 	/*
 	 * Choose a database to connect to.  We pick the database that was least
 	 * recently auto-vacuumed, or one that needs vacuuming to prevent Xid
@@ -1226,6 +1243,11 @@ do_start_worker(void)
 	{
 		avw_dbase  *tmp = lfirst(cell);
 		dlist_iter	iter;
+
+		ereport(LOG, (errmsg("AVL: dbid %u frozenxid %u xid_wrap? %d",
+							 tmp->adw_datid,
+							 tmp->adw_frozenxid,
+							 TransactionIdPrecedes(tmp->adw_frozenxid, xidForceLimit))));
 
 		/* Check to see if this one is at risk of wraparound */
 		if (TransactionIdPrecedes(tmp->adw_frozenxid, xidForceLimit))
@@ -1258,7 +1280,11 @@ do_start_worker(void)
 		 * activity.
 		 */
 		if (!tmp->adw_entry)
+		{
+			ereport(LOG, (errmsg("AVL: skip dbid %u due to missing pgstat entry",
+								 tmp->adw_datid)));
 			continue;
+		}
 
 		/*
 		 * Also, skip a database that appears on the database list as having
@@ -1286,9 +1312,14 @@ do_start_worker(void)
 												autovacuum_naptime * 1000))
 					skipit = true;
 
+				ereport(LOG, (errmsg("AVL: dbid %u skip_it? %d next_worker %s",
+									 tmp->adw_datid, skipit,
+									 timestamptz_to_str(dbp->adl_next_worker))));
+
 				break;
 			}
 		}
+
 		if (skipit)
 			continue;
 
@@ -1323,6 +1354,9 @@ do_start_worker(void)
 		AutoVacuumShmem->av_startingWorker = worker;
 
 		LWLockRelease(AutovacuumLock);
+
+		ereport(LOG, (errmsg("AVL: requested starting AV worker for dbid %u",
+							 worker->wi_dboid)));
 
 		SendPostmasterSignal(PMSIGNAL_START_AUTOVAC_WORKER);
 
@@ -1383,6 +1417,10 @@ launch_worker(TimestampTz now)
 				 */
 				avdb->adl_next_worker =
 					TimestampTzPlusMilliseconds(now, autovacuum_naptime * 1000);
+
+				ereport(LOG, (errmsg("AVL: dbid %u set new next_worker %s",
+									 avdb->adl_datid,
+									 timestamptz_to_str(avdb->adl_next_worker))));
 
 				dlist_move_head(&DatabaseList, iter.cur);
 				break;
@@ -1670,6 +1708,8 @@ AutoVacWorkerMain(int argc, char *argv[])
 		/* wake up the launcher */
 		if (AutoVacuumShmem->av_launcherpid != 0)
 			kill(AutoVacuumShmem->av_launcherpid, SIGUSR2);
+
+		ereport(LOG, (errmsg("AVW: started working on dbid %u", dbid)));
 	}
 	else
 	{

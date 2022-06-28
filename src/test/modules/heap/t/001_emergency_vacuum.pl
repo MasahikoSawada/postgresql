@@ -8,6 +8,16 @@ use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
+sub check_and_die
+{
+    my $node = shift;
+
+    diag($node->safe_psql('postgres',
+			  'select datname, datfrozenxid from pg_database'));
+
+    die "timeout waiting all database are vacuumed";
+}
+
 # Initialize primary node
 my $node = PostgreSQL::Test::Cluster->new('primary');
 
@@ -95,7 +105,7 @@ SELECT NOT EXISTS (
 	SELECT *
 	FROM pg_database
 	WHERE age(datfrozenxid) > current_setting('autovacuum_freeze_max_age')::int)
-]) or die "timeout waiting all databases are vacuumed";
+]) or check_and_die($node);
 
 $ret = $node->safe_psql('postgres', qq/
 SELECT relname, age(relfrozenxid) > current_setting('autovacuum_freeze_max_age')::int
@@ -103,6 +113,7 @@ FROM pg_class
 WHERE oid = ANY(ARRAY['large'::regclass, 'large_trunc', 'small', 'small_trunc', 'autovacuum_disabled'])
 ORDER BY 1
 /);
+
 is($ret, "autovacuum_disabled|f
 large|f
 large_trunc|f
