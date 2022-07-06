@@ -241,6 +241,30 @@ struct SnapBuild
 		 */
 		TransactionId *xip;
 	}			committed;
+
+	/*
+	 * Array of transactions and subtransactions that had modified catalogs
+	 * and were running when the snapshot was serialized.
+	 *
+	 * We normally rely on HEAP2_NEW_CID and XLOG_XACT_INVALIDATIONS records to
+	 * know if the transaction has changed the catalog. But it could happen that
+	 * the logical decoding decodes only the commit record of the transaction.
+	 * This array keeps track of the transactions that have modified catalogs
+	 * and were running when serializing a snapshot, and this array is used to
+	 * add such transactions to the snapshot.
+	 *
+	 * This array is set once when restoring the snapshot, xids are removed
+	 * from the array when decoding xl_running_xacts record, and then eventually
+	 * becomes empty.
+	 */
+	struct
+	{
+		/* number of transactions */
+		size_t		xcnt;
+
+		/* This array must be sorted in xidComparator order */
+		TransactionId *xip;
+	}			catchange;
 };
 
 /*
@@ -250,8 +274,8 @@ struct SnapBuild
 static ResourceOwner SavedResourceOwnerDuringExport = NULL;
 static bool ExportInProgress = false;
 
-/* ->committed manipulation */
-static void SnapBuildPurgeCommittedTxn(SnapBuild *builder);
+/* ->committed and ->catchange manipulation */
+static void SnapBuildPurgeOlderTxn(SnapBuild *builder);
 
 /* snapshot building/manipulation/distribution functions */
 static Snapshot SnapBuildBuildSnapshot(SnapBuild *builder);
@@ -262,6 +286,8 @@ static void SnapBuildSnapIncRefcount(Snapshot snap);
 
 static void SnapBuildDistributeNewCatalogSnapshot(SnapBuild *builder, XLogRecPtr lsn);
 
+static inline bool SnapBuildXidHasCatalogChanges(SnapBuild *builder, TransactionId xid);
+
 /* xlog reading helper functions for SnapBuildProcessRunningXacts */
 static bool SnapBuildFindSnapshot(SnapBuild *builder, XLogRecPtr lsn, xl_running_xacts *running);
 static void SnapBuildWaitSnapshot(xl_running_xacts *running, TransactionId cutoff);
@@ -269,6 +295,7 @@ static void SnapBuildWaitSnapshot(xl_running_xacts *running, TransactionId cutof
 /* serialization functions */
 static void SnapBuildSerialize(SnapBuild *builder, XLogRecPtr lsn);
 static bool SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn);
+static void SnapBuildRestoreContents(int fd, char *dest, Size size, const char *path);
 
 /*
  * Allocate a new snapshot builder.
@@ -305,6 +332,9 @@ AllocateSnapshotBuilder(ReorderBuffer *reorder,
 	builder->committed.xip =
 		palloc0(builder->committed.xcnt_space * sizeof(TransactionId));
 	builder->committed.includes_all_transactions = true;
+
+	builder->catchange.xcnt = 0;
+	builder->catchange.xip = NULL;
 
 	builder->initial_xmin_horizon = xmin_horizon;
 	builder->start_decoding_at = start_lsn;
@@ -888,12 +918,15 @@ SnapBuildAddCommittedTxn(SnapBuild *builder, TransactionId xid)
 }
 
 /*
- * Remove knowledge about transactions we treat as committed that are smaller
- * than ->xmin. Those won't ever get checked via the ->committed array but via
- * the clog machinery, so we don't need to waste memory on them.
+ * Remove knowledge about transactions we treat as committed or containing catalog
+ * changes that are smaller than ->xmin. Those won't ever get checked via
+ * the ->committed or ->catchange array, respectively. The committed xids will
+ * get checked via the clog machinery. We can ideally remove the transaction
+ * from catchange array once it is finished (committed/aborted) but that could
+ * be costly as we need to maintain the xids order in the array.
  */
 static void
-SnapBuildPurgeCommittedTxn(SnapBuild *builder)
+SnapBuildPurgeOlderTxn(SnapBuild *builder)
 {
 	int			off;
 	TransactionId *workspace;
@@ -928,6 +961,36 @@ SnapBuildPurgeCommittedTxn(SnapBuild *builder)
 	builder->committed.xcnt = surviving_xids;
 
 	pfree(workspace);
+
+	/* purge xids in ->catchange as well */
+	if (builder->catchange.xcnt > 0)
+	{
+		/*
+		 * Since catchange.xip is sorted, we find the lower bound of
+		 * xids that still are interesting.
+		 */
+		for (off = 0; off < builder->catchange.xcnt; off++)
+		{
+			if (TransactionIdFollowsOrEquals(builder->catchange.xip[off],
+											 builder->xmin))
+				break;
+		}
+
+		surviving_xids = builder->catchange.xcnt - off;
+		if (surviving_xids > 0)
+			memmove(builder->catchange.xip, &(builder->catchange.xip[off]),
+					surviving_xids * sizeof(TransactionId));
+		else
+		{
+			/* catchange list becomes empty */
+			pfree(builder->catchange.xip);
+			builder->catchange.xip = NULL;
+		}
+
+		elog(DEBUG3, "purged catalog modifying transactions from %d to %d",
+			 (uint32) builder->catchange.xcnt, surviving_xids);
+		builder->catchange.xcnt = surviving_xids;
+	}
 }
 
 /*
@@ -983,7 +1046,7 @@ SnapBuildCommitTxn(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid,
 		 * Add subtransaction to base snapshot if catalog modifying, we don't
 		 * distinguish to toplevel transactions there.
 		 */
-		if (ReorderBufferXidHasCatalogChanges(builder->reorder, subxid))
+		if (SnapBuildXidHasCatalogChanges(builder, subxid))
 		{
 			sub_needs_timetravel = true;
 			needs_snapshot = true;
@@ -1012,7 +1075,7 @@ SnapBuildCommitTxn(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid,
 	}
 
 	/* if top-level modified catalog, it'll need a snapshot */
-	if (ReorderBufferXidHasCatalogChanges(builder->reorder, xid))
+	if (SnapBuildXidHasCatalogChanges(builder, xid))
 	{
 		elog(DEBUG2, "found top level transaction %u, with catalog changes",
 			 xid);
@@ -1089,6 +1152,21 @@ SnapBuildCommitTxn(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid,
 	}
 }
 
+/*
+ * Check both the reorder buffer and the snapshot to see if the given
+ * transaction has modified catalogs.
+ */
+static inline bool
+SnapBuildXidHasCatalogChanges(SnapBuild *builder, TransactionId xid)
+{
+	if (ReorderBufferXidHasCatalogChanges(builder->reorder, xid))
+		return true;
+
+	/* Check the catchange XID array */
+	return ((builder->catchange.xcnt > 0) &&
+			(bsearch(&xid, builder->catchange.xip, builder->catchange.xcnt,
+					 sizeof(TransactionId), xidComparator) != NULL));
+}
 
 /* -----------------------------------
  * Snapshot building functions dealing with xlog records
@@ -1135,7 +1213,7 @@ SnapBuildProcessRunningXacts(SnapBuild *builder, XLogRecPtr lsn, xl_running_xact
 	builder->xmin = running->oldestRunningXid;
 
 	/* Remove transactions we don't need to keep track off anymore */
-	SnapBuildPurgeCommittedTxn(builder);
+	SnapBuildPurgeOlderTxn(builder);
 
 	/*
 	 * Advance the xmin limit for the current replication slot, to allow
@@ -1438,6 +1516,7 @@ SnapBuildWaitSnapshot(xl_running_xacts *running, TransactionId cutoff)
  *
  * struct SnapBuildOnDisk;
  * TransactionId * committed.xcnt; (*not xcnt_space*)
+ * TransactionId * catchange.xcnt;
  *
  */
 typedef struct SnapBuildOnDisk
@@ -1467,7 +1546,7 @@ typedef struct SnapBuildOnDisk
 	offsetof(SnapBuildOnDisk, version)
 
 #define SNAPBUILD_MAGIC 0x51A1E001
-#define SNAPBUILD_VERSION 4
+#define SNAPBUILD_VERSION 5
 
 /*
  * Store/Load a snapshot from disk, depending on the snapshot builder's state.
@@ -1493,6 +1572,8 @@ SnapBuildSerialize(SnapBuild *builder, XLogRecPtr lsn)
 {
 	Size		needed_length;
 	SnapBuildOnDisk *ondisk = NULL;
+	TransactionId	*catchange_xip = NULL;
+	size_t		catchange_xcnt;
 	char	   *ondisk_c;
 	int			fd;
 	char		tmppath[MAXPGPATH];
@@ -1578,8 +1659,12 @@ SnapBuildSerialize(SnapBuild *builder, XLogRecPtr lsn)
 				(errcode_for_file_access(),
 				 errmsg("could not remove file \"%s\": %m", tmppath)));
 
+	/* Get the catalog modifying transactions that are yet not committed */
+	catchange_xip = ReorderBufferGetCatalogChangesXacts(builder->reorder);
+	catchange_xcnt = builder->reorder->catchange_ntxns;
+
 	needed_length = sizeof(SnapBuildOnDisk) +
-		sizeof(TransactionId) * builder->committed.xcnt;
+		sizeof(TransactionId) * (builder->committed.xcnt + catchange_xcnt);
 
 	ondisk_c = MemoryContextAllocZero(builder->context, needed_length);
 	ondisk = (SnapBuildOnDisk *) ondisk_c;
@@ -1598,6 +1683,9 @@ SnapBuildSerialize(SnapBuild *builder, XLogRecPtr lsn)
 	ondisk->builder.snapshot = NULL;
 	ondisk->builder.reorder = NULL;
 	ondisk->builder.committed.xip = NULL;
+	ondisk->builder.catchange.xip = NULL;
+	/* update catchange only on disk data */
+	ondisk->builder.catchange.xcnt = catchange_xcnt;
 
 	COMP_CRC32C(ondisk->checksum,
 				&ondisk->builder,
@@ -1606,6 +1694,12 @@ SnapBuildSerialize(SnapBuild *builder, XLogRecPtr lsn)
 	/* copy committed xacts */
 	sz = sizeof(TransactionId) * builder->committed.xcnt;
 	memcpy(ondisk_c, builder->committed.xip, sz);
+	COMP_CRC32C(ondisk->checksum, ondisk_c, sz);
+	ondisk_c += sz;
+
+	/* copy catalog modifying xacts */
+	sz = sizeof(TransactionId) * catchange_xcnt;
+	memcpy(ondisk_c, catchange_xip, sz);
 	COMP_CRC32C(ondisk->checksum, ondisk_c, sz);
 	ondisk_c += sz;
 
@@ -1694,6 +1788,8 @@ out:
 	/* be tidy */
 	if (ondisk)
 		pfree(ondisk);
+	if (catchange_xip)
+		pfree(catchange_xip);
 }
 
 /*
@@ -1707,7 +1803,6 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 	int			fd;
 	char		path[MAXPGPATH];
 	Size		sz;
-	int			readBytes;
 	pg_crc32c	checksum;
 
 	/* no point in loading a snapshot if we're already there */
@@ -1739,29 +1834,7 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 
 
 	/* read statically sized portion of snapshot */
-	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_READ);
-	readBytes = read(fd, &ondisk, SnapBuildOnDiskConstantSize);
-	pgstat_report_wait_end();
-	if (readBytes != SnapBuildOnDiskConstantSize)
-	{
-		int			save_errno = errno;
-
-		CloseTransientFile(fd);
-
-		if (readBytes < 0)
-		{
-			errno = save_errno;
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read file \"%s\": %m", path)));
-		}
-		else
-			ereport(ERROR,
-					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("could not read file \"%s\": read %d of %zu",
-							path, readBytes,
-							(Size) SnapBuildOnDiskConstantSize)));
-	}
+	SnapBuildRestoreContents(fd, (char *) &ondisk, SnapBuildOnDiskConstantSize, path);
 
 	if (ondisk.magic != SNAPBUILD_MAGIC)
 		ereport(ERROR,
@@ -1781,56 +1854,20 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 				SnapBuildOnDiskConstantSize - SnapBuildOnDiskNotChecksummedSize);
 
 	/* read SnapBuild */
-	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_READ);
-	readBytes = read(fd, &ondisk.builder, sizeof(SnapBuild));
-	pgstat_report_wait_end();
-	if (readBytes != sizeof(SnapBuild))
-	{
-		int			save_errno = errno;
-
-		CloseTransientFile(fd);
-
-		if (readBytes < 0)
-		{
-			errno = save_errno;
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read file \"%s\": %m", path)));
-		}
-		else
-			ereport(ERROR,
-					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("could not read file \"%s\": read %d of %zu",
-							path, readBytes, sizeof(SnapBuild))));
-	}
+	SnapBuildRestoreContents(fd, (char *) &ondisk.builder, sizeof(SnapBuild), path);
 	COMP_CRC32C(checksum, &ondisk.builder, sizeof(SnapBuild));
 
 	/* restore committed xacts information */
 	sz = sizeof(TransactionId) * ondisk.builder.committed.xcnt;
 	ondisk.builder.committed.xip = MemoryContextAllocZero(builder->context, sz);
-	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_READ);
-	readBytes = read(fd, ondisk.builder.committed.xip, sz);
-	pgstat_report_wait_end();
-	if (readBytes != sz)
-	{
-		int			save_errno = errno;
-
-		CloseTransientFile(fd);
-
-		if (readBytes < 0)
-		{
-			errno = save_errno;
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read file \"%s\": %m", path)));
-		}
-		else
-			ereport(ERROR,
-					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("could not read file \"%s\": read %d of %zu",
-							path, readBytes, sz)));
-	}
+	SnapBuildRestoreContents(fd, (char *) ondisk.builder.committed.xip, sz, path);
 	COMP_CRC32C(checksum, ondisk.builder.committed.xip, sz);
+
+	/* restore catalog modifying xacts information */
+	sz = sizeof(TransactionId) * ondisk.builder.catchange.xcnt;
+	ondisk.builder.catchange.xip = MemoryContextAllocZero(builder->context, sz);
+	SnapBuildRestoreContents(fd, (char *) ondisk.builder.catchange.xip, sz, path);
+	COMP_CRC32C(checksum, ondisk.builder.catchange.xip, sz);
 
 	if (CloseTransientFile(fd) != 0)
 		ereport(ERROR,
@@ -1885,6 +1922,14 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 	}
 	ondisk.builder.committed.xip = NULL;
 
+	/* set catalog modifying transactions */
+	if (builder->catchange.xip)
+		pfree(builder->catchange.xip);
+	builder->catchange.xcnt = ondisk.builder.catchange.xcnt;
+	builder->catchange.xip = ondisk.builder.catchange.xip;
+
+	ondisk.builder.catchange.xip = NULL;
+
 	/* our snapshot is not interesting anymore, build a new one */
 	if (builder->snapshot != NULL)
 	{
@@ -1907,6 +1952,38 @@ snapshot_not_interesting:
 	if (ondisk.builder.committed.xip != NULL)
 		pfree(ondisk.builder.committed.xip);
 	return false;
+}
+
+/*
+ * Read the contents of the serialized snapshot to the dest.
+ */
+static void
+SnapBuildRestoreContents(int fd, char *dest, Size size, const char *path)
+{
+	int			readBytes;
+
+	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_READ);
+	readBytes = read(fd, dest, size);
+	pgstat_report_wait_end();
+	if (readBytes != size)
+	{
+		int			save_errno = errno;
+
+		CloseTransientFile(fd);
+
+		if (readBytes < 0)
+		{
+			errno = save_errno;
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not read file \"%s\": %m", path)));
+		}
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_DATA_CORRUPTED),
+					 errmsg("could not read file \"%s\": read %d of %zu",
+							path, readBytes, sizeof(SnapBuild))));
+	}
 }
 
 /*
