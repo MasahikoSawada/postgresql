@@ -54,13 +54,7 @@ $node_subscriber->safe_psql(
 	WITH (two_phase = on)");
 
 # Wait for subscriber to finish initialization
-$node_publisher->wait_for_catchup($appname);
-
-# Also wait for initial table sync to finish
-my $synced_query =
-  "SELECT count(1) = 0 FROM pg_subscription_rel WHERE srsubstate NOT IN ('r', 's');";
-$node_subscriber->poll_query_until('postgres', $synced_query)
-  or die "Timed out while waiting for subscriber to synchronize data";
+$node_subscriber->wait_for_subscription_sync($node_publisher, $appname);
 
 # Also wait for two-phase to be enabled
 my $twophase_query =
@@ -332,11 +326,7 @@ $node_subscriber->safe_psql(
 	WITH (two_phase=on, copy_data=false);");
 
 # Wait for subscriber to finish initialization
-$node_publisher->wait_for_catchup($appname_copy);
-
-# Also wait for initial table sync to finish
-$node_subscriber->poll_query_until('postgres', $synced_query)
-  or die "Timed out while waiting for subscriber to synchronize data";
+$node_subscriber->wait_for_subscription_sync($node_publisher, $appname_copy);
 
 # Also wait for two-phase to be enabled
 $node_subscriber->poll_query_until('postgres', $twophase_query)
