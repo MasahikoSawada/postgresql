@@ -207,38 +207,36 @@ typedef enum
 #define GUC_LIST_INPUT			0x0001	/* input can be list format */
 #define GUC_LIST_QUOTE			0x0002	/* double-quote list elements */
 #define GUC_NO_SHOW_ALL			0x0004	/* exclude from SHOW ALL */
-#define GUC_NO_RESET_ALL		0x0008	/* exclude from RESET ALL */
-#define GUC_REPORT				0x0010	/* auto-report changes to client */
-#define GUC_NOT_IN_SAMPLE		0x0020	/* not in postgresql.conf.sample */
-#define GUC_DISALLOW_IN_FILE	0x0040	/* can't set in postgresql.conf */
-#define GUC_CUSTOM_PLACEHOLDER	0x0080	/* placeholder for custom variable */
-#define GUC_SUPERUSER_ONLY		0x0100	/* show only to superusers */
-#define GUC_IS_NAME				0x0200	/* limit string to NAMEDATALEN-1 */
-#define GUC_NOT_WHILE_SEC_REST	0x0400	/* can't set if security restricted */
-#define GUC_DISALLOW_IN_AUTO_FILE 0x0800	/* can't set in
+#define GUC_NO_RESET		  	0x0008	/* not support RESET and save */
+#define GUC_NO_RESET_ALL		0x0010	/* exclude from RESET ALL */
+#define GUC_REPORT				0x0020	/* auto-report changes to client */
+#define GUC_NOT_IN_SAMPLE		0x0040	/* not in postgresql.conf.sample */
+#define GUC_DISALLOW_IN_FILE	0x0080	/* can't set in postgresql.conf */
+#define GUC_CUSTOM_PLACEHOLDER	0x0100	/* placeholder for custom variable */
+#define GUC_SUPERUSER_ONLY		0x0200	/* show only to superusers */
+#define GUC_IS_NAME				0x0400	/* limit string to NAMEDATALEN-1 */
+#define GUC_NOT_WHILE_SEC_REST	0x0800	/* can't set if security restricted */
+#define GUC_DISALLOW_IN_AUTO_FILE 0x1000	/* can't set in
 											 * PG_AUTOCONF_FILENAME */
-
-#define GUC_UNIT_KB				0x1000	/* value is in kilobytes */
-#define GUC_UNIT_BLOCKS			0x2000	/* value is in blocks */
-#define GUC_UNIT_XBLOCKS		0x3000	/* value is in xlog blocks */
-#define GUC_UNIT_MB				0x4000	/* value is in megabytes */
-#define GUC_UNIT_BYTE			0x5000	/* value is in bytes */
-#define GUC_UNIT_MEMORY			0xF000	/* mask for size-related units */
-
-#define GUC_UNIT_MS			   0x10000	/* value is in milliseconds */
-#define GUC_UNIT_S			   0x20000	/* value is in seconds */
-#define GUC_UNIT_MIN		   0x30000	/* value is in minutes */
-#define GUC_UNIT_TIME		   0xF0000	/* mask for time-related units */
-
-#define GUC_EXPLAIN			  0x100000	/* include in explain */
+#define GUC_EXPLAIN			  0x2000	/* include in explain */
 
 /*
  * GUC_RUNTIME_COMPUTED is intended for runtime-computed GUCs that are only
  * available via 'postgres -C' if the server is not running.
  */
-#define GUC_RUNTIME_COMPUTED  0x200000
+#define GUC_RUNTIME_COMPUTED  0x4000
 
-#define GUC_NO_RESET		  0x400000	/* not support RESET and save */
+#define GUC_UNIT_KB				0x010000	/* value is in kilobytes */
+#define GUC_UNIT_BLOCKS			0x020000	/* value is in blocks */
+#define GUC_UNIT_XBLOCKS		0x030000	/* value is in xlog blocks */
+#define GUC_UNIT_MB				0x040000	/* value is in megabytes */
+#define GUC_UNIT_BYTE			0x050000	/* value is in bytes */
+#define GUC_UNIT_MEMORY			0x0F0000	/* mask for size-related units */
+
+#define GUC_UNIT_MS			   0x100000	/* value is in milliseconds */
+#define GUC_UNIT_S			   0x200000	/* value is in seconds */
+#define GUC_UNIT_MIN		   0x300000	/* value is in minutes */
+#define GUC_UNIT_TIME		   0xF00000	/* mask for time-related units */
 
 #define GUC_UNIT				(GUC_UNIT_MEMORY | GUC_UNIT_TIME)
 
