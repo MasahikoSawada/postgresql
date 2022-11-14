@@ -150,6 +150,19 @@ typedef enum rt_size_class
 #define RT_SIZE_CLASS_COUNT (RT_CLASS_256 + 1)
 } rt_size_class;
 
+/*
+ * rt_pointer is a pointer compatible with a pointer to local memory and a
+ * pointer for DSA area (i.e. dsa_pointer). Since the radix tree node can be
+ * allocated in backend local memory as well as DSA area, we cannot use a
+ * C-pointer to rt_node (i.e. backend local memory address) for child pointers
+ * in inner nodes. Inner nodes need to use rt_pointer instead. We can get
+ * the backend local memory address of a node from a rt_pointer by using
+ * rt_pointer_decode().
+*/
+typedef uintptr_t rt_pointer;
+#define InvalidRTPointer		((rt_pointer) 0)
+#define RTPointerIsValid(x) 	(((rt_pointer) (x)) != InvalidRTPointer)
+
 /* Common type for all nodes types */
 typedef struct rt_node
 {
@@ -175,8 +188,7 @@ typedef struct rt_node
 	/* Node kind, one per search/set algorithm */
 	uint8		kind;
 } rt_node;
-#define NODE_IS_LEAF(n)			(((rt_node *) (n))->shift == 0)
-#define NODE_IS_EMPTY(n)		(((rt_node *) (n))->count == 0)
+#define RT_NODE_IS_LEAF(n)			(((rt_node *) (n))->shift == 0)
 #define VAR_NODE_HAS_FREE_SLOT(node) \
 	((node)->base.n.count < (node)->base.n.fanout)
 #define FIXED_NODE_HAS_FREE_SLOT(node, class) \
@@ -240,7 +252,7 @@ typedef struct rt_node_inner_4
 	rt_node_base_4 base;
 
 	/* number of children depends on size class */
-	rt_node    *children[FLEXIBLE_ARRAY_MEMBER];
+	rt_pointer    children[FLEXIBLE_ARRAY_MEMBER];
 } rt_node_inner_4;
 
 typedef struct rt_node_leaf_4
@@ -256,7 +268,7 @@ typedef struct rt_node_inner_32
 	rt_node_base_32 base;
 
 	/* number of children depends on size class */
-	rt_node    *children[FLEXIBLE_ARRAY_MEMBER];
+	rt_pointer    children[FLEXIBLE_ARRAY_MEMBER];
 } rt_node_inner_32;
 
 typedef struct rt_node_leaf_32
@@ -272,7 +284,7 @@ typedef struct rt_node_inner_125
 	rt_node_base_125 base;
 
 	/* number of children depends on size class */
-	rt_node    *children[FLEXIBLE_ARRAY_MEMBER];
+	rt_pointer    children[FLEXIBLE_ARRAY_MEMBER];
 } rt_node_inner_125;
 
 typedef struct rt_node_leaf_125
@@ -292,7 +304,7 @@ typedef struct rt_node_inner_256
 	rt_node_base_256 base;
 
 	/* Slots for 256 children */
-	rt_node    *children[RT_NODE_MAX_SLOTS];
+	rt_pointer    children[RT_NODE_MAX_SLOTS];
 } rt_node_inner_256;
 
 typedef struct rt_node_leaf_256
@@ -305,6 +317,29 @@ typedef struct rt_node_leaf_256
 	/* Slots for 256 values */
 	uint64		values[RT_NODE_MAX_SLOTS];
 } rt_node_leaf_256;
+
+/* rt_node_ptr is a data structure representing a pointer for a rt_node */
+typedef struct rt_node_ptr
+{
+	rt_pointer		encoded;
+	rt_node			*decoded;
+} rt_node_ptr;
+#define InvalidRTNodePtr \
+	(rt_node_ptr) {.encoded = InvalidRTPointer, .decoded = NULL}
+#define RTNodePtrIsValid(n) \
+	(!rt_node_ptr_eq((rt_node_ptr *) &(n), &(InvalidRTNodePtr)))
+
+/* Macros for rt_node_ptr to access the fields of rt_node */
+#define NODE_RAW(n)			(n.decoded)
+#define NODE_IS_LEAF(n)		(NODE_RAW(n)->shift == 0)
+#define NODE_IS_EMPTY(n)	(NODE_COUNT(n) == 0)
+#define NODE_KIND(n)	(NODE_RAW(n)->kind)
+#define NODE_COUNT(n)	(NODE_RAW(n)->count)
+#define NODE_SHIFT(n)	(NODE_RAW(n)->shift)
+#define NODE_CHUNK(n)	(NODE_RAW(n)->chunk)
+#define NODE_FANOUT(n)	(NODE_RAW(n)->fanout)
+#define NODE_HAS_FREE_SLOT(n) \
+	(NODE_COUNT(n) < rt_node_kind_info[NODE_KIND(n)].fanout)
 
 /* Information for each size class */
 typedef struct rt_size_class_elem
@@ -394,7 +429,7 @@ static rt_size_class kind_min_size_class[RT_NODE_KIND_COUNT] = {
  */
 typedef struct rt_node_iter
 {
-	rt_node    *node;			/* current node being iterated */
+	rt_node_ptr	node;			/* current node being iterated */
 	int			current_idx;	/* current position. -1 for initial value */
 } rt_node_iter;
 
@@ -415,7 +450,7 @@ struct radix_tree
 {
 	MemoryContext context;
 
-	rt_node    *root;
+	rt_pointer	root;
 	uint64		max_val;
 	uint64		num_keys;
 
@@ -429,27 +464,58 @@ struct radix_tree
 };
 
 static void rt_new_root(radix_tree *tree, uint64 key);
-static rt_node *rt_alloc_node(radix_tree *tree, rt_size_class size_class, bool inner);
-static inline void rt_init_node(rt_node *node, uint8 kind, rt_size_class size_class,
+
+static rt_node_ptr rt_alloc_node(radix_tree *tree, rt_size_class size_class, bool inner);
+static inline void rt_init_node(rt_node_ptr node, uint8 kind, rt_size_class size_class,
 								bool inner);
-static void rt_free_node(radix_tree *tree, rt_node *node);
+static void rt_free_node(radix_tree *tree, rt_node_ptr node);
 static void rt_extend(radix_tree *tree, uint64 key);
-static inline bool rt_node_search_inner(rt_node *node, uint64 key, rt_action action,
-										rt_node **child_p);
-static inline bool rt_node_search_leaf(rt_node *node, uint64 key, rt_action action,
+static inline bool rt_node_search_inner(rt_node_ptr node_ptr, uint64 key, rt_action action,
+										rt_pointer *child_p);
+static inline bool rt_node_search_leaf(rt_node_ptr node_ptr, uint64 key, rt_action action,
 									   uint64 *value_p);
-static bool rt_node_insert_inner(radix_tree *tree, rt_node *parent, rt_node *node,
-								 uint64 key, rt_node *child);
-static bool rt_node_insert_leaf(radix_tree *tree, rt_node *parent, rt_node *node,
+static bool rt_node_insert_inner(radix_tree *tree, rt_node_ptr parent, rt_node_ptr node,
+								 uint64 key, rt_node_ptr child);
+static bool rt_node_insert_leaf(radix_tree *tree, rt_node_ptr parent, rt_node_ptr node,
 								uint64 key, uint64 value);
-static inline rt_node *rt_node_inner_iterate_next(rt_iter *iter, rt_node_iter *node_iter);
+static inline bool rt_node_inner_iterate_next(rt_iter *iter, rt_node_iter *node_iter,
+											  rt_node_ptr *child_p);
 static inline bool rt_node_leaf_iterate_next(rt_iter *iter, rt_node_iter *node_iter,
 											 uint64 *value_p);
-static void rt_update_iter_stack(rt_iter *iter, rt_node *from_node, int from);
+static void rt_update_iter_stack(rt_iter *iter, rt_node_ptr from_node, int from);
 static inline void rt_iter_update_key(rt_iter *iter, uint8 chunk, uint8 shift);
 
 /* verification (available only with assertion) */
-static void rt_verify_node(rt_node *node);
+static void rt_verify_node(rt_node_ptr node);
+
+/* Decode and encode functions of rt_pointer */
+static inline rt_node *
+rt_pointer_decode(rt_pointer encoded)
+{
+	return (rt_node *) encoded;
+}
+
+static inline rt_pointer
+rt_pointer_encode(rt_node *decoded)
+{
+	return (rt_pointer) decoded;
+}
+
+/* Return a rt_node_ptr created from the given encoded pointer */
+static inline rt_node_ptr
+rt_node_ptr_encoded(rt_pointer encoded)
+{
+	return (rt_node_ptr) {
+		.encoded = encoded,
+			.decoded = rt_pointer_decode(encoded),
+			};
+}
+
+static inline bool
+rt_node_ptr_eq(rt_node_ptr *a, rt_node_ptr *b)
+{
+	return (a->decoded == b->decoded) && (a->encoded == b->encoded);
+}
 
 /*
  * Return index of the first element in 'base' that equals 'key'. Return -1
@@ -598,10 +664,10 @@ node_32_get_insertpos(rt_node_base_32 *node, uint8 chunk)
 
 /* Shift the elements right at 'idx' by one */
 static inline void
-chunk_children_array_shift(uint8 *chunks, rt_node **children, int count, int idx)
+chunk_children_array_shift(uint8 *chunks, rt_pointer *children, int count, int idx)
 {
 	memmove(&(chunks[idx + 1]), &(chunks[idx]), sizeof(uint8) * (count - idx));
-	memmove(&(children[idx + 1]), &(children[idx]), sizeof(rt_node *) * (count - idx));
+	memmove(&(children[idx + 1]), &(children[idx]), sizeof(rt_pointer) * (count - idx));
 }
 
 static inline void
@@ -613,10 +679,10 @@ chunk_values_array_shift(uint8 *chunks, uint64 *values, int count, int idx)
 
 /* Delete the element at 'idx' */
 static inline void
-chunk_children_array_delete(uint8 *chunks, rt_node **children, int count, int idx)
+chunk_children_array_delete(uint8 *chunks, rt_pointer *children, int count, int idx)
 {
 	memmove(&(chunks[idx]), &(chunks[idx + 1]), sizeof(uint8) * (count - idx - 1));
-	memmove(&(children[idx]), &(children[idx + 1]), sizeof(rt_node *) * (count - idx - 1));
+	memmove(&(children[idx]), &(children[idx + 1]), sizeof(rt_pointer) * (count - idx - 1));
 }
 
 static inline void
@@ -628,12 +694,12 @@ chunk_values_array_delete(uint8 *chunks, uint64 *values, int count, int idx)
 
 /* Copy both chunks and children/values arrays */
 static inline void
-chunk_children_array_copy(uint8 *src_chunks, rt_node **src_children,
-						  uint8 *dst_chunks, rt_node **dst_children)
+chunk_children_array_copy(uint8 *src_chunks, rt_pointer *src_children,
+						  uint8 *dst_chunks, rt_pointer *dst_children)
 {
 	const int fanout = rt_size_class_info[RT_CLASS_4_FULL].fanout;
 	const Size chunk_size = sizeof(uint8) * fanout;
-	const Size children_size = sizeof(rt_node *) * fanout;
+	const Size children_size = sizeof(rt_pointer) * fanout;
 
 	memcpy(dst_chunks, src_chunks, chunk_size);
 	memcpy(dst_children, src_children, children_size);
@@ -665,7 +731,7 @@ node_125_is_chunk_used(rt_node_base_125 *node, uint8 chunk)
 static inline bool
 node_inner_125_is_slot_used(rt_node_inner_125 *node, uint8 slot)
 {
-	Assert(!NODE_IS_LEAF(node));
+	Assert(!RT_NODE_IS_LEAF(node));
 	Assert(slot < node->base.n.fanout);
 	return (node->base.isset[WORDNUM(slot)] & ((bitmapword) 1 << BITNUM(slot))) != 0;
 }
@@ -673,23 +739,23 @@ node_inner_125_is_slot_used(rt_node_inner_125 *node, uint8 slot)
 static inline bool
 node_leaf_125_is_slot_used(rt_node_leaf_125 *node, uint8 slot)
 {
-	Assert(NODE_IS_LEAF(node));
+	Assert(RT_NODE_IS_LEAF(node));
 	Assert(slot < node->base.n.fanout);
 	return (node->base.isset[WORDNUM(slot)] & ((bitmapword) 1 << BITNUM(slot))) != 0;
 }
 #endif
 
-static inline rt_node *
+static inline rt_pointer
 node_inner_125_get_child(rt_node_inner_125 *node, uint8 chunk)
 {
-	Assert(!NODE_IS_LEAF(node));
+	Assert(!RT_NODE_IS_LEAF(node));
 	return node->children[node->base.slot_idxs[chunk]];
 }
 
 static inline uint64
 node_leaf_125_get_value(rt_node_leaf_125 *node, uint8 chunk)
 {
-	Assert(NODE_IS_LEAF(node));
+	Assert(RT_NODE_IS_LEAF(node));
 	Assert(((rt_node_base_125 *) node)->slot_idxs[chunk] != RT_NODE_125_INVALID_IDX);
 	return node->values[node->base.slot_idxs[chunk]];
 }
@@ -699,9 +765,9 @@ node_inner_125_delete(rt_node_inner_125 *node, uint8 chunk)
 {
 	int			slotpos = node->base.slot_idxs[chunk];
 
-	Assert(!NODE_IS_LEAF(node));
+	Assert(!RT_NODE_IS_LEAF(node));
 	node->base.isset[WORDNUM(slotpos)] &= ~((bitmapword) 1 << BITNUM(slotpos));
-	node->children[node->base.slot_idxs[chunk]] = NULL;
+	node->children[node->base.slot_idxs[chunk]] = InvalidRTPointer;
 	node->base.slot_idxs[chunk] = RT_NODE_125_INVALID_IDX;
 }
 
@@ -710,7 +776,7 @@ node_leaf_125_delete(rt_node_leaf_125 *node, uint8 chunk)
 {
 	int			slotpos = node->base.slot_idxs[chunk];
 
-	Assert(NODE_IS_LEAF(node));
+	Assert(RT_NODE_IS_LEAF(node));
 	node->base.isset[WORDNUM(slotpos)] &= ~((bitmapword) 1 << BITNUM(slotpos));
 	node->base.slot_idxs[chunk] = RT_NODE_125_INVALID_IDX;
 }
@@ -742,11 +808,11 @@ node_125_find_unused_slot(bitmapword *isset)
  }
 
 static inline void
-node_inner_125_insert(rt_node_inner_125 *node, uint8 chunk, rt_node *child)
+node_inner_125_insert(rt_node_inner_125 *node, uint8 chunk, rt_pointer child)
 {
 	int			slotpos;
 
-	Assert(!NODE_IS_LEAF(node));
+	Assert(!RT_NODE_IS_LEAF(node));
 
 	slotpos = node_125_find_unused_slot(node->base.isset);
 	Assert(slotpos < node->base.n.fanout);
@@ -761,7 +827,7 @@ node_leaf_125_insert(rt_node_leaf_125 *node, uint8 chunk, uint64 value)
 {
 	int			slotpos;
 
-	Assert(NODE_IS_LEAF(node));
+	Assert(RT_NODE_IS_LEAF(node));
 
 	slotpos = node_125_find_unused_slot(node->base.isset);
 	Assert(slotpos < node->base.n.fanout);
@@ -772,16 +838,16 @@ node_leaf_125_insert(rt_node_leaf_125 *node, uint8 chunk, uint64 value)
 
 /* Update the child corresponding to 'chunk' to 'child' */
 static inline void
-node_inner_125_update(rt_node_inner_125 *node, uint8 chunk, rt_node *child)
+node_inner_125_update(rt_node_inner_125 *node, uint8 chunk, rt_pointer child)
 {
-	Assert(!NODE_IS_LEAF(node));
+	Assert(!RT_NODE_IS_LEAF(node));
 	node->children[node->base.slot_idxs[chunk]] = child;
 }
 
 static inline void
 node_leaf_125_update(rt_node_leaf_125 *node, uint8 chunk, uint64 value)
 {
-	Assert(NODE_IS_LEAF(node));
+	Assert(RT_NODE_IS_LEAF(node));
 	node->values[node->base.slot_idxs[chunk]] = value;
 }
 
@@ -791,21 +857,21 @@ node_leaf_125_update(rt_node_leaf_125 *node, uint8 chunk, uint64 value)
 static inline bool
 node_inner_256_is_chunk_used(rt_node_inner_256 *node, uint8 chunk)
 {
-	Assert(!NODE_IS_LEAF(node));
-	return (node->children[chunk] != NULL);
+	Assert(!RT_NODE_IS_LEAF(node));
+	return RTPointerIsValid(node->children[chunk]);
 }
 
 static inline bool
 node_leaf_256_is_chunk_used(rt_node_leaf_256 *node, uint8 chunk)
 {
-	Assert(NODE_IS_LEAF(node));
+	Assert(RT_NODE_IS_LEAF(node));
 	return (node->isset[RT_NODE_BITMAP_BYTE(chunk)] & RT_NODE_BITMAP_BIT(chunk)) != 0;
 }
 
-static inline rt_node *
+static inline rt_pointer
 node_inner_256_get_child(rt_node_inner_256 *node, uint8 chunk)
 {
-	Assert(!NODE_IS_LEAF(node));
+	Assert(!RT_NODE_IS_LEAF(node));
 	Assert(node_inner_256_is_chunk_used(node, chunk));
 	return node->children[chunk];
 }
@@ -813,16 +879,16 @@ node_inner_256_get_child(rt_node_inner_256 *node, uint8 chunk)
 static inline uint64
 node_leaf_256_get_value(rt_node_leaf_256 *node, uint8 chunk)
 {
-	Assert(NODE_IS_LEAF(node));
+	Assert(RT_NODE_IS_LEAF(node));
 	Assert(node_leaf_256_is_chunk_used(node, chunk));
 	return node->values[chunk];
 }
 
 /* Set the child in the node-256 */
 static inline void
-node_inner_256_set(rt_node_inner_256 *node, uint8 chunk, rt_node *child)
+node_inner_256_set(rt_node_inner_256 *node, uint8 chunk, rt_pointer child)
 {
-	Assert(!NODE_IS_LEAF(node));
+	Assert(!RT_NODE_IS_LEAF(node));
 	node->children[chunk] = child;
 }
 
@@ -830,7 +896,7 @@ node_inner_256_set(rt_node_inner_256 *node, uint8 chunk, rt_node *child)
 static inline void
 node_leaf_256_set(rt_node_leaf_256 *node, uint8 chunk, uint64 value)
 {
-	Assert(NODE_IS_LEAF(node));
+	Assert(RT_NODE_IS_LEAF(node));
 	node->isset[RT_NODE_BITMAP_BYTE(chunk)] |= RT_NODE_BITMAP_BIT(chunk);
 	node->values[chunk] = value;
 }
@@ -839,14 +905,14 @@ node_leaf_256_set(rt_node_leaf_256 *node, uint8 chunk, uint64 value)
 static inline void
 node_inner_256_delete(rt_node_inner_256 *node, uint8 chunk)
 {
-	Assert(!NODE_IS_LEAF(node));
-	node->children[chunk] = NULL;
+	Assert(!RT_NODE_IS_LEAF(node));
+	node->children[chunk] = InvalidRTPointer;
 }
 
 static inline void
 node_leaf_256_delete(rt_node_leaf_256 *node, uint8 chunk)
 {
-	Assert(NODE_IS_LEAF(node));
+	Assert(RT_NODE_IS_LEAF(node));
 	node->isset[RT_NODE_BITMAP_BYTE(chunk)] &= ~(RT_NODE_BITMAP_BIT(chunk));
 }
 
@@ -882,29 +948,32 @@ rt_new_root(radix_tree *tree, uint64 key)
 {
 	int			shift = key_get_shift(key);
 	bool		inner = shift > 0;
-	rt_node    *newnode;
+	rt_node_ptr	newnode;
 
 	newnode = rt_alloc_node(tree, RT_CLASS_4_FULL, inner);
 	rt_init_node(newnode, RT_NODE_KIND_4, RT_CLASS_4_FULL, inner);
-	newnode->shift = shift;
+	NODE_SHIFT(newnode) = shift;
+
 	tree->max_val = shift_get_max_val(shift);
-	tree->root = newnode;
+	tree->root = newnode.encoded;
 }
 
 /*
  * Allocate a new node with the given node kind.
  */
-static rt_node *
+static rt_node_ptr
 rt_alloc_node(radix_tree *tree, rt_size_class size_class, bool inner)
 {
-	rt_node    *newnode;
+	rt_node_ptr	newnode;
 
 	if (inner)
-		newnode = (rt_node *) MemoryContextAlloc(tree->inner_slabs[size_class],
-												 rt_size_class_info[size_class].inner_size);
+		newnode.decoded = (rt_node *) MemoryContextAlloc(tree->inner_slabs[size_class],
+														 rt_size_class_info[size_class].inner_size);
 	else
-		newnode = (rt_node *) MemoryContextAlloc(tree->leaf_slabs[size_class],
-												 rt_size_class_info[size_class].leaf_size);
+		newnode.decoded = (rt_node *) MemoryContextAlloc(tree->leaf_slabs[size_class],
+														 rt_size_class_info[size_class].leaf_size);
+
+	newnode.encoded = rt_pointer_encode(newnode.decoded);
 
 #ifdef RT_DEBUG
 	/* update the statistics */
@@ -916,20 +985,20 @@ rt_alloc_node(radix_tree *tree, rt_size_class size_class, bool inner)
 
 /* Initialize the node contents */
 static inline void
-rt_init_node(rt_node *node, uint8 kind, rt_size_class size_class, bool inner)
+rt_init_node(rt_node_ptr node, uint8 kind, rt_size_class size_class, bool inner)
 {
 	if (inner)
-		MemSet(node, 0, rt_size_class_info[size_class].inner_size);
+		MemSet(node.decoded, 0, rt_size_class_info[size_class].inner_size);
 	else
-		MemSet(node, 0, rt_size_class_info[size_class].leaf_size);
+		MemSet(node.decoded, 0, rt_size_class_info[size_class].leaf_size);
 
-	node->kind = kind;
-	node->fanout = rt_size_class_info[size_class].fanout;
+	NODE_KIND(node) = kind;
+	NODE_FANOUT(node) = rt_size_class_info[size_class].fanout;
 
 	/* Initialize slot_idxs to invalid values */
 	if (kind == RT_NODE_KIND_125)
 	{
-		rt_node_base_125 *n125 = (rt_node_base_125 *) node;
+		rt_node_base_125 *n125 = (rt_node_base_125 *) node.decoded;
 
 		memset(n125->slot_idxs, RT_NODE_125_INVALID_IDX, sizeof(n125->slot_idxs));
 	}
@@ -939,25 +1008,25 @@ rt_init_node(rt_node *node, uint8 kind, rt_size_class size_class, bool inner)
 	 * and this is the max size class to it will never grow.
 	 */
 	if (kind == RT_NODE_KIND_256)
-		node->fanout = 0;
+		NODE_FANOUT(node) = 0;
 }
 
 static inline void
-rt_copy_node(rt_node *newnode, rt_node *oldnode)
+rt_copy_node(rt_node_ptr newnode, rt_node_ptr oldnode)
 {
-	newnode->shift = oldnode->shift;
-	newnode->chunk = oldnode->chunk;
-	newnode->count = oldnode->count;
+	NODE_SHIFT(newnode) = NODE_SHIFT(oldnode);
+	NODE_CHUNK(newnode) = NODE_CHUNK(oldnode);
+	NODE_COUNT(newnode) = NODE_COUNT(oldnode);
 }
 
 /*
  * Create a new node with 'new_kind' and the same shift, chunk, and
  * count of 'node'.
  */
-static rt_node*
-rt_grow_node_kind(radix_tree *tree, rt_node *node, uint8 new_kind)
+static rt_node_ptr
+rt_grow_node_kind(radix_tree *tree, rt_node_ptr node, uint8 new_kind)
 {
-	rt_node	*newnode;
+	rt_node_ptr	newnode;
 	bool inner = !NODE_IS_LEAF(node);
 
 	newnode = rt_alloc_node(tree, kind_min_size_class[new_kind], inner);
@@ -969,12 +1038,12 @@ rt_grow_node_kind(radix_tree *tree, rt_node *node, uint8 new_kind)
 
 /* Free the given node */
 static void
-rt_free_node(radix_tree *tree, rt_node *node)
+rt_free_node(radix_tree *tree, rt_node_ptr node)
 {
 	/* If we're deleting the root node, make the tree empty */
-	if (tree->root == node)
+	if (tree->root == node.encoded)
 	{
-		tree->root = NULL;
+		tree->root = InvalidRTPointer;
 		tree->max_val = 0;
 	}
 
@@ -985,7 +1054,7 @@ rt_free_node(radix_tree *tree, rt_node *node)
 		/* update the statistics */
 		for (i = 0; i < RT_SIZE_CLASS_COUNT; i++)
 		{
-			if (node->fanout == rt_size_class_info[i].fanout)
+			if (NODE_FANOUT(node) == rt_size_class_info[i].fanout)
 				break;
 		}
 
@@ -998,29 +1067,30 @@ rt_free_node(radix_tree *tree, rt_node *node)
 	}
 #endif
 
-	pfree(node);
+	pfree(node.decoded);
 }
 
 /*
  * Replace old_child with new_child, and free the old one.
  */
 static void
-rt_replace_node(radix_tree *tree, rt_node *parent, rt_node *old_child,
-				rt_node *new_child, uint64 key)
+rt_replace_node(radix_tree *tree, rt_node_ptr parent, rt_node_ptr old_child,
+				rt_node_ptr new_child, uint64 key)
 {
-	Assert(old_child->chunk == new_child->chunk);
-	Assert(old_child->shift == new_child->shift);
+	Assert(NODE_CHUNK(old_child) == NODE_CHUNK(new_child));
+	Assert(NODE_SHIFT(old_child) == NODE_SHIFT(new_child));
 
-	if (parent == old_child)
+	if (rt_node_ptr_eq(&parent, &old_child))
 	{
 		/* Replace the root node with the new large node */
-		tree->root = new_child;
+		tree->root = new_child.encoded;
 	}
 	else
 	{
 		bool		replaced PG_USED_FOR_ASSERTS_ONLY;
 
-		replaced = rt_node_insert_inner(tree, NULL, parent, key, new_child);
+		replaced = rt_node_insert_inner(tree, InvalidRTNodePtr, parent, key,
+										new_child);
 		Assert(replaced);
 	}
 
@@ -1035,24 +1105,28 @@ static void
 rt_extend(radix_tree *tree, uint64 key)
 {
 	int			target_shift;
-	int			shift = tree->root->shift + RT_NODE_SPAN;
+	rt_node		*root = rt_pointer_decode(tree->root);
+	int			shift = root->shift + RT_NODE_SPAN;
 
 	target_shift = key_get_shift(key);
 
 	/* Grow tree from 'shift' to 'target_shift' */
 	while (shift <= target_shift)
 	{
-		rt_node_inner_4 *node;
+		rt_node_ptr	node;
+		rt_node_inner_4 *n4;
 
-		node = (rt_node_inner_4 *) rt_alloc_node(tree, RT_CLASS_4_FULL, true);
-		rt_init_node((rt_node *) node, RT_NODE_KIND_4, RT_CLASS_4_FULL, true);
-		node->base.n.shift = shift;
-		node->base.n.count = 1;
-		node->base.chunks[0] = 0;
-		node->children[0] = tree->root;
+		node = rt_alloc_node(tree, RT_CLASS_4_FULL, true);
+		rt_init_node(node, RT_NODE_KIND_4, RT_CLASS_4_FULL, true);
 
-		tree->root->chunk = 0;
-		tree->root = (rt_node *) node;
+		n4 = (rt_node_inner_4 *) node.decoded;
+		n4->base.n.shift = shift;
+		n4->base.n.count = 1;
+		n4->base.chunks[0] = 0;
+		n4->children[0] = tree->root;
+
+		root->chunk = 0;
+		tree->root = node.encoded;
 
 		shift += RT_NODE_SPAN;
 	}
@@ -1065,21 +1139,22 @@ rt_extend(radix_tree *tree, uint64 key)
  * Insert inner and leaf nodes from 'node' to bottom.
  */
 static inline void
-rt_set_extend(radix_tree *tree, uint64 key, uint64 value, rt_node *parent,
-			  rt_node *node)
+rt_set_extend(radix_tree *tree, uint64 key, uint64 value, rt_node_ptr parent,
+			  rt_node_ptr node)
 {
-	int			shift = node->shift;
+	int			shift = NODE_SHIFT(node);
 
 	while (shift >= RT_NODE_SPAN)
 	{
-		rt_node    *newchild;
+		rt_node_ptr    newchild;
 		int			newshift = shift - RT_NODE_SPAN;
 		bool		inner = newshift > 0;
 
 		newchild = rt_alloc_node(tree, RT_CLASS_4_FULL, inner);
 		rt_init_node(newchild, RT_NODE_KIND_4, RT_CLASS_4_FULL, inner);
-		newchild->shift = newshift;
-		newchild->chunk = RT_GET_KEY_CHUNK(key, node->shift);
+		NODE_SHIFT(newchild) = newshift;
+		NODE_CHUNK(newchild) = RT_GET_KEY_CHUNK(key, NODE_SHIFT(node));
+
 		rt_node_insert_inner(tree, parent, node, key, newchild);
 
 		parent = node;
@@ -1099,17 +1174,18 @@ rt_set_extend(radix_tree *tree, uint64 key, uint64 value, rt_node *parent,
  * pointer is set to child_p.
  */
 static inline bool
-rt_node_search_inner(rt_node *node, uint64 key, rt_action action, rt_node **child_p)
+rt_node_search_inner(rt_node_ptr node, uint64 key, rt_action action,
+					 rt_pointer *child_p)
 {
-	uint8		chunk = RT_GET_KEY_CHUNK(key, node->shift);
+	uint8		chunk = RT_GET_KEY_CHUNK(key, NODE_SHIFT(node));
 	bool		found = false;
-	rt_node    *child = NULL;
+	rt_pointer	child;
 
-	switch (node->kind)
+	switch (NODE_KIND(node))
 	{
 		case RT_NODE_KIND_4:
 			{
-				rt_node_inner_4 *n4 = (rt_node_inner_4 *) node;
+				rt_node_inner_4 *n4 = (rt_node_inner_4 *) node.decoded;
 				int			idx = node_4_search_eq((rt_node_base_4 *) n4, chunk);
 
 				if (idx < 0)
@@ -1127,7 +1203,7 @@ rt_node_search_inner(rt_node *node, uint64 key, rt_action action, rt_node **chil
 			}
 		case RT_NODE_KIND_32:
 			{
-				rt_node_inner_32 *n32 = (rt_node_inner_32 *) node;
+				rt_node_inner_32 *n32 = (rt_node_inner_32 *) node.decoded;
 				int			idx = node_32_search_eq((rt_node_base_32 *) n32, chunk);
 
 				if (idx < 0)
@@ -1143,7 +1219,7 @@ rt_node_search_inner(rt_node *node, uint64 key, rt_action action, rt_node **chil
 			}
 		case RT_NODE_KIND_125:
 			{
-				rt_node_inner_125 *n125 = (rt_node_inner_125 *) node;
+				rt_node_inner_125 *n125 = (rt_node_inner_125 *) node.decoded;
 
 				if (!node_125_is_chunk_used((rt_node_base_125 *) n125, chunk))
 					break;
@@ -1159,7 +1235,7 @@ rt_node_search_inner(rt_node *node, uint64 key, rt_action action, rt_node **chil
 			}
 		case RT_NODE_KIND_256:
 			{
-				rt_node_inner_256 *n256 = (rt_node_inner_256 *) node;
+				rt_node_inner_256 *n256 = (rt_node_inner_256 *) node.decoded;
 
 				if (!node_inner_256_is_chunk_used(n256, chunk))
 					break;
@@ -1176,7 +1252,7 @@ rt_node_search_inner(rt_node *node, uint64 key, rt_action action, rt_node **chil
 
 	/* update statistics */
 	if (action == RT_ACTION_DELETE && found)
-		node->count--;
+		NODE_COUNT(node)--;
 
 	if (found && child_p)
 		*child_p = child;
@@ -1192,17 +1268,17 @@ rt_node_search_inner(rt_node *node, uint64 key, rt_action action, rt_node **chil
  * to the value is set to value_p.
  */
 static inline bool
-rt_node_search_leaf(rt_node *node, uint64 key, rt_action action, uint64 *value_p)
+rt_node_search_leaf(rt_node_ptr node, uint64 key, rt_action action, uint64 *value_p)
 {
-	uint8		chunk = RT_GET_KEY_CHUNK(key, node->shift);
+	uint8		chunk = RT_GET_KEY_CHUNK(key, NODE_SHIFT(node));
 	bool		found = false;
 	uint64		value = 0;
 
-	switch (node->kind)
+	switch (NODE_KIND(node))
 	{
 		case RT_NODE_KIND_4:
 			{
-				rt_node_leaf_4 *n4 = (rt_node_leaf_4 *) node;
+				rt_node_leaf_4 *n4 = (rt_node_leaf_4 *) node.decoded;
 				int			idx = node_4_search_eq((rt_node_base_4 *) n4, chunk);
 
 				if (idx < 0)
@@ -1220,7 +1296,7 @@ rt_node_search_leaf(rt_node *node, uint64 key, rt_action action, uint64 *value_p
 			}
 		case RT_NODE_KIND_32:
 			{
-				rt_node_leaf_32 *n32 = (rt_node_leaf_32 *) node;
+				rt_node_leaf_32 *n32 = (rt_node_leaf_32 *) node.decoded;
 				int			idx = node_32_search_eq((rt_node_base_32 *) n32, chunk);
 
 				if (idx < 0)
@@ -1236,7 +1312,7 @@ rt_node_search_leaf(rt_node *node, uint64 key, rt_action action, uint64 *value_p
 			}
 		case RT_NODE_KIND_125:
 			{
-				rt_node_leaf_125 *n125 = (rt_node_leaf_125 *) node;
+				rt_node_leaf_125 *n125 = (rt_node_leaf_125 *) node.decoded;
 
 				if (!node_125_is_chunk_used((rt_node_base_125 *) n125, chunk))
 					break;
@@ -1252,7 +1328,7 @@ rt_node_search_leaf(rt_node *node, uint64 key, rt_action action, uint64 *value_p
 			}
 		case RT_NODE_KIND_256:
 			{
-				rt_node_leaf_256 *n256 = (rt_node_leaf_256 *) node;
+				rt_node_leaf_256 *n256 = (rt_node_leaf_256 *) node.decoded;
 
 				if (!node_leaf_256_is_chunk_used(n256, chunk))
 					break;
@@ -1269,7 +1345,7 @@ rt_node_search_leaf(rt_node *node, uint64 key, rt_action action, uint64 *value_p
 
 	/* update statistics */
 	if (action == RT_ACTION_DELETE && found)
-		node->count--;
+		NODE_COUNT(node)--;
 
 	if (found && value_p)
 		*value_p = value;
@@ -1279,19 +1355,19 @@ rt_node_search_leaf(rt_node *node, uint64 key, rt_action action, uint64 *value_p
 
 /* Insert the child to the inner node */
 static bool
-rt_node_insert_inner(radix_tree *tree, rt_node *parent, rt_node *node, uint64 key,
-					 rt_node *child)
+rt_node_insert_inner(radix_tree *tree, rt_node_ptr parent, rt_node_ptr node,
+					 uint64 key, rt_node_ptr child)
 {
-	uint8		chunk = RT_GET_KEY_CHUNK(key, node->shift);
+	uint8		chunk = RT_GET_KEY_CHUNK(key, NODE_SHIFT(node));
 	bool		chunk_exists = false;
 
 	Assert(!NODE_IS_LEAF(node));
 
-	switch (node->kind)
+	switch (NODE_KIND(node))
 	{
 		case RT_NODE_KIND_4:
 			{
-				rt_node_inner_4 *n4 = (rt_node_inner_4 *) node;
+				rt_node_inner_4 *n4 = (rt_node_inner_4 *) node.decoded;
 				int			idx;
 
 				idx = node_4_search_eq((rt_node_base_4 *) n4, chunk);
@@ -1299,25 +1375,27 @@ rt_node_insert_inner(radix_tree *tree, rt_node *parent, rt_node *node, uint64 ke
 				{
 					/* found the existing chunk */
 					chunk_exists = true;
-					n4->children[idx] = child;
+					n4->children[idx] = child.encoded;
 					break;
 				}
 
 				if (unlikely(!VAR_NODE_HAS_FREE_SLOT(n4)))
 				{
+					rt_node_ptr	new;
 					rt_node_inner_32 *new32;
-					Assert(parent != NULL);
+
+					Assert(RTNodePtrIsValid(parent));
 
 					/* grow node from 4 to 32 */
-					new32 = (rt_node_inner_32 *) rt_grow_node_kind(tree, (rt_node *) n4,
-																   RT_NODE_KIND_32);
+					new = rt_grow_node_kind(tree, node, RT_NODE_KIND_32);
+					new32 = (rt_node_inner_32 *) new.decoded;
+
 					chunk_children_array_copy(n4->base.chunks, n4->children,
 											  new32->base.chunks, new32->children);
 
-					Assert(parent != NULL);
-					rt_replace_node(tree, parent, (rt_node *) n4, (rt_node *) new32,
-									key);
-					node = (rt_node *) new32;
+					Assert(RTNodePtrIsValid(parent));
+					rt_replace_node(tree, parent, node, new, key);
+					node = new;
 				}
 				else
 				{
@@ -1330,14 +1408,14 @@ rt_node_insert_inner(radix_tree *tree, rt_node *parent, rt_node *node, uint64 ke
 												   count, insertpos);
 
 					n4->base.chunks[insertpos] = chunk;
-					n4->children[insertpos] = child;
+					n4->children[insertpos] = child.encoded;
 					break;
 				}
 			}
 			/* FALLTHROUGH */
 		case RT_NODE_KIND_32:
 			{
-				rt_node_inner_32 *n32 = (rt_node_inner_32 *) node;
+				rt_node_inner_32 *n32 = (rt_node_inner_32 *) node.decoded;
 				int			idx;
 
 				idx = node_32_search_eq((rt_node_base_32 *) n32, chunk);
@@ -1345,45 +1423,52 @@ rt_node_insert_inner(radix_tree *tree, rt_node *parent, rt_node *node, uint64 ke
 				{
 					/* found the existing chunk */
 					chunk_exists = true;
-					n32->children[idx] = child;
+					n32->children[idx] = child.encoded;
 					break;
 				}
 
 				if (unlikely(!VAR_NODE_HAS_FREE_SLOT(n32)))
 				{
-					Assert(parent != NULL);
+					Assert(RTNodePtrIsValid(parent));
 
 					if (n32->base.n.count == rt_size_class_info[RT_CLASS_32_PARTIAL].fanout)
 					{
 						/* use the same node kind, but expand to the next size class */
 						const Size size = rt_size_class_info[RT_CLASS_32_PARTIAL].inner_size;
 						const int fanout = rt_size_class_info[RT_CLASS_32_FULL].fanout;
+						rt_node_ptr	new;
 						rt_node_inner_32 *new32;
 
-						new32 = (rt_node_inner_32 *) rt_alloc_node(tree, RT_CLASS_32_FULL, true);
+						new = rt_alloc_node(tree, RT_CLASS_32_FULL, true);
+						new32 = (rt_node_inner_32 *) new.decoded;
 						memcpy(new32, n32, size);
 						new32->base.n.fanout = fanout;
 
-						rt_replace_node(tree, parent, (rt_node *) n32, (rt_node *) new32, key);
+						rt_replace_node(tree, parent, node, new, key);
 
-						/* must update both pointers here */
-						node = (rt_node *) new32;
+						/*
+						 * Must update both pointers here since we update n32 and
+						 * verify node.
+						 */
+						node = new;
 						n32 = new32;
 
 						goto retry_insert_inner_32;
 					}
 					else
 					{
+						rt_node_ptr	new;
 						rt_node_inner_125 *new125;
 
 						/* grow node from 32 to 125 */
-						new125 = (rt_node_inner_125 *) rt_grow_node_kind(tree, (rt_node *) n32,
-																		 RT_NODE_KIND_125);
+						new = rt_grow_node_kind(tree, node, RT_NODE_KIND_125);
+						new125 = (rt_node_inner_125 *) new.decoded;
+
 						for (int i = 0; i < n32->base.n.count; i++)
 							node_inner_125_insert(new125, n32->base.chunks[i], n32->children[i]);
 
-						rt_replace_node(tree, parent, (rt_node *) n32, (rt_node *) new125, key);
-						node = (rt_node *) new125;
+						rt_replace_node(tree, parent, node, new, key);
+						node = new;
 					}
 				}
 				else
@@ -1398,7 +1483,7 @@ retry_insert_inner_32:
 													   count, insertpos);
 
 						n32->base.chunks[insertpos] = chunk;
-						n32->children[insertpos] = child;
+						n32->children[insertpos] = child.encoded;
 						break;
 					}
 				}
@@ -1406,25 +1491,28 @@ retry_insert_inner_32:
 			/* FALLTHROUGH */
 		case RT_NODE_KIND_125:
 			{
-				rt_node_inner_125 *n125 = (rt_node_inner_125 *) node;
+				rt_node_inner_125 *n125 = (rt_node_inner_125 *) node.decoded;
 				int			cnt = 0;
 
 				if (node_125_is_chunk_used((rt_node_base_125 *) n125, chunk))
 				{
 					/* found the existing chunk */
 					chunk_exists = true;
-					node_inner_125_update(n125, chunk, child);
+					node_inner_125_update(n125, chunk, child.encoded);
 					break;
 				}
 
 				if (unlikely(!VAR_NODE_HAS_FREE_SLOT(n125)))
 				{
+					rt_node_ptr	new;
 					rt_node_inner_256 *new256;
-					Assert(parent != NULL);
+
+					Assert(RTNodePtrIsValid(parent));
 
 					/* grow node from 125 to 256 */
-					new256 = (rt_node_inner_256 *) rt_grow_node_kind(tree, (rt_node *) n125,
-																	 RT_NODE_KIND_256);
+					new = rt_grow_node_kind(tree, node, RT_NODE_KIND_256);
+					new256 = (rt_node_inner_256 *) new.decoded;
+
 					for (int i = 0; i < RT_NODE_MAX_SLOTS && cnt < n125->base.n.count; i++)
 					{
 						if (!node_125_is_chunk_used((rt_node_base_125 *) n125, i))
@@ -1434,32 +1522,31 @@ retry_insert_inner_32:
 						cnt++;
 					}
 
-					rt_replace_node(tree, parent, (rt_node *) n125, (rt_node *) new256,
-									key);
-					node = (rt_node *) new256;
+					rt_replace_node(tree, parent, node, new, key);
+					node = new;
 				}
 				else
 				{
-					node_inner_125_insert(n125, chunk, child);
+					node_inner_125_insert(n125, chunk, child.encoded);
 					break;
 				}
 			}
 			/* FALLTHROUGH */
 		case RT_NODE_KIND_256:
 			{
-				rt_node_inner_256 *n256 = (rt_node_inner_256 *) node;
+				rt_node_inner_256 *n256 = (rt_node_inner_256 *) node.decoded;
 
 				chunk_exists = node_inner_256_is_chunk_used(n256, chunk);
 				Assert(chunk_exists || FIXED_NODE_HAS_FREE_SLOT(n256, RT_CLASS_256));
 
-				node_inner_256_set(n256, chunk, child);
+				node_inner_256_set(n256, chunk, child.encoded);
 				break;
 			}
 	}
 
 	/* Update statistics */
 	if (!chunk_exists)
-		node->count++;
+		NODE_COUNT(node)++;
 
 	/*
 	 * Done. Finally, verify the chunk and value is inserted or replaced
@@ -1472,19 +1559,19 @@ retry_insert_inner_32:
 
 /* Insert the value to the leaf node */
 static bool
-rt_node_insert_leaf(radix_tree *tree, rt_node *parent, rt_node *node,
+rt_node_insert_leaf(radix_tree *tree, rt_node_ptr parent, rt_node_ptr node,
 					uint64 key, uint64 value)
 {
-	uint8		chunk = RT_GET_KEY_CHUNK(key, node->shift);
+	uint8		chunk = RT_GET_KEY_CHUNK(key, NODE_SHIFT(node));
 	bool		chunk_exists = false;
 
 	Assert(NODE_IS_LEAF(node));
 
-	switch (node->kind)
+	switch (NODE_KIND(node))
 	{
 		case RT_NODE_KIND_4:
 			{
-				rt_node_leaf_4 *n4 = (rt_node_leaf_4 *) node;
+				rt_node_leaf_4 *n4 = (rt_node_leaf_4 *) node.decoded;
 				int			idx;
 
 				idx = node_4_search_eq((rt_node_base_4 *) n4, chunk);
@@ -1498,16 +1585,18 @@ rt_node_insert_leaf(radix_tree *tree, rt_node *parent, rt_node *node,
 
 				if (unlikely(!VAR_NODE_HAS_FREE_SLOT(n4)))
 				{
+					rt_node_ptr	new;
 					rt_node_leaf_32 *new32;
-					Assert(parent != NULL);
+
+					Assert(RTNodePtrIsValid(parent));
 
 					/* grow node from 4 to 32 */
-					new32 = (rt_node_leaf_32 *) rt_grow_node_kind(tree, (rt_node *) n4,
-																  RT_NODE_KIND_32);
+					new = rt_grow_node_kind(tree, node, RT_NODE_KIND_32);
+					new32 = (rt_node_leaf_32 *) new.decoded;
 					chunk_values_array_copy(n4->base.chunks, n4->values,
 											new32->base.chunks, new32->values);
-					rt_replace_node(tree, parent, (rt_node *) n4, (rt_node *) new32, key);
-					node = (rt_node *) new32;
+					rt_replace_node(tree, parent, node, new, key);
+					node = new;
 				}
 				else
 				{
@@ -1527,7 +1616,7 @@ rt_node_insert_leaf(radix_tree *tree, rt_node *parent, rt_node *node,
 			/* FALLTHROUGH */
 		case RT_NODE_KIND_32:
 			{
-				rt_node_leaf_32 *n32 = (rt_node_leaf_32 *) node;
+				rt_node_leaf_32 *n32 = (rt_node_leaf_32 *) node.decoded;
 				int			idx;
 
 				idx = node_32_search_eq((rt_node_base_32 *) n32, chunk);
@@ -1541,45 +1630,51 @@ rt_node_insert_leaf(radix_tree *tree, rt_node *parent, rt_node *node,
 
 				if (unlikely(!VAR_NODE_HAS_FREE_SLOT(n32)))
 				{
-					Assert(parent != NULL);
+					Assert(RTNodePtrIsValid(parent));
 
 					if (n32->base.n.count == rt_size_class_info[RT_CLASS_32_PARTIAL].fanout)
 					{
 						/* use the same node kind, but expand to the next size class */
 						const Size size = rt_size_class_info[RT_CLASS_32_PARTIAL].leaf_size;
 						const int fanout = rt_size_class_info[RT_CLASS_32_FULL].fanout;
+						rt_node_ptr new;
 						rt_node_leaf_32 *new32;
 
-						new32 = (rt_node_leaf_32 *) rt_alloc_node(tree, RT_CLASS_32_FULL, false);
+						new = rt_alloc_node(tree, RT_CLASS_32_FULL, false);
+						new32 = (rt_node_leaf_32 *) new.decoded;
 						memcpy(new32, n32, size);
 						new32->base.n.fanout = fanout;
 
-						rt_replace_node(tree, parent, (rt_node *) n32, (rt_node *) new32, key);
+						rt_replace_node(tree, parent, node, new, key);
 
-						/* must update both pointers here */
-						node = (rt_node *) new32;
+						/*
+						 * Must update both pointers here since we update n32 and
+						 * verify node.
+						 */
+						node = new;
 						n32 = new32;
 
 						goto retry_insert_leaf_32;
 					}
 					else
 					{
+						rt_node_ptr	new;
 						rt_node_leaf_125 *new125;
 
 						/* grow node from 32 to 125 */
-						new125 = (rt_node_leaf_125 *) rt_grow_node_kind(tree, (rt_node *) n32,
-																		RT_NODE_KIND_125);
+						new = rt_grow_node_kind(tree, node, RT_NODE_KIND_125);
+						new125 = (rt_node_leaf_125 *) new.decoded;
+
 						for (int i = 0; i < n32->base.n.count; i++)
 							node_leaf_125_insert(new125, n32->base.chunks[i], n32->values[i]);
 
-						rt_replace_node(tree, parent, (rt_node *) n32, (rt_node *) new125,
-										key);
-						node = (rt_node *) new125;
+						rt_replace_node(tree, parent, node, new, key);
+						node = new;
 					}
 				}
 				else
 				{
-				retry_insert_leaf_32:
+retry_insert_leaf_32:
 					{
 						int	insertpos = node_32_get_insertpos((rt_node_base_32 *) n32, chunk);
 						int	count = n32->base.n.count;
@@ -1597,7 +1692,7 @@ rt_node_insert_leaf(radix_tree *tree, rt_node *parent, rt_node *node,
 			/* FALLTHROUGH */
 		case RT_NODE_KIND_125:
 			{
-				rt_node_leaf_125 *n125 = (rt_node_leaf_125 *) node;
+				rt_node_leaf_125 *n125 = (rt_node_leaf_125 *) node.decoded;
 				int			cnt = 0;
 
 				if (node_125_is_chunk_used((rt_node_base_125 *) n125, chunk))
@@ -1610,12 +1705,14 @@ rt_node_insert_leaf(radix_tree *tree, rt_node *parent, rt_node *node,
 
 				if (unlikely(!VAR_NODE_HAS_FREE_SLOT(n125)))
 				{
+					rt_node_ptr	new;
 					rt_node_leaf_256 *new256;
-					Assert(parent != NULL);
+
+					Assert(RTNodePtrIsValid(parent));
 
 					/* grow node from 125 to 256 */
-					new256 = (rt_node_leaf_256 *) rt_grow_node_kind(tree, (rt_node *) n125,
-																	RT_NODE_KIND_256);
+					new = rt_grow_node_kind(tree, node, RT_NODE_KIND_256);
+					new256 = (rt_node_leaf_256 *) new.decoded;
 					for (int i = 0; i < RT_NODE_MAX_SLOTS && cnt < n125->base.n.count; i++)
 					{
 						if (!node_125_is_chunk_used((rt_node_base_125 *) n125, i))
@@ -1625,9 +1722,8 @@ rt_node_insert_leaf(radix_tree *tree, rt_node *parent, rt_node *node,
 						cnt++;
 					}
 
-					rt_replace_node(tree, parent, (rt_node *) n125, (rt_node *) new256,
-									key);
-					node = (rt_node *) new256;
+					rt_replace_node(tree, parent, node, new, key);
+					node = new;
 				}
 				else
 				{
@@ -1638,7 +1734,7 @@ rt_node_insert_leaf(radix_tree *tree, rt_node *parent, rt_node *node,
 			/* FALLTHROUGH */
 		case RT_NODE_KIND_256:
 			{
-				rt_node_leaf_256 *n256 = (rt_node_leaf_256 *) node;
+				rt_node_leaf_256 *n256 = (rt_node_leaf_256 *) node.decoded;
 
 				chunk_exists = node_leaf_256_is_chunk_used(n256, chunk);
 				Assert(chunk_exists || FIXED_NODE_HAS_FREE_SLOT(n256, RT_CLASS_256));
@@ -1650,7 +1746,7 @@ rt_node_insert_leaf(radix_tree *tree, rt_node *parent, rt_node *node,
 
 	/* Update statistics */
 	if (!chunk_exists)
-		node->count++;
+		NODE_COUNT(node)++;
 
 	/*
 	 * Done. Finally, verify the chunk and value is inserted or replaced
@@ -1674,7 +1770,7 @@ rt_create(MemoryContext ctx)
 
 	tree = palloc(sizeof(radix_tree));
 	tree->context = ctx;
-	tree->root = NULL;
+	tree->root = InvalidRTPointer;
 	tree->max_val = 0;
 	tree->num_keys = 0;
 
@@ -1723,26 +1819,23 @@ rt_set(radix_tree *tree, uint64 key, uint64 value)
 {
 	int			shift;
 	bool		updated;
-	rt_node    *node;
-	rt_node    *parent;
+	rt_node_ptr	node;
+	rt_node_ptr parent;
 
 	/* Empty tree, create the root */
-	if (!tree->root)
+	if (!RTPointerIsValid(tree->root))
 		rt_new_root(tree, key);
 
 	/* Extend the tree if necessary */
 	if (key > tree->max_val)
 		rt_extend(tree, key);
 
-	Assert(tree->root);
-
-	shift = tree->root->shift;
-	node = parent = tree->root;
-
 	/* Descend the tree until a leaf node */
+	node = parent = rt_node_ptr_encoded(tree->root);
+	shift = NODE_SHIFT(node);
 	while (shift >= 0)
 	{
-		rt_node    *child;
+		rt_pointer    child;
 
 		if (NODE_IS_LEAF(node))
 			break;
@@ -1754,7 +1847,7 @@ rt_set(radix_tree *tree, uint64 key, uint64 value)
 		}
 
 		parent = node;
-		node = child;
+		node = rt_node_ptr_encoded(child);
 		shift -= RT_NODE_SPAN;
 	}
 
@@ -1775,21 +1868,21 @@ rt_set(radix_tree *tree, uint64 key, uint64 value)
 bool
 rt_search(radix_tree *tree, uint64 key, uint64 *value_p)
 {
-	rt_node    *node;
+	rt_node_ptr    node;
 	int			shift;
 
 	Assert(value_p != NULL);
 
-	if (!tree->root || key > tree->max_val)
+	if (!RTPointerIsValid(tree->root) || key > tree->max_val)
 		return false;
 
-	node = tree->root;
-	shift = tree->root->shift;
+	node = rt_node_ptr_encoded(tree->root);
+	shift = NODE_SHIFT(node);
 
 	/* Descend the tree until a leaf node */
 	while (shift >= 0)
 	{
-		rt_node    *child;
+		rt_pointer	child;
 
 		if (NODE_IS_LEAF(node))
 			break;
@@ -1797,7 +1890,7 @@ rt_search(radix_tree *tree, uint64 key, uint64 *value_p)
 		if (!rt_node_search_inner(node, key, RT_ACTION_FIND, &child))
 			return false;
 
-		node = child;
+		node = rt_node_ptr_encoded(child);
 		shift -= RT_NODE_SPAN;
 	}
 
@@ -1811,8 +1904,8 @@ rt_search(radix_tree *tree, uint64 key, uint64 *value_p)
 bool
 rt_delete(radix_tree *tree, uint64 key)
 {
-	rt_node    *node;
-	rt_node    *stack[RT_MAX_LEVEL] = {0};
+	rt_node_ptr	node;
+	rt_node_ptr	stack[RT_MAX_LEVEL] = {0};
 	int			shift;
 	int			level;
 	bool		deleted;
@@ -1824,12 +1917,12 @@ rt_delete(radix_tree *tree, uint64 key)
 	 * Descend the tree to search the key while building a stack of nodes we
 	 * visited.
 	 */
-	node = tree->root;
-	shift = tree->root->shift;
+	node = rt_node_ptr_encoded(tree->root);
+	shift = NODE_SHIFT(node);
 	level = -1;
 	while (shift > 0)
 	{
-		rt_node    *child;
+		rt_pointer	child;
 
 		/* Push the current node to the stack */
 		stack[++level] = node;
@@ -1837,7 +1930,7 @@ rt_delete(radix_tree *tree, uint64 key)
 		if (!rt_node_search_inner(node, key, RT_ACTION_FIND, &child))
 			return false;
 
-		node = child;
+		node = rt_node_ptr_encoded(child);
 		shift -= RT_NODE_SPAN;
 	}
 
@@ -1888,6 +1981,7 @@ rt_iter *
 rt_begin_iterate(radix_tree *tree)
 {
 	MemoryContext old_ctx;
+	rt_node_ptr	root;
 	rt_iter    *iter;
 	int			top_level;
 
@@ -1897,17 +1991,18 @@ rt_begin_iterate(radix_tree *tree)
 	iter->tree = tree;
 
 	/* empty tree */
-	if (!iter->tree->root)
+	if (!RTPointerIsValid(iter->tree) || !RTPointerIsValid(iter->tree->root))
 		return iter;
 
-	top_level = iter->tree->root->shift / RT_NODE_SPAN;
+	root = rt_node_ptr_encoded(iter->tree->root);
+	top_level = NODE_SHIFT(root) / RT_NODE_SPAN;
 	iter->stack_len = top_level;
 
 	/*
 	 * Descend to the left most leaf node from the root. The key is being
 	 * constructed while descending to the leaf.
 	 */
-	rt_update_iter_stack(iter, iter->tree->root, top_level);
+	rt_update_iter_stack(iter, root, top_level);
 
 	MemoryContextSwitchTo(old_ctx);
 
@@ -1918,14 +2013,15 @@ rt_begin_iterate(radix_tree *tree)
  * Update each node_iter for inner nodes in the iterator node stack.
  */
 static void
-rt_update_iter_stack(rt_iter *iter, rt_node *from_node, int from)
+rt_update_iter_stack(rt_iter *iter, rt_node_ptr from_node, int from)
 {
 	int			level = from;
-	rt_node    *node = from_node;
+	rt_node_ptr node = from_node;
 
 	for (;;)
 	{
 		rt_node_iter *node_iter = &(iter->stack[level--]);
+		bool found PG_USED_FOR_ASSERTS_ONLY;
 
 		node_iter->node = node;
 		node_iter->current_idx = -1;
@@ -1935,10 +2031,10 @@ rt_update_iter_stack(rt_iter *iter, rt_node *from_node, int from)
 			return;
 
 		/* Advance to the next slot in the inner node */
-		node = rt_node_inner_iterate_next(iter, node_iter);
+		found = rt_node_inner_iterate_next(iter, node_iter, &node);
 
 		/* We must find the first children in the node */
-		Assert(node);
+		Assert(found);
 	}
 }
 
@@ -1955,7 +2051,7 @@ rt_iterate_next(rt_iter *iter, uint64 *key_p, uint64 *value_p)
 
 	for (;;)
 	{
-		rt_node    *child = NULL;
+		rt_node_ptr	child = InvalidRTNodePtr;
 		uint64		value;
 		int			level;
 		bool		found;
@@ -1976,14 +2072,12 @@ rt_iterate_next(rt_iter *iter, uint64 *key_p, uint64 *value_p)
 		 */
 		for (level = 1; level <= iter->stack_len; level++)
 		{
-			child = rt_node_inner_iterate_next(iter, &(iter->stack[level]));
-
-			if (child)
+			if (rt_node_inner_iterate_next(iter, &(iter->stack[level]), &child))
 				break;
 		}
 
 		/* the iteration finished */
-		if (!child)
+		if (!RTNodePtrIsValid(child))
 			return false;
 
 		/*
@@ -2015,18 +2109,19 @@ rt_iter_update_key(rt_iter *iter, uint8 chunk, uint8 shift)
  * Advance the slot in the inner node. Return the child if exists, otherwise
  * null.
  */
-static inline rt_node *
-rt_node_inner_iterate_next(rt_iter *iter, rt_node_iter *node_iter)
+static inline bool
+rt_node_inner_iterate_next(rt_iter *iter, rt_node_iter *node_iter, rt_node_ptr *child_p)
 {
-	rt_node    *child = NULL;
+	rt_node_ptr	node = node_iter->node;
+	rt_pointer	child;
 	bool		found = false;
 	uint8		key_chunk;
 
-	switch (node_iter->node->kind)
+	switch (NODE_KIND(node))
 	{
 		case RT_NODE_KIND_4:
 			{
-				rt_node_inner_4 *n4 = (rt_node_inner_4 *) node_iter->node;
+				rt_node_inner_4 *n4 = (rt_node_inner_4 *) node.decoded;
 
 				node_iter->current_idx++;
 				if (node_iter->current_idx >= n4->base.n.count)
@@ -2039,7 +2134,7 @@ rt_node_inner_iterate_next(rt_iter *iter, rt_node_iter *node_iter)
 			}
 		case RT_NODE_KIND_32:
 			{
-				rt_node_inner_32 *n32 = (rt_node_inner_32 *) node_iter->node;
+				rt_node_inner_32 *n32 = (rt_node_inner_32 *) node.decoded;
 
 				node_iter->current_idx++;
 				if (node_iter->current_idx >= n32->base.n.count)
@@ -2052,7 +2147,7 @@ rt_node_inner_iterate_next(rt_iter *iter, rt_node_iter *node_iter)
 			}
 		case RT_NODE_KIND_125:
 			{
-				rt_node_inner_125 *n125 = (rt_node_inner_125 *) node_iter->node;
+				rt_node_inner_125 *n125 = (rt_node_inner_125 *) node.decoded;
 				int			i;
 
 				for (i = node_iter->current_idx + 1; i < RT_NODE_MAX_SLOTS; i++)
@@ -2072,7 +2167,7 @@ rt_node_inner_iterate_next(rt_iter *iter, rt_node_iter *node_iter)
 			}
 		case RT_NODE_KIND_256:
 			{
-				rt_node_inner_256 *n256 = (rt_node_inner_256 *) node_iter->node;
+				rt_node_inner_256 *n256 = (rt_node_inner_256 *) node.decoded;
 				int			i;
 
 				for (i = node_iter->current_idx + 1; i < RT_NODE_MAX_SLOTS; i++)
@@ -2093,9 +2188,12 @@ rt_node_inner_iterate_next(rt_iter *iter, rt_node_iter *node_iter)
 	}
 
 	if (found)
-		rt_iter_update_key(iter, key_chunk, node_iter->node->shift);
+	{
+		rt_iter_update_key(iter, key_chunk, NODE_SHIFT(node));
+		*child_p = rt_node_ptr_encoded(child);
+	}
 
-	return child;
+	return found;
 }
 
 /*
@@ -2103,19 +2201,18 @@ rt_node_inner_iterate_next(rt_iter *iter, rt_node_iter *node_iter)
  * is set to value_p, otherwise return false.
  */
 static inline bool
-rt_node_leaf_iterate_next(rt_iter *iter, rt_node_iter *node_iter,
-						  uint64 *value_p)
+rt_node_leaf_iterate_next(rt_iter *iter, rt_node_iter *node_iter, uint64 *value_p)
 {
-	rt_node    *node = node_iter->node;
+	rt_node_ptr node = node_iter->node;
 	bool		found = false;
 	uint64		value;
 	uint8		key_chunk;
 
-	switch (node->kind)
+	switch (NODE_KIND(node))
 	{
 		case RT_NODE_KIND_4:
 			{
-				rt_node_leaf_4 *n4 = (rt_node_leaf_4 *) node_iter->node;
+				rt_node_leaf_4 *n4 = (rt_node_leaf_4 *) node.decoded;
 
 				node_iter->current_idx++;
 				if (node_iter->current_idx >= n4->base.n.count)
@@ -2128,7 +2225,7 @@ rt_node_leaf_iterate_next(rt_iter *iter, rt_node_iter *node_iter,
 			}
 		case RT_NODE_KIND_32:
 			{
-				rt_node_leaf_32 *n32 = (rt_node_leaf_32 *) node_iter->node;
+				rt_node_leaf_32 *n32 = (rt_node_leaf_32 *) node.decoded;
 
 				node_iter->current_idx++;
 				if (node_iter->current_idx >= n32->base.n.count)
@@ -2141,7 +2238,7 @@ rt_node_leaf_iterate_next(rt_iter *iter, rt_node_iter *node_iter,
 			}
 		case RT_NODE_KIND_125:
 			{
-				rt_node_leaf_125 *n125 = (rt_node_leaf_125 *) node_iter->node;
+				rt_node_leaf_125 *n125 = (rt_node_leaf_125 *) node.decoded;
 				int			i;
 
 				for (i = node_iter->current_idx + 1; i < RT_NODE_MAX_SLOTS; i++)
@@ -2161,7 +2258,7 @@ rt_node_leaf_iterate_next(rt_iter *iter, rt_node_iter *node_iter,
 			}
 		case RT_NODE_KIND_256:
 			{
-				rt_node_leaf_256 *n256 = (rt_node_leaf_256 *) node_iter->node;
+				rt_node_leaf_256 *n256 = (rt_node_leaf_256 *) node.decoded;
 				int			i;
 
 				for (i = node_iter->current_idx + 1; i < RT_NODE_MAX_SLOTS; i++)
@@ -2183,7 +2280,7 @@ rt_node_leaf_iterate_next(rt_iter *iter, rt_node_iter *node_iter,
 
 	if (found)
 	{
-		rt_iter_update_key(iter, key_chunk, node_iter->node->shift);
+		rt_iter_update_key(iter, key_chunk, NODE_SHIFT(node));
 		*value_p = value;
 	}
 
@@ -2220,16 +2317,16 @@ rt_memory_usage(radix_tree *tree)
  * Verify the radix tree node.
  */
 static void
-rt_verify_node(rt_node *node)
+rt_verify_node(rt_node_ptr node)
 {
 #ifdef USE_ASSERT_CHECKING
-	Assert(node->count >= 0);
+	Assert(NODE_COUNT(node) >= 0);
 
-	switch (node->kind)
+	switch (NODE_KIND(node))
 	{
 		case RT_NODE_KIND_4:
 			{
-				rt_node_base_4 *n4 = (rt_node_base_4 *) node;
+				rt_node_base_4 *n4 = (rt_node_base_4 *) node.decoded;
 
 				for (int i = 1; i < n4->n.count; i++)
 					Assert(n4->chunks[i - 1] < n4->chunks[i]);
@@ -2238,7 +2335,7 @@ rt_verify_node(rt_node *node)
 			}
 		case RT_NODE_KIND_32:
 			{
-				rt_node_base_32 *n32 = (rt_node_base_32 *) node;
+				rt_node_base_32 *n32 = (rt_node_base_32 *) node.decoded;
 
 				for (int i = 1; i < n32->n.count; i++)
 					Assert(n32->chunks[i - 1] < n32->chunks[i]);
@@ -2247,7 +2344,7 @@ rt_verify_node(rt_node *node)
 			}
 		case RT_NODE_KIND_125:
 			{
-				rt_node_base_125 *n125 = (rt_node_base_125 *) node;
+				rt_node_base_125 *n125 = (rt_node_base_125 *) node.decoded;
 				int			cnt = 0;
 
 				for (int i = 0; i < RT_NODE_MAX_SLOTS; i++)
@@ -2257,10 +2354,10 @@ rt_verify_node(rt_node *node)
 
 					/* Check if the corresponding slot is used */
 					if (NODE_IS_LEAF(node))
-						Assert(node_leaf_125_is_slot_used((rt_node_leaf_125 *) node,
+						Assert(node_leaf_125_is_slot_used((rt_node_leaf_125 *) n125,
 														  n125->slot_idxs[i]));
 					else
-						Assert(node_inner_125_is_slot_used((rt_node_inner_125 *) node,
+						Assert(node_inner_125_is_slot_used((rt_node_inner_125 *) n125,
 														   n125->slot_idxs[i]));
 
 					cnt++;
@@ -2273,7 +2370,7 @@ rt_verify_node(rt_node *node)
 			{
 				if (NODE_IS_LEAF(node))
 				{
-					rt_node_leaf_256 *n256 = (rt_node_leaf_256 *) node;
+					rt_node_leaf_256 *n256 = (rt_node_leaf_256 *) node.decoded;
 					int			cnt = 0;
 
 					for (int i = 0; i < RT_NODE_NSLOTS_BITS(RT_NODE_MAX_SLOTS); i++)
@@ -2294,54 +2391,62 @@ rt_verify_node(rt_node *node)
 void
 rt_stats(radix_tree *tree)
 {
+	rt_node *root = rt_pointer_decode(tree->root);
+
+	if (root == NULL)
+		return;
+
 	ereport(NOTICE, (errmsg("num_keys = " UINT64_FORMAT ", height = %d, n4 = %u, n15 = %u, n32 = %u, n125 = %u, n256 = %u",
-						 tree->num_keys,
-						 tree->root->shift / RT_NODE_SPAN,
-						 tree->cnt[RT_CLASS_4_FULL],
-						 tree->cnt[RT_CLASS_32_PARTIAL],
-						 tree->cnt[RT_CLASS_32_FULL],
-						 tree->cnt[RT_CLASS_125_FULL],
-						 tree->cnt[RT_CLASS_256])));
+							tree->num_keys,
+							root->shift / RT_NODE_SPAN,
+							tree->cnt[RT_CLASS_4_FULL],
+							tree->cnt[RT_CLASS_32_PARTIAL],
+							tree->cnt[RT_CLASS_32_FULL],
+							tree->cnt[RT_CLASS_125_FULL],
+							tree->cnt[RT_CLASS_256])));
 }
 
 static void
-rt_dump_node(rt_node *node, int level, bool recurse)
+rt_dump_node(rt_node_ptr node, int level, bool recurse)
 {
-	char		space[125] = {0};
+	rt_node		*n = node.decoded;
+	char		space[128] = {0};
 
 	fprintf(stderr, "[%s] kind %d, fanout %d, count %u, shift %u, chunk 0x%X:\n",
 			NODE_IS_LEAF(node) ? "LEAF" : "INNR",
-			(node->kind == RT_NODE_KIND_4) ? 4 :
-			(node->kind == RT_NODE_KIND_32) ? 32 :
-			(node->kind == RT_NODE_KIND_125) ? 125 : 256,
-			node->fanout == 0 ? 256 : node->fanout,
-			node->count, node->shift, node->chunk);
+
+			(n->kind == RT_NODE_KIND_4) ? 4 :
+			(n->kind == RT_NODE_KIND_32) ? 32 :
+			(n->kind == RT_NODE_KIND_125) ? 125 : 256,
+			n->fanout == 0 ? 256 : n->fanout,
+			n->count, n->shift, n->chunk);
 
 	if (level > 0)
 		sprintf(space, "%*c", level * 4, ' ');
 
-	switch (node->kind)
+	switch (NODE_KIND(node))
 	{
 		case RT_NODE_KIND_4:
 			{
-				for (int i = 0; i < node->count; i++)
+				for (int i = 0; i < NODE_COUNT(node); i++)
 				{
 					if (NODE_IS_LEAF(node))
 					{
-						rt_node_leaf_4 *n4 = (rt_node_leaf_4 *) node;
+						rt_node_leaf_4 *n4 = (rt_node_leaf_4 *) node.decoded;
 
 						fprintf(stderr, "%schunk 0x%X value 0x" UINT64_FORMAT_HEX "\n",
 								space, n4->base.chunks[i], n4->values[i]);
 					}
 					else
 					{
-						rt_node_inner_4 *n4 = (rt_node_inner_4 *) node;
+						rt_node_inner_4 *n4 = (rt_node_inner_4 *) node.decoded;
 
 						fprintf(stderr, "%schunk 0x%X ->",
 								space, n4->base.chunks[i]);
 
 						if (recurse)
-							rt_dump_node(n4->children[i], level + 1, recurse);
+							rt_dump_node(rt_node_ptr_encoded(n4->children[i]),
+										 level + 1, recurse);
 						else
 							fprintf(stderr, "\n");
 					}
@@ -2350,25 +2455,26 @@ rt_dump_node(rt_node *node, int level, bool recurse)
 			}
 		case RT_NODE_KIND_32:
 			{
-				for (int i = 0; i < node->count; i++)
+				for (int i = 0; i < NODE_KIND(node); i++)
 				{
 					if (NODE_IS_LEAF(node))
 					{
-						rt_node_leaf_32 *n32 = (rt_node_leaf_32 *) node;
+						rt_node_leaf_32 *n32 = (rt_node_leaf_32 *) node.decoded;
 
 						fprintf(stderr, "%schunk 0x%X value 0x" UINT64_FORMAT_HEX "\n",
 								space, n32->base.chunks[i], n32->values[i]);
 					}
 					else
 					{
-						rt_node_inner_32 *n32 = (rt_node_inner_32 *) node;
+						rt_node_inner_32 *n32 = (rt_node_inner_32 *) node.decoded;
 
 						fprintf(stderr, "%schunk 0x%X ->",
 								space, n32->base.chunks[i]);
 
 						if (recurse)
 						{
-							rt_dump_node(n32->children[i], level + 1, recurse);
+							rt_dump_node(rt_node_ptr_encoded(n32->children[i]),
+										 level + 1, recurse);
 						}
 						else
 							fprintf(stderr, "\n");
@@ -2378,7 +2484,7 @@ rt_dump_node(rt_node *node, int level, bool recurse)
 			}
 		case RT_NODE_KIND_125:
 			{
-				rt_node_base_125 *b125 = (rt_node_base_125 *) node;
+				rt_node_base_125 *b125 = (rt_node_base_125 *) node.decoded;
 
 				fprintf(stderr, "slot_idxs ");
 				for (int i = 0; i < RT_NODE_MAX_SLOTS; i++)
@@ -2390,7 +2496,7 @@ rt_dump_node(rt_node *node, int level, bool recurse)
 				}
 				if (NODE_IS_LEAF(node))
 				{
-					rt_node_leaf_125 *n = (rt_node_leaf_125 *) node;
+					rt_node_leaf_125 *n = (rt_node_leaf_125 *) node.decoded;
 
 					fprintf(stderr, ", isset-bitmap:");
 					for (int i = 0; i < WORDNUM(128); i++)
@@ -2420,7 +2526,7 @@ rt_dump_node(rt_node *node, int level, bool recurse)
 								space, i);
 
 						if (recurse)
-							rt_dump_node(node_inner_125_get_child(n125, i),
+							rt_dump_node(rt_node_ptr_encoded(node_inner_125_get_child(n125, i)),
 										 level + 1, recurse);
 						else
 							fprintf(stderr, "\n");
@@ -2434,7 +2540,7 @@ rt_dump_node(rt_node *node, int level, bool recurse)
 				{
 					if (NODE_IS_LEAF(node))
 					{
-						rt_node_leaf_256 *n256 = (rt_node_leaf_256 *) node;
+						rt_node_leaf_256 *n256 = (rt_node_leaf_256 *) node.decoded;
 
 						if (!node_leaf_256_is_chunk_used(n256, i))
 							continue;
@@ -2444,7 +2550,7 @@ rt_dump_node(rt_node *node, int level, bool recurse)
 					}
 					else
 					{
-						rt_node_inner_256 *n256 = (rt_node_inner_256 *) node;
+						rt_node_inner_256 *n256 = (rt_node_inner_256 *) node.decoded;
 
 						if (!node_inner_256_is_chunk_used(n256, i))
 							continue;
@@ -2453,8 +2559,8 @@ rt_dump_node(rt_node *node, int level, bool recurse)
 								space, i);
 
 						if (recurse)
-							rt_dump_node(node_inner_256_get_child(n256, i), level + 1,
-										 recurse);
+							rt_dump_node(rt_node_ptr_encoded(node_inner_256_get_child(n256, i)),
+										 level + 1, recurse);
 						else
 							fprintf(stderr, "\n");
 					}
@@ -2467,7 +2573,7 @@ rt_dump_node(rt_node *node, int level, bool recurse)
 void
 rt_dump_search(radix_tree *tree, uint64 key)
 {
-	rt_node    *node;
+	rt_node_ptr node;
 	int			shift;
 	int			level = 0;
 
@@ -2475,7 +2581,7 @@ rt_dump_search(radix_tree *tree, uint64 key)
 	elog(NOTICE, "max_val = " UINT64_FORMAT "(0x" UINT64_FORMAT_HEX ")",
 		 tree->max_val, tree->max_val);
 
-	if (!tree->root)
+	if (!RTPointerIsValid(tree->root))
 	{
 		elog(NOTICE, "tree is empty");
 		return;
@@ -2488,11 +2594,11 @@ rt_dump_search(radix_tree *tree, uint64 key)
 		return;
 	}
 
-	node = tree->root;
-	shift = tree->root->shift;
+	node = rt_node_ptr_encoded(tree->root);
+	shift = NODE_SHIFT(node);
 	while (shift >= 0)
 	{
-		rt_node    *child;
+		rt_pointer   child;
 
 		rt_dump_node(node, level, false);
 
@@ -2509,7 +2615,7 @@ rt_dump_search(radix_tree *tree, uint64 key)
 		if (!rt_node_search_inner(node, key, RT_ACTION_FIND, &child))
 			break;
 
-		node = child;
+		node = rt_node_ptr_encoded(child);
 		shift -= RT_NODE_SPAN;
 		level++;
 	}
@@ -2518,6 +2624,7 @@ rt_dump_search(radix_tree *tree, uint64 key)
 void
 rt_dump(radix_tree *tree)
 {
+	rt_node_ptr root;
 
 	for (int i = 0; i < RT_SIZE_CLASS_COUNT; i++)
 		fprintf(stderr, "%s\tinner_size %zu\tinner_blocksize %zu\tleaf_size %zu\tleaf_blocksize %zu\n",
@@ -2528,12 +2635,13 @@ rt_dump(radix_tree *tree)
 				rt_size_class_info[i].leaf_blocksize);
 	fprintf(stderr, "max_val = " UINT64_FORMAT "\n", tree->max_val);
 
-	if (!tree->root)
+	if (!RTPointerIsValid(tree->root))
 	{
 		fprintf(stderr, "empty tree\n");
 		return;
 	}
 
-	rt_dump_node(tree->root, 0, true);
+	root = rt_node_ptr_encoded(tree->root);
+	rt_dump_node(root, 0, true);
 }
 #endif
