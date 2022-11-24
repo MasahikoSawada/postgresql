@@ -2417,6 +2417,14 @@ rt_stats(radix_tree *tree)
 						 tree->cnt[RT_CLASS_128_PARTIAL],
 						 tree->cnt[RT_CLASS_128_FULL],
 						 tree->cnt[RT_CLASS_256])));
+
+	for (int i = 0; i < RT_SIZE_CLASS_COUNT; i++)
+		ereport(NOTICE, (errmsg("%s\tinner_size %zu\tinner_blocksize %zu\tleaf_size %zu\tleaf_blocksize %zu",
+								rt_size_class_info[i].name,
+								rt_size_class_info[i].inner_size,
+								rt_size_class_info[i].inner_blocksize,
+								rt_size_class_info[i].leaf_size,
+								rt_size_class_info[i].leaf_blocksize)));
 }
 
 static void
