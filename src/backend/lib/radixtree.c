@@ -133,8 +133,11 @@ typedef enum
 
 typedef enum rt_size_class
 {
-	RT_CLASS_4_FULL = 0,
+	RT_CLASS_4_PARTIAL = 0,
+	RT_CLASS_4_FULL,
+	RT_CLASS_32_PARTIAL,
 	RT_CLASS_32_FULL,
+	RT_CLASS_128_PARTIAL,
 	RT_CLASS_128_FULL,
 	RT_CLASS_256
 
@@ -151,6 +154,8 @@ typedef struct rt_node
 	uint16		count;
 
 	/* Max number of children. We can use uint8 because we never need to store 256 */
+	/* WIP: if we don't have a variable sized node4, this should instead be in the base
+	types as needed, since saving every byte is crucial for the smallest node kind */
 	uint8		fanout;
 
 	/*
@@ -168,8 +173,12 @@ typedef struct rt_node
 #define NODE_IS_EMPTY(n)		(((rt_node *) (n))->count == 0)
 #define NODE_HAS_FREE_SLOT(node) \
 	((node)->base.n.count < (node)->base.n.fanout)
+#define NODE_NEEDS_TO_GROW_CLASS(node, class) \
+	(((node)->base.n.count) == (rt_size_class_info[(class)].fanout))
 
 /* Base type of each node kinds for leaf and inner nodes */
+/* The base types must be a be able to accommodate the largest size
+class for variable-sized node kinds*/
 typedef struct rt_node_base_4
 {
 	rt_node		n;
@@ -221,40 +230,40 @@ typedef struct rt_node_inner_4
 {
 	rt_node_base_4 base;
 
-	/* 4 children, for key chunks */
-	rt_node    *children[4];
+	/* number of children depends on size class */
+	rt_node    *children[FLEXIBLE_ARRAY_MEMBER];
 } rt_node_inner_4;
 
 typedef struct rt_node_leaf_4
 {
 	rt_node_base_4 base;
 
-	/* 4 values, for key chunks */
-	uint64		values[4];
+	/* number of values depends on size class */
+	uint64		values[FLEXIBLE_ARRAY_MEMBER];
 } rt_node_leaf_4;
 
 typedef struct rt_node_inner_32
 {
 	rt_node_base_32 base;
 
-	/* 32 children, for key chunks */
-	rt_node    *children[32];
+	/* number of children depends on size class */
+	rt_node    *children[FLEXIBLE_ARRAY_MEMBER];
 } rt_node_inner_32;
 
 typedef struct rt_node_leaf_32
 {
 	rt_node_base_32 base;
 
-	/* 32 values, for key chunks */
-	uint64		values[32];
+	/* number of values depends on size class */
+	uint64		values[FLEXIBLE_ARRAY_MEMBER];
 } rt_node_leaf_32;
 
 typedef struct rt_node_inner_128
 {
 	rt_node_base_128 base;
 
-	/* Slots for 128 children */
-	rt_node    *children[128];
+	/* number of children depends on size class */
+	rt_node    *children[FLEXIBLE_ARRAY_MEMBER];
 } rt_node_inner_128;
 
 typedef struct rt_node_leaf_128
@@ -264,8 +273,8 @@ typedef struct rt_node_leaf_128
 	/* isset is a bitmap to track which slot is in use */
 	uint8		isset[RT_NODE_NSLOTS_BITS(128)];
 
-	/* Slots for 128 values */
-	uint64		values[128];
+	/* number of values depends on size class */
+	uint64		values[FLEXIBLE_ARRAY_MEMBER];
 } rt_node_leaf_128;
 
 /*
@@ -311,32 +320,55 @@ typedef struct rt_size_class_elem
  * from the block.
  */
 #define NODE_SLAB_BLOCK_SIZE(size)	\
-	Max((SLAB_DEFAULT_BLOCK_SIZE / (size)) * size, (size) * 32)
+	Max((SLAB_DEFAULT_BLOCK_SIZE / (size)) * (size), (size) * 32)
 static rt_size_class_elem rt_size_class_info[RT_SIZE_CLASS_COUNT] = {
-
+	[RT_CLASS_4_PARTIAL] = {
+		.name = "radix tree node 1",
+		.fanout = 1,
+		.inner_size = sizeof(rt_node_inner_4) + 1 * sizeof(rt_node *),
+		.leaf_size = sizeof(rt_node_leaf_4) + 1 * sizeof(uint64),
+		.inner_blocksize = NODE_SLAB_BLOCK_SIZE(sizeof(rt_node_inner_4) + 1 * sizeof(rt_node *)),
+		.leaf_blocksize = NODE_SLAB_BLOCK_SIZE(sizeof(rt_node_leaf_4) + 1 * sizeof(uint64)),
+	},
 	[RT_CLASS_4_FULL] = {
 		.name = "radix tree node 4",
 		.fanout = 4,
-		.inner_size = sizeof(rt_node_inner_4),
-		.leaf_size = sizeof(rt_node_leaf_4),
-		.inner_blocksize = NODE_SLAB_BLOCK_SIZE(sizeof(rt_node_inner_4)),
-		.leaf_blocksize = NODE_SLAB_BLOCK_SIZE(sizeof(rt_node_leaf_4)),
+		.inner_size = sizeof(rt_node_inner_4) + 4 * sizeof(rt_node *),
+		.leaf_size = sizeof(rt_node_leaf_4) + 4 * sizeof(uint64),
+		.inner_blocksize = NODE_SLAB_BLOCK_SIZE(sizeof(rt_node_inner_4) + 4 * sizeof(rt_node *)),
+		.leaf_blocksize = NODE_SLAB_BLOCK_SIZE(sizeof(rt_node_leaf_4) + 4 * sizeof(uint64)),
+	},
+	[RT_CLASS_32_PARTIAL] = {
+		.name = "radix tree node 15",
+		.fanout = 15,
+		.inner_size = sizeof(rt_node_inner_32) + 15 * sizeof(rt_node *),
+		.leaf_size = sizeof(rt_node_leaf_32) + 15 * sizeof(uint64),
+		.inner_blocksize = NODE_SLAB_BLOCK_SIZE(sizeof(rt_node_inner_32) + 15 * sizeof(rt_node *)),
+		.leaf_blocksize = NODE_SLAB_BLOCK_SIZE(sizeof(rt_node_leaf_32) + 15 * sizeof(uint64)),
 	},
 	[RT_CLASS_32_FULL] = {
 		.name = "radix tree node 32",
 		.fanout = 32,
-		.inner_size = sizeof(rt_node_inner_32),
-		.leaf_size = sizeof(rt_node_leaf_32),
-		.inner_blocksize = NODE_SLAB_BLOCK_SIZE(sizeof(rt_node_inner_32)),
-		.leaf_blocksize = NODE_SLAB_BLOCK_SIZE(sizeof(rt_node_leaf_32)),
+		.inner_size = sizeof(rt_node_inner_32) + 32 * sizeof(rt_node *),
+		.leaf_size = sizeof(rt_node_leaf_32) + 32 * sizeof(uint64),
+		.inner_blocksize = NODE_SLAB_BLOCK_SIZE(sizeof(rt_node_inner_32) + 32 * sizeof(rt_node *)),
+		.leaf_blocksize = NODE_SLAB_BLOCK_SIZE(sizeof(rt_node_leaf_32) + 32 * sizeof(uint64)),
+	},
+	[RT_CLASS_128_PARTIAL] = {
+		.name = "radix tree node 61",
+		.fanout = 61,
+		.inner_size = sizeof(rt_node_inner_128) + 61 * sizeof(rt_node *),
+		.leaf_size = sizeof(rt_node_leaf_128) + 61 * sizeof(uint64),
+		.inner_blocksize = NODE_SLAB_BLOCK_SIZE(sizeof(rt_node_inner_128) + 61 * sizeof(rt_node *)),
+		.leaf_blocksize = NODE_SLAB_BLOCK_SIZE(sizeof(rt_node_leaf_128) + 61 * sizeof(uint64)),
 	},
 	[RT_CLASS_128_FULL] = {
 		.name = "radix tree node 128",
 		.fanout = 128,
-		.inner_size = sizeof(rt_node_inner_128),
-		.leaf_size = sizeof(rt_node_leaf_128),
-		.inner_blocksize = NODE_SLAB_BLOCK_SIZE(sizeof(rt_node_inner_128)),
-		.leaf_blocksize = NODE_SLAB_BLOCK_SIZE(sizeof(rt_node_leaf_128)),
+		.inner_size = sizeof(rt_node_inner_128) + 128 * sizeof(rt_node *),
+		.leaf_size = sizeof(rt_node_leaf_128) + 128 * sizeof(uint64),
+		.inner_blocksize = NODE_SLAB_BLOCK_SIZE(sizeof(rt_node_inner_128) + 128 * sizeof(rt_node *)),
+		.leaf_blocksize = NODE_SLAB_BLOCK_SIZE(sizeof(rt_node_leaf_128) + 128 * sizeof(uint64)),
 	},
 	[RT_CLASS_256] = {
 		.name = "radix tree node 256",
@@ -352,9 +384,9 @@ static rt_size_class_elem rt_size_class_info[RT_SIZE_CLASS_COUNT] = {
 
 /* Map from the node kind to its minimum size class */
 static rt_size_class kind_min_size_class[RT_NODE_KIND_COUNT] = {
-	[RT_NODE_KIND_4] = RT_CLASS_4_FULL,
-	[RT_NODE_KIND_32] = RT_CLASS_32_FULL,
-	[RT_NODE_KIND_128] = RT_CLASS_128_FULL,
+	[RT_NODE_KIND_4] = RT_CLASS_4_PARTIAL,
+	[RT_NODE_KIND_32] = RT_CLASS_32_PARTIAL,
+	[RT_NODE_KIND_128] = RT_CLASS_128_PARTIAL,
 	[RT_NODE_KIND_256] = RT_CLASS_256,
 };
 
@@ -867,7 +899,7 @@ rt_new_root(radix_tree *tree, uint64 key)
 	int			shift = key_get_shift(key);
 	rt_node    *node;
 
-	node = (rt_node *) rt_alloc_init_node(tree, RT_NODE_KIND_4, RT_CLASS_4_FULL,
+	node = (rt_node *) rt_alloc_init_node(tree, RT_NODE_KIND_4, RT_CLASS_4_PARTIAL,
 										  shift, 0, shift > 0);
 	tree->max_val = shift_get_max_val(shift);
 	tree->root = node;
@@ -965,7 +997,6 @@ rt_free_node(radix_tree *tree, rt_node *node)
 
 #ifdef RT_DEBUG
 	/* update the statistics */
-	// FIXME
 	for (i = 0; i < RT_SIZE_CLASS_COUNT; i++)
 	{
 		if (node->fanout == rt_size_class_info[i].fanout)
@@ -1021,7 +1052,7 @@ rt_extend(radix_tree *tree, uint64 key)
 	{
 		rt_node_inner_4 *node;
 
-		node = (rt_node_inner_4 *) rt_alloc_init_node(tree, RT_NODE_KIND_4, RT_CLASS_4_FULL,
+		node = (rt_node_inner_4 *) rt_alloc_init_node(tree, RT_NODE_KIND_4, RT_CLASS_4_PARTIAL,
 													  shift, 0, true);
 		node->base.n.count = 1;
 		node->base.chunks[0] = 0;
@@ -1051,7 +1082,7 @@ rt_set_extend(radix_tree *tree, uint64 key, uint64 value, rt_node *parent,
 		rt_node    *newchild;
 		int			newshift = shift - RT_NODE_SPAN;
 
-		newchild = rt_alloc_init_node(tree, RT_NODE_KIND_4, RT_CLASS_4_FULL, newshift,
+		newchild = rt_alloc_init_node(tree, RT_NODE_KIND_4, RT_CLASS_4_PARTIAL, newshift,
 									  RT_GET_KEY_CHUNK(key, node->shift),
 									  newshift > 0);
 		rt_node_insert_inner(tree, parent, node, key, newchild);
@@ -1279,33 +1310,63 @@ rt_node_insert_inner(radix_tree *tree, rt_node *parent, rt_node *node, uint64 ke
 
 				if (unlikely(!NODE_HAS_FREE_SLOT(n4)))
 				{
-					rt_node_inner_32 *new32;
-
-					/* grow node from 4 to 32 */
-					new32 = (rt_node_inner_32 *) rt_grow_node_kind(tree, (rt_node *) n4,
-																   RT_NODE_KIND_32);
-					chunk_children_array_copy(n4->base.chunks, n4->children,
-											  new32->base.chunks, new32->children,
-											  n4->base.n.count);
-
 					Assert(parent != NULL);
-					rt_replace_node(tree, parent, (rt_node *) n4, (rt_node *) new32,
-									key);
-					node = (rt_node *) new32;
+
+					if (NODE_NEEDS_TO_GROW_CLASS(n4, RT_CLASS_4_PARTIAL))
+					{
+						rt_node_inner_4 *new4;
+
+						/*
+						 * Use the same node kind, but expand to the next size class. We
+						 * copy the entire old node -- the new node is only different in
+						 * having additional slots so we only have to change the fanout.
+						 */
+						new4 = (rt_node_inner_4 *) rt_alloc_node(tree, RT_CLASS_4_FULL, true);
+						memcpy(new4, n4, rt_size_class_info[RT_CLASS_4_PARTIAL].inner_size);
+						new4->base.n.fanout = rt_size_class_info[RT_CLASS_4_FULL].fanout;
+
+						rt_replace_node(tree, parent, (rt_node *) n4, (rt_node *) new4,
+										key);
+
+						/* must update both pointers here */
+						node = (rt_node *) new4;
+						n4 = new4;
+
+						goto retry_insert_inner_4;
+					}
+					else
+					{
+						rt_node_inner_32 *new32;
+
+						/* grow node from 4 to 32 */
+						new32 = (rt_node_inner_32 *) rt_grow_node_kind(tree, (rt_node *) n4,
+																	   RT_NODE_KIND_32);
+						chunk_children_array_copy(n4->base.chunks, n4->children,
+												  new32->base.chunks, new32->children,
+												  n4->base.n.count);
+
+						Assert(parent != NULL);
+						rt_replace_node(tree, parent, (rt_node *) n4, (rt_node *) new32,
+										key);
+						node = (rt_node *) new32;
+					}
 				}
 				else
 				{
-					int			insertpos = node_4_get_insertpos((rt_node_base_4 *) n4, chunk);
-					uint16		count = n4->base.n.count;
+				retry_insert_inner_4:
+					{
+						int			insertpos = node_4_get_insertpos((rt_node_base_4 *) n4, chunk);
+						uint16		count = n4->base.n.count;
 
-					/* shift chunks and children */
-					if (count != 0 && insertpos < count)
-						chunk_children_array_shift(n4->base.chunks, n4->children,
-												   count, insertpos);
+						/* shift chunks and children */
+						if (count != 0 && insertpos < count)
+							chunk_children_array_shift(n4->base.chunks, n4->children,
+													   count, insertpos);
 
-					n4->base.chunks[insertpos] = chunk;
-					n4->children[insertpos] = child;
-					break;
+						n4->base.chunks[insertpos] = chunk;
+						n4->children[insertpos] = child;
+						break;
+					}
 				}
 			}
 			/* FALLTHROUGH */
@@ -1325,31 +1386,56 @@ rt_node_insert_inner(radix_tree *tree, rt_node *parent, rt_node *node, uint64 ke
 
 				if (unlikely(!NODE_HAS_FREE_SLOT(n32)))
 				{
-					rt_node_inner_128 *new128;
-
-					/* grow node from 32 to 128 */
-					new128 = (rt_node_inner_128 *) rt_grow_node_kind(tree, (rt_node *) n32,
-																	 RT_NODE_KIND_128);
-					for (int i = 0; i < n32->base.n.count; i++)
-						node_inner_128_insert(new128, n32->base.chunks[i], n32->children[i]);
-
 					Assert(parent != NULL);
-					rt_replace_node(tree, parent, (rt_node *) n32, (rt_node *) new128,
-									key);
-					node = (rt_node *) new128;
+
+					if (NODE_NEEDS_TO_GROW_CLASS(n32, RT_CLASS_32_PARTIAL))
+					{
+						/* use the same node kind, but expand to the next size class */
+						rt_node_inner_32 *new32;
+
+						new32 = (rt_node_inner_32 *) rt_alloc_node(tree, RT_CLASS_32_FULL, true);
+						memcpy(new32, n32, rt_size_class_info[RT_CLASS_32_PARTIAL].inner_size);
+						new32->base.n.fanout = rt_size_class_info[RT_CLASS_32_FULL].fanout;
+
+						rt_replace_node(tree, parent, (rt_node *) n32, (rt_node *) new32,
+										key);
+
+						/* must update both pointers here */
+						node = (rt_node *) new32;
+						n32 = new32;
+
+						goto retry_insert_inner_32;
+					}
+					else
+					{
+						rt_node_inner_128 *new128;
+
+						/* grow node from 32 to 128 */
+						new128 = (rt_node_inner_128 *) rt_grow_node_kind(tree, (rt_node *) n32,
+																		 RT_NODE_KIND_128);
+						for (int i = 0; i < n32->base.n.count; i++)
+							node_inner_128_insert(new128, n32->base.chunks[i], n32->children[i]);
+
+						rt_replace_node(tree, parent, (rt_node *) n32, (rt_node *) new128,
+										key);
+						node = (rt_node *) new128;
+					}
 				}
 				else
 				{
-					int			insertpos = node_32_get_insertpos((rt_node_base_32 *) n32, chunk);
-					int16		count = n32->base.n.count;
+retry_insert_inner_32:
+					{
+						int	insertpos = node_32_get_insertpos((rt_node_base_32 *) n32, chunk);
+						int16 count = n32->base.n.count;
 
-					if (count != 0 && insertpos < count)
-						chunk_children_array_shift(n32->base.chunks, n32->children,
-												   count, insertpos);
+						if (count != 0 && insertpos < count)
+							chunk_children_array_shift(n32->base.chunks, n32->children,
+													   count, insertpos);
 
-					n32->base.chunks[insertpos] = chunk;
-					n32->children[insertpos] = child;
-					break;
+						n32->base.chunks[insertpos] = chunk;
+						n32->children[insertpos] = child;
+						break;
+					}
 				}
 			}
 			/* FALLTHROUGH */
@@ -1368,29 +1454,54 @@ rt_node_insert_inner(radix_tree *tree, rt_node *parent, rt_node *node, uint64 ke
 
 				if (unlikely(!NODE_HAS_FREE_SLOT(n128)))
 				{
-					rt_node_inner_256 *new256;
-
-					/* grow node from 128 to 256 */
-					new256 = (rt_node_inner_256 *) rt_grow_node_kind(tree, (rt_node *) n128,
-																	 RT_NODE_KIND_256);
-					for (int i = 0; i < RT_NODE_MAX_SLOTS && cnt < n128->base.n.count; i++)
-					{
-						if (!node_128_is_chunk_used((rt_node_base_128 *) n128, i))
-							continue;
-
-						node_inner_256_set(new256, i, node_inner_128_get_child(n128, i));
-						cnt++;
-					}
-
 					Assert(parent != NULL);
-					rt_replace_node(tree, parent, (rt_node *) n128, (rt_node *) new256,
-									key);
-					node = (rt_node *) new256;
+
+					if (NODE_NEEDS_TO_GROW_CLASS(n128, RT_CLASS_128_PARTIAL))
+					{
+						/* use the same node kind, but expand to the next size class */
+						rt_node_inner_128 *new128;
+
+						new128 = (rt_node_inner_128 *) rt_alloc_node(tree, RT_CLASS_128_FULL, true);
+						memcpy(new128, n128, rt_size_class_info[RT_CLASS_128_PARTIAL].inner_size);
+						new128->base.n.fanout = rt_size_class_info[RT_CLASS_128_FULL].fanout;
+
+						rt_replace_node(tree, parent, (rt_node *) n128, (rt_node *) new128,
+										key);
+
+						/* must update both pointers here */
+						node = (rt_node *) new128;
+						n128 = new128;
+
+						goto retry_insert_inner_128;
+					}
+					else
+					{
+						rt_node_inner_256 *new256;
+
+						/* grow node from 128 to 256 */
+						new256 = (rt_node_inner_256 *) rt_grow_node_kind(tree, (rt_node *) n128,
+																		 RT_NODE_KIND_256);
+						for (int i = 0; i < RT_NODE_MAX_SLOTS && cnt < n128->base.n.count; i++)
+						{
+							if (!node_128_is_chunk_used((rt_node_base_128 *) n128, i))
+								continue;
+
+							node_inner_256_set(new256, i, node_inner_128_get_child(n128, i));
+							cnt++;
+						}
+
+						rt_replace_node(tree, parent, (rt_node *) n128, (rt_node *) new256,
+										key);
+						node = (rt_node *) new256;
+					}
 				}
 				else
 				{
-					node_inner_128_insert(n128, chunk, child);
-					break;
+				retry_insert_inner_128:
+					{
+						node_inner_128_insert(n128, chunk, child);
+						break;
+					}
 				}
 			}
 			/* FALLTHROUGH */
@@ -1448,33 +1559,57 @@ rt_node_insert_leaf(radix_tree *tree, rt_node *parent, rt_node *node,
 
 				if (unlikely(!NODE_HAS_FREE_SLOT(n4)))
 				{
-					rt_node_leaf_32 *new32;
-
-					/* grow node from 4 to 32 */
-					new32 = (rt_node_leaf_32 *) rt_grow_node_kind(tree, (rt_node *) n4,
-																  RT_NODE_KIND_32);
-					chunk_values_array_copy(n4->base.chunks, n4->values,
-											new32->base.chunks, new32->values,
-											n4->base.n.count);
-
 					Assert(parent != NULL);
-					rt_replace_node(tree, parent, (rt_node *) n4, (rt_node *) new32,
-									key);
-					node = (rt_node *) new32;
+
+					if (NODE_NEEDS_TO_GROW_CLASS(n4, RT_CLASS_4_PARTIAL))
+					{
+						/* use the same node kind, but expand to the next size class */
+						rt_node_leaf_4 *new4;
+
+						new4 = (rt_node_leaf_4 *) rt_alloc_node(tree, RT_CLASS_4_FULL, false);
+						memcpy(new4, n4, rt_size_class_info[RT_CLASS_4_PARTIAL].leaf_size);
+						new4->base.n.fanout = rt_size_class_info[RT_CLASS_4_FULL].fanout;
+
+						rt_replace_node(tree, parent, (rt_node *) n4, (rt_node *) new4,
+										key);
+
+						/* must update both pointers here */
+						node = (rt_node *) new4;
+						n4 = new4;
+
+						goto retry_insert_leaf_4;
+					}
+					else
+					{
+						rt_node_leaf_32 *new32;
+
+						/* grow node from 4 to 32 */
+						new32 = (rt_node_leaf_32 *) rt_grow_node_kind(tree, (rt_node *) n4,
+																	  RT_NODE_KIND_32);
+						chunk_values_array_copy(n4->base.chunks, n4->values,
+												new32->base.chunks, new32->values,
+												n4->base.n.count);
+						rt_replace_node(tree, parent, (rt_node *) n4, (rt_node *) new32,
+										key);
+						node = (rt_node *) new32;
+					}
 				}
 				else
 				{
-					int			insertpos = node_4_get_insertpos((rt_node_base_4 *) n4, chunk);
-					int			count = n4->base.n.count;
+				retry_insert_leaf_4:
+					{
+						int			insertpos = node_4_get_insertpos((rt_node_base_4 *) n4, chunk);
+						int			count = n4->base.n.count;
 
-					/* shift chunks and values */
-					if (count != 0 && insertpos < count)
-						chunk_values_array_shift(n4->base.chunks, n4->values,
-												 count, insertpos);
+						/* shift chunks and values */
+						if (count != 0 && insertpos < count)
+							chunk_values_array_shift(n4->base.chunks, n4->values,
+													 count, insertpos);
 
-					n4->base.chunks[insertpos] = chunk;
-					n4->values[insertpos] = value;
-					break;
+						n4->base.chunks[insertpos] = chunk;
+						n4->values[insertpos] = value;
+						break;
+					}
 				}
 			}
 			/* FALLTHROUGH */
@@ -1494,31 +1629,56 @@ rt_node_insert_leaf(radix_tree *tree, rt_node *parent, rt_node *node,
 
 				if (unlikely(!NODE_HAS_FREE_SLOT(n32)))
 				{
-					rt_node_leaf_128 *new128;
-
-					/* grow node from 32 to 128 */
-					new128 = (rt_node_leaf_128 *) rt_grow_node_kind(tree, (rt_node *) n32,
-																	RT_NODE_KIND_128);
-					for (int i = 0; i < n32->base.n.count; i++)
-						node_leaf_128_insert(new128, n32->base.chunks[i], n32->values[i]);
-
 					Assert(parent != NULL);
-					rt_replace_node(tree, parent, (rt_node *) n32, (rt_node *) new128,
-									key);
-					node = (rt_node *) new128;
+
+					if (NODE_NEEDS_TO_GROW_CLASS(n32, RT_CLASS_32_PARTIAL))
+					{
+						/* use the same node kind, but expand to the next size class */
+						rt_node_leaf_32 *new32;
+
+						new32 = (rt_node_leaf_32 *) rt_alloc_node(tree, RT_CLASS_32_FULL, false);
+						memcpy(new32, n32, rt_size_class_info[RT_CLASS_32_PARTIAL].leaf_size);
+						new32->base.n.fanout = rt_size_class_info[RT_CLASS_32_FULL].fanout;
+
+						rt_replace_node(tree, parent, (rt_node *) n32, (rt_node *) new32,
+										key);
+
+						/* must update both pointers here */
+						node = (rt_node *) new32;
+						n32 = new32;
+
+						goto retry_insert_leaf_32;
+					}
+					else
+					{
+						rt_node_leaf_128 *new128;
+
+						/* grow node from 32 to 128 */
+						new128 = (rt_node_leaf_128 *) rt_grow_node_kind(tree, (rt_node *) n32,
+																		RT_NODE_KIND_128);
+						for (int i = 0; i < n32->base.n.count; i++)
+							node_leaf_128_insert(new128, n32->base.chunks[i], n32->values[i]);
+
+						rt_replace_node(tree, parent, (rt_node *) n32, (rt_node *) new128,
+										key);
+						node = (rt_node *) new128;
+					}
 				}
 				else
 				{
-					int			insertpos = node_32_get_insertpos((rt_node_base_32 *) n32, chunk);
-					int			count = n32->base.n.count;
+				retry_insert_leaf_32:
+					{
+						int	insertpos = node_32_get_insertpos((rt_node_base_32 *) n32, chunk);
+						int	count = n32->base.n.count;
 
-					if (count != 0 && insertpos < count)
-						chunk_values_array_shift(n32->base.chunks, n32->values,
-												 count, insertpos);
+						if (count != 0 && insertpos < count)
+							chunk_values_array_shift(n32->base.chunks, n32->values,
+													 count, insertpos);
 
-					n32->base.chunks[insertpos] = chunk;
-					n32->values[insertpos] = value;
-					break;
+						n32->base.chunks[insertpos] = chunk;
+						n32->values[insertpos] = value;
+						break;
+					}
 				}
 			}
 			/* FALLTHROUGH */
@@ -1537,29 +1697,54 @@ rt_node_insert_leaf(radix_tree *tree, rt_node *parent, rt_node *node,
 
 				if (unlikely(!NODE_HAS_FREE_SLOT(n128)))
 				{
-					rt_node_leaf_256 *new256;
-
-					/* grow node from 128 to 256 */
-					new256 = (rt_node_leaf_256 *) rt_grow_node_kind(tree, (rt_node *) n128,
-															   RT_NODE_KIND_256);
-					for (int i = 0; i < RT_NODE_MAX_SLOTS && cnt < n128->base.n.count; i++)
-					{
-						if (!node_128_is_chunk_used((rt_node_base_128 *) n128, i))
-							continue;
-
-						node_leaf_256_set(new256, i, node_leaf_128_get_value(n128, i));
-						cnt++;
-					}
-
 					Assert(parent != NULL);
-					rt_replace_node(tree, parent, (rt_node *) n128, (rt_node *) new256,
-									key);
-					node = (rt_node *) new256;
+
+					if (NODE_NEEDS_TO_GROW_CLASS(n128, RT_CLASS_128_PARTIAL))
+					{
+						/* use the same node kind, but expand to the next size class */
+						rt_node_leaf_128 *new128;
+
+						new128 = (rt_node_leaf_128 *) rt_alloc_node(tree, RT_CLASS_128_FULL, false);
+						memcpy(new128, n128, rt_size_class_info[RT_CLASS_128_PARTIAL].leaf_size);
+						new128->base.n.fanout = rt_size_class_info[RT_CLASS_128_FULL].fanout;
+
+						rt_replace_node(tree, parent, (rt_node *) n128, (rt_node *) new128,
+										key);
+
+						/* must update both pointers here */
+						node = (rt_node *) new128;
+						n128 = new128;
+
+						goto retry_insert_leaf_128;
+					}
+					else
+					{
+						rt_node_leaf_256 *new256;
+
+						/* grow node from 128 to 256 */
+						new256 = (rt_node_leaf_256 *) rt_grow_node_kind(tree, (rt_node *) n128,
+																		RT_NODE_KIND_256);
+						for (int i = 0; i < RT_NODE_MAX_SLOTS && cnt < n128->base.n.count; i++)
+						{
+							if (!node_128_is_chunk_used((rt_node_base_128 *) n128, i))
+								continue;
+
+							node_leaf_256_set(new256, i, node_leaf_128_get_value(n128, i));
+							cnt++;
+						}
+
+						rt_replace_node(tree, parent, (rt_node *) n128, (rt_node *) new256,
+										key);
+						node = (rt_node *) new256;
+					}
 				}
 				else
 				{
-					node_leaf_128_insert(n128, chunk, value);
-					break;
+				retry_insert_leaf_128:
+					{
+						node_leaf_128_insert(n128, chunk, value);
+						break;
+					}
 				}
 			}
 			/* FALLTHROUGH */
@@ -2222,11 +2407,14 @@ rt_verify_node(rt_node *node)
 void
 rt_stats(radix_tree *tree)
 {
-	ereport(LOG, (errmsg("num_keys = %lu, height = %u, n4 = %u, n32 = %u, n128 = %u, n256 = %u",
+	ereport(NOTICE, (errmsg("num_keys = " UINT64_FORMAT ", height = %d, n1 = %u, n4 = %u, n15 = %u, n32 = %u, n61 = %u, n128 = %u, n256 = %u",
 						 tree->num_keys,
 						 tree->root->shift / RT_NODE_SPAN,
+						 tree->cnt[RT_CLASS_4_PARTIAL],
 						 tree->cnt[RT_CLASS_4_FULL],
+						 tree->cnt[RT_CLASS_32_PARTIAL],
 						 tree->cnt[RT_CLASS_32_FULL],
+						 tree->cnt[RT_CLASS_128_PARTIAL],
 						 tree->cnt[RT_CLASS_128_FULL],
 						 tree->cnt[RT_CLASS_256])));
 }
