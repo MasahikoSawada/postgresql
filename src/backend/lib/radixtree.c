@@ -62,6 +62,7 @@
 #include "lib/radixtree.h"
 #include "lib/stringinfo.h"
 #include "miscadmin.h"
+#include "nodes/bitmapset.h"
 #include "port/pg_bitutils.h"
 #include "port/pg_lfind.h"
 #include "utils/memutils.h"
@@ -102,6 +103,10 @@
  */
 #define RT_NODE_BITMAP_BYTE(v) ((v) / BITS_PER_BYTE)
 #define RT_NODE_BITMAP_BIT(v) (UINT64CONST(1) << ((v) % RT_NODE_SPAN))
+
+/* FIXME rename */
+#define WORDNUM(x)	((x) / BITS_PER_BITMAPWORD)
+#define BITNUM(x)	((x) % BITS_PER_BITMAPWORD)
 
 /* Enum used rt_node_search() */
 typedef enum
@@ -207,6 +212,9 @@ typedef struct rt_node_base125
 
 	/* The index of slots for each fanout */
 	uint8		slot_idxs[RT_NODE_MAX_SLOTS];
+
+	/* isset is a bitmap to track which slot is in use */
+	bitmapword		isset[WORDNUM(128)];
 } rt_node_base_125;
 
 typedef struct rt_node_base256
@@ -270,9 +278,6 @@ typedef struct rt_node_inner_125
 typedef struct rt_node_leaf_125
 {
 	rt_node_base_125 base;
-
-	/* isset is a bitmap to track which slot is in use */
-	uint8		isset[RT_NODE_NSLOTS_BITS(128)];
 
 	/* number of values depends on size class */
 	uint64		values[FLEXIBLE_ARRAY_MEMBER];
@@ -655,13 +660,14 @@ node_125_is_chunk_used(rt_node_base_125 *node, uint8 chunk)
 	return node->slot_idxs[chunk] != RT_NODE_125_INVALID_IDX;
 }
 
+#ifdef USE_ASSERT_CHECKING
 /* Is the slot in the node used? */
 static inline bool
 node_inner_125_is_slot_used(rt_node_inner_125 *node, uint8 slot)
 {
 	Assert(!NODE_IS_LEAF(node));
 	Assert(slot < node->base.n.fanout);
-	return (node->children[slot] != NULL);
+	return (node->base.isset[WORDNUM(slot)] & ((bitmapword) 1 << BITNUM(slot))) != 0;
 }
 
 static inline bool
@@ -669,8 +675,9 @@ node_leaf_125_is_slot_used(rt_node_leaf_125 *node, uint8 slot)
 {
 	Assert(NODE_IS_LEAF(node));
 	Assert(slot < node->base.n.fanout);
-	return ((node->isset[RT_NODE_BITMAP_BYTE(slot)] & RT_NODE_BITMAP_BIT(slot)) != 0);
+	return (node->base.isset[WORDNUM(slot)] & ((bitmapword) 1 << BITNUM(slot))) != 0;
 }
+#endif
 
 static inline rt_node *
 node_inner_125_get_child(rt_node_inner_125 *node, uint8 chunk)
@@ -690,7 +697,10 @@ node_leaf_125_get_value(rt_node_leaf_125 *node, uint8 chunk)
 static void
 node_inner_125_delete(rt_node_inner_125 *node, uint8 chunk)
 {
+	int			slotpos = node->base.slot_idxs[chunk];
+
 	Assert(!NODE_IS_LEAF(node));
+	node->base.isset[WORDNUM(slotpos)] &= ~((bitmapword) 1 << BITNUM(slotpos));
 	node->children[node->base.slot_idxs[chunk]] = NULL;
 	node->base.slot_idxs[chunk] = RT_NODE_125_INVALID_IDX;
 }
@@ -701,44 +711,35 @@ node_leaf_125_delete(rt_node_leaf_125 *node, uint8 chunk)
 	int			slotpos = node->base.slot_idxs[chunk];
 
 	Assert(NODE_IS_LEAF(node));
-	node->isset[RT_NODE_BITMAP_BYTE(slotpos)] &= ~(RT_NODE_BITMAP_BIT(slotpos));
+	node->base.isset[WORDNUM(slotpos)] &= ~((bitmapword) 1 << BITNUM(slotpos));
 	node->base.slot_idxs[chunk] = RT_NODE_125_INVALID_IDX;
 }
 
 /* Return an unused slot in node-125 */
 static int
-node_inner_125_find_unused_slot(rt_node_inner_125 *node, uint8 chunk)
-{
-	int			slotpos = 0;
-
-	Assert(!NODE_IS_LEAF(node));
-	while (node_inner_125_is_slot_used(node, slotpos))
-		slotpos++;
-
-	return slotpos;
-}
-
-static int
-node_leaf_125_find_unused_slot(rt_node_leaf_125 *node, uint8 chunk)
+node_125_find_unused_slot(bitmapword *isset)
 {
 	int			slotpos;
+	int			idx;
+	bitmapword	inverse;
 
-	Assert(NODE_IS_LEAF(node));
-
-	/* We iterate over the isset bitmap per byte then check each bit */
-	for (slotpos = 0; slotpos < RT_NODE_NSLOTS_BITS(128); slotpos++)
+	/* get the first word with at least one bit not set */
+	for (idx = 0; idx < WORDNUM(128); idx++)
 	{
-		if (node->isset[slotpos] < 0xFF)
+		if (isset[idx] < ~((bitmapword) 0))
 			break;
 	}
-	Assert(slotpos < RT_NODE_NSLOTS_BITS(128));
 
-	slotpos *= BITS_PER_BYTE;
-	while (node_leaf_125_is_slot_used(node, slotpos))
-		slotpos++;
+	/* To get the first unset bit in X, get the first set bit in ~X */
+	inverse = ~(isset[idx]);
+	slotpos = idx * BITS_PER_BITMAPWORD;
+	slotpos += bmw_rightmost_one_pos(inverse);
+
+	/* mark the slot used */
+	isset[idx] |= bmw_rightmost_one(inverse);
 
 	return slotpos;
-}
+ }
 
 static inline void
 node_inner_125_insert(rt_node_inner_125 *node, uint8 chunk, rt_node *child)
@@ -747,8 +748,7 @@ node_inner_125_insert(rt_node_inner_125 *node, uint8 chunk, rt_node *child)
 
 	Assert(!NODE_IS_LEAF(node));
 
-	/* find unused slot */
-	slotpos = node_inner_125_find_unused_slot(node, chunk);
+	slotpos = node_125_find_unused_slot(node->base.isset);
 	Assert(slotpos < node->base.n.fanout);
 
 	node->base.slot_idxs[chunk] = slotpos;
@@ -763,12 +763,10 @@ node_leaf_125_insert(rt_node_leaf_125 *node, uint8 chunk, uint64 value)
 
 	Assert(NODE_IS_LEAF(node));
 
-	/* find unused slot */
-	slotpos = node_leaf_125_find_unused_slot(node, chunk);
+	slotpos = node_125_find_unused_slot(node->base.isset);
 	Assert(slotpos < node->base.n.fanout);
 
 	node->base.slot_idxs[chunk] = slotpos;
-	node->isset[RT_NODE_BITMAP_BYTE(slotpos)] |= RT_NODE_BITMAP_BIT(slotpos);
 	node->values[slotpos] = value;
 }
 
@@ -2395,9 +2393,9 @@ rt_dump_node(rt_node *node, int level, bool recurse)
 					rt_node_leaf_125 *n = (rt_node_leaf_125 *) node;
 
 					fprintf(stderr, ", isset-bitmap:");
-					for (int i = 0; i < 16; i++)
+					for (int i = 0; i < WORDNUM(128); i++)
 					{
-						fprintf(stderr, "%X ", (uint8) n->isset[i]);
+						fprintf(stderr, UINT64_FORMAT_HEX " ", n->base.isset[i]);
 					}
 					fprintf(stderr, "\n");
 				}
