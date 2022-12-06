@@ -154,6 +154,8 @@ bench_search(FunctionCallInfo fcinfo, bool shuffle)
 	BlockNumber maxblk = PG_GETARG_INT32(1);
 	bool		random_block = PG_GETARG_BOOL(2);
 	radix_tree *rt = NULL;
+	bool		shared = PG_GETARG_BOOL(3);
+	dsa_area   *dsa = NULL;
 	uint64		ntids;
 	uint64		key;
 	uint64		last_key = PG_UINT64_MAX;
@@ -176,7 +178,11 @@ bench_search(FunctionCallInfo fcinfo, bool shuffle)
 	tids = generate_tids(minblk, maxblk, TIDS_PER_BLOCK_FOR_LOAD, &ntids, random_block);
 
 	/* measure the load time of the radix tree */
-	rt = rt_create(CurrentMemoryContext);
+	if (shared)
+		dsa = dsa_create(LWLockNewTrancheId());
+	rt = rt_create(CurrentMemoryContext, dsa);
+
+	/* measure the load time of the radix tree */
 	start_time = GetCurrentTimestamp();
 	for (int i = 0; i < ntids; i++)
 	{
@@ -327,7 +333,7 @@ bench_load_random_int(PG_FUNCTION_ARGS)
 		elog(ERROR, "return type must be a row type");
 
 	pg_prng_seed(&state, 0);
-	rt = rt_create(CurrentMemoryContext);
+	rt = rt_create(CurrentMemoryContext, NULL);
 
 	start_time = GetCurrentTimestamp();
 	for (uint64 i = 0; i < cnt; i++)
@@ -393,7 +399,7 @@ bench_search_random_nodes(PG_FUNCTION_ARGS)
 	}
 	elog(NOTICE, "bench with filter 0x%lX", filter);
 
-	rt = rt_create(CurrentMemoryContext);
+	rt = rt_create(CurrentMemoryContext, NULL);
 
 	for (uint64 i = 0; i < cnt; i++)
 	{
@@ -462,7 +468,7 @@ bench_fixed_height_search(PG_FUNCTION_ARGS)
 	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
 		elog(ERROR, "return type must be a row type");
 
-	rt = rt_create(CurrentMemoryContext);
+	rt = rt_create(CurrentMemoryContext, NULL);
 
 	start_time = GetCurrentTimestamp();
 
@@ -574,7 +580,7 @@ bench_node128_load(PG_FUNCTION_ARGS)
 	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
 		elog(ERROR, "return type must be a row type");
 
-	rt = rt_create(CurrentMemoryContext);
+	rt = rt_create(CurrentMemoryContext, NULL);
 
 	key_id = 0;
 

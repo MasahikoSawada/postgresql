@@ -19,6 +19,7 @@
 #include "nodes/bitmapset.h"
 #include "storage/block.h"
 #include "storage/itemptr.h"
+#include "storage/lwlock.h"
 #include "utils/memutils.h"
 #include "utils/timestamp.h"
 
@@ -99,6 +100,8 @@ static const test_spec test_specs[] = {
 	}
 };
 
+static int lwlock_tranche_id;
+
 PG_MODULE_MAGIC;
 
 PG_FUNCTION_INFO_V1(test_radixtree);
@@ -112,7 +115,7 @@ test_empty(void)
 	uint64		key;
 	uint64		val;
 
-	radixtree = rt_create(CurrentMemoryContext);
+	radixtree = rt_create(CurrentMemoryContext, NULL);
 
 	if (rt_search(radixtree, 0, &dummy))
 		elog(ERROR, "rt_search on empty tree returned true");
@@ -140,16 +143,13 @@ test_empty(void)
 }
 
 static void
-test_basic(int children, bool test_inner)
+do_test_basic(radix_tree *radixtree, int children, bool test_inner)
 {
-	radix_tree	*radixtree;
 	uint64 *keys;
 	int	shift = test_inner ? 8 : 0;
 
 	elog(NOTICE, "testing basic operations with %s node %d",
 		 test_inner ? "inner" : "leaf", children);
-
-	radixtree = rt_create(CurrentMemoryContext);
 
 	/* prepare keys in order like 1, 32, 2, 31, 2, ... */
 	keys = palloc(sizeof(uint64) * children);
@@ -165,7 +165,7 @@ test_basic(int children, bool test_inner)
 	for (int i = 0; i < children; i++)
 	{
 		if (rt_set(radixtree, keys[i], keys[i]))
-			elog(ERROR, "new inserted key 0x" UINT64_HEX_FORMAT " is found ", keys[i]);
+			elog(ERROR, "new inserted key 0x" UINT64_HEX_FORMAT " is found %d", keys[i], i);
 	}
 
 	/* update keys */
@@ -185,7 +185,38 @@ test_basic(int children, bool test_inner)
 	}
 
 	pfree(keys);
-	rt_free(radixtree);
+}
+
+static void
+test_basic()
+{
+	for (int i = 1; i < lengthof(rt_node_kind_fanouts); i++)
+	{
+		radix_tree *tree;
+		dsa_area	*area;
+
+		/* Test the local radix tree */
+		tree = rt_create(CurrentMemoryContext, NULL);
+		do_test_basic(tree, rt_node_kind_fanouts[i], false);
+		rt_free(tree);
+
+		tree = rt_create(CurrentMemoryContext, NULL);
+		do_test_basic(tree, rt_node_kind_fanouts[i], true);
+		rt_free(tree);
+
+		/* Test the shared radix tree */
+		area = dsa_create(lwlock_tranche_id);
+		tree = rt_create(CurrentMemoryContext, area);
+		do_test_basic(tree, rt_node_kind_fanouts[i], false);
+		rt_free(tree);
+		dsa_detach(area);
+
+		area = dsa_create(lwlock_tranche_id);
+		tree = rt_create(CurrentMemoryContext, area);
+		do_test_basic(tree, rt_node_kind_fanouts[i], true);
+		rt_free(tree);
+		dsa_detach(area);
+	}
 }
 
 /*
@@ -286,13 +317,9 @@ test_node_types_delete(radix_tree *radixtree, uint8 shift)
  * level.
  */
 static void
-test_node_types(uint8 shift)
+do_test_node_types(radix_tree *radixtree, uint8 shift)
 {
-	radix_tree *radixtree;
-
 	elog(NOTICE, "testing radix tree node types with shift \"%d\"", shift);
-
-	radixtree = rt_create(CurrentMemoryContext);
 
 	/*
 	 * Insert and search entries for every node type at the 'shift' level,
@@ -302,19 +329,37 @@ test_node_types(uint8 shift)
 	test_node_types_insert(radixtree, shift, true);
 	test_node_types_delete(radixtree, shift);
 	test_node_types_insert(radixtree, shift, false);
+}
 
-	rt_free(radixtree);
+static void
+test_node_types(void)
+{
+	for (int shift = 0; shift <= (64 - 8); shift += 8)
+	{
+		radix_tree *tree;
+		dsa_area   *area;
+
+		/* Test the local radix tree */
+		tree = rt_create(CurrentMemoryContext, NULL);
+		do_test_node_types(tree, shift);
+		rt_free(tree);
+
+		/* Test the shared radix tree */
+		area = dsa_create(lwlock_tranche_id);
+		tree = rt_create(CurrentMemoryContext, area);
+		do_test_node_types(tree, shift);
+		rt_free(tree);
+		dsa_detach(area);
+	}
 }
 
 /*
  * Test with a repeating pattern, defined by the 'spec'.
  */
 static void
-test_pattern(const test_spec * spec)
+do_test_pattern(radix_tree *radixtree, const test_spec * spec)
 {
-	radix_tree *radixtree;
 	rt_iter    *iter;
-	MemoryContext radixtree_ctx;
 	TimestampTz starttime;
 	TimestampTz endtime;
 	uint64		n;
@@ -339,18 +384,6 @@ test_pattern(const test_spec * spec)
 		if (spec->pattern_str[i] == '1')
 			pattern_values[pattern_num_values++] = i;
 	}
-
-	/*
-	 * Allocate the radix tree.
-	 *
-	 * Allocate it in a separate memory context, so that we can print its
-	 * memory usage easily.
-	 */
-	radixtree_ctx = AllocSetContextCreate(CurrentMemoryContext,
-										  "radixtree test",
-										  ALLOCSET_SMALL_SIZES);
-	MemoryContextSetIdentifier(radixtree_ctx, spec->test_name);
-	radixtree = rt_create(radixtree_ctx);
 
 	/*
 	 * Add values to the set.
@@ -405,8 +438,6 @@ test_pattern(const test_spec * spec)
 		mem_usage = rt_memory_usage(radixtree);
 		fprintf(stderr, "rt_memory_usage() reported " UINT64_FORMAT " (%0.2f bytes / integer)\n",
 				mem_usage, (double) mem_usage / spec->num_values);
-
-		MemoryContextStats(radixtree_ctx);
 	}
 
 	/* Check that rt_num_entries works */
@@ -555,27 +586,57 @@ test_pattern(const test_spec * spec)
 	if ((nbefore - ndeleted) != nafter)
 		elog(ERROR, "rt_num_entries returned " UINT64_FORMAT ", expected " UINT64_FORMAT "after " UINT64_FORMAT " deletion",
 			 nafter, (nbefore - ndeleted), ndeleted);
+}
 
-	MemoryContextDelete(radixtree_ctx);
+static void
+test_patterns(void)
+{
+	/* Test different test patterns, with lots of entries */
+	for (int i = 0; i < lengthof(test_specs); i++)
+	{
+		radix_tree *tree;
+		MemoryContext radixtree_ctx;
+		dsa_area   *area;
+		const		test_spec *spec = &test_specs[i];
+
+		/*
+		 * Allocate the radix tree.
+		 *
+		 * Allocate it in a separate memory context, so that we can print its
+		 * memory usage easily.
+		 */
+		radixtree_ctx = AllocSetContextCreate(CurrentMemoryContext,
+											  "radixtree test",
+											  ALLOCSET_SMALL_SIZES);
+		MemoryContextSetIdentifier(radixtree_ctx, spec->test_name);
+
+		/* Test the local radix tree */
+		tree = rt_create(radixtree_ctx, NULL);
+		do_test_pattern(tree, spec);
+		rt_free(tree);
+		MemoryContextReset(radixtree_ctx);
+
+		/* Test the shared radix tree */
+		area = dsa_create(lwlock_tranche_id);
+		tree = rt_create(radixtree_ctx, area);
+		do_test_pattern(tree, spec);
+		rt_free(tree);
+		dsa_detach(area);
+		MemoryContextDelete(radixtree_ctx);
+	}
 }
 
 Datum
 test_radixtree(PG_FUNCTION_ARGS)
 {
+	/* get a new lwlock tranche id for all tests for shared radix tree */
+	lwlock_tranche_id = LWLockNewTrancheId();
+
 	test_empty();
+	test_basic();
 
-	for (int i = 1; i < lengthof(rt_node_kind_fanouts); i++)
-	{
-		test_basic(rt_node_kind_fanouts[i], false);
-		test_basic(rt_node_kind_fanouts[i], true);
-	}
-
-	for (int shift = 0; shift <= (64 - 8); shift += 8)
-		test_node_types(shift);
-
-	/* Test different test patterns, with lots of entries */
-	for (int i = 0; i < lengthof(test_specs); i++)
-		test_pattern(&test_specs[i]);
+	test_node_types();
+	test_patterns();
 
 	PG_RETURN_VOID();
 }

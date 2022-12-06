@@ -22,6 +22,15 @@
  * choose it to avoid an additional pointer traversal.  It is the reason this code
  * currently does not support variable-length keys.
  *
+ * If DSA area is specified for rt_create(), the radix tree is created in the
+ * DSA area so that multiple processes can access to it simultaneously. The process
+ * who created the shared radix tree needs to tell both DSA area specified when
+ * calling to rt_create() and dsa_pointer of the radix tree, fetched by
+ * rt_get_dsa_pointer(), to other processes so that they can attach by rt_attach().
+ *
+ * XXX: shared radix tree is still PoC state as it doesn't have any locking support.
+ * Also, it supports the iteration only by one process.
+ *
  * XXX: Most functions in this file have two variants for inner nodes and leaf
  * nodes, therefore there are duplication codes. While this sometimes makes the
  * code maintenance tricky, this reduces branch prediction misses when judging
@@ -34,6 +43,9 @@
  *
  * rt_create		- Create a new, empty radix tree
  * rt_free			- Free the radix tree
+ * rt_attach		- Attach to the radix tree
+ * rt_detach		- Detach from the radix tree
+ * rt_get_handle	- Return the handle of the radix tree
  * rt_search		- Search a key-value pair
  * rt_set			- Set a key-value pair
  * rt_delete		- Delete a key-value pair
@@ -65,6 +77,7 @@
 #include "nodes/bitmapset.h"
 #include "port/pg_bitutils.h"
 #include "port/pg_lfind.h"
+#include "utils/dsa.h"
 #include "utils/memutils.h"
 
 #ifdef RT_DEBUG
@@ -426,6 +439,10 @@ static rt_size_class kind_min_size_class[RT_NODE_KIND_COUNT] = {
  * construct the key whenever updating the node iteration information, e.g., when
  * advancing the current index within the node or when moving to the next node
  * at the same level.
+ *
+ * XXX: We need either a safeguard to disallow other processes to begin the
+ * iteration while one process is doing or to allow multiple processes to do
+ * the iteration.
  */
 typedef struct rt_node_iter
 {
@@ -445,23 +462,43 @@ struct rt_iter
 	uint64		key;
 };
 
-/* A radix tree with nodes */
-struct radix_tree
-{
-	MemoryContext context;
+/* A magic value used to identify our radix tree */
+#define RADIXTREE_MAGIC 0x54A48167
 
+/* Control information for an radix tree */
+typedef struct radix_tree_control
+{
+	rt_handle	handle;
+	uint32		magic;
+
+	/* Root node */
 	rt_pointer	root;
+
 	uint64		max_val;
 	uint64		num_keys;
-
-	MemoryContextData *inner_slabs[RT_SIZE_CLASS_COUNT];
-	MemoryContextData *leaf_slabs[RT_SIZE_CLASS_COUNT];
 
 	/* statistics */
 #ifdef RT_DEBUG
 	int32		cnt[RT_SIZE_CLASS_COUNT];
 #endif
+} radix_tree_control;
+
+/* A radix tree with nodes */
+struct radix_tree
+{
+	MemoryContext context;
+
+	/* control object in either backend-local memory or DSA */
+	radix_tree_control *ctl;
+
+	/* used only when the radix tree is shared */
+	dsa_area   *area;
+
+	/* used only when the radix tree is private */
+	MemoryContextData *inner_slabs[RT_SIZE_CLASS_COUNT];
+	MemoryContextData *leaf_slabs[RT_SIZE_CLASS_COUNT];
 };
+#define RadixTreeIsShared(rt) ((rt)->area != NULL)
 
 static void rt_new_root(radix_tree *tree, uint64 key);
 
@@ -490,9 +527,12 @@ static void rt_verify_node(rt_node_ptr node);
 
 /* Decode and encode functions of rt_pointer */
 static inline rt_node *
-rt_pointer_decode(rt_pointer encoded)
+rt_pointer_decode(radix_tree *tree, rt_pointer encoded)
 {
-	return (rt_node *) encoded;
+	if (RadixTreeIsShared(tree))
+		return (rt_node *) dsa_get_address(tree->area, encoded);
+	else
+		return (rt_node *) encoded;
 }
 
 static inline rt_pointer
@@ -503,11 +543,11 @@ rt_pointer_encode(rt_node *decoded)
 
 /* Return a rt_node_ptr created from the given encoded pointer */
 static inline rt_node_ptr
-rt_node_ptr_encoded(rt_pointer encoded)
+rt_node_ptr_encoded(radix_tree *tree, rt_pointer encoded)
 {
 	return (rt_node_ptr) {
 		.encoded = encoded,
-			.decoded = rt_pointer_decode(encoded),
+			.decoded = rt_pointer_decode(tree, encoded)
 			};
 }
 
@@ -954,8 +994,8 @@ rt_new_root(radix_tree *tree, uint64 key)
 	rt_init_node(newnode, RT_NODE_KIND_4, RT_CLASS_4_FULL, inner);
 	NODE_SHIFT(newnode) = shift;
 
-	tree->max_val = shift_get_max_val(shift);
-	tree->root = newnode.encoded;
+	tree->ctl->max_val = shift_get_max_val(shift);
+	tree->ctl->root = newnode.encoded;
 }
 
 /*
@@ -964,20 +1004,35 @@ rt_new_root(radix_tree *tree, uint64 key)
 static rt_node_ptr
 rt_alloc_node(radix_tree *tree, rt_size_class size_class, bool inner)
 {
-	rt_node_ptr	newnode;
+	rt_node_ptr newnode;
 
-	if (inner)
-		newnode.decoded = (rt_node *) MemoryContextAlloc(tree->inner_slabs[size_class],
-														 rt_size_class_info[size_class].inner_size);
+	if (RadixTreeIsShared(tree))
+	{
+		dsa_pointer dp;
+
+		if (inner)
+			dp = dsa_allocate(tree->area, rt_size_class_info[size_class].inner_size);
+		else
+			dp = dsa_allocate(tree->area, rt_size_class_info[size_class].leaf_size);
+
+		newnode.encoded = (rt_pointer) dp;
+		newnode.decoded = rt_pointer_decode(tree, newnode.encoded);
+	}
 	else
-		newnode.decoded = (rt_node *) MemoryContextAlloc(tree->leaf_slabs[size_class],
-														 rt_size_class_info[size_class].leaf_size);
+	{
+		if (inner)
+			newnode.decoded = (rt_node *) MemoryContextAlloc(tree->inner_slabs[size_class],
+															 rt_size_class_info[size_class].inner_size);
+		else
+			newnode.decoded = (rt_node *) MemoryContextAlloc(tree->leaf_slabs[size_class],
+															 rt_size_class_info[size_class].leaf_size);
 
-	newnode.encoded = rt_pointer_encode(newnode.decoded);
+		newnode.encoded = rt_pointer_encode(newnode.decoded);
+	}
 
 #ifdef RT_DEBUG
 	/* update the statistics */
-	tree->cnt[size_class]++;
+	tree->ctl->cnt[size_class]++;
 #endif
 
 	return newnode;
@@ -1041,10 +1096,10 @@ static void
 rt_free_node(radix_tree *tree, rt_node_ptr node)
 {
 	/* If we're deleting the root node, make the tree empty */
-	if (tree->root == node.encoded)
+	if (tree->ctl->root == node.encoded)
 	{
-		tree->root = InvalidRTPointer;
-		tree->max_val = 0;
+		tree->ctl->root = InvalidRTPointer;
+		tree->ctl->max_val = 0;
 	}
 
 #ifdef RT_DEBUG
@@ -1062,12 +1117,15 @@ rt_free_node(radix_tree *tree, rt_node_ptr node)
 		if (i == RT_SIZE_CLASS_COUNT)
 			i = RT_CLASS_256;
 
-		tree->cnt[i]--;
-		Assert(tree->cnt[i] >= 0);
+		tree->ctl->cnt[i]--;
+		Assert(tree->ctl->cnt[i] >= 0);
 	}
 #endif
 
-	pfree(node.decoded);
+	if (RadixTreeIsShared(tree))
+		dsa_free(tree->area, (dsa_pointer) node.encoded);
+	else
+		pfree(node.decoded);
 }
 
 /*
@@ -1083,7 +1141,7 @@ rt_replace_node(radix_tree *tree, rt_node_ptr parent, rt_node_ptr old_child,
 	if (rt_node_ptr_eq(&parent, &old_child))
 	{
 		/* Replace the root node with the new large node */
-		tree->root = new_child.encoded;
+		tree->ctl->root = new_child.encoded;
 	}
 	else
 	{
@@ -1105,7 +1163,7 @@ static void
 rt_extend(radix_tree *tree, uint64 key)
 {
 	int			target_shift;
-	rt_node		*root = rt_pointer_decode(tree->root);
+	rt_node		*root = rt_pointer_decode(tree, tree->ctl->root);
 	int			shift = root->shift + RT_NODE_SPAN;
 
 	target_shift = key_get_shift(key);
@@ -1123,15 +1181,15 @@ rt_extend(radix_tree *tree, uint64 key)
 		n4->base.n.shift = shift;
 		n4->base.n.count = 1;
 		n4->base.chunks[0] = 0;
-		n4->children[0] = tree->root;
+		n4->children[0] = tree->ctl->root;
 
 		root->chunk = 0;
-		tree->root = node.encoded;
+		tree->ctl->root = node.encoded;
 
 		shift += RT_NODE_SPAN;
 	}
 
-	tree->max_val = shift_get_max_val(target_shift);
+	tree->ctl->max_val = shift_get_max_val(target_shift);
 }
 
 /*
@@ -1163,7 +1221,7 @@ rt_set_extend(radix_tree *tree, uint64 key, uint64 value, rt_node_ptr parent,
 	}
 
 	rt_node_insert_leaf(tree, parent, node, key, value);
-	tree->num_keys++;
+	tree->ctl->num_keys++;
 }
 
 /*
@@ -1174,12 +1232,11 @@ rt_set_extend(radix_tree *tree, uint64 key, uint64 value, rt_node_ptr parent,
  * pointer is set to child_p.
  */
 static inline bool
-rt_node_search_inner(rt_node_ptr node, uint64 key, rt_action action,
-					 rt_pointer *child_p)
+rt_node_search_inner(rt_node_ptr node, uint64 key, rt_action action, rt_pointer *child_p)
 {
 	uint8		chunk = RT_GET_KEY_CHUNK(key, NODE_SHIFT(node));
 	bool		found = false;
-	rt_pointer	child;
+	rt_pointer	child = InvalidRTPointer;
 
 	switch (NODE_KIND(node))
 	{
@@ -1210,6 +1267,7 @@ rt_node_search_inner(rt_node_ptr node, uint64 key, rt_action action,
 					break;
 
 				found = true;
+
 				if (action == RT_ACTION_FIND)
 					child = n32->children[idx];
 				else			/* RT_ACTION_DELETE */
@@ -1761,33 +1819,51 @@ retry_insert_leaf_32:
  * Create the radix tree in the given memory context and return it.
  */
 radix_tree *
-rt_create(MemoryContext ctx)
+rt_create(MemoryContext ctx, dsa_area *area)
 {
 	radix_tree *tree;
 	MemoryContext old_ctx;
 
 	old_ctx = MemoryContextSwitchTo(ctx);
 
-	tree = palloc(sizeof(radix_tree));
+	tree = (radix_tree *) palloc0(sizeof(radix_tree));
 	tree->context = ctx;
-	tree->root = InvalidRTPointer;
-	tree->max_val = 0;
-	tree->num_keys = 0;
+
+	if (area != NULL)
+	{
+		dsa_pointer dp;
+
+		tree->area = area;
+		dp = dsa_allocate0(area, sizeof(radix_tree_control));
+		tree->ctl = (radix_tree_control *) dsa_get_address(area, dp);
+		tree->ctl->handle = (rt_handle) dp;
+	}
+	else
+	{
+		tree->ctl = (radix_tree_control *) palloc0(sizeof(radix_tree_control));
+		tree->ctl->handle = InvalidDsaPointer;
+	}
+
+	tree->ctl->magic = RADIXTREE_MAGIC;
+	tree->ctl->root = InvalidRTPointer;
 
 	/* Create the slab allocator for each size class */
-	for (int i = 0; i < RT_SIZE_CLASS_COUNT; i++)
+	if (area == NULL)
 	{
-		tree->inner_slabs[i] = SlabContextCreate(ctx,
-												 rt_size_class_info[i].name,
-												 rt_size_class_info[i].inner_blocksize,
-												 rt_size_class_info[i].inner_size);
-		tree->leaf_slabs[i] = SlabContextCreate(ctx,
-												rt_size_class_info[i].name,
-												rt_size_class_info[i].leaf_blocksize,
-												rt_size_class_info[i].leaf_size);
+		for (int i = 0; i < RT_SIZE_CLASS_COUNT; i++)
+		{
+			tree->inner_slabs[i] = SlabContextCreate(ctx,
+													 rt_size_class_info[i].name,
+													 rt_size_class_info[i].inner_blocksize,
+													 rt_size_class_info[i].inner_size);
+			tree->leaf_slabs[i] = SlabContextCreate(ctx,
+													rt_size_class_info[i].name,
+													rt_size_class_info[i].leaf_blocksize,
+													rt_size_class_info[i].leaf_size);
 #ifdef RT_DEBUG
-		tree->cnt[i] = 0;
+			tree->ctl->cnt[i] = 0;
 #endif
+		}
 	}
 
 	MemoryContextSwitchTo(old_ctx);
@@ -1796,15 +1872,162 @@ rt_create(MemoryContext ctx)
 }
 
 /*
+ * Get a handle that can be used by other processes to attach to this radix
+ * tree.
+ */
+dsa_pointer
+rt_get_handle(radix_tree *tree)
+{
+	Assert(RadixTreeIsShared(tree));
+	Assert(tree->ctl->magic == RADIXTREE_MAGIC);
+
+	return tree->ctl->handle;
+}
+
+/*
+ * Attach to an existing radix tree using a handle. The returned object is
+ * allocated in backend-local memory using the CurrentMemoryContext.
+ */
+radix_tree *
+rt_attach(dsa_area *area, rt_handle handle)
+{
+	radix_tree *tree;
+	dsa_pointer	control;
+
+	/* Allocate the backend-local object representing the radix tree */
+	tree = (radix_tree *) palloc0(sizeof(radix_tree));
+
+	/* Find the control object in shard memory */
+	control = handle;
+
+	/* Set up the local radix tree */
+	tree->area = area;
+	tree->ctl = (radix_tree_control *) dsa_get_address(area, control);
+	Assert(tree->ctl->magic == RADIXTREE_MAGIC);
+
+	return tree;
+}
+
+/*
+ * Detach from a radix tree. This frees backend-local resources associated
+ * with the radix tree, but the radix tree will continue to exist until
+ * it is explicitly freed.
+ */
+void
+rt_detach(radix_tree *tree)
+{
+	Assert(RadixTreeIsShared(tree));
+	Assert(tree->ctl->magic == RADIXTREE_MAGIC);
+
+	pfree(tree);
+}
+
+/*
+ * Recursively free all nodes allocated to the dsa area.
+ */
+static void
+rt_free_recurse(radix_tree *tree, rt_pointer ptr)
+{
+	rt_node_ptr	node = rt_node_ptr_encoded(tree, ptr);
+
+	Assert(RadixTreeIsShared(tree));
+
+	check_stack_depth();
+	CHECK_FOR_INTERRUPTS();
+
+	/* The leaf node doesn't have child pointers, so free it */
+	if (NODE_IS_LEAF(node))
+	{
+		dsa_free(tree->area, (dsa_pointer) node.encoded);
+		return;
+	}
+
+	switch (NODE_KIND(node))
+	{
+		case RT_NODE_KIND_4:
+			{
+				rt_node_inner_4 *n4 = (rt_node_inner_4 *) node.decoded;
+
+				/* Free all children recursively */
+				for (int i = 0; i < NODE_COUNT(node); i++)
+					rt_free_recurse(tree, n4->children[i]);
+
+				break;
+			}
+		case RT_NODE_KIND_32:
+			{
+				rt_node_inner_32 *n32 = (rt_node_inner_32 *) node.decoded;
+
+				/* Free all children recursively */
+				for (int i = 0; i < NODE_COUNT(node); i++)
+					rt_free_recurse(tree, n32->children[i]);
+
+				break;
+			}
+		case RT_NODE_KIND_125:
+			{
+				rt_node_inner_125 *n125 = (rt_node_inner_125 *) node.decoded;
+
+				/* Free all children recursively */
+				for (int i = 0; i < RT_NODE_MAX_SLOTS; i++)
+				{
+					if (!node_125_is_chunk_used((rt_node_base_125 *) n125, i))
+						continue;
+
+					rt_free_recurse(tree, node_inner_125_get_child(n125, i));
+				}
+				break;
+			}
+		case RT_NODE_KIND_256:
+			{
+				rt_node_inner_256 *n256 = (rt_node_inner_256 *) node.decoded;
+
+				/* Free all children recursively */
+				for (int i = 0; i < RT_NODE_MAX_SLOTS; i++)
+				{
+					if (!node_inner_256_is_chunk_used(n256, i))
+						continue;
+
+					rt_free_recurse(tree, node_inner_256_get_child(n256, i));
+				}
+				break;
+			}
+	}
+
+	/* Free the inner node itself */
+	dsa_free(tree->area, node.encoded);
+}
+
+/*
  * Free the given radix tree.
  */
 void
 rt_free(radix_tree *tree)
 {
-	for (int i = 0; i < RT_SIZE_CLASS_COUNT; i++)
+	Assert(!RadixTreeIsShared(tree) || tree->ctl->magic == RADIXTREE_MAGIC);
+
+	if (RadixTreeIsShared(tree))
 	{
-		MemoryContextDelete(tree->inner_slabs[i]);
-		MemoryContextDelete(tree->leaf_slabs[i]);
+		/* Free all memory used for radix tree nodes */
+		if (RTPointerIsValid(tree->ctl->root))
+			rt_free_recurse(tree, tree->ctl->root);
+
+		/*
+		 * Vandalize the control block to help catch programming error where
+		 * other backends access the memory formerly occupied by this radix tree.
+		 */
+		tree->ctl->magic = 0;
+		dsa_free(tree->area, tree->ctl->handle);
+	}
+	else
+	{
+		/* Free all memory used for radix tree nodes */
+		for (int i = 0; i < RT_NODE_KIND_COUNT; i++)
+		{
+			MemoryContextDelete(tree->inner_slabs[i]);
+			MemoryContextDelete(tree->leaf_slabs[i]);
+		}
+		pfree(tree->ctl);
 	}
 
 	pfree(tree);
@@ -1822,16 +2045,18 @@ rt_set(radix_tree *tree, uint64 key, uint64 value)
 	rt_node_ptr	node;
 	rt_node_ptr parent;
 
+	Assert(!RadixTreeIsShared(tree) || tree->ctl->magic == RADIXTREE_MAGIC);
+
 	/* Empty tree, create the root */
-	if (!RTPointerIsValid(tree->root))
+	if (!RTPointerIsValid(tree->ctl->root))
 		rt_new_root(tree, key);
 
 	/* Extend the tree if necessary */
-	if (key > tree->max_val)
+	if (key > tree->ctl->max_val)
 		rt_extend(tree, key);
 
 	/* Descend the tree until a leaf node */
-	node = parent = rt_node_ptr_encoded(tree->root);
+	node = parent = rt_node_ptr_encoded(tree, tree->ctl->root);
 	shift = NODE_SHIFT(node);
 	while (shift >= 0)
 	{
@@ -1847,7 +2072,7 @@ rt_set(radix_tree *tree, uint64 key, uint64 value)
 		}
 
 		parent = node;
-		node = rt_node_ptr_encoded(child);
+		node = rt_node_ptr_encoded(tree, child);
 		shift -= RT_NODE_SPAN;
 	}
 
@@ -1855,7 +2080,7 @@ rt_set(radix_tree *tree, uint64 key, uint64 value)
 
 	/* Update the statistics */
 	if (!updated)
-		tree->num_keys++;
+		tree->ctl->num_keys++;
 
 	return updated;
 }
@@ -1871,12 +2096,13 @@ rt_search(radix_tree *tree, uint64 key, uint64 *value_p)
 	rt_node_ptr    node;
 	int			shift;
 
+	Assert(!RadixTreeIsShared(tree) || tree->ctl->magic == RADIXTREE_MAGIC);
 	Assert(value_p != NULL);
 
-	if (!RTPointerIsValid(tree->root) || key > tree->max_val)
+	if (!RTPointerIsValid(tree->ctl->root) || key > tree->ctl->max_val)
 		return false;
 
-	node = rt_node_ptr_encoded(tree->root);
+	node = rt_node_ptr_encoded(tree, tree->ctl->root);
 	shift = NODE_SHIFT(node);
 
 	/* Descend the tree until a leaf node */
@@ -1890,7 +2116,7 @@ rt_search(radix_tree *tree, uint64 key, uint64 *value_p)
 		if (!rt_node_search_inner(node, key, RT_ACTION_FIND, &child))
 			return false;
 
-		node = rt_node_ptr_encoded(child);
+		node = rt_node_ptr_encoded(tree, child);
 		shift -= RT_NODE_SPAN;
 	}
 
@@ -1910,14 +2136,16 @@ rt_delete(radix_tree *tree, uint64 key)
 	int			level;
 	bool		deleted;
 
-	if (!tree->root || key > tree->max_val)
+	Assert(!RadixTreeIsShared(tree) || tree->ctl->magic == RADIXTREE_MAGIC);
+
+	if (!RTPointerIsValid(tree->ctl->root) || key > tree->ctl->max_val)
 		return false;
 
 	/*
 	 * Descend the tree to search the key while building a stack of nodes we
 	 * visited.
 	 */
-	node = rt_node_ptr_encoded(tree->root);
+	node = rt_node_ptr_encoded(tree, tree->ctl->root);
 	shift = NODE_SHIFT(node);
 	level = -1;
 	while (shift > 0)
@@ -1930,7 +2158,7 @@ rt_delete(radix_tree *tree, uint64 key)
 		if (!rt_node_search_inner(node, key, RT_ACTION_FIND, &child))
 			return false;
 
-		node = rt_node_ptr_encoded(child);
+		node = rt_node_ptr_encoded(tree, child);
 		shift -= RT_NODE_SPAN;
 	}
 
@@ -1945,7 +2173,7 @@ rt_delete(radix_tree *tree, uint64 key)
 	}
 
 	/* Found the key to delete. Update the statistics */
-	tree->num_keys--;
+	tree->ctl->num_keys--;
 
 	/*
 	 * Return if the leaf node still has keys and we don't need to delete the
@@ -1985,16 +2213,18 @@ rt_begin_iterate(radix_tree *tree)
 	rt_iter    *iter;
 	int			top_level;
 
+	Assert(!RadixTreeIsShared(tree) || tree->ctl->magic == RADIXTREE_MAGIC);
+
 	old_ctx = MemoryContextSwitchTo(tree->context);
 
 	iter = (rt_iter *) palloc0(sizeof(rt_iter));
 	iter->tree = tree;
 
 	/* empty tree */
-	if (!RTPointerIsValid(iter->tree) || !RTPointerIsValid(iter->tree->root))
+	if (!RTPointerIsValid(iter->tree) || !RTPointerIsValid(iter->tree->ctl->root))
 		return iter;
 
-	root = rt_node_ptr_encoded(iter->tree->root);
+	root = rt_node_ptr_encoded(tree, iter->tree->ctl->root);
 	top_level = NODE_SHIFT(root) / RT_NODE_SPAN;
 	iter->stack_len = top_level;
 
@@ -2045,8 +2275,10 @@ rt_update_iter_stack(rt_iter *iter, rt_node_ptr from_node, int from)
 bool
 rt_iterate_next(rt_iter *iter, uint64 *key_p, uint64 *value_p)
 {
+	Assert(!RadixTreeIsShared(iter->tree) || iter->tree->ctl->magic == RADIXTREE_MAGIC);
+
 	/* Empty tree */
-	if (!iter->tree->root)
+	if (!iter->tree->ctl->root)
 		return false;
 
 	for (;;)
@@ -2190,7 +2422,7 @@ rt_node_inner_iterate_next(rt_iter *iter, rt_node_iter *node_iter, rt_node_ptr *
 	if (found)
 	{
 		rt_iter_update_key(iter, key_chunk, NODE_SHIFT(node));
-		*child_p = rt_node_ptr_encoded(child);
+		*child_p = rt_node_ptr_encoded(iter->tree, child);
 	}
 
 	return found;
@@ -2293,7 +2525,7 @@ rt_node_leaf_iterate_next(rt_iter *iter, rt_node_iter *node_iter, uint64 *value_
 uint64
 rt_num_entries(radix_tree *tree)
 {
-	return tree->num_keys;
+	return tree->ctl->num_keys;
 }
 
 /*
@@ -2302,12 +2534,19 @@ rt_num_entries(radix_tree *tree)
 uint64
 rt_memory_usage(radix_tree *tree)
 {
-	Size		total = sizeof(radix_tree);
+	Size		total = sizeof(radix_tree) + sizeof(radix_tree_control);
 
-	for (int i = 0; i < RT_SIZE_CLASS_COUNT; i++)
+	Assert(!RadixTreeIsShared(tree) || tree->ctl->magic == RADIXTREE_MAGIC);
+
+	if (RadixTreeIsShared(tree))
+		total = dsa_get_total_size(tree->area);
+	else
 	{
-		total += MemoryContextMemAllocated(tree->inner_slabs[i], true);
-		total += MemoryContextMemAllocated(tree->leaf_slabs[i], true);
+		for (int i = 0; i < RT_NODE_KIND_COUNT; i++)
+		{
+			total += MemoryContextMemAllocated(tree->inner_slabs[i], true);
+			total += MemoryContextMemAllocated(tree->leaf_slabs[i], true);
+		}
 	}
 
 	return total;
@@ -2391,23 +2630,23 @@ rt_verify_node(rt_node_ptr node)
 void
 rt_stats(radix_tree *tree)
 {
-	rt_node *root = rt_pointer_decode(tree->root);
+	rt_node *root = rt_pointer_decode(tree, tree->ctl->root);
 
 	if (root == NULL)
 		return;
 
 	ereport(NOTICE, (errmsg("num_keys = " UINT64_FORMAT ", height = %d, n4 = %u, n15 = %u, n32 = %u, n125 = %u, n256 = %u",
-							tree->num_keys,
+							tree->ctl->num_keys,
 							root->shift / RT_NODE_SPAN,
-							tree->cnt[RT_CLASS_4_FULL],
-							tree->cnt[RT_CLASS_32_PARTIAL],
-							tree->cnt[RT_CLASS_32_FULL],
-							tree->cnt[RT_CLASS_125_FULL],
-							tree->cnt[RT_CLASS_256])));
+							tree->ctl->cnt[RT_CLASS_4_FULL],
+							tree->ctl->cnt[RT_CLASS_32_PARTIAL],
+							tree->ctl->cnt[RT_CLASS_32_FULL],
+							tree->ctl->cnt[RT_CLASS_125_FULL],
+							tree->ctl->cnt[RT_CLASS_256])));
 }
 
 static void
-rt_dump_node(rt_node_ptr node, int level, bool recurse)
+rt_dump_node(radix_tree *tree, rt_node_ptr node, int level, bool recurse)
 {
 	rt_node		*n = node.decoded;
 	char		space[128] = {0};
@@ -2445,7 +2684,7 @@ rt_dump_node(rt_node_ptr node, int level, bool recurse)
 								space, n4->base.chunks[i]);
 
 						if (recurse)
-							rt_dump_node(rt_node_ptr_encoded(n4->children[i]),
+							rt_dump_node(tree, rt_node_ptr_encoded(tree, n4->children[i]),
 										 level + 1, recurse);
 						else
 							fprintf(stderr, "\n");
@@ -2473,7 +2712,7 @@ rt_dump_node(rt_node_ptr node, int level, bool recurse)
 
 						if (recurse)
 						{
-							rt_dump_node(rt_node_ptr_encoded(n32->children[i]),
+							rt_dump_node(tree, rt_node_ptr_encoded(tree, n32->children[i]),
 										 level + 1, recurse);
 						}
 						else
@@ -2526,7 +2765,9 @@ rt_dump_node(rt_node_ptr node, int level, bool recurse)
 								space, i);
 
 						if (recurse)
-							rt_dump_node(rt_node_ptr_encoded(node_inner_125_get_child(n125, i)),
+							rt_dump_node(tree,
+										 rt_node_ptr_encoded(tree,
+															 node_inner_125_get_child(n125, i)),
 										 level + 1, recurse);
 						else
 							fprintf(stderr, "\n");
@@ -2559,7 +2800,9 @@ rt_dump_node(rt_node_ptr node, int level, bool recurse)
 								space, i);
 
 						if (recurse)
-							rt_dump_node(rt_node_ptr_encoded(node_inner_256_get_child(n256, i)),
+							rt_dump_node(tree,
+										 rt_node_ptr_encoded(tree,
+															 node_inner_256_get_child(n256, i)),
 										 level + 1, recurse);
 						else
 							fprintf(stderr, "\n");
@@ -2579,28 +2822,28 @@ rt_dump_search(radix_tree *tree, uint64 key)
 
 	elog(NOTICE, "-----------------------------------------------------------");
 	elog(NOTICE, "max_val = " UINT64_FORMAT "(0x" UINT64_FORMAT_HEX ")",
-		 tree->max_val, tree->max_val);
+		 tree->ctl->max_val, tree->ctl->max_val);
 
-	if (!RTPointerIsValid(tree->root))
+	if (!RTPointerIsValid(tree->ctl->root))
 	{
 		elog(NOTICE, "tree is empty");
 		return;
 	}
 
-	if (key > tree->max_val)
+	if (key > tree->ctl->max_val)
 	{
 		elog(NOTICE, "key " UINT64_FORMAT "(0x" UINT64_FORMAT_HEX ") is larger than max val",
 			 key, key);
 		return;
 	}
 
-	node = rt_node_ptr_encoded(tree->root);
+	node = rt_node_ptr_encoded(tree, tree->ctl->root);
 	shift = NODE_SHIFT(node);
 	while (shift >= 0)
 	{
 		rt_pointer   child;
 
-		rt_dump_node(node, level, false);
+		rt_dump_node(tree, node, level, false);
 
 		if (NODE_IS_LEAF(node))
 		{
@@ -2615,7 +2858,7 @@ rt_dump_search(radix_tree *tree, uint64 key)
 		if (!rt_node_search_inner(node, key, RT_ACTION_FIND, &child))
 			break;
 
-		node = rt_node_ptr_encoded(child);
+		node = rt_node_ptr_encoded(tree, child);
 		shift -= RT_NODE_SPAN;
 		level++;
 	}
@@ -2633,15 +2876,15 @@ rt_dump(radix_tree *tree)
 				rt_size_class_info[i].inner_blocksize,
 				rt_size_class_info[i].leaf_size,
 				rt_size_class_info[i].leaf_blocksize);
-	fprintf(stderr, "max_val = " UINT64_FORMAT "\n", tree->max_val);
+	fprintf(stderr, "max_val = " UINT64_FORMAT "\n", tree->ctl->max_val);
 
-	if (!RTPointerIsValid(tree->root))
+	if (!RTPointerIsValid(tree->ctl->root))
 	{
 		fprintf(stderr, "empty tree\n");
 		return;
 	}
 
-	root = rt_node_ptr_encoded(tree->root);
-	rt_dump_node(root, 0, true);
+	root = rt_node_ptr_encoded(tree, tree->ctl->root);
+	rt_dump_node(tree, root, 0, true);
 }
 #endif
