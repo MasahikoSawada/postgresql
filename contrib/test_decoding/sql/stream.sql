@@ -44,5 +44,13 @@ toasted-123456789012345678901234567890123456789012345678901234567890123456789012
 
 SELECT data FROM pg_logical_slot_get_changes('regression_slot', NULL,NULL, 'include-xids', '0', 'skip-empty-xacts', '1', 'stream-changes', '1');
 
+-- streaming test with logical_decoding_mode=immediate
+SET logical_decoding_mode=immediate;
+
+TRUNCATE table stream_test;
+SELECT data FROM pg_logical_slot_get_changes('regression_slot', NULL,NULL, 'include-xids', '0', 'skip-empty-xacts', '1', 'stream-changes', '1');
+
+RESET logical_decoding_mode;
+
 DROP TABLE stream_test;
 SELECT pg_drop_replication_slot('regression_slot');
