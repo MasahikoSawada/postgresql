@@ -23,7 +23,6 @@ $node_A->init(allows_streaming => 'logical');
 $node_A->append_conf(
 	'postgresql.conf', qq(
 max_prepared_transactions = 10
-logical_decoding_work_mem = 64kB
 ));
 $node_A->start;
 # node_B
@@ -32,7 +31,6 @@ $node_B->init(allows_streaming => 'logical');
 $node_B->append_conf(
 	'postgresql.conf', qq(
 max_prepared_transactions = 10
-logical_decoding_work_mem = 64kB
 ));
 $node_B->start;
 # node_C
@@ -41,7 +39,6 @@ $node_C->init(allows_streaming => 'logical');
 $node_C->append_conf(
 	'postgresql.conf', qq(
 max_prepared_transactions = 10
-logical_decoding_work_mem = 64kB
 ));
 $node_C->start;
 
@@ -260,6 +257,15 @@ is($result, qq(21), 'Rows committed are present on subscriber C');
 # 2PC + STREAMING TESTS
 # ---------------------
 
+# Set logical_decoding_mode to immediate, so each change will be streamed.
+$node_A->safe_psql('postgres',
+	'ALTER SYSTEM SET logical_decoding_mode = immediate');
+$node_A->reload;
+
+$node_B->safe_psql('postgres',
+	'ALTER SYSTEM SET logical_decoding_mode = immediate');
+$node_B->reload;
+
 my $oldpid_B = $node_A->safe_psql(
 	'postgres', "
 	SELECT pid FROM pg_stat_replication
@@ -301,12 +307,12 @@ $node_B->poll_query_until(
 # Expect all data is replicated on subscriber(s) after the commit.
 ###############################
 
-# Insert, update and delete enough rows to exceed the 64kB limit.
+# Insert, update and delete some rows.
 # Then 2PC PREPARE
 $node_A->safe_psql(
 	'postgres', q{
 	BEGIN;
-	INSERT INTO test_tab SELECT i, md5(i::text) FROM generate_series(3, 5000) s(i);
+	INSERT INTO test_tab SELECT i, md5(i::text) FROM generate_series(3, 5) s(i);
 	UPDATE test_tab SET b = md5(b) WHERE mod(a,2) = 0;
 	DELETE FROM test_tab WHERE mod(a,3) = 0;
 	PREPARE TRANSACTION 'test_prepared_tab';});
@@ -331,12 +337,12 @@ $node_B->wait_for_catchup($appname_C);
 # check that transaction was committed on subscriber(s)
 $result = $node_B->safe_psql('postgres',
 	"SELECT count(*), count(c), count(d = 999) FROM test_tab");
-is($result, qq(3334|3334|3334),
+is($result, qq(4|4|4),
 	'Rows inserted by 2PC have committed on subscriber B, and extra columns have local defaults'
 );
 $result = $node_C->safe_psql('postgres',
 	"SELECT count(*), count(c), count(d = 999) FROM test_tab");
-is($result, qq(3334|3334|3334),
+is($result, qq(4|4|4),
 	'Rows inserted by 2PC have committed on subscriber C, and extra columns have local defaults'
 );
 
@@ -369,7 +375,7 @@ $node_A->safe_psql(
 	BEGIN;
 	INSERT INTO test_tab VALUES (9999, 'foobar');
 	SAVEPOINT sp_inner;
-	INSERT INTO test_tab SELECT i, md5(i::text) FROM generate_series(3, 5000) s(i);
+	INSERT INTO test_tab SELECT i, md5(i::text) FROM generate_series(3, 5) s(i);
 	UPDATE test_tab SET b = md5(b) WHERE mod(a,2) = 0;
 	DELETE FROM test_tab WHERE mod(a,3) = 0;
 	ROLLBACK TO SAVEPOINT sp_inner;
