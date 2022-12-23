@@ -2280,7 +2280,7 @@ struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_KB
 		},
 		&maintenance_work_mem,
-		65536, 1024, MAX_KILOBYTES,
+		65536, 2048, MAX_KILOBYTES,
 		NULL, NULL, NULL
 	},
 

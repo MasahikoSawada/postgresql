@@ -27,7 +27,6 @@
 #include "lib/radixtree.h"
 #include "miscadmin.h"
 #include "port/pg_bitutils.h"
-#include "storage/lwlock.h"
 #include "utils/dsa.h"
 #include "utils/memutils.h"
 
@@ -110,9 +109,6 @@ typedef struct TidStoreControl
 	/* handles for TidStore and radix tree */
 	tidstore_handle handle;
 	rt_handle	tree_handle;
-
-	/* protects a TidStore from concurrent updates */
-	LWLock	lock;
 } TidStoreControl;
 
 /* Per-backend state for a TidStore */
@@ -185,7 +181,6 @@ tidstore_create(uint64 max_bytes, dsa_area *area)
 		ts->control->magic = TIDSTORE_MAGIC;
 		ts->control->handle = dp;
 		ts->control->tree_handle = rt_get_handle(ts->tree);
-		LWLockInitialize(&(ts->control->lock), LWTRANCHE_SHARED_TIDSTORE);
 	}
 	else
 	{
@@ -274,9 +269,6 @@ tidstore_reset(TidStore *ts)
 {
 	Assert(!TidStoreIsShared(ts) || ts->control->magic == TIDSTORE_MAGIC);
 
-	if (TidStoreIsShared(ts))
-		LWLockAcquire(&ts->control->lock, LW_EXCLUSIVE);
-
 	/* Reset the statistics */
 	ts->control->num_tids = 0;
 
@@ -294,8 +286,6 @@ tidstore_reset(TidStore *ts)
 	{
 		/* update the radix tree handle as we recreated it */
 		ts->control->tree_handle = rt_get_handle(ts->tree);
-
-		LWLockRelease(&ts->control->lock);
 	}
 }
 
@@ -313,9 +303,6 @@ tidstore_add_tids(TidStore *ts, BlockNumber blkno, OffsetNumber *offsets,
 	ItemPointerData tid;
 
 	ItemPointerSetBlockNumber(&tid, blkno);
-
-	if (TidStoreIsShared(ts))
-		LWLockAcquire(&ts->control->lock, LW_EXCLUSIVE);
 
 	for (int i = 0; i < num_offsets; i++)
 	{
@@ -344,9 +331,6 @@ tidstore_add_tids(TidStore *ts, BlockNumber blkno, OffsetNumber *offsets,
 
 	/* update statistics */
 	ts->control->num_tids += num_offsets;
-
-	if (TidStoreIsShared(ts))
-		LWLockRelease(&ts->control->lock);
 }
 
 /* Return true if the given Tid is present in TidStore */
@@ -360,13 +344,7 @@ tidstore_lookup_tid(TidStore *ts, ItemPointer tid)
 
 	key = tid_to_key_off(tid, &off);
 
-	if (TidStoreIsShared(ts))
-		LWLockAcquire(&ts->control->lock, LW_SHARED);
-
 	found = rt_search(ts->tree, key, &val);
-
-	if (TidStoreIsShared(ts))
-		LWLockRelease(&ts->control->lock);
 
 	if (!found)
 		return false;
@@ -453,20 +431,9 @@ tidstore_end_iterate(TidStoreIter *iter)
 uint64
 tidstore_num_tids(TidStore *ts)
 {
-	uint32 num_tids;
-
 	Assert(!TidStoreIsShared(ts) || ts->control->magic == TIDSTORE_MAGIC);
 
-	if (!TidStoreIsShared(ts))
-		return ts->control->num_tids;
-	else
-	{
-		LWLockAcquire(&ts->control->lock, LW_SHARED);
-		num_tids = ts->control->num_tids;
-		LWLockRelease(&ts->control->lock);
-	}
-
-	return num_tids;
+	return ts->control->num_tids;
 }
 
 /* Return true if the current memory usage of TidStore exceeds the limit */

@@ -188,6 +188,8 @@ static const char *const BuiltinTrancheNames[] = {
 	"PgStatsHash",
 	/* LWTRANCHE_PGSTATS_DATA: */
 	"PgStatsData",
+	/* LWTRANCHE_PARALLEL_VACUUM_DSA: */
+	"ParallelVacuumDSA",
 };
 
 StaticAssertDecl(lengthof(BuiltinTrancheNames) ==
