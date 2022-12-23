@@ -1100,6 +1100,10 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       </entry>
      </row>
      <row>
+      <entry><literal>SharedTidStore</literal></entry>
+      <entry>Waiting to access a shared TID store.</entry>
+     </row>
+     <row>
       <entry><literal>Timeout</literal></entry>
       <entry>The server process is waiting for a timeout
        to expire.  <literal>wait_event</literal> will identify the specific wait

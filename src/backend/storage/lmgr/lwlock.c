@@ -154,6 +154,7 @@ static const char *const BuiltinTrancheNames[] = {
 	[LWTRANCHE_PER_SESSION_RECORD_TYPMOD] = "PerSessionRecordTypmod",
 	[LWTRANCHE_SHARED_TUPLESTORE] = "SharedTupleStore",
 	[LWTRANCHE_SHARED_TIDBITMAP] = "SharedTidBitmap",
+	[LWTRANCHE_SHARED_TIDSTORE] = "SharedTidStore",
 	[LWTRANCHE_PARALLEL_APPEND] = "ParallelAppend",
 	[LWTRANCHE_PER_XACT_PREDICATE_LIST] = "PerXactPredicateList",
 	[LWTRANCHE_PGSTATS_DSA] = "PgStatsDSA",
