@@ -12,6 +12,7 @@ endif
 
 test_radixtree = shared_module('test_radixtree',
   test_radixtree_sources,
+  link_with: [pgport_srv],
   kwargs: pg_mod_args,
 )
 testprep_targets += test_radixtree
