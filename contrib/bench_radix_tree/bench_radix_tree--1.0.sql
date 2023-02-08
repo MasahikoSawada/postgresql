@@ -47,10 +47,11 @@ create function bench_search_random_nodes(
 cnt int8,
 filter_str text DEFAULT NULL,
 OUT mem_allocated int8,
-OUT search_ms int8)
+OUT search_ms int8,
+OUT load_ms int8)
 returns record
 as 'MODULE_PATHNAME'
-LANGUAGE C STRICT VOLATILE PARALLEL UNSAFE;
+LANGUAGE C VOLATILE PARALLEL UNSAFE;
 
 create function bench_fixed_height_search(
 fanout int4,

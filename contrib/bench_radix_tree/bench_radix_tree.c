@@ -375,8 +375,9 @@ bench_search_random_nodes(PG_FUNCTION_ARGS)
 	long		secs;
 	int			usecs;
 	int64		search_time_ms;
-	Datum		values[2] = {0};
-	bool		nulls[2] = {0};
+	int64		load_time_ms;
+	Datum		values[3] = {0};
+	bool		nulls[3] = {0};
 	/* from trial and error */
 	uint64 filter = (((uint64) 0x7F<<32) | (0x07<<24) | (0xFF<<16) | 0xFF);
 
@@ -395,6 +396,7 @@ bench_search_random_nodes(PG_FUNCTION_ARGS)
 
 	rt = rt_create(CurrentMemoryContext);
 
+	start_time = GetCurrentTimestamp();
 	for (uint64 i = 0; i < cnt; i++)
 	{
 		const uint64 hash = hash64(i);
@@ -402,6 +404,10 @@ bench_search_random_nodes(PG_FUNCTION_ARGS)
 
 		rt_set(rt, key, key);
 	}
+	end_time = GetCurrentTimestamp();
+
+	TimestampDifference(start_time, end_time, &secs, &usecs);
+	load_time_ms = secs * 1000 + usecs / 1000;
 
 	elog(NOTICE, "sleeping for 2 seconds...");
 	pg_usleep(2 * 1000000L);
@@ -429,6 +435,7 @@ bench_search_random_nodes(PG_FUNCTION_ARGS)
 
 	values[0] = Int64GetDatum(rt_memory_usage(rt));
 	values[1] = Int64GetDatum(search_time_ms);
+	values[2] = Int64GetDatum(load_time_ms);
 
 	rt_free(rt);
 	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
