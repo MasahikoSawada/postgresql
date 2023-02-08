@@ -9,6 +9,7 @@
  */
 #include "postgres.h"
 
+#include "access/tidstore.h"
 #include "common/pg_prng.h"
 #include "fmgr.h"
 #include "funcapi.h"
@@ -33,6 +34,7 @@ PG_FUNCTION_INFO_V1(bench_load_random_int);
 PG_FUNCTION_INFO_V1(bench_fixed_height_search);
 PG_FUNCTION_INFO_V1(bench_search_random_nodes);
 PG_FUNCTION_INFO_V1(bench_node128_load);
+PG_FUNCTION_INFO_V1(bench_tidstore_load);
 
 static uint64
 tid_to_key_off(ItemPointer tid, uint32 *off)
@@ -146,6 +148,50 @@ vac_cmp_itemptr(const void *left, const void *right)
 	return 0;
 }
 #endif
+
+Datum
+bench_tidstore_load(PG_FUNCTION_ARGS)
+{
+	BlockNumber minblk = PG_GETARG_INT32(0);
+	BlockNumber maxblk = PG_GETARG_INT32(1);
+	TidStore	*ts;
+	OffsetNumber *offs;
+	TimestampTz start_time,
+				end_time;
+	long		secs;
+	int			usecs;
+	int64		load_ms;
+	TupleDesc	tupdesc;
+	Datum		values[2];
+	bool		nulls[2] = {false};
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	offs = palloc(sizeof(OffsetNumber) * TIDS_PER_BLOCK_FOR_LOAD);
+	for (int i = 0; i < TIDS_PER_BLOCK_FOR_LOAD; i++)
+		offs[i] = i + 1; /* FirstOffsetNumber is 1 */
+
+	ts = tidstore_create(1 * 1024L * 1024L * 1024L, MaxHeapTuplesPerPage, NULL);
+
+	elog(NOTICE, "sleeping for 2 seconds...");
+	pg_usleep(2 * 1000000L);
+
+	/* load tids */
+	start_time = GetCurrentTimestamp();
+	for (BlockNumber blkno = minblk; blkno < maxblk; blkno++)
+		tidstore_add_tids(ts, blkno, offs, TIDS_PER_BLOCK_FOR_LOAD);
+	end_time = GetCurrentTimestamp();
+	TimestampDifference(start_time, end_time, &secs, &usecs);
+	load_ms = secs * 1000 + usecs / 1000;
+
+	values[0] = Int64GetDatum(tidstore_memory_usage(ts));
+	values[1] = Int64GetDatum(load_ms);
+
+	tidstore_destroy(ts);
+	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+}
 
 static Datum
 bench_search(FunctionCallInfo fcinfo, bool shuffle)

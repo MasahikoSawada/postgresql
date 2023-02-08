@@ -75,3 +75,13 @@ OUT rt_sparseload_ms int8
 returns record
 as 'MODULE_PATHNAME'
 LANGUAGE C STRICT VOLATILE PARALLEL UNSAFE;
+
+create function bench_tidstore_load(
+minblk int4,
+maxblk int4,
+OUT mem_allocated int8,
+OUT load_ms int8
+)
+returns record
+as 'MODULE_PATHNAME'
+LANGUAGE C STRICT VOLATILE PARALLEL UNSAFE;
