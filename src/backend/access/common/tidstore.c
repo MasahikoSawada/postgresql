@@ -29,6 +29,7 @@
 #include "access/tidstore.h"
 #include "miscadmin.h"
 #include "port/pg_bitutils.h"
+#include "lib/radixtree.h"
 #include "storage/lwlock.h"
 #include "utils/dsa.h"
 #include "utils/memutils.h"
@@ -74,21 +75,6 @@
 /* A magic value used to identify our TidStores. */
 #define TIDSTORE_MAGIC 0x826f6a10
 
-#define RT_PREFIX local_rt
-#define RT_SCOPE static
-#define RT_DECLARE
-#define RT_DEFINE
-#define RT_VALUE_TYPE uint64
-#include "lib/radixtree.h"
-
-#define RT_PREFIX shared_rt
-#define RT_SHMEM
-#define RT_SCOPE static
-#define RT_DECLARE
-#define RT_DEFINE
-#define RT_VALUE_TYPE uint64
-#include "lib/radixtree.h"
-
 /* The control object for a TidStore */
 typedef struct TidStoreControl
 {
@@ -110,7 +96,6 @@ typedef struct TidStoreControl
 
 	/* handles for TidStore and radix tree */
 	tidstore_handle		handle;
-	shared_rt_handle	tree_handle;
 } TidStoreControl;
 
 /* Per-backend state for a TidStore */
@@ -125,14 +110,9 @@ struct TidStore
 	/* Storage for Tids. Use either one depending on TidStoreIsShared() */
 	union
 	{
-		local_rt_radix_tree *local;
-		shared_rt_radix_tree *shared;
+		radix_tree *local;
 	} tree;
-
-	/* DSA area for TidStore if used */
-	dsa_area	*area;
 };
-#define TidStoreIsShared(ts) ((ts)->area != NULL)
 
 /* Iterator for TidStore */
 typedef struct TidStoreIter
@@ -142,8 +122,8 @@ typedef struct TidStoreIter
 	/* iterator of radix tree. Use either one depending on TidStoreIsShared() */
 	union
 	{
-		shared_rt_iter	*shared;
-		local_rt_iter	*local;
+		rt_iter	*shared;
+		rt_iter	*local;
 	} tree_iter;
 
 	/* we returned all tids? */
@@ -194,31 +174,10 @@ tidstore_create(size_t max_bytes, int max_offset, dsa_area *area)
 	 * perfectly works in case where the max_bytes is a power-of-2, and the 60%
 	 * threshold works for other cases.
 	 */
-	if (area != NULL)
-	{
-		dsa_pointer dp;
-		float ratio = ((max_bytes & (max_bytes - 1)) == 0) ? 0.75 : 0.6;
+	ts->tree.local = rt_create(CurrentMemoryContext);
 
-		ts->tree.shared = shared_rt_create(CurrentMemoryContext, area,
-										   LWTRANCHE_SHARED_TIDSTORE);
-
-		dp = dsa_allocate0(area, sizeof(TidStoreControl));
-		ts->control = (TidStoreControl *) dsa_get_address(area, dp);
-		ts->control->max_bytes = (uint64) (max_bytes * ratio);
-		ts->area = area;
-
-		ts->control->magic = TIDSTORE_MAGIC;
-		LWLockInitialize(&ts->control->lock, LWTRANCHE_SHARED_TIDSTORE);
-		ts->control->handle = dp;
-		ts->control->tree_handle = shared_rt_get_handle(ts->tree.shared);
-	}
-	else
-	{
-		ts->tree.local = local_rt_create(CurrentMemoryContext);
-
-		ts->control = (TidStoreControl *) palloc0(sizeof(TidStoreControl));
-		ts->control->max_bytes = max_bytes - (70 * 1024);
-	}
+	ts->control = (TidStoreControl *) palloc0(sizeof(TidStoreControl));
+	ts->control->max_bytes = max_bytes - (70 * 1024);
 
 	ts->control->max_offset = max_offset;
 	ts->control->offset_nbits = pg_ceil_log2_32(max_offset);
@@ -243,50 +202,6 @@ tidstore_create(size_t max_bytes, int max_offset, dsa_area *area)
 }
 
 /*
- * Attach to the shared TidStore using a handle. The returned object is
- * allocated in backend-local memory using the CurrentMemoryContext.
- */
-TidStore *
-tidstore_attach(dsa_area *area, tidstore_handle handle)
-{
-	TidStore *ts;
-	dsa_pointer control;
-
-	Assert(area != NULL);
-	Assert(DsaPointerIsValid(handle));
-
-	/* create per-backend state */
-	ts = palloc0(sizeof(TidStore));
-
-	/* Find the control object in shared memory */
-	control = handle;
-
-	/* Set up the TidStore */
-	ts->control = (TidStoreControl *) dsa_get_address(area, control);
-	Assert(ts->control->magic == TIDSTORE_MAGIC);
-
-	ts->tree.shared = shared_rt_attach(area, ts->control->tree_handle);
-	ts->area = area;
-
-	return ts;
-}
-
-/*
- * Detach from a TidStore. This detaches from radix tree and frees the
- * backend-local resources. The radix tree will continue to exist until
- * it is either explicitly destroyed, or the area that backs it is returned
- * to the operating system.
- */
-void
-tidstore_detach(TidStore *ts)
-{
-	Assert(TidStoreIsShared(ts) && ts->control->magic == TIDSTORE_MAGIC);
-
-	shared_rt_detach(ts->tree.shared);
-	pfree(ts);
-}
-
-/*
  * Destroy a TidStore, returning all memory.
  *
  * TODO: The caller must be certain that no other backend will attempt to
@@ -298,25 +213,8 @@ tidstore_detach(TidStore *ts)
 void
 tidstore_destroy(TidStore *ts)
 {
-	if (TidStoreIsShared(ts))
-	{
-		Assert(ts->control->magic == TIDSTORE_MAGIC);
-
-		/*
-		 * Vandalize the control block to help catch programming error where
-		 * other backends access the memory formerly occupied by this radix
-		 * tree.
-		 */
-		ts->control->magic = 0;
-		dsa_free(ts->area, ts->control->handle);
-		shared_rt_free(ts->tree.shared);
-	}
-	else
-	{
-		pfree(ts->control);
-		local_rt_free(ts->tree.local);
-	}
-
+	pfree(ts->control);
+	rt_free(ts->tree.local);
 	pfree(ts);
 }
 
@@ -327,39 +225,11 @@ tidstore_destroy(TidStore *ts)
 void
 tidstore_reset(TidStore *ts)
 {
-	if (TidStoreIsShared(ts))
-	{
-		Assert(ts->control->magic == TIDSTORE_MAGIC);
+	rt_free(ts->tree.local);
+	ts->tree.local = rt_create(CurrentMemoryContext);
 
-		LWLockAcquire(&ts->control->lock, LW_EXCLUSIVE);
-
-		/*
-		 * Free the radix tree and return allocated DSA segments to
-		 * the operating system.
-		 */
-		shared_rt_free(ts->tree.shared);
-		dsa_trim(ts->area);
-
-		/* Recreate the radix tree */
-		ts->tree.shared = shared_rt_create(CurrentMemoryContext, ts->area,
-										   LWTRANCHE_SHARED_TIDSTORE);
-
-		/* update the radix tree handle as we recreated it */
-		ts->control->tree_handle = shared_rt_get_handle(ts->tree.shared);
-
-		/* Reset the statistics */
-		ts->control->num_tids = 0;
-
-		LWLockRelease(&ts->control->lock);
-	}
-	else
-	{
-		local_rt_free(ts->tree.local);
-		ts->tree.local = local_rt_create(CurrentMemoryContext);
-
-		/* Reset the statistics */
-		ts->control->num_tids = 0;
-	}
+	/* Reset the statistics */
+	ts->control->num_tids = 0;
 }
 
 /* Add Tids on a block to TidStore */
@@ -371,8 +241,6 @@ tidstore_add_tids(TidStore *ts, BlockNumber blkno, OffsetNumber *offsets,
 	uint64	key_base;
 	uint64	*values;
 	int	nkeys;
-
-	Assert(!TidStoreIsShared(ts) || ts->control->magic == TIDSTORE_MAGIC);
 
 	if (ts->control->encode_tids)
 	{
@@ -404,9 +272,6 @@ tidstore_add_tids(TidStore *ts, BlockNumber blkno, OffsetNumber *offsets,
 		values[idx] |= UINT64CONST(1) << off;
 	}
 
-	if (TidStoreIsShared(ts))
-		LWLockAcquire(&ts->control->lock, LW_EXCLUSIVE);
-
 	/* insert the calculated key-values to the tree */
 	for (int i = 0; i < nkeys; i++)
 	{
@@ -414,18 +279,12 @@ tidstore_add_tids(TidStore *ts, BlockNumber blkno, OffsetNumber *offsets,
 		{
 			uint64 key = key_base + i;
 
-			if (TidStoreIsShared(ts))
-				shared_rt_set(ts->tree.shared, key, &values[i]);
-			else
-				local_rt_set(ts->tree.local, key, &values[i]);
+			rt_set(ts->tree.local, key, values[i]);
 		}
 	}
 
 	/* update statistics */
 	ts->control->num_tids += num_offsets;
-
-	if (TidStoreIsShared(ts))
-		LWLockRelease(&ts->control->lock);
 
 	pfree(values);
 }
@@ -441,10 +300,7 @@ tidstore_lookup_tid(TidStore *ts, ItemPointer tid)
 
 	key = tid_to_key_off(ts, tid, &off);
 
-	if (TidStoreIsShared(ts))
-		found = shared_rt_search(ts->tree.shared, key, &val);
-	else
-		found = local_rt_search(ts->tree.local, key, &val);
+	found = rt_search(ts->tree.local, key, &val);
 
 	if (!found)
 		return false;
@@ -464,18 +320,13 @@ tidstore_begin_iterate(TidStore *ts)
 {
 	TidStoreIter *iter;
 
-	Assert(!TidStoreIsShared(ts) || ts->control->magic == TIDSTORE_MAGIC);
-
 	iter = palloc0(sizeof(TidStoreIter));
 	iter->ts = ts;
 
 	iter->result.blkno = InvalidBlockNumber;
 	iter->result.offsets = palloc(sizeof(OffsetNumber) * ts->control->max_offset);
 
-	if (TidStoreIsShared(ts))
-		iter->tree_iter.shared = shared_rt_begin_iterate(ts->tree.shared);
-	else
-		iter->tree_iter.local = local_rt_begin_iterate(ts->tree.local);
+	iter->tree_iter.local = rt_begin_iterate(ts->tree.local);
 
 	/* If the TidStore is empty, there is no business */
 	if (tidstore_num_tids(ts) == 0)
@@ -487,10 +338,7 @@ tidstore_begin_iterate(TidStore *ts)
 static inline bool
 tidstore_iter_kv(TidStoreIter *iter, uint64 *key, uint64 *val)
 {
-	if (TidStoreIsShared(iter->ts))
-		return shared_rt_iterate_next(iter->tree_iter.shared, key, val);
-
-	return local_rt_iterate_next(iter->tree_iter.local, key, val);
+	return rt_iterate_next(iter->tree_iter.local, key, val);
 }
 
 /*
@@ -547,10 +395,7 @@ tidstore_iterate_next(TidStoreIter *iter)
 void
 tidstore_end_iterate(TidStoreIter *iter)
 {
-	if (TidStoreIsShared(iter->ts))
-		shared_rt_end_iterate(iter->tree_iter.shared);
-	else
-		local_rt_end_iterate(iter->tree_iter.local);
+	rt_end_iterate(iter->tree_iter.local);
 
 	pfree(iter->result.offsets);
 	pfree(iter);
@@ -560,26 +405,13 @@ tidstore_end_iterate(TidStoreIter *iter)
 int64
 tidstore_num_tids(TidStore *ts)
 {
-	uint64 num_tids;
-
-	Assert(!TidStoreIsShared(ts) || ts->control->magic == TIDSTORE_MAGIC);
-
-	if (!TidStoreIsShared(ts))
-		return ts->control->num_tids;
-
-	LWLockAcquire(&ts->control->lock, LW_SHARED);
-	num_tids = ts->control->num_tids;
-	LWLockRelease(&ts->control->lock);
-
-	return num_tids;
+	return ts->control->num_tids;
 }
 
 /* Return true if the current memory usage of TidStore exceeds the limit */
 bool
 tidstore_is_full(TidStore *ts)
 {
-	Assert(!TidStoreIsShared(ts) || ts->control->magic == TIDSTORE_MAGIC);
-
 	return (tidstore_memory_usage(ts) > ts->control->max_bytes);
 }
 
@@ -587,8 +419,6 @@ tidstore_is_full(TidStore *ts)
 size_t
 tidstore_max_memory(TidStore *ts)
 {
-	Assert(!TidStoreIsShared(ts) || ts->control->magic == TIDSTORE_MAGIC);
-
 	return ts->control->max_bytes;
 }
 
@@ -596,17 +426,7 @@ tidstore_max_memory(TidStore *ts)
 size_t
 tidstore_memory_usage(TidStore *ts)
 {
-	Assert(!TidStoreIsShared(ts) || ts->control->magic == TIDSTORE_MAGIC);
-
-	/*
-	 * In the shared case, TidStoreControl and radix_tree are backed by the
-	 * same DSA area and rt_memory_usage() returns the value including both.
-	 * So we don't need to add the size of TidStoreControl separately.
-	 */
-	if (TidStoreIsShared(ts))
-		return sizeof(TidStore) + shared_rt_memory_usage(ts->tree.shared);
-
-	return sizeof(TidStore) + sizeof(TidStore) + local_rt_memory_usage(ts->tree.local);
+	return sizeof(TidStore) + sizeof(TidStore) + rt_memory_usage(ts->tree.local);
 }
 
 /*
@@ -615,7 +435,6 @@ tidstore_memory_usage(TidStore *ts)
 tidstore_handle
 tidstore_get_handle(TidStore *ts)
 {
-	Assert(TidStoreIsShared(ts) && ts->control->magic == TIDSTORE_MAGIC);
 
 	return ts->control->handle;
 }
