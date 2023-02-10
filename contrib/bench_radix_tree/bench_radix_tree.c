@@ -189,6 +189,7 @@ bench_tidstore_load(PG_FUNCTION_ARGS)
 	values[0] = Int64GetDatum(tidstore_memory_usage(ts));
 	values[1] = Int64GetDatum(load_ms);
 
+	//tidstore_stats(ts);
 	tidstore_destroy(ts);
 	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
 }
@@ -249,7 +250,7 @@ bench_search(FunctionCallInfo fcinfo, bool shuffle)
 	TimestampDifference(start_time, end_time, &secs, &usecs);
 	rt_load_ms = secs * 1000 + usecs / 1000;
 
-	rt_stats(rt);
+	//rt_stats(rt);
 
 	if (shuffle)
 		shuffle_itemptrs(tids, ntids);
@@ -387,7 +388,7 @@ bench_load_random_int(PG_FUNCTION_ARGS)
 	TimestampDifference(start_time, end_time, &secs, &usecs);
 	load_time_ms = secs * 1000 + usecs / 1000;
 
-	rt_stats(rt);
+	//rt_stats(rt);
 
 	MemSet(nulls, false, sizeof(nulls));
 	values[0] = Int64GetDatum(rt_memory_usage(rt));
@@ -477,7 +478,7 @@ bench_search_random_nodes(PG_FUNCTION_ARGS)
 	TimestampDifference(start_time, end_time, &secs, &usecs);
 	search_time_ms = secs * 1000 + usecs / 1000;
 
-	rt_stats(rt);
+	//rt_stats(rt);
 
 	values[0] = Int64GetDatum(rt_memory_usage(rt));
 	values[1] = Int64GetDatum(search_time_ms);
@@ -556,7 +557,7 @@ finish_set:
 	TimestampDifference(start_time, end_time, &secs, &usecs);
 	rt_load_ms = secs * 1000 + usecs / 1000;
 
-	rt_stats(rt);
+	//rt_stats(rt);
 
 	/* meaure the search time of the radix tree */
 	start_time = GetCurrentTimestamp();
@@ -644,7 +645,7 @@ bench_node128_load(PG_FUNCTION_ARGS)
 		}
 	}
 
-	rt_stats(rt);
+	//rt_stats(rt);
 
 	/* measure sparse deletion and re-loading */
 	start_time = GetCurrentTimestamp();

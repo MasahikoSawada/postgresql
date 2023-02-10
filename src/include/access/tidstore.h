@@ -46,4 +46,6 @@ extern size_t tidstore_max_memory(TidStore *ts);
 extern size_t tidstore_memory_usage(TidStore *ts);
 extern tidstore_handle tidstore_get_handle(TidStore *ts);
 
+//extern void tidstore_stats(TidStore *ts);
+
 #endif		/* TIDSTORE_H */

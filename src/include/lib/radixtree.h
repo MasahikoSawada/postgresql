@@ -15,7 +15,7 @@
 
 #include "postgres.h"
 
-#define RT_DEBUG 1
+//#define RT_DEBUG 1
 
 typedef struct radix_tree radix_tree;
 typedef struct rt_iter rt_iter;

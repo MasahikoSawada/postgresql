@@ -430,6 +430,16 @@ tidstore_memory_usage(TidStore *ts)
 }
 
 /*
+void
+tidstore_stats(TidStore *ts)
+{
+#ifdef RT_DEBUG
+	rt_stats(ts->tree.local);
+#endif
+}
+*/
+
+/*
  * Get a handle that can be used by other processes to attach to this TidStore
  */
 tidstore_handle
