@@ -85,3 +85,14 @@ OUT load_ms int8
 returns record
 as 'MODULE_PATHNAME'
 LANGUAGE C STRICT VOLATILE PARALLEL UNSAFE;
+
+create function bench_leaf_shift(
+shift int4,
+loop int4 default 1000000,
+OUT shift int4,
+OUT load_ms int8,
+OUT mem_allocated int8
+)
+returns record
+as 'MODULE_PATHNAME'
+language c volatile parallel unsafe;

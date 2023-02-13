@@ -35,6 +35,7 @@ PG_FUNCTION_INFO_V1(bench_fixed_height_search);
 PG_FUNCTION_INFO_V1(bench_search_random_nodes);
 PG_FUNCTION_INFO_V1(bench_node128_load);
 PG_FUNCTION_INFO_V1(bench_tidstore_load);
+PG_FUNCTION_INFO_V1(bench_leaf_shift);
 
 static uint64
 tid_to_key_off(ItemPointer tid, uint32 *off)
@@ -683,6 +684,47 @@ bench_node128_load(PG_FUNCTION_ARGS)
 	values[1] = Int64GetDatum(rt_num_entries(rt));
 	values[2] = Int64GetDatum(rt_memory_usage(rt));
 	values[3] = Int64GetDatum(rt_sparseload_ms);
+
+	rt_free(rt);
+	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+}
+
+Datum
+bench_leaf_shift(PG_FUNCTION_ARGS)
+{
+	int			shift = PG_GETARG_INT32(0);
+	int			loop = PG_GETARG_INT32(1);
+	radix_tree *rt;
+	TupleDesc	tupdesc;
+	TimestampTz start_time,
+				end_time;
+	long		secs;
+	int			usecs;
+	int64		load_ms;
+	Datum		values[3];
+	bool		nulls[3] = {false};
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	rt = rt_create(CurrentMemoryContext);
+
+	start_time = GetCurrentTimestamp();
+	for (uint64 i = 0; i < loop; i++)
+	{
+		uint64 key = i << shift;
+		rt_set(rt, key, key);
+	}
+	end_time = GetCurrentTimestamp();
+	TimestampDifference(start_time, end_time, &secs, &usecs);
+	load_ms = secs * 1000 + usecs / 1000;
+
+	rt_stats(rt);
+
+	values[0] = Int32GetDatum(shift);
+	values[1] = Int64GetDatum(load_ms);
+	values[2] = Int64GetDatum(rt_memory_usage(rt));
 
 	rt_free(rt);
 	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
