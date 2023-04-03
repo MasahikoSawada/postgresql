@@ -2409,7 +2409,7 @@ struct config_int ConfigureNamesInt[] =
 			gettext_noop("Vacuum cost amount available before napping."),
 			NULL
 		},
-		&VacuumCostLimit,
+		&vacuum_cost_limit,
 		200, 1, 10000,
 		NULL, NULL, NULL
 	},
@@ -3701,7 +3701,7 @@ struct config_real ConfigureNamesReal[] =
 			NULL,
 			GUC_UNIT_MS
 		},
-		&VacuumCostDelay,
+		&vacuum_cost_delay,
 		0, 0, 100,
 		NULL, NULL, NULL
 	},

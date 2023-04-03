@@ -71,6 +71,17 @@ int			vacuum_multixact_freeze_min_age;
 int			vacuum_multixact_freeze_table_age;
 int			vacuum_failsafe_age;
 int			vacuum_multixact_failsafe_age;
+double		vacuum_cost_delay;
+int			vacuum_cost_limit;
+
+/*
+ * Variables for cost-based vacuum delay. The defaults differ between
+ * autovacuum and vacuum. These should be overridden with the appropriate GUC
+ * value in vacuum code. These are initialized here to the defaults for client
+ * backends executing VACUUM or ANALYZE.
+ */
+int			VacuumCostLimit = 200;
+double		VacuumCostDelay = 0;
 
 /*
  * VacuumFailsafeActive is a defined as a global so that we can determine
@@ -506,6 +517,7 @@ vacuum(List *relations, VacuumParams *params,
 	{
 		ListCell   *cur;
 
+		VacuumUpdateCosts();
 		in_vacuum = true;
 		VacuumCostActive = (VacuumCostDelay > 0);
 		VacuumCostBalance = 0;
@@ -2266,8 +2278,7 @@ vacuum_delay_point(void)
 
 		VacuumCostBalance = 0;
 
-		/* update balance values for workers */
-		AutoVacuumUpdateDelay();
+		VacuumUpdateCosts();
 
 		/* Might have gotten an interrupt while sleeping */
 		CHECK_FOR_INTERRUPTS();
