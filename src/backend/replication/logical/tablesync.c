@@ -120,6 +120,7 @@
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
+#include "utils/usercontext.h"
 
 static bool table_states_valid = false;
 static List *table_states_not_ready = NIL;
@@ -1253,6 +1254,8 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 	char		originname[NAMEDATALEN];
 	RepOriginId originid;
 	bool		must_use_password;
+	UserContext	ucxt;
+	bool		run_as_owner;
 
 	/* Check the state of the table synchronization. */
 	StartTransactionCommand();
@@ -1375,6 +1378,15 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 	rel = table_open(MyLogicalRepWorker->relid, RowExclusiveLock);
 
 	/*
+	 * Make sure that the copy command runs as the table owner, unless
+	 * the user has opted out of that behaviour.
+	 */
+	run_as_owner = MySubscription->runasowner;
+
+	if (!run_as_owner)
+		SwitchToUntrustedUser(rel->rd_rel->relowner, &ucxt);
+
+	/*
 	 * Check that our table sync worker has permission to insert into the
 	 * target table.
 	 */
@@ -1468,6 +1480,9 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 				 errmsg("table copy could not finish transaction on publisher: %s",
 						res->err)));
 	walrcv_clear_result(res);
+
+	if(!run_as_owner)
+		RestoreUserContext(&ucxt);
 
 	table_close(rel, NoLock);
 
