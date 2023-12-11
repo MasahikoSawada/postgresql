@@ -23,6 +23,7 @@
 #include "access/xact.h"
 #include "catalog/pg_authid.h"
 #include "commands/copy.h"
+#include "commands/copyapi.h"
 #include "commands/defrem.h"
 #include "executor/executor.h"
 #include "mb/pg_wchar.h"
@@ -32,6 +33,7 @@
 #include "parser/parse_coerce.h"
 #include "parser/parse_collate.h"
 #include "parser/parse_expr.h"
+#include "parser/parse_func.h"
 #include "parser/parse_relation.h"
 #include "rewrite/rewriteHandler.h"
 #include "utils/acl.h"
@@ -427,6 +429,8 @@ ProcessCopyOptions(ParseState *pstate,
 
 	opts_out->file_encoding = -1;
 
+	/* Text is the default format. */
+	opts_out->to_ops = &CopyToTextFormatRoutine;
 	/* Extract options from the statement node tree */
 	foreach(option, options)
 	{
@@ -442,9 +446,26 @@ ProcessCopyOptions(ParseState *pstate,
 			if (strcmp(fmt, "text") == 0)
 				 /* default format */ ;
 			else if (strcmp(fmt, "csv") == 0)
+			{
 				opts_out->csv_mode = true;
+				opts_out->to_ops = &CopyToCSVFormatRoutine;
+			}
 			else if (strcmp(fmt, "binary") == 0)
+			{
 				opts_out->binary = true;
+				opts_out->to_ops = &CopyToBinaryFormatRoutine;
+			}
+			else if (!is_from)
+			{
+				/*
+				 * XXX: Currently we support custom COPY format only for COPY
+				 * TO.
+				 *
+				 * XXX: need to check the combination of the existing options
+				 * and a custom format (e.g., FREEZE)?
+				 */
+				opts_out->to_ops = GetCopyToFormatRoutine(fmt);
+			}
 			else
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -863,4 +884,65 @@ CopyGetAttnums(TupleDesc tupDesc, Relation rel, List *attnamelist)
 	}
 
 	return attnums;
+}
+
+static CopyFormatRoutine *
+GetCopyFormatRoutine(char *format_name, bool is_from)
+{
+	Oid			handlerOid;
+	Oid			funcargtypes[1];
+	CopyFormatRoutine *routine;
+	Datum		datum;
+
+	funcargtypes[0] = INTERNALOID;
+	handlerOid = LookupFuncName(list_make1(makeString(format_name)), 1,
+								funcargtypes, true);
+
+	if (!OidIsValid(handlerOid))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("COPY format \"%s\" not recognized", format_name)));
+
+	datum = OidFunctionCall1(handlerOid, BoolGetDatum(is_from));
+
+	routine = (CopyFormatRoutine *) DatumGetPointer(datum);
+
+	if (routine == NULL || !IsA(routine, CopyFormatRoutine))
+		elog(ERROR, "copy handler function %u did not return a CopyFormatRoutine struct",
+			 handlerOid);
+
+	return routine;
+}
+
+CopyToFormatRoutine *
+GetCopyToFormatRoutine(char *format_name)
+{
+	CopyFormatRoutine *cp;
+	CopyToFormatRoutine *cpt;
+
+	cp = GetCopyFormatRoutine(format_name, false);
+	cpt = (CopyToFormatRoutine *) &(cp->routine.copyto);
+
+	if (!IsA(cpt, CopyToFormatRoutine))
+		elog(ERROR, "COPY TO handler for format \"%s\" returned invalid struct",
+			 format_name);
+
+	return cpt;
+}
+
+CopyFromFormatRoutine *
+GetCopyFromFormatRoutine(char *format_name)
+{
+	CopyFormatRoutine *cp;
+	CopyFromFormatRoutine *cpf;
+
+	cp = GetCopyFormatRoutine(format_name, true);
+	cpf = (CopyFromFormatRoutine *) &(cp->routine.copyfrom);
+
+	if (!IsA(cpf, CopyFromFormatRoutine))
+		elog(ERROR, "COPY FROM handler for format \"%s\" returned invalid struct",
+			 format_name);
+
+	return cpf;
+
 }

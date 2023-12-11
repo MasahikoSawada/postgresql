@@ -18,6 +18,7 @@
 #include "nodes/parsenodes.h"
 #include "parser/parse_node.h"
 #include "tcop/dest.h"
+#include "commands/copyapi.h"
 
 /*
  * Represents whether a header line should be present, and whether it must
@@ -63,11 +64,8 @@ typedef struct CopyFormatOptions
 	bool	   *force_null_flags;	/* per-column CSV FN flags */
 	bool		convert_selectively;	/* do selective binary conversion? */
 	List	   *convert_select; /* list of column names (can be NIL) */
+	CopyToFormatRoutine *to_ops;	/* callback routines for COPY TO */
 } CopyFormatOptions;
-
-/* These are private in commands/copy[from|to].c */
-typedef struct CopyFromStateData *CopyFromState;
-typedef struct CopyToStateData *CopyToState;
 
 typedef int (*copy_data_source_cb) (void *outbuf, int minread, int maxread);
 typedef void (*copy_data_dest_cb) (void *data, int len);
@@ -101,5 +99,10 @@ extern void EndCopyTo(CopyToState cstate);
 extern uint64 DoCopyTo(CopyToState cstate);
 extern List *CopyGetAttnums(TupleDesc tupDesc, Relation rel,
 							List *attnamelist);
+
+/* build-in COPY TO format routines */
+extern CopyToFormatRoutine CopyToTextFormatRoutine;
+extern CopyToFormatRoutine CopyToCSVFormatRoutine;
+extern CopyToFormatRoutine CopyToBinaryFormatRoutine;
 
 #endif							/* COPY_H */
