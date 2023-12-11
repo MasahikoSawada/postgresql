@@ -10,6 +10,7 @@ node_support_input_i = [
   'access/amapi.h',
   'access/sdir.h',
   'access/tableam.h',
+  'access/copyapi.h',
   'access/tsmapi.h',
   'commands/event_trigger.h',
   'commands/trigger.h',
