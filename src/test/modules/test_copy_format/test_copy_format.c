@@ -47,19 +47,21 @@ Datum
 copy_testfmt_handler(PG_FUNCTION_ARGS)
 {
 	bool		is_from = PG_GETARG_BOOL(0);
-	CopyFormatRoutine *cp = makeNode(CopyFormatRoutine);
+	CopyFormatRoutine *cp = makeNode(CopyFormatRoutine);;
 
 	ereport(NOTICE,
 			(errmsg("testfmt_handler called with is_from %d", is_from)));
 
+	cp->is_from = is_from;
 	if (!is_from)
 	{
-		CopyToFormatRoutine *cpt_routine = &(cp->routine.copyto);
+		CopyToFormatRoutine *cpt = makeNode(CopyToFormatRoutine);
 
-		cpt_routine->type = T_CopyToFormatRoutine;
-		cpt_routine->start_fn = testfmt_copyto_start;
-		cpt_routine->onerow_fn = testfmt_copyto_onerow;
-		cpt_routine->end_fn = testfmt_copyto_end;
+		cpt->start_fn = testfmt_copyto_start;
+		cpt->onerow_fn = testfmt_copyto_onerow;
+		cpt->end_fn = testfmt_copyto_end;
+
+		cp->routine = (Node *) cpt;
 	}
 	else
 		elog(ERROR, "custom COPY format \"testfmt\" does not support COPY FROM");

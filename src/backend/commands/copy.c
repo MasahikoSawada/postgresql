@@ -891,7 +891,7 @@ GetCopyFormatRoutine(char *format_name, bool is_from)
 {
 	Oid			handlerOid;
 	Oid			funcargtypes[1];
-	CopyFormatRoutine *routine;
+	CopyFormatRoutine *cp;
 	Datum		datum;
 
 	funcargtypes[0] = INTERNALOID;
@@ -905,44 +905,42 @@ GetCopyFormatRoutine(char *format_name, bool is_from)
 
 	datum = OidFunctionCall1(handlerOid, BoolGetDatum(is_from));
 
-	routine = (CopyFormatRoutine *) DatumGetPointer(datum);
+	cp = (CopyFormatRoutine *) DatumGetPointer(datum);
 
-	if (routine == NULL || !IsA(routine, CopyFormatRoutine))
+	if (cp == NULL || !IsA(cp, CopyFormatRoutine))
 		elog(ERROR, "copy handler function %u did not return a CopyFormatRoutine struct",
 			 handlerOid);
 
-	return routine;
+	if (!IsA(cp->routine, CopyToFormatRoutine) &&
+		!IsA(cp->routine, CopyFromFormatRoutine))
+		elog(ERROR, "copy handler function %u returned invalid CopyFormatRoutine struct",
+			 handlerOid);
+
+	if (!cp->is_from && !IsA(cp->routine, CopyToFormatRoutine))
+		elog(ERROR, "copy handler function %u returned COPY FROM routines but expected COPY TO routines",
+			 handlerOid);
+
+	if (cp->is_from && !IsA(cp->routine, CopyFromFormatRoutine))
+		elog(ERROR, "copy handler function %u returned COPY TO routines but expected COPY FROM routines",
+			 handlerOid);
+
+	return cp;
 }
 
 CopyToFormatRoutine *
 GetCopyToFormatRoutine(char *format_name)
 {
 	CopyFormatRoutine *cp;
-	CopyToFormatRoutine *cpt;
 
 	cp = GetCopyFormatRoutine(format_name, false);
-	cpt = (CopyToFormatRoutine *) &(cp->routine.copyto);
-
-	if (!IsA(cpt, CopyToFormatRoutine))
-		elog(ERROR, "COPY TO handler for format \"%s\" returned invalid struct",
-			 format_name);
-
-	return cpt;
+	return (CopyToFormatRoutine *) castNode(CopyToFormatRoutine, cp->routine);
 }
 
 CopyFromFormatRoutine *
 GetCopyFromFormatRoutine(char *format_name)
 {
 	CopyFormatRoutine *cp;
-	CopyFromFormatRoutine *cpf;
 
 	cp = GetCopyFormatRoutine(format_name, true);
-	cpf = (CopyFromFormatRoutine *) &(cp->routine.copyfrom);
-
-	if (!IsA(cpf, CopyFromFormatRoutine))
-		elog(ERROR, "COPY FROM handler for format \"%s\" returned invalid struct",
-			 format_name);
-
-	return cpf;
-
+	return (CopyFromFormatRoutine *) castNode(CopyFromFormatRoutine, cp->routine);
 }
