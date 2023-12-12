@@ -29,6 +29,11 @@
 #include "utils/dsa.h"
 #include "utils/memutils.h"
 
+/* Enable TidStore debugging if USE_ASSERT_CHECKING */
+#ifdef USE_ASSERT_CHECKING
+#define TIDSTORE_DEBUG
+#include "catalog/index.h"
+#endif
 
 #define WORDNUM(x)	((x) / BITS_PER_BITMAPWORD)
 #define BITNUM(x)	((x) % BITS_PER_BITMAPWORD)
@@ -81,6 +86,13 @@ struct TidStore
 
 	/* DSA area for TidStore if using shared memory */
 	dsa_area	*area;
+
+#ifdef TIDSTORE_DEBUG
+	ItemPointerData	*tids;
+	int64		max_tids;
+	int64		num_tids;
+	bool		tids_unordered;
+#endif
 };
 #define TidStoreIsShared(ts) ((ts)->area != NULL)
 
@@ -96,6 +108,12 @@ typedef struct TidStoreIter
 		local_rt_iter	*local;
 	} tree_iter;
 
+
+#ifdef TIDSTORE_DEBUG
+	/* iterator index for the ts->tids array */
+	int64		tids_idx;
+#endif
+
 	/*
 	 * output for the caller. Must be last because variable-size.
 	 */
@@ -103,6 +121,15 @@ typedef struct TidStoreIter
 } TidStoreIter;
 
 static void tidstore_iter_extract_tids(TidStoreIter *iter, BlocktableEntry *page);
+
+/* debug functions available only when TIDSTORE_DEBUG */
+#ifdef TIDSTORE_DEBUG
+static void ts_debug_set_block_offsets(TidStore *ts, BlockNumber blkno,
+									   OffsetNumber *offsets, int num_offsets);
+static void ts_debug_iter_check_tids(TidStoreIter *iter);
+static bool ts_debug_is_member(TidStore *ts, ItemPointer tid);
+static int itemptr_cmp(const void *left, const void *right);
+#endif
 
 /*
  * Create a TidStore. The returned object is allocated in backend-local memory.
@@ -124,6 +151,17 @@ TidStoreCreate(size_t max_bytes, dsa_area *area)
 	}
 	else
 		ts->tree.local = local_rt_create(ts->context, max_bytes);
+
+#ifdef TIDSTORE_DEBUG
+	{
+		int64		max_tids = max_bytes / sizeof(ItemPointerData);
+
+		ts->tids = palloc(sizeof(ItemPointerData) * max_tids);
+		ts->max_tids = max_tids;
+		ts->num_tids = 0;
+		ts->tids_unordered = false;
+	}
+#endif
 
 	return ts;
 }
@@ -162,6 +200,7 @@ TidStoreDetach(TidStore *ts)
 	Assert(TidStoreIsShared(ts));
 
 	shared_rt_detach(ts->tree.shared);
+
 	pfree(ts);
 }
 
@@ -209,6 +248,11 @@ TidStoreDestroy(TidStore *ts)
 		shared_rt_free(ts->tree.shared);
 	else
 		local_rt_free(ts->tree.local);
+
+#ifdef TIDSTORE_DEBUG
+	if (!TidStoreIsShared(ts))
+		pfree(ts->tids);
+#endif
 
 	pfree(ts);
 }
@@ -273,6 +317,14 @@ TidStoreSetBlockOffsets(TidStore *ts, BlockNumber blkno, OffsetNumber *offsets,
 							 page_len);
 
 	Assert(!found);
+
+#ifdef TIDSTORE_DEBUG
+	if (!TidStoreIsShared(ts))
+	{
+		/* Insert tids into the tid array too */
+		ts_debug_set_block_offsets(ts, blkno, offsets, num_offsets);
+	}
+#endif
 }
 
 /* Return true if the given tid is present in the TidStore */
@@ -304,6 +356,13 @@ TidStoreIsMember(TidStore *ts, ItemPointer tid)
 
 	ret = (page->words[wordnum] & ((bitmapword) 1 << bitnum)) != 0;
 
+#ifdef TIDSTORE_DEBUG
+	if (!TidStoreIsShared(ts))
+	{
+		bool ret_debug = ts_debug_is_member(ts, tid);;
+		Assert(ret == ret_debug);
+	}
+#endif
 	return ret;
 }
 
@@ -336,6 +395,11 @@ TidStoreBeginIterate(TidStore *ts)
 	else
 		iter->tree_iter.local = local_rt_begin_iterate(ts->tree.local);
 
+#ifdef TIDSTORE_DEBUG
+	if (!TidStoreIsShared(ts))
+		iter->tids_idx = 0;
+#endif
+
 	return iter;
 }
 
@@ -365,6 +429,11 @@ TidStoreIterateNext(TidStoreIter *iter)
 
 	tidstore_iter_extract_tids(iter, page);
 	result->blkno = key;
+
+#ifdef TIDSTORE_DEBUG
+	if (!TidStoreIsShared(iter->ts))
+		ts_debug_iter_check_tids(iter);
+#endif
 
 	return result;
 }
@@ -434,3 +503,122 @@ tidstore_iter_extract_tids(TidStoreIter *iter, BlocktableEntry *page)
 		}
 	}
 }
+
+#ifdef TIDSTORE_DEBUG
+/* Comparator routines for ItemPointer */
+static int
+itemptr_cmp(const void *left, const void *right)
+{
+	BlockNumber lblk,
+		rblk;
+	OffsetNumber loff,
+		roff;
+
+	lblk = ItemPointerGetBlockNumber((ItemPointer) left);
+	rblk = ItemPointerGetBlockNumber((ItemPointer) right);
+
+	if (lblk < rblk)
+		return -1;
+	if (lblk > rblk)
+		return 1;
+
+	loff = ItemPointerGetOffsetNumber((ItemPointer) left);
+	roff = ItemPointerGetOffsetNumber((ItemPointer) right);
+
+	if (loff < roff)
+		return -1;
+	if (loff > roff)
+		return 1;
+
+	return 0;
+}
+
+/* Insert tids to the tid array for debugging */
+static void
+ts_debug_set_block_offsets(TidStore *ts, BlockNumber blkno, OffsetNumber *offsets,
+						   int num_offsets)
+{
+	if (ts->num_tids > 0 &&
+		blkno < ItemPointerGetBlockNumber(&(ts->tids[ts->num_tids - 1])))
+	{
+		/* The array will be sorted at ts_debug_is_member() */
+		ts->tids_unordered = true;
+	}
+
+	for (int i = 0; i < num_offsets; i++)
+	{
+		ItemPointer tid;
+		int idx = ts->num_tids + i;
+
+		/* Enlarge the tid array if necessary */
+		if (idx >= ts->max_tids)
+		{
+			ts->max_tids *= 2;
+			ts->tids = repalloc(ts->tids, sizeof(ItemPointerData) * ts->max_tids);
+		}
+
+		tid = &(ts->tids[idx]);
+
+		ItemPointerSetBlockNumber(tid, blkno);
+		ItemPointerSetOffsetNumber(tid, offsets[i]);
+	}
+
+	ts->num_tids += num_offsets;
+}
+
+/* Return true if the given tid is present in the tid array */
+static bool
+ts_debug_is_member(TidStore *ts, ItemPointer tid)
+{
+	int64	litem,
+		ritem,
+		item;
+	ItemPointer res;
+
+	if (ts->num_tids == 0)
+		return false;
+
+	/* Make sure the tid array is sorted */
+	if (ts->tids_unordered)
+	{
+		qsort(ts->tids, ts->num_tids, sizeof(ItemPointerData), itemptr_cmp);
+		ts->tids_unordered = false;
+	}
+
+	litem = itemptr_encode(&ts->tids[0]);
+	ritem = itemptr_encode(&ts->tids[ts->num_tids - 1]);
+	item = itemptr_encode(tid);
+
+	/*
+	 * Doing a simple bound check before bsearch() is useful to avoid the
+	 * extra cost of bsearch(), especially if dead items on the heap are
+	 * concentrated in a certain range.	Since this function is called for
+	 * every index tuple, it pays to be really fast.
+	 */
+	if (item < litem || item > ritem)
+		return false;
+
+	res = bsearch(tid, ts->tids, ts->num_tids, sizeof(ItemPointerData),
+				  itemptr_cmp);
+
+	return (res != NULL);
+}
+
+/* Verify if the iterator output matches the tids in the array for debugging */
+static void
+ts_debug_iter_check_tids(TidStoreIter *iter)
+{
+	BlockNumber blkno = iter->output.blkno;
+
+	for (int i = 0; i < iter->output.num_offsets; i++)
+	{
+		ItemPointer tid = &(iter->ts->tids[iter->tids_idx + i]);
+
+		Assert((iter->tids_idx + i) < iter->ts->max_tids);
+		Assert(ItemPointerGetBlockNumber(tid) == blkno);
+		Assert(ItemPointerGetOffsetNumber(tid) == iter->output.offsets[i]);
+	}
+
+	iter->tids_idx += iter->output.num_offsets;
+}
+#endif
