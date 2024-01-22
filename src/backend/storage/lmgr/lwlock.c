@@ -164,6 +164,7 @@ static const char *const BuiltinTrancheNames[] = {
 	[LWTRANCHE_LAUNCHER_HASH] = "LogicalRepLauncherHash",
 	[LWTRANCHE_DSM_REGISTRY_DSA] = "DSMRegistryDSA",
 	[LWTRANCHE_DSM_REGISTRY_HASH] = "DSMRegistryHash",
+	[LWTRANCHE_PARALLEL_VACUUM_DSA] = "ParallelVacuumDSA",
 };
 
 StaticAssertDecl(lengthof(BuiltinTrancheNames) ==
