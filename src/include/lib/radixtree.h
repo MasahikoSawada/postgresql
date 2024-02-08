@@ -335,7 +335,7 @@ RT_SCOPE void RT_STATS(RT_RADIX_TREE * tree);
  * smaller nodes expend some additional CPU time to enable a smaller
  * memory footprint.
  *
- * XXX There are 4 node kinds, and this should never be increased,
+ * NOTE: There are 4 node kinds, and this should never be increased,
  * for several reasons:
  * 1. With 5 or more kinds, gcc tends to use a jump table for switch
  *    statements.

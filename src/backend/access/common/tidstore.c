@@ -214,24 +214,6 @@ TidStoreDestroy(TidStore *ts)
 }
 
 /*
- * Support routine for TidStoreSetBlockOffsets(). Set the offset bitmapword
- * to the right location and zero out any gaps between (wordnum, new_wordnum).
- */
-static inline void
-set_offset_bitmap_at(BlocktableEntry *page, bitmapword word, int wordnum,
-					 int new_wordnum)
-{
-	Assert(new_wordnum >= wordnum);
-
-	/* write out offset bitmap for this page */
-	page->words[wordnum] = word;
-
-	/* Zero out any gaps up to the current word */
-	for (int empty_idx = wordnum + 1; empty_idx < new_wordnum; empty_idx++)
-		page->words[empty_idx] = 0;
-}
-
-/*
  * Set the given tids on the blkno to TidStore.
  *
  * NB: the offset numbers in offsets must be sorted in ascending order.
@@ -242,44 +224,43 @@ TidStoreSetBlockOffsets(TidStore *ts, BlockNumber blkno, OffsetNumber *offsets,
 {
 	char	data[MaxBlocktableEntrySize];
 	BlocktableEntry *page = (BlocktableEntry *) data;
-	bitmapword word = 0;
-	int		prev_wordnum;
+	bitmapword word;
 	int		wordnum;
-	int		bitnum;
+	int next_word_threshold;
+	int idx = 0;
 	size_t page_len;
 	bool	found PG_USED_FOR_ASSERTS_ONLY;
 
 	Assert(num_offsets > 0);
 
-	wordnum = prev_wordnum = 0;
-	for (int i = 0; i < num_offsets; i++)
+
+	for (wordnum = 0, next_word_threshold = BITS_PER_BITMAPWORD;
+		wordnum <= WORDNUM(offsets[num_offsets - 1]);
+		wordnum++, next_word_threshold += BITS_PER_BITMAPWORD)
 	{
-		OffsetNumber off = offsets[i];
+		word = 0;
 
-		/* safety check to ensure we don't overrun bit array bounds */
-		if (!OffsetNumberIsValid(off))
-			elog(ERROR, "tuple offset out of range: %u", off);
-
-		/* Page is exact, so set bit for individual tuple */
-		wordnum = WORDNUM(off);
-		bitnum = BITNUM(off);
-
-		if (wordnum > prev_wordnum)
+		while(idx < num_offsets)
 		{
-			/* write out offset bitmap for this page */
-			set_offset_bitmap_at(page, word, prev_wordnum, wordnum);
+			OffsetNumber off = offsets[idx];
 
-			word = 0;
-			prev_wordnum = wordnum;
+			/* safety check to ensure we don't overrun bit array bounds */
+			if (!OffsetNumberIsValid(off))
+				elog(ERROR, "tuple offset out of range: %u", off);
+
+			if (off >= next_word_threshold)
+				break;
+
+			word |= ((bitmapword) 1 << BITNUM(off));
+			idx++;
 		}
 
-		word |= ((bitmapword) 1 << bitnum);
+		/* write out offset bitmap for this wordnum */
+		page->words[wordnum] = word;
 	}
 
-	/* write out the final offset bitmap */
-	set_offset_bitmap_at(page, word, prev_wordnum, wordnum);
-
-	page->nwords = WORDS_PER_PAGE(offsets[num_offsets - 1]);
+	page->nwords = wordnum + 1;
+	Assert(page->nwords = WORDS_PER_PAGE(offsets[num_offsets - 1]));
 
 	page_len = offsetof(BlocktableEntry, words) +
 		sizeof(bitmapword) * page->nwords;
