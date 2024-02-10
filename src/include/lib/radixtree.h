@@ -3,13 +3,38 @@
  * radixtree.h
  *		Template for adaptive radix tree.
  *
- * This module employs the idea from the paper "The Adaptive Radix Tree: ARTful
- * Indexing for Main-Memory Databases" by Viktor Leis, Alfons Kemper, and Thomas
- * Neumann, 2013. The radix tree uses adaptive node sizes, a small number of node
- * types, each with a different numbers of elements. Depending on the number of
- * children, the appropriate node type is used.
+ * A template to generate an "adaptive radix tree", specialized for user
+ * defined types and for local/shared memory.
  *
- * WIP: notes about traditional radix tree trading off span vs height...
+ * The concept originates from the paper "The Adaptive Radix Tree: ARTful
+ * Indexing for Main-Memory Databases" by Viktor Leis, Alfons Kemper,
+ * and Thomas Neumann, 2013.
+ *
+ * Radix trees have some advantages over hash tables:
+ * - The keys are logically ordered, allowing iteration and range queries
+ * - Operations using keys that are lexicographically close together
+ *   will have favorable memory locality
+ * - Memory use grows gradually rather than by doubling
+ * - The key does not need to be stored with the value, since the key
+ *   is implicitly contained in the path to the value
+ *
+ * A classic radix tree consists of nodes, each conaining an array of
+ * pointers to child nodes.  The size of the array is determined by the
+ * "span" of the tree, which is the number of bits of the key used to
+ * index into the array.  For example, with a span of 6, a "chunk"
+ * of 6 bits is extracted from the key at each node traversal, and
+ * the arrays thus have a "fanout" of 2^6 or 64 entries.  A large span
+ * allows a shorter tree, but requires larger arrays that may be mostly
+ * wasted space.
+ *
+ * The key idea of the adaptive radix tree is to choose different
+ * data structures based on the number of child nodes. A node will
+ * start out small when it is first populated, and when it is full,
+ * it is replaced by the next larger size. Conversely, when a node
+ * becomes mostly empty, it is replaced by the next smaller node. The
+ * bulk of the code complexity in this module stems from this dynamic
+ * switching. One mitigating factor is using a span of 8, since bytes
+ * are directly addressable.
  *
  * The ART paper mentions three ways to implement leaves:
  *
@@ -23,33 +48,43 @@
  *  pointer storage location in an inner node can either
  *  store a pointer or a value."
  *
- * We use "combined pointer/value slots", as recommended. Values of size equal or smaller
- * than the platform's pointer type are stored in the child slots of the last level node,
- * while larger values are the same as 'single-value' leaves above.
- * This offers flexibility and efficiency.
+ * We use a form of "combined pointer/value slots", as recommended. Values
+ * of size (if fixed at compile time) equal or smaller than the platform's
+ * pointer type are stored in the child slots of the last level node,
+ * while larger values are the same as 'single-value' leaves above. This
+ * offers flexibility and efficiency. Variable-length types are currently
+ * treated as single-value leaves for simplicity, but future work may
+ * allow those to be stored in the child pointer arrays, when they're
+ * small enough.
  *
- * For simplicity, the key is assumed to be 64-bit unsigned integer. The
- * tree doesn't need to contain paths where the highest bytes of all keys
- * are zero. That way, the tree's height adapts to the distribution of keys.
+ * There are two other techniques described in the paper that are not
+ * impemented here:
+ * - path compression "...removes all inner nodes that have only a single child."
+ * - lazy path expansion "...inner nodes are only created if they are required
+ *   to distinguish at least two leaf nodes."
  *
- * There are some optimizations not yet implemented, particularly path
- * compression and lazy path expansion.
+ * We do have a form of "poor man's lazy expansion", however, enabled by
+ * only supporting unsigned integer keys (for now assumed to be 64-bit):
+ * A tree doesn't contain paths where the highest bytes of all keys are
+ * zero. That way, the tree's height adapts to the distribution of keys.
  *
- * To handle concurrency, we use a single reader-writer lock for the radix
- * tree. The radix tree must be exclusively locked during write operations such
- * as RT_SET() and RT_DELETE(), and shared locked during read operations
- * such as RT_FIND() and RT_BEGIN_ITERATE().
+ * To handle concurrency, we use a single reader-writer lock for the
+ * radix tree. If oncurrent write operations are possible, the tree
+ * must be exclusively locked during write operations such as RT_SET()
+ * and RT_DELETE(), and shared locked during read operations such as
+ * RT_FIND() and RT_BEGIN_ITERATE().
  *
- * TODO: The current locking mechanism is not optimized for high concurrency
- * with mixed read-write workloads. In the future it might be worthwhile
- * to replace it with the Optimistic Lock Coupling or ROWEX mentioned in
- * the paper "The ART of Practical Synchronization" by the same authors as
- * the ART paper, 2016.
+ * TODO: The current locking mechanism is not optimized for high
+ * concurrency with mixed read-write workloads. In the future it might
+ * be worthwhile to replace it with the Optimistic Lock Coupling or
+ * ROWEX mentioned in the paper "The ART of Practical Synchronization"
+ * by the same authors as the ART paper, 2016.
  *
- * To generate a radix tree and associated functions for a use case several
- * macros have to be #define'ed before this file is included.  Including
- * the file #undef's all those, so a new radix tree can be generated
- * afterwards.
+ * To generate a radix tree and associated functions for a use case
+ * several macros have to be #define'ed before this file is included.
+ * Including the file #undef's all those, so a new radix tree can be
+ * generated afterwards.
+ *
  * The relevant parameters are:
  * - RT_PREFIX - prefix for all symbol names generated. A prefix of 'foo'
  * 	 will result in radix tree type 'foo_radix_tree' and functions like
@@ -77,7 +112,7 @@
  * RT_BEGIN_ITERATE	- Begin iterating through all key-value pairs
  * RT_ITERATE_NEXT	- Return next key-value pair, if any
  * RT_END_ITERATE	- End iteration
- * RT_MEMORY_USAGE	- Get the memory usage
+ * RT_MEMORY_USAGE	- Get the memory, as measured by memory context blocks
  *
  * Interface for Shared Memory
  * ---------
@@ -92,7 +127,7 @@
  * Optional Interface
  * ---------
  *
- * RT_DELETE		- Delete a key-value pair. Declared/define if RT_USE_DELETE is defined
+ * RT_DELETE		- Delete a key-value pair. Declared/defined if RT_USE_DELETE is defined
  *
  *
  * Copyright (c) 2024, PostgreSQL Global Development Group
@@ -317,7 +352,7 @@ RT_SCOPE void RT_STATS(RT_RADIX_TREE * tree);
 #define RT_NODE_KIND_COUNT		4
 
 /*
- * Calculate the slab blocksize so that we can allocate at least 32 chunks
+ * Calculate the slab block size so that we can allocate at least 32 chunks
  * from the block.
  */
 #define RT_SLAB_BLOCK_SIZE(size)	\
@@ -402,12 +437,11 @@ typedef union RT_NODE_PTR
 
 /*
  * This also determines the number of bits necessary for the isset array,
- * so we need to be mindful of the size of bitmapword.
- * Since bitmapword can be 64 bits, the only values that make sense
- * here are 64 and 128.
- * The paper uses at most 64 for this node kind, and one advantage for us
- * is that "isset" is a single bitmapword on most platforms, rather than
- * an array, allowing the compiler to get rid of loops.
+ * so we need to be mindful of the size of bitmapword.  Since bitmapword
+ * can be 64 bits, the only values that make sense here are 64 and 128.
+ * The ART paper uses at most 64 for this node kind, and one advantage
+ * for us is that "isset" is a single bitmapword on most platforms,
+ * rather than an array, allowing the compiler to get rid of loops.
  */
 #define RT_FANOUT_48_MAX 64
 
@@ -416,6 +450,13 @@ typedef union RT_NODE_PTR
 /*
  * Node structs, one for each "kind"
  */
+
+/*
+ * node4 and node16 use one array for key chunks and another
+ * array of the same length for children. The keys and children
+ * are stored at corresponding positions, sorted by chunk.
+ */
+
 typedef struct RT_NODE_4
 {
 	RT_NODE		base;
@@ -437,9 +478,8 @@ typedef struct RT_NODE_16
 }			RT_NODE_16;
 
 /*
- * node48 uses slot_idx array, an array of RT_NODE_MAX_SLOTS length
- * to store indexes into a second array that contains the values (or
- * child pointers).
+ * node48 uses a 256-element array indexed by key chunks. This array
+ * stores indexes into a second array containing the children.
  */
 typedef struct RT_NODE_48
 {
@@ -459,10 +499,9 @@ typedef struct RT_NODE_48
 }			RT_NODE_48;
 
 /*
- * node256 is the largest node type. This node has an array
- * of children/values directly indexed by chunk.
- * Unlike other node kinds, its array size is by definition
- * fixed.
+ * node256 is the largest node type. This node has an array of
+ * children directly indexed by chunk.  Unlike other node kinds,
+ * its array size is by definition fixed.
  */
 typedef struct RT_NODE_256
 {
@@ -477,9 +516,9 @@ typedef struct RT_NODE_256
 
 #if defined(RT_SHMEM)
 /*
- * Make sure the all nodes (except for node256) fit neatly into a DSA size class.
- * We assume the RT_FANOUT_4 is in the range where DSA size classes
- * increment by 8 (as of PG17 up to 64 bytes), so we just hard
+ * Make sure the all nodes (except for node256) fit neatly into a DSA
+ * size class.  We assume the RT_FANOUT_4 is in the range where DSA size
+ * classes increment by 8 (as of PG17 up to 64 bytes), so we just hard
  * code that one.
  */
 
@@ -519,15 +558,15 @@ StaticAssertDecl(RT_FANOUT_48 <= RT_FANOUT_48_MAX, "more slots than isset bits")
  * Node size classes
  *
  * Nodes of different kinds necessarily belong to different size classes.
- * The main innovation in our implementation compared to the ART paper
- * is decoupling the notion of size class from kind.
+ * One innovation in our implementation compared to the ART paper is
+ * decoupling the notion of size class from kind.
  *
  * The size classes within a given node kind have the same underlying
  * type, but a variable number of children/values. This is possible
- * because the base type contains small fixed data structures that
- * work the same way regardless of how many child slots there are. We store the
- * node's allocated capacity in the "fanout" member of RT_NODE, to allow
- * runtime introspection.
+ * because the base type contains small fixed data structures that work
+ * the same way regardless of how many child slots there are. We store
+ * the node's allocated capacity in the "fanout" member of RT_NODE,
+ * to allow runtime introspection.
  */
 typedef enum RT_SIZE_CLASS
 {
@@ -1443,12 +1482,12 @@ RT_ADD_CHILD_4(RT_RADIX_TREE * tree, RT_PTR_ALLOC * ref, RT_NODE_PTR node,
 }
 
 /*
- * Reserve slot in "node"'s child array. The caller will populate
- * it with the actual child pointer.
+ * Reserve slot in "node"'s child array. The caller will populate it
+ * with the actual child pointer.
  *
- * "ref" is the parent's child pointer to "node".
- * If the node we're inserting into needs to grow, we update the parent's
- * child pointer with the pointer to the new larger node.
+ * "ref" is the parent's child pointer to "node".  If the node we're
+ * inserting into needs to grow, we update the parent's child pointer
+ * with the pointer to the new larger node.
  */
 static RT_PTR_ALLOC *
 RT_NODE_INSERT(RT_RADIX_TREE * tree, RT_PTR_ALLOC * ref, RT_NODE_PTR node,
@@ -1459,17 +1498,26 @@ RT_NODE_INSERT(RT_RADIX_TREE * tree, RT_PTR_ALLOC * ref, RT_NODE_PTR node,
 	switch (n->kind)
 	{
 		case RT_NODE_KIND_4:
+			{
 			if (unlikely(RT_NODE_MUST_GROW(n)))
 				return RT_GROW_NODE_4(tree, ref, node, chunk);
+
 			return RT_ADD_CHILD_4(tree, ref, node, chunk);
+			}
 		case RT_NODE_KIND_16:
+			{
 			if (unlikely(RT_NODE_MUST_GROW(n)))
 				return RT_GROW_NODE_16(tree, ref, node, chunk);
+
 			return RT_ADD_CHILD_16(tree, ref, node, chunk);
+			}
 		case RT_NODE_KIND_48:
+			{
 			if (unlikely(RT_NODE_MUST_GROW(n)))
 				return RT_GROW_NODE_48(tree, ref, node, chunk);
+
 			return RT_ADD_CHILD_48(tree, ref, node, chunk);
+			}
 		case RT_NODE_KIND_256:
 			return RT_ADD_CHILD_256(tree, ref, node, chunk);
 		default:
