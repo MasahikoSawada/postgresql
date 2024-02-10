@@ -366,10 +366,10 @@ typedef struct RT_NODE
 
 	/*
 	 * Max capacity for the current size class. Storing this in the node
-	 * enables multiple size classes per node kind. uint8 is sufficient
-	 * for all node kinds, because we only use this number to test if the
-	 * node needs to grow. Since node256 never needs to grow, we let this
-	 * overflow to zero.
+	 * enables multiple size classes per node kind. uint8 is sufficient for
+	 * all node kinds, because we only use this number to test if the node
+	 * needs to grow. Since node256 never needs to grow, we let this overflow
+	 * to zero.
 	 */
 	uint8		fanout;
 
@@ -401,7 +401,7 @@ typedef union RT_NODE_PTR
 #endif
 {
 	RT_PTR_ALLOC alloc;
-	RT_NODE * local;
+	RT_NODE    *local;
 }			RT_NODE_PTR;
 
 #ifdef RT_VARLEN_VALUE
@@ -409,7 +409,7 @@ typedef union RT_NODE_PTR
  * With variable-length values, we always use single-value leaves.
  */
 #define RT_VALUE_IS_EMBEDDABLE (false)
-#else			/* ! RT_VARLEN_VALUE */
+#else							/* ! RT_VARLEN_VALUE */
 
 /*
  * With fixed-length values, we either embed values in the child slots of
@@ -420,8 +420,8 @@ typedef union RT_NODE_PTR
 #define RT_VALUE_IS_EMBEDDABLE (sizeof(RT_VALUE_TYPE) <= SIZEOF_DSA_POINTER)
 #else
 #define RT_VALUE_IS_EMBEDDABLE (sizeof(RT_VALUE_TYPE) <= SIZEOF_VOID_P)
-#endif /* RT_SHMEM */
-#endif /* RT_VALUE_IS_EMBEDDABLE */
+#endif							/* RT_SHMEM */
+#endif							/* RT_VALUE_IS_EMBEDDABLE */
 
 /*
  * Symbols for maximum possible fanout are declared first as they are
@@ -469,7 +469,7 @@ typedef struct RT_NODE_4
 
 typedef struct RT_NODE_16
 {
-	RT_NODE		 base;
+	RT_NODE		base;
 
 	uint8		chunks[RT_FANOUT_16_MAX];
 
@@ -483,7 +483,7 @@ typedef struct RT_NODE_16
  */
 typedef struct RT_NODE_48
 {
-	RT_NODE		 base;
+	RT_NODE		base;
 
 	/* The index of slots for each fanout */
 	uint8		slot_idxs[RT_NODE_MAX_SLOTS];
@@ -505,7 +505,7 @@ typedef struct RT_NODE_48
  */
 typedef struct RT_NODE_256
 {
-	RT_NODE		 base;
+	RT_NODE		base;
 
 	/* bitmap to track which slots are in use */
 	bitmapword	isset[RT_BM_IDX(RT_FANOUT_256)];
@@ -588,27 +588,27 @@ typedef struct RT_SIZE_CLASS_ELEM
 
 static const RT_SIZE_CLASS_ELEM RT_SIZE_CLASS_INFO[] = {
 	[RT_CLASS_4] = {
-		.name =  RT_STR(RT_PREFIX) "radix_tree node4",
+		.name = RT_STR(RT_PREFIX) "radix_tree node4",
 		.fanout = RT_FANOUT_4,
 		.allocsize = sizeof(RT_NODE_4) + RT_FANOUT_4 * sizeof(RT_PTR_ALLOC),
 	},
 	[RT_CLASS_16_LO] = {
-		.name =  RT_STR(RT_PREFIX) "radix_tree node16_lo",
+		.name = RT_STR(RT_PREFIX) "radix_tree node16_lo",
 		.fanout = RT_FANOUT_16_LO,
 		.allocsize = sizeof(RT_NODE_16) + RT_FANOUT_16_LO * sizeof(RT_PTR_ALLOC),
 	},
 	[RT_CLASS_16_HI] = {
-		.name =  RT_STR(RT_PREFIX) "radix_tree node16_hi",
+		.name = RT_STR(RT_PREFIX) "radix_tree node16_hi",
 		.fanout = RT_FANOUT_16_HI,
 		.allocsize = sizeof(RT_NODE_16) + RT_FANOUT_16_HI * sizeof(RT_PTR_ALLOC),
 	},
 	[RT_CLASS_48] = {
-		.name =  RT_STR(RT_PREFIX) "radix_tree node48",
+		.name = RT_STR(RT_PREFIX) "radix_tree node48",
 		.fanout = RT_FANOUT_48,
 		.allocsize = sizeof(RT_NODE_48) + RT_FANOUT_48 * sizeof(RT_PTR_ALLOC),
 	},
 	[RT_CLASS_256] = {
-		.name =  RT_STR(RT_PREFIX) "radix_tree node256",
+		.name = RT_STR(RT_PREFIX) "radix_tree node256",
 		.fanout = RT_FANOUT_256,
 		.allocsize = sizeof(RT_NODE_256),
 	},
@@ -685,7 +685,10 @@ typedef struct RT_ITER
 {
 	RT_RADIX_TREE *tree;
 
-	/* A stack to track iteration for each level. Level 0 is the lowest (or leaf) level */
+	/*
+	 * A stack to track iteration for each level. Level 0 is the lowest (or
+	 * leaf) level
+	 */
 	RT_NODE_ITER node_iters[RT_MAX_LEVEL];
 	int			top_level;
 	int			cur_level;
@@ -769,7 +772,7 @@ static inline RT_NODE_PTR
 RT_ALLOC_NODE(RT_RADIX_TREE * tree, const uint8 kind, const RT_SIZE_CLASS size_class)
 {
 	RT_NODE_PTR allocnode;
-	RT_NODE * node;
+	RT_NODE    *node;
 	size_t		allocsize;
 
 	allocsize = RT_SIZE_CLASS_INFO[size_class].allocsize;
@@ -894,7 +897,7 @@ RT_FREE_NODE(RT_RADIX_TREE * tree, RT_NODE_PTR node)
 static inline void
 RT_FREE_LEAF(RT_RADIX_TREE * tree, RT_PTR_ALLOC leaf)
 {
-	Assert(leaf!= tree->ctl->root);
+	Assert(leaf != tree->ctl->root);
 
 #ifdef RT_DEBUG
 	tree->ctl->leafcnt--;
@@ -925,11 +928,11 @@ RT_NODE_16_SEARCH_EQ(RT_NODE_16 * node, uint8 chunk)
 	Vector8		cmp1;
 	Vector8		cmp2;
 	uint32		bitfield;
-	RT_PTR_ALLOC * slot_simd = NULL;
+	RT_PTR_ALLOC *slot_simd = NULL;
 #endif
 
 #if defined(USE_NO_SIMD) || defined(USE_ASSERT_CHECKING)
-	RT_PTR_ALLOC * slot = NULL;
+	RT_PTR_ALLOC *slot = NULL;
 
 	for (int i = 0; i < count; i++)
 	{
@@ -983,7 +986,7 @@ RT_NODE_SEARCH(RT_NODE * node, uint8 chunk)
 	{
 		case RT_NODE_KIND_4:
 			{
-				RT_NODE_4 *n4 = (RT_NODE_4 *) node;
+				RT_NODE_4  *n4 = (RT_NODE_4 *) node;
 
 				for (int i = 0; i < n4->base.count; i++)
 				{
@@ -993,7 +996,7 @@ RT_NODE_SEARCH(RT_NODE * node, uint8 chunk)
 				return NULL;
 			}
 		case RT_NODE_KIND_16:
-				return RT_NODE_16_SEARCH_EQ((RT_NODE_16 *) node, chunk);
+			return RT_NODE_16_SEARCH_EQ((RT_NODE_16 *) node, chunk);
 		case RT_NODE_KIND_48:
 			{
 				RT_NODE_48 *n48 = (RT_NODE_48 *) node;
@@ -1118,16 +1121,16 @@ RT_NODE_16_GET_INSERTPOS(RT_NODE_16 * node, uint8 chunk)
 	/*
 	 * First compare the last element. There are two reasons to branch here:
 	 *
-	 * 1) A realistic pattern is inserting ordered keys. In that case, non-SIMD platforms must do a
-	 * linear search to the last chunk to find the insert position. This will get slower
-	 * as the node fills up.
+	 * 1) A realistic pattern is inserting ordered keys. In that case,
+	 * non-SIMD platforms must do a linear search to the last chunk to find
+	 * the insert position. This will get slower as the node fills up.
 	 *
-	 * 2) On SIMD platforms, we must branch anyway to make sure we don't bit scan an
-	 * empty bitfield. Doing the branch here eliminates some work that we might
-	 * otherwise throw away.
+	 * 2) On SIMD platforms, we must branch anyway to make sure we don't bit
+	 * scan an empty bitfield. Doing the branch here eliminates some work that
+	 * we might otherwise throw away.
 	 */
 	Assert(count > 0);
-	if (node->chunks[count-1] < chunk)
+	if (node->chunks[count - 1] < chunk)
 		return count;
 
 #if defined(USE_NO_SIMD) || defined(USE_ASSERT_CHECKING)
@@ -1179,8 +1182,8 @@ static inline void
 RT_SHIFT_ARRAYS_FOR_INSERT(uint8 *chunks, RT_PTR_ALLOC * children, int count, int insertpos)
 {
 	/*
-	 * This is basically a memmove, but written in a simple loop for speed
-	 * on small inputs.
+	 * This is basically a memmove, but written in a simple loop for speed on
+	 * small inputs.
 	 */
 	for (int i = count - 1; i >= insertpos; i--)
 	{
@@ -1198,9 +1201,9 @@ RT_SHIFT_ARRAYS_FOR_INSERT(uint8 *chunks, RT_PTR_ALLOC * children, int count, in
  * place. The caller is responsible for inserting the new element.
  */
 static inline void
-RT_COPY_ARRAYS_FOR_INSERT(	 uint8 *dst_chunks, RT_PTR_ALLOC * dst_children,
-						uint8 *src_chunks, RT_PTR_ALLOC * src_children,
-							 int insertpos, int count)
+RT_COPY_ARRAYS_FOR_INSERT(uint8 *dst_chunks, RT_PTR_ALLOC * dst_children,
+						  uint8 *src_chunks, RT_PTR_ALLOC * src_children,
+						  int insertpos, int count)
 {
 	for (int i = 0; i < count; i++)
 	{
@@ -1249,16 +1252,16 @@ RT_GROW_NODE_48(RT_RADIX_TREE * tree, RT_PTR_ALLOC * ref, RT_NODE_PTR node,
 	RT_COPY_COMMON(newnode, node);
 	for (int word_num = 0; word_num < RT_BM_IDX(RT_NODE_MAX_SLOTS); word_num++)
 	{
-		bitmapword bitmap = 0;
+		bitmapword	bitmap = 0;
 
 		/*
-		 * Bit manipulation is a surprisingly large portion of the
-		 * overhead in the naive implementation. Doing stores word-at-a-time
-		 * removes a lot of that overhead.
+		 * Bit manipulation is a surprisingly large portion of the overhead in
+		 * the naive implementation. Doing stores word-at-a-time removes a lot
+		 * of that overhead.
 		 */
 		for (int bit = 0; bit < BITS_PER_BITMAPWORD; bit++)
 		{
-			uint8 offset = n48->slot_idxs[i];
+			uint8		offset = n48->slot_idxs[i];
 
 			if (offset != RT_INVALID_SLOT_IDX)
 			{
@@ -1341,9 +1344,9 @@ RT_GROW_NODE_16(RT_RADIX_TREE * tree, RT_PTR_ALLOC * ref, RT_NODE_PTR node,
 		RT_COPY_COMMON(newnode, node);
 		Assert(n16->base.count == RT_FANOUT_16_LO);
 		insertpos = RT_NODE_16_GET_INSERTPOS(n16, chunk);
-		RT_COPY_ARRAYS_FOR_INSERT(	 new16->chunks, new16->children,
-								n16->chunks, n16->children,
-									 insertpos, RT_FANOUT_16_LO);
+		RT_COPY_ARRAYS_FOR_INSERT(new16->chunks, new16->children,
+								  n16->chunks, n16->children,
+								  insertpos, RT_FANOUT_16_LO);
 
 		/* insert new chunk into place */
 		new16->chunks[insertpos] = chunk;
@@ -1361,7 +1364,8 @@ RT_GROW_NODE_16(RT_RADIX_TREE * tree, RT_PTR_ALLOC * ref, RT_NODE_PTR node,
 	{
 		RT_NODE_PTR newnode;
 		RT_NODE_48 *new48;
-		int idx, bit;
+		int			idx,
+					bit;
 
 		Assert(n16->base.fanout == RT_FANOUT_16_HI);
 
@@ -1415,7 +1419,7 @@ RT_ADD_CHILD_16(RT_RADIX_TREE * tree, RT_PTR_ALLOC * ref, RT_NODE_PTR node,
 
 	/* shift chunks and children */
 	RT_SHIFT_ARRAYS_FOR_INSERT(n16->chunks, n16->children,
-								  count, insertpos);
+							   count, insertpos);
 
 	/* insert new chunk into place */
 	n16->chunks[insertpos] = chunk;
@@ -1443,9 +1447,9 @@ RT_GROW_NODE_4(RT_RADIX_TREE * tree, RT_PTR_ALLOC * ref, RT_NODE_PTR node,
 	RT_COPY_COMMON(newnode, node);
 	Assert(n4->base.count == RT_FANOUT_4);
 	insertpos = RT_NODE_4_GET_INSERTPOS(n4, chunk, RT_FANOUT_4);
-	RT_COPY_ARRAYS_FOR_INSERT(	 new16->chunks, new16->children,
-							n4->chunks, n4->children,
-								 insertpos, RT_FANOUT_4);
+	RT_COPY_ARRAYS_FOR_INSERT(new16->chunks, new16->children,
+							  n4->chunks, n4->children,
+							  insertpos, RT_FANOUT_4);
 
 	/* insert new chunk into place */
 	new16->chunks[insertpos] = chunk;
@@ -1470,7 +1474,7 @@ RT_ADD_CHILD_4(RT_RADIX_TREE * tree, RT_PTR_ALLOC * ref, RT_NODE_PTR node,
 
 	/* shift chunks and children */
 	RT_SHIFT_ARRAYS_FOR_INSERT(n4->chunks, n4->children,
-								  count, insertpos);
+							   count, insertpos);
 
 	/* insert new chunk into place */
 	n4->chunks[insertpos] = chunk;
@@ -1493,30 +1497,30 @@ static RT_PTR_ALLOC *
 RT_NODE_INSERT(RT_RADIX_TREE * tree, RT_PTR_ALLOC * ref, RT_NODE_PTR node,
 			   uint8 chunk)
 {
-	RT_NODE * n = node.local;
+	RT_NODE    *n = node.local;
 
 	switch (n->kind)
 	{
 		case RT_NODE_KIND_4:
 			{
-			if (unlikely(RT_NODE_MUST_GROW(n)))
-				return RT_GROW_NODE_4(tree, ref, node, chunk);
+				if (unlikely(RT_NODE_MUST_GROW(n)))
+					return RT_GROW_NODE_4(tree, ref, node, chunk);
 
-			return RT_ADD_CHILD_4(tree, ref, node, chunk);
+				return RT_ADD_CHILD_4(tree, ref, node, chunk);
 			}
 		case RT_NODE_KIND_16:
 			{
-			if (unlikely(RT_NODE_MUST_GROW(n)))
-				return RT_GROW_NODE_16(tree, ref, node, chunk);
+				if (unlikely(RT_NODE_MUST_GROW(n)))
+					return RT_GROW_NODE_16(tree, ref, node, chunk);
 
-			return RT_ADD_CHILD_16(tree, ref, node, chunk);
+				return RT_ADD_CHILD_16(tree, ref, node, chunk);
 			}
 		case RT_NODE_KIND_48:
 			{
-			if (unlikely(RT_NODE_MUST_GROW(n)))
-				return RT_GROW_NODE_48(tree, ref, node, chunk);
+				if (unlikely(RT_NODE_MUST_GROW(n)))
+					return RT_GROW_NODE_48(tree, ref, node, chunk);
 
-			return RT_ADD_CHILD_48(tree, ref, node, chunk);
+				return RT_ADD_CHILD_48(tree, ref, node, chunk);
 			}
 		case RT_NODE_KIND_256:
 			return RT_ADD_CHILD_256(tree, ref, node, chunk);
@@ -1585,7 +1589,7 @@ RT_EXTEND_DOWN(RT_RADIX_TREE * tree, RT_PTR_ALLOC * ref, RT_NODE_PTR node, uint6
 {
 	RT_NODE_PTR child;
 	RT_NODE_4  *n4;
-	RT_PTR_ALLOC * first;
+	RT_PTR_ALLOC *first;
 
 	child = RT_ALLOC_NODE(tree, RT_NODE_KIND_4, RT_CLASS_4);
 
@@ -1595,7 +1599,7 @@ RT_EXTEND_DOWN(RT_RADIX_TREE * tree, RT_PTR_ALLOC * ref, RT_NODE_PTR node, uint6
 	 * function.
 	 */
 	first = RT_NODE_INSERT(tree, ref, node,
-								RT_GET_KEY_CHUNK(key, shift));
+						   RT_GET_KEY_CHUNK(key, shift));
 	*first = child.alloc;
 
 	node = child;
@@ -1795,8 +1799,8 @@ RT_CREATE(MemoryContext ctx, size_t max_bytes)
 	}
 
 	/*
-	 * Create leaf context for single-value leaves,
-	 * unless all values are embeddable.
+	 * Create leaf context for single-value leaves, unless all values are
+	 * embeddable.
 	 */
 	if (RT_VALUE_IS_EMBEDDABLE)
 	{
@@ -1870,21 +1874,21 @@ RT_GET_HANDLE(RT_RADIX_TREE * tree)
 	return tree->ctl->handle;
 }
 
-RT_SCOPE	void
+RT_SCOPE void
 RT_LOCK_EXCLUSIVE(RT_RADIX_TREE * tree)
 {
 	Assert(tree->ctl->magic == RT_RADIX_TREE_MAGIC);
 	LWLockAcquire(&tree->ctl->lock, LW_EXCLUSIVE);
 }
 
-RT_SCOPE	void
+RT_SCOPE void
 RT_LOCK_SHARE(RT_RADIX_TREE * tree)
 {
 	Assert(tree->ctl->magic == RT_RADIX_TREE_MAGIC);
 	LWLockAcquire(&tree->ctl->lock, LW_SHARED);
 }
 
-RT_SCOPE	void
+RT_SCOPE void
 RT_UNLOCK(RT_RADIX_TREE * tree)
 {
 	Assert(tree->ctl->magic == RT_RADIX_TREE_MAGIC);
@@ -2151,7 +2155,7 @@ RT_ITERATE_NEXT(RT_ITER * iter, uint64 *key_p)
 
 	while (iter->cur_level <= iter->top_level)
 	{
-		RT_NODE_PTR	node;
+		RT_NODE_PTR node;
 
 		slot = RT_NODE_ITERATE_NEXT(iter, iter->cur_level);
 
@@ -2211,8 +2215,8 @@ static inline void
 RT_SHIFT_ARRAYS_AND_DELETE(uint8 *chunks, RT_PTR_ALLOC * children, int count, int deletepos)
 {
 	/*
-	 * This is basically a memmove, but written in a simple loop for speed
-	 * on small inputs.
+	 * This is basically a memmove, but written in a simple loop for speed on
+	 * small inputs.
 	 */
 	for (int i = deletepos; i < count - 1; i++)
 	{
@@ -2443,7 +2447,7 @@ RT_REMOVE_CHILD_16(RT_RADIX_TREE * tree, RT_PTR_ALLOC * ref, RT_NODE_PTR node, u
 	Assert(n16->chunks[deletepos] == chunk);
 
 	RT_SHIFT_ARRAYS_AND_DELETE(n16->chunks, n16->children,
-								   n16->base.count, deletepos);
+							   n16->base.count, deletepos);
 	n16->base.count--;
 }
 
@@ -2481,7 +2485,7 @@ RT_REMOVE_CHILD_4(RT_RADIX_TREE * tree, RT_PTR_ALLOC * ref, RT_NODE_PTR node, ui
 		Assert(n4->chunks[deletepos] == chunk);
 
 		RT_SHIFT_ARRAYS_AND_DELETE(n4->chunks, n4->children,
-									   n4->base.count, deletepos);
+								   n4->base.count, deletepos);
 
 		n4->base.count--;
 	}
@@ -2593,7 +2597,7 @@ RT_DELETE(RT_RADIX_TREE * tree, uint64 key)
 	return deleted;
 }
 
-#endif /* USE_RT_DELETE */
+#endif							/* USE_RT_DELETE */
 
 /***************** UTILITY FUNCTIONS *****************/
 
@@ -2639,7 +2643,7 @@ RT_VERIFY_NODE(RT_NODE * node)
 	{
 		case RT_NODE_KIND_4:
 			{
-				RT_NODE_4 *n4 = (RT_NODE_4 *) node;
+				RT_NODE_4  *n4 = (RT_NODE_4 *) node;
 
 				/* RT_DUMP_NODE(node); */
 
@@ -2697,8 +2701,8 @@ RT_VERIFY_NODE(RT_NODE * node)
 					cnt += bmw_popcount(n256->isset[i]);
 
 				/*
-				 * Check if the number of used chunk matches, accounting
-				 * for overflow
+				 * Check if the number of used chunk matches, accounting for
+				 * overflow
 				 */
 				if (cnt == RT_FANOUT_256)
 					Assert(n256->base.count == 0);
@@ -2791,7 +2795,7 @@ RT_DUMP_NODE(RT_NODE * node)
 		case RT_NODE_KIND_48:
 			{
 				RT_NODE_48 *n48 = (RT_NODE_48 *) node;
-				char *sep = "";
+				char	   *sep = "";
 
 				fprintf(stderr, "slot_idxs: \n");
 				for (int chunk = 0; chunk < RT_NODE_MAX_SLOTS; chunk++)
@@ -2826,7 +2830,7 @@ RT_DUMP_NODE(RT_NODE * node)
 		case RT_NODE_KIND_256:
 			{
 				RT_NODE_256 *n256 = (RT_NODE_256 *) node;
-				char *sep = "";
+				char	   *sep = "";
 
 				fprintf(stderr, "isset-bitmap: ");
 				for (int i = 0; i < (RT_FANOUT_256 / BITS_PER_BYTE); i++)
