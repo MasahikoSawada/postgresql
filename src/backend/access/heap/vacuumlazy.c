@@ -3155,7 +3155,7 @@ dead_items_alloc(LVRelState *vacrel, int nworkers)
 	}
 
 	/* Serial VACUUM case */
-	vacrel->dead_items = TidStoreCreate(vac_work_mem, NULL, 0);
+	vacrel->dead_items = TidStoreCreateLocal(vac_work_mem);
 
 	dead_items_info = (VacDeadItemsInfo *) palloc(sizeof(VacDeadItemsInfo));
 	dead_items_info->max_bytes = vac_work_mem * 1024L;
@@ -3196,8 +3196,7 @@ dead_items_reset(LVRelState *vacrel)
 
 	/* Recreate the tidstore with the same max_bytes limitation */
 	TidStoreDestroy(dead_items);
-	vacrel->dead_items = TidStoreCreate(vacrel->dead_items_info->max_bytes,
-										NULL, 0);
+	vacrel->dead_items = TidStoreCreateLocal(vacrel->dead_items_info->max_bytes);
 
 	/* Reset the counter */
 	vacrel->dead_items_info->num_items = 0;

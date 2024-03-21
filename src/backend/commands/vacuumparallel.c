@@ -45,7 +45,7 @@
  * use small integers.
  */
 #define PARALLEL_VACUUM_KEY_SHARED			1
-#define PARALLEL_VACUUM_KEY_DEAD_ITEMS		2
+/* 2 was PARALLEL_VACUUM_KEY_DEAD_ITEMS */
 #define PARALLEL_VACUUM_KEY_QUERY_TEXT		3
 #define PARALLEL_VACUUM_KEY_BUFFER_USAGE	4
 #define PARALLEL_VACUUM_KEY_WAL_USAGE		5
@@ -110,6 +110,9 @@ typedef struct PVShared
 
 	/* Counter for vacuuming and cleanup */
 	pg_atomic_uint32 idx;
+
+	/* DSA handle where the TidStore lives */
+	dsa_handle	dead_items_dsa_handle;
 
 	/* DSA pointer to the shared TidStore */
 	dsa_pointer dead_items_handle;
@@ -183,7 +186,6 @@ struct ParallelVacuumState
 
 	/* Shared dead items space among parallel vacuum workers */
 	TidStore   *dead_items;
-	dsa_area   *dead_items_area;
 
 	/* Points to buffer usage area in DSM */
 	BufferUsage *buffer_usage;
@@ -249,12 +251,9 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 	PVIndStats *indstats;
 	BufferUsage *buffer_usage;
 	WalUsage   *wal_usage;
-	void	   *area_space;
-	dsa_area   *dead_items_dsa;
 	bool	   *will_parallel_vacuum;
 	Size		est_indstats_len;
 	Size		est_shared_len;
-	Size		dsa_minsize = dsa_minimum_size();
 	int			nindexes_mwm = 0;
 	int			parallel_workers = 0;
 	int			querylen;
@@ -301,10 +300,6 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 	/* Estimate size for shared information -- PARALLEL_VACUUM_KEY_SHARED */
 	est_shared_len = sizeof(PVShared);
 	shm_toc_estimate_chunk(&pcxt->estimator, est_shared_len);
-	shm_toc_estimate_keys(&pcxt->estimator, 1);
-
-	/* Initial size of DSA for dead tuples -- PARALLEL_VACUUM_KEY_DEAD_ITEMS */
-	shm_toc_estimate_chunk(&pcxt->estimator, dsa_minsize);
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 
 	/*
@@ -371,15 +366,8 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 	pvs->indstats = indstats;
 
 	/* Prepare DSA space for dead items */
-	area_space = shm_toc_allocate(pcxt->toc, dsa_minsize);
-	shm_toc_insert(pcxt->toc, PARALLEL_VACUUM_KEY_DEAD_ITEMS, area_space);
-	dead_items_dsa = dsa_create_in_place(area_space, dsa_minsize,
-										 LWTRANCHE_PARALLEL_VACUUM_DSA,
-										 pcxt->seg);
-	dead_items = TidStoreCreate(vac_work_mem, dead_items_dsa,
-								LWTRANCHE_PARALLEL_VACUUM_DSA);
+	dead_items = TidStoreCreateShared(vac_work_mem, LWTRANCHE_PARALLEL_VACUUM_DSA);
 	pvs->dead_items = dead_items;
-	pvs->dead_items_area = dead_items_dsa;
 
 	/* Prepare shared information */
 	shared = (PVShared *) shm_toc_allocate(pcxt->toc, est_shared_len);
@@ -390,6 +378,7 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 		(nindexes_mwm > 0) ?
 		maintenance_work_mem / Min(parallel_workers, nindexes_mwm) :
 		maintenance_work_mem;
+	shared->dead_items_dsa_handle = dsa_get_handle(TidStoreGetDSA(dead_items));
 	shared->dead_items_handle = TidStoreGetHandle(dead_items);
 	shared->dead_items_info.max_bytes = vac_work_mem * 1024L;
 
@@ -461,7 +450,6 @@ parallel_vacuum_end(ParallelVacuumState *pvs, IndexBulkDeleteResult **istats)
 	}
 
 	TidStoreDestroy(pvs->dead_items);
-	dsa_detach(pvs->dead_items_area);
 
 	DestroyParallelContext(pvs->pcxt);
 	ExitParallelMode();
@@ -493,11 +481,11 @@ parallel_vacuum_reset_dead_items(ParallelVacuumState *pvs)
 	 * limitation we just used.
 	 */
 	TidStoreDestroy(dead_items);
-	dsa_trim(pvs->dead_items_area);
-	pvs->dead_items = TidStoreCreate(dead_items_info->max_bytes, pvs->dead_items_area,
-									 LWTRANCHE_PARALLEL_VACUUM_DSA);
+	pvs->dead_items = TidStoreCreateShared(dead_items_info->max_bytes,
+									   LWTRANCHE_PARALLEL_VACUUM_DSA);
 
 	/* Update the DSA pointer for dead_items to the new one */
+	pvs->shared->dead_items_dsa_handle = dsa_get_handle(TidStoreGetDSA(dead_items));
 	pvs->shared->dead_items_handle = TidStoreGetHandle(dead_items);
 
 	/* Reset the counter */
@@ -1005,8 +993,6 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 	PVIndStats *indstats;
 	PVShared   *shared;
 	TidStore   *dead_items;
-	void	   *area_space;
-	dsa_area   *dead_items_area;
 	BufferUsage *buffer_usage;
 	WalUsage   *wal_usage;
 	int			nindexes;
@@ -1051,9 +1037,8 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 											 false);
 
 	/* Set dead items */
-	area_space = shm_toc_lookup(toc, PARALLEL_VACUUM_KEY_DEAD_ITEMS, false);
-	dead_items_area = dsa_attach_in_place(area_space, seg);
-	dead_items = TidStoreAttach(dead_items_area, shared->dead_items_handle);
+	dead_items = TidStoreAttach(shared->dead_items_dsa_handle,
+								shared->dead_items_handle);
 
 	/* Set cost-based vacuum delay */
 	VacuumUpdateCosts();
@@ -1102,7 +1087,6 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 						  &wal_usage[ParallelWorkerNumber]);
 
 	TidStoreDetach(dead_items);
-	dsa_detach(dead_items_area);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
