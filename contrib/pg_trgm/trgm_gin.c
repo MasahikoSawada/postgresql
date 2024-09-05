@@ -11,7 +11,9 @@
 
 PG_FUNCTION_INFO_V1(gin_extract_trgm);
 PG_FUNCTION_INFO_V1(gin_extract_value_trgm);
+PG_FUNCTION_INFO_V1(gin_extract_value_trgm_unsigned);
 PG_FUNCTION_INFO_V1(gin_extract_query_trgm);
+PG_FUNCTION_INFO_V1(gin_extract_query_trgm_unsigned);
 PG_FUNCTION_INFO_V1(gin_trgm_consistent);
 PG_FUNCTION_INFO_V1(gin_trgm_triconsistent);
 
@@ -31,8 +33,8 @@ gin_extract_trgm(PG_FUNCTION_ARGS)
 	PG_RETURN_NULL();
 }
 
-Datum
-gin_extract_value_trgm(PG_FUNCTION_ARGS)
+static Datum
+gin_extract_value_trgm_common(FunctionCallInfo fcinfo, bool use_signed_char)
 {
 	text	   *val = (text *) PG_GETARG_TEXT_PP(0);
 	int32	   *nentries = (int32 *) PG_GETARG_POINTER(1);
@@ -42,7 +44,8 @@ gin_extract_value_trgm(PG_FUNCTION_ARGS)
 
 	*nentries = 0;
 
-	trg = generate_trgm(VARDATA_ANY(val), VARSIZE_ANY_EXHDR(val));
+	trg = generate_trgm(VARDATA_ANY(val), VARSIZE_ANY_EXHDR(val),
+						use_signed_char);
 	trglen = ARRNELEM(trg);
 
 	if (trglen > 0)
@@ -64,10 +67,23 @@ gin_extract_value_trgm(PG_FUNCTION_ARGS)
 	}
 
 	PG_RETURN_POINTER(entries);
+
 }
 
 Datum
-gin_extract_query_trgm(PG_FUNCTION_ARGS)
+gin_extract_value_trgm(PG_FUNCTION_ARGS)
+{
+	return gin_extract_value_trgm_common(fcinfo, true);
+}
+
+Datum
+gin_extract_value_trgm_unsigned(PG_FUNCTION_ARGS)
+{
+	return gin_extract_value_trgm_common(fcinfo, false);
+}
+
+static Datum
+gin_extract_query_trgm_common(FunctionCallInfo fcinfo, bool use_signed_char)
 {
 	text	   *val = (text *) PG_GETARG_TEXT_PP(0);
 	int32	   *nentries = (int32 *) PG_GETARG_POINTER(1);
@@ -91,7 +107,8 @@ gin_extract_query_trgm(PG_FUNCTION_ARGS)
 		case WordSimilarityStrategyNumber:
 		case StrictWordSimilarityStrategyNumber:
 		case EqualStrategyNumber:
-			trg = generate_trgm(VARDATA_ANY(val), VARSIZE_ANY_EXHDR(val));
+			trg = generate_trgm(VARDATA_ANY(val), VARSIZE_ANY_EXHDR(val),
+								use_signed_char);
 			break;
 		case ILikeStrategyNumber:
 #ifndef IGNORECASE
@@ -105,7 +122,8 @@ gin_extract_query_trgm(PG_FUNCTION_ARGS)
 			 * potentially-matching string must include.
 			 */
 			trg = generate_wildcard_trgm(VARDATA_ANY(val),
-										 VARSIZE_ANY_EXHDR(val));
+										 VARSIZE_ANY_EXHDR(val),
+										 use_signed_char);
 			break;
 		case RegExpICaseStrategyNumber:
 #ifndef IGNORECASE
@@ -164,6 +182,18 @@ gin_extract_query_trgm(PG_FUNCTION_ARGS)
 		*searchMode = GIN_SEARCH_MODE_ALL;
 
 	PG_RETURN_POINTER(entries);
+}
+
+Datum
+gin_extract_query_trgm(PG_FUNCTION_ARGS)
+{
+	return gin_extract_query_trgm_common(fcinfo, true);
+}
+
+Datum
+gin_extract_query_trgm_unsigned(PG_FUNCTION_ARGS)
+{
+	return gin_extract_query_trgm_common(fcinfo, false);
 }
 
 Datum

@@ -161,6 +161,12 @@ show_limit(PG_FUNCTION_ARGS)
 }
 
 static int
+comp_trgm_unsigned(const void *a, const void *b)
+{
+	return CMPTRGM_UNS(a, b);
+}
+
+static int
 comp_trgm(const void *a, const void *b)
 {
 	return CMPTRGM(a, b);
@@ -356,7 +362,7 @@ protect_out_of_mem(int slen)
  * Returns the sorted array of unique trigrams.
  */
 TRGM *
-generate_trgm(char *str, int slen)
+generate_trgm(char *str, int slen, bool comp_signed)
 {
 	TRGM	   *trg;
 	int			len;
@@ -377,8 +383,10 @@ generate_trgm(char *str, int slen)
 	 */
 	if (len > 1)
 	{
-		qsort(GETARR(trg), len, sizeof(trgm), comp_trgm);
-		len = qunique(GETARR(trg), len, sizeof(trgm), comp_trgm);
+		qsort(GETARR(trg), len, sizeof(trgm),
+			  comp_signed ? comp_trgm : comp_trgm_unsigned);
+		len = qunique(GETARR(trg), len, sizeof(trgm),
+					  comp_signed ? comp_trgm : comp_trgm_unsigned);
 	}
 
 	SET_VARSIZE(trg, CALCGTSIZE(ARRKEY, len));
@@ -866,7 +874,7 @@ get_wildcard_part(const char *str, int lenstr,
  * " a", "bcd" would be extracted.
  */
 TRGM *
-generate_wildcard_trgm(const char *str, int slen)
+generate_wildcard_trgm(const char *str, int slen, bool comp_signed)
 {
 	TRGM	   *trg;
 	char	   *buf,
@@ -925,8 +933,10 @@ generate_wildcard_trgm(const char *str, int slen)
 	 */
 	if (len > 1)
 	{
-		qsort(GETARR(trg), len, sizeof(trgm), comp_trgm);
-		len = qunique(GETARR(trg), len, sizeof(trgm), comp_trgm);
+		qsort(GETARR(trg), len, sizeof(trgm),
+			  comp_signed ? comp_trgm : comp_trgm_unsigned);
+		len = qunique(GETARR(trg), len, sizeof(trgm),
+					  comp_signed ? comp_trgm : comp_trgm_unsigned);
 	}
 
 	SET_VARSIZE(trg, CALCGTSIZE(ARRKEY, len));
@@ -958,7 +968,7 @@ show_trgm(PG_FUNCTION_ARGS)
 	trgm	   *ptr;
 	int			i;
 
-	trg = generate_trgm(VARDATA_ANY(in), VARSIZE_ANY_EXHDR(in));
+	trg = generate_trgm(VARDATA_ANY(in), VARSIZE_ANY_EXHDR(in), true);
 	d = (Datum *) palloc(sizeof(Datum) * (1 + ARRNELEM(trg)));
 
 	for (i = 0, ptr = GETARR(trg); i < ARRNELEM(trg); i++, ptr++)
@@ -1125,8 +1135,8 @@ similarity(PG_FUNCTION_ARGS)
 			   *trg2;
 	float4		res;
 
-	trg1 = generate_trgm(VARDATA_ANY(in1), VARSIZE_ANY_EXHDR(in1));
-	trg2 = generate_trgm(VARDATA_ANY(in2), VARSIZE_ANY_EXHDR(in2));
+	trg1 = generate_trgm(VARDATA_ANY(in1), VARSIZE_ANY_EXHDR(in1), true);
+	trg2 = generate_trgm(VARDATA_ANY(in2), VARSIZE_ANY_EXHDR(in2), true);
 
 	res = cnt_sml(trg1, trg2, false);
 

@@ -41,9 +41,16 @@
 
 typedef char trgm[3];
 
-#define CMPCHAR(a,b) ( ((a)==(b)) ? 0 : ( ((a)<(b)) ? -1 : 1 ) )
+#define CMPCHAR(a,b) ( (((signed char)(a))==((signed char)(b))) ? 0 \
+					   : ( ((((signed char)(a)))<((signed char)(b))) ? -1 : 1 ) )
 #define CMPPCHAR(a,b,i)  CMPCHAR( *(((const char*)(a))+i), *(((const char*)(b))+i) )
 #define CMPTRGM(a,b) ( CMPPCHAR(a,b,0) ? CMPPCHAR(a,b,0) : ( CMPPCHAR(a,b,1) ? CMPPCHAR(a,b,1) : CMPPCHAR(a,b,2) ) )
+
+#define CMPCHAR_UNS(a,b) ( (((unsigned char)(a))==((unsigned char)(b))) ? 0 \
+								: ( ((((unsigned char)(a)))<((unsigned char)(b))) ? -1 : 1 ) )
+#define CMPPCHAR_UNS(a,b,i)  CMPCHAR_UNS( *(((const char*)(a))+i), *(((const char*)(b))+i) )
+#define CMPTRGM_UNS(a,b) ( CMPPCHAR_UNS(a,b,0) ? CMPPCHAR_UNS(a,b,0) : ( CMPPCHAR_UNS(a,b,1) ? CMPPCHAR_UNS(a,b,1) : CMPPCHAR_UNS(a,b,2) ) )
+
 
 #define CPTRGM(a,b) do {				\
 	*(((char*)(a))+0) = *(((char*)(b))+0);	\
@@ -128,8 +135,8 @@ extern double strict_word_similarity_threshold;
 extern double index_strategy_get_limit(StrategyNumber strategy);
 extern uint32 trgm2int(trgm *ptr);
 extern void compact_trigram(trgm *tptr, char *str, int bytelen);
-extern TRGM *generate_trgm(char *str, int slen);
-extern TRGM *generate_wildcard_trgm(const char *str, int slen);
+extern TRGM *generate_trgm(char *str, int slen, bool comp_signed);
+extern TRGM *generate_wildcard_trgm(const char *str, int slen, bool comp_signed);
 extern float4 cnt_sml(TRGM *trg1, TRGM *trg2, bool inexact);
 extern bool trgm_contained_by(TRGM *trg1, TRGM *trg2);
 extern bool *trgm_presence_map(TRGM *query, TRGM *key);

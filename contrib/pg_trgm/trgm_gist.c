@@ -123,7 +123,7 @@ gtrgm_compress(PG_FUNCTION_ARGS)
 		TRGM	   *res;
 		text	   *val = DatumGetTextPP(entry->key);
 
-		res = generate_trgm(VARDATA_ANY(val), VARSIZE_ANY_EXHDR(val));
+		res = generate_trgm(VARDATA_ANY(val), VARSIZE_ANY_EXHDR(val), true);
 		retval = (GISTENTRY *) palloc(sizeof(GISTENTRY));
 		gistentryinit(*retval, PointerGetDatum(res),
 					  entry->rel, entry->page,
@@ -241,7 +241,7 @@ gtrgm_consistent(PG_FUNCTION_ARGS)
 			case StrictWordSimilarityStrategyNumber:
 			case EqualStrategyNumber:
 				qtrg = generate_trgm(VARDATA(query),
-									 querysize - VARHDRSZ);
+									 querysize - VARHDRSZ, true);
 				break;
 			case ILikeStrategyNumber:
 #ifndef IGNORECASE
@@ -250,7 +250,8 @@ gtrgm_consistent(PG_FUNCTION_ARGS)
 				/* FALL THRU */
 			case LikeStrategyNumber:
 				qtrg = generate_wildcard_trgm(VARDATA(query),
-											  querysize - VARHDRSZ);
+											  querysize - VARHDRSZ,
+											  true);
 				break;
 			case RegExpICaseStrategyNumber:
 #ifndef IGNORECASE
@@ -473,7 +474,7 @@ gtrgm_distance(PG_FUNCTION_ARGS)
 	{
 		char	   *newcache;
 
-		qtrg = generate_trgm(VARDATA(query), querysize - VARHDRSZ);
+		qtrg = generate_trgm(VARDATA(query), querysize - VARHDRSZ, true);
 
 		newcache = MemoryContextAlloc(fcinfo->flinfo->fn_mcxt,
 									  MAXALIGN(querysize) +
