@@ -441,6 +441,7 @@ static const PgStat_KindInfo pgstat_kind_builtin_infos[PGSTAT_KIND_BUILTIN_SIZE]
 		.shared_data_off = offsetof(PgStatShared_Wal, stats),
 		.shared_data_len = sizeof(((PgStatShared_Wal *) 0)->stats),
 
+		.init_backend_cb = pgstat_wal_init_backend_cb,
 		.init_shmem_cb = pgstat_wal_init_shmem_cb,
 		.reset_all_cb = pgstat_wal_reset_all_cb,
 		.snapshot_cb = pgstat_wal_snapshot_cb,
@@ -604,9 +605,18 @@ pgstat_initialize(void)
 
 	pgstat_attach_shmem();
 
-	pgstat_init_wal();
-
 	pgstat_init_snapshot_fixed();
+
+	/* Backend initialization callbacks */
+	for (PgStat_Kind kind = PGSTAT_KIND_MIN; kind <= PGSTAT_KIND_MAX; kind++)
+	{
+		const PgStat_KindInfo *kind_info = pgstat_get_kind_info(kind);
+
+		if (kind_info == NULL || kind_info->init_backend_cb == NULL)
+			continue;
+
+		kind_info->init_backend_cb();
+	}
 
 	/* Set up a process-exit hook to clean up */
 	before_shmem_exit(pgstat_shutdown_hook, 0);
@@ -1781,6 +1791,12 @@ pgstat_read_statsfile(XLogRecPtr redo)
 					}
 
 					info = pgstat_get_kind_info(kind);
+					if (!info)
+					{
+						elog(WARNING, "could not find information of kind %u for entry of type %c",
+							 kind, t);
+						goto error;
+					}
 
 					if (!info->fixed_amount)
 					{
@@ -1861,6 +1877,12 @@ pgstat_read_statsfile(XLogRecPtr redo)
 						}
 
 						kind_info = pgstat_get_kind_info(kind);
+						if (!kind_info)
+						{
+							elog(WARNING, "could not find information of kind %u for entry of type %c",
+								 kind, t);
+							goto error;
+						}
 
 						if (!kind_info->from_serialized_name)
 						{
