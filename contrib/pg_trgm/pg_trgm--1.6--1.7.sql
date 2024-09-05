@@ -68,7 +68,7 @@ ALTER OPERATOR FAMILY gist_trgm_ops_unsigned USING gist ADD
         OPERATOR        3       pg_catalog.~~ (text, text),
         OPERATOR        4       pg_catalog.~~* (text, text),
         OPERATOR        5       pg_catalog.~ (text, text),
-        OPERATOR        6       pg_catalog.~* (text, text);
+        OPERATOR        6       pg_catalog.~* (text, text),
         OPERATOR        7       %> (text, text),
         OPERATOR        8       <->> (text, text) FOR ORDER BY pg_catalog.float_ops,
         OPERATOR        9       %>> (text, text),
