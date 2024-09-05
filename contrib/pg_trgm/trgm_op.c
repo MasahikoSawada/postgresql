@@ -1062,9 +1062,29 @@ trgm_contained_by(TRGM *trg1, TRGM *trg2)
 	len1 = ARRNELEM(trg1);
 	len2 = ARRNELEM(trg2);
 
+	trgm *ptr3 = ptr2;
+	for (int i = 0; i < len2; i++)
+	{
+		elog(LOG, "trg2[%d] %x %x %x",
+			 i,
+			 (uint8)*(((char *) ptr3) + 0),
+			 (uint8)*(((char *) ptr3) + 1),
+			 (uint8)*(((char *) ptr3) + 2));
+		ptr3++;
+	}
+
 	while (ptr1 - GETARR(trg1) < len1 && ptr2 - GETARR(trg2) < len2)
 	{
 		int			res = CMPTRGM(ptr1, ptr2);
+
+		elog(LOG, "compare %x %x %x <-> %x %x %x ----> result %d",
+			 (uint8)*(((char *) ptr1) + 0),
+			 (uint8)*(((char *) ptr1) + 1),
+			 (uint8)*(((char *) ptr1) + 2),
+			 (uint8)*(((char *) ptr2) + 0),
+			 (uint8)*(((char *) ptr2) + 1),
+			 (uint8)*(((char *) ptr2) + 2),
+			 res);
 
 		if (res < 0)
 			return false;
