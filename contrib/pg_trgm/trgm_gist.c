@@ -43,9 +43,12 @@ typedef struct
 PG_FUNCTION_INFO_V1(gtrgm_in);
 PG_FUNCTION_INFO_V1(gtrgm_out);
 PG_FUNCTION_INFO_V1(gtrgm_compress);
+PG_FUNCTION_INFO_V1(gtrgm_compress_unsigned);
 PG_FUNCTION_INFO_V1(gtrgm_decompress);
 PG_FUNCTION_INFO_V1(gtrgm_consistent);
+PG_FUNCTION_INFO_V1(gtrgm_consistent_unsigned);
 PG_FUNCTION_INFO_V1(gtrgm_distance);
+PG_FUNCTION_INFO_V1(gtrgm_distance_unsigned);
 PG_FUNCTION_INFO_V1(gtrgm_union);
 PG_FUNCTION_INFO_V1(gtrgm_same);
 PG_FUNCTION_INFO_V1(gtrgm_penalty);
@@ -111,8 +114,9 @@ makesign(BITVECP sign, TRGM *a, int siglen)
 	}
 }
 
-Datum
-gtrgm_compress(PG_FUNCTION_ARGS)
+
+static Datum
+gtrgm_compress_common(FunctionCallInfo fcinfo, bool use_signed_char)
 {
 	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
 	int			siglen = GET_SIGLEN();
@@ -123,7 +127,7 @@ gtrgm_compress(PG_FUNCTION_ARGS)
 		TRGM	   *res;
 		text	   *val = DatumGetTextPP(entry->key);
 
-		res = generate_trgm(VARDATA_ANY(val), VARSIZE_ANY_EXHDR(val), true);
+		res = generate_trgm(VARDATA_ANY(val), VARSIZE_ANY_EXHDR(val), use_signed_char);
 		retval = (GISTENTRY *) palloc(sizeof(GISTENTRY));
 		gistentryinit(*retval, PointerGetDatum(res),
 					  entry->rel, entry->page,
@@ -149,6 +153,18 @@ gtrgm_compress(PG_FUNCTION_ARGS)
 					  entry->offset, false);
 	}
 	PG_RETURN_POINTER(retval);
+}
+
+Datum
+gtrgm_compress(PG_FUNCTION_ARGS)
+{
+	return gtrgm_compress_common(fcinfo, true);
+}
+
+Datum
+gtrgm_compress_unsigned(PG_FUNCTION_ARGS)
+{
+	return gtrgm_compress_common(fcinfo, false);
 }
 
 Datum
@@ -193,8 +209,8 @@ cnt_sml_sign_common(TRGM *qtrg, BITVECP sign, int siglen)
 	return count;
 }
 
-Datum
-gtrgm_consistent(PG_FUNCTION_ARGS)
+static Datum
+gtrgm_consistent_common(FunctionCallInfo fcinfo, bool use_signed_char)
 {
 	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
 	text	   *query = PG_GETARG_TEXT_P(1);
@@ -241,7 +257,7 @@ gtrgm_consistent(PG_FUNCTION_ARGS)
 			case StrictWordSimilarityStrategyNumber:
 			case EqualStrategyNumber:
 				qtrg = generate_trgm(VARDATA(query),
-									 querysize - VARHDRSZ, true);
+									 querysize - VARHDRSZ, use_signed_char);
 				break;
 			case ILikeStrategyNumber:
 #ifndef IGNORECASE
@@ -251,7 +267,7 @@ gtrgm_consistent(PG_FUNCTION_ARGS)
 			case LikeStrategyNumber:
 				qtrg = generate_wildcard_trgm(VARDATA(query),
 											  querysize - VARHDRSZ,
-											  true);
+											  use_signed_char);
 				break;
 			case RegExpICaseStrategyNumber:
 #ifndef IGNORECASE
@@ -450,7 +466,19 @@ gtrgm_consistent(PG_FUNCTION_ARGS)
 }
 
 Datum
-gtrgm_distance(PG_FUNCTION_ARGS)
+gtrgm_consistent(PG_FUNCTION_ARGS)
+{
+	return gtrgm_consistent_common(fcinfo, true);
+}
+
+Datum
+gtrgm_consistent_unsigned(PG_FUNCTION_ARGS)
+{
+	return gtrgm_consistent_common(fcinfo, false);
+}
+
+static Datum
+gtrgm_distance_common(FunctionCallInfo fcinfo, bool use_signed_char)
 {
 	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
 	text	   *query = PG_GETARG_TEXT_P(1);
@@ -474,7 +502,7 @@ gtrgm_distance(PG_FUNCTION_ARGS)
 	{
 		char	   *newcache;
 
-		qtrg = generate_trgm(VARDATA(query), querysize - VARHDRSZ, true);
+		qtrg = generate_trgm(VARDATA(query), querysize - VARHDRSZ, use_signed_char);
 
 		newcache = MemoryContextAlloc(fcinfo->flinfo->fn_mcxt,
 									  MAXALIGN(querysize) +
@@ -529,6 +557,18 @@ gtrgm_distance(PG_FUNCTION_ARGS)
 	}
 
 	PG_RETURN_FLOAT8(res);
+}
+
+Datum
+gtrgm_distance(PG_FUNCTION_ARGS)
+{
+	return gtrgm_distance_common(fcinfo, true);
+}
+
+Datum
+gtrgm_distance_unsigned(PG_FUNCTION_ARGS)
+{
+	return gtrgm_distance_common(fcinfo, true);
 }
 
 static int32
