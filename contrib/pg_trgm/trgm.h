@@ -41,8 +41,8 @@
 
 typedef char trgm[3];
 
-//#define CMPCHAR(a,b) ( (((signed char)(a))==((signed char)(b))) ? 0	\
-//					   : ( ((((signed char)(a)))<((signed char)(b))) ? -1 : 1 ) )
+#define CMPCHAR(a,b) ( (((signed char)(a))==((signed char)(b))) ? 0	\
+					   : ( ((((signed char)(a)))<((signed char)(b))) ? -1 : 1 ) )
 #define CMPCHAR(a,b) ( ((a)==(b)) ? 0 : ( ((a)<(b)) ? -1 : 1 ) )
 #define CMPPCHAR(a,b,i)  CMPCHAR( *(((const char*)(a))+i), *(((const char*)(b))+i) )
 #define CMPTRGM(a,b) ( CMPPCHAR(a,b,0) ? CMPPCHAR(a,b,0) : ( CMPPCHAR(a,b,1) ? CMPPCHAR(a,b,1) : CMPPCHAR(a,b,2) ) )
