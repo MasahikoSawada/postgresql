@@ -2588,6 +2588,11 @@ PredicateLockPage(Relation relation, BlockNumber blkno, Snapshot snapshot)
 	if (!SerializationNeededForRead(relation, snapshot))
 		return;
 
+	ereport(LOG, (errmsg("predicate %s blk %u",
+						 RelationGetRelationName(relation),
+						 blkno),
+				  errbacktrace()));
+
 	SET_PREDICATELOCKTARGETTAG_PAGE(tag,
 									relation->rd_locator.dbOid,
 									relation->rd_id,
