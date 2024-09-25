@@ -27858,6 +27858,11 @@ acl      | {postgres=arwdDxtm/postgres,foo=r/postgres}
        <entry><type>integer</type></entry>
       </row>
 
+      <row>
+       <entry><structfield>signed_char</structfield></entry>
+       <entry><type>bool</type></entry>
+      </row>
+
      </tbody>
     </tgroup>
    </table>
