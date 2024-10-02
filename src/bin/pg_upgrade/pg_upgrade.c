@@ -39,6 +39,7 @@
 #include "postgres_fe.h"
 
 #include <time.h>
+#include <limits.h>				/* for CHAR_MIN */
 
 #include "catalog/pg_class_d.h"
 #include "common/file_perm.h"
@@ -54,6 +55,7 @@
  */
 #define RESTORE_TRANSACTION_SIZE 1000
 
+static void set_new_cluster_char_signedness(void);
 static void set_locale_and_encoding(void);
 static void prepare_new_cluster(void);
 static void prepare_new_globals(void);
@@ -154,6 +156,7 @@ main(int argc, char **argv)
 	 */
 
 	copy_xact_xlog_xid();
+	set_new_cluster_char_signedness();
 
 	/* New now using xids of the old system */
 
@@ -388,6 +391,43 @@ setup(char *argv0)
 	}
 }
 
+static void
+set_new_cluster_char_signedness(void)
+{
+	bool		new_char_signedness;
+
+	prep_status("Setting the default char signedness for new cluster");
+
+	if (GET_MAJOR_VERSION(old_cluster.major_version) <= 17)
+	{
+		/*
+		 * Pre-v18 database clusters don't have the default char signedness
+		 * information. We use the char signedness of the platform where
+		 * pg_upgrade was built.
+		 */
+#if CHAR_MIN != 0
+		new_char_signedness = true;
+#else
+		new_char_signedness = false;
+#endif
+	}
+	else
+	{
+		/* Set the source database signedness */
+		new_char_signedness = old_cluster.controldata.default_char_signedness;
+	}
+
+	/* Change the char signedness of the new cluster, if necessary */
+	if (new_cluster.controldata.default_char_signedness != new_char_signedness)
+	{
+		exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+				  "\"%s/pg_resetwal\" --char-signedness %s \"%s\"",
+				  new_cluster.bindir,
+				  new_char_signedness ? "signed" : "unsigned",
+				  new_cluster.pgdata);
+		check_ok();
+	}
+}
 
 /*
  * Copy locale and encoding information into the new cluster's template0.

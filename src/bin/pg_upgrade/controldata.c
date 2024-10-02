@@ -62,6 +62,7 @@ get_control_data(ClusterInfo *cluster)
 	bool		got_date_is_int = false;
 	bool		got_data_checksum_version = false;
 	bool		got_cluster_state = false;
+	bool		got_default_char_signedness = false;
 	char	   *lc_collate = NULL;
 	char	   *lc_ctype = NULL;
 	char	   *lc_monetary = NULL;
@@ -204,6 +205,13 @@ get_control_data(ClusterInfo *cluster)
 	{
 		cluster->controldata.data_checksum_version = 0;
 		got_data_checksum_version = true;
+	}
+
+	/* Only in <= 17 */
+	if (GET_MAJOR_VERSION(cluster->major_version) <= 1700)
+	{
+		cluster->controldata.default_char_signedness = true;
+		got_default_char_signedness = true;
 	}
 
 	/* we have the result of cmd in "output". so parse it line by line now */
@@ -501,6 +509,17 @@ get_control_data(ClusterInfo *cluster)
 			cluster->controldata.data_checksum_version = str2uint(p);
 			got_data_checksum_version = true;
 		}
+		else if ((p = strstr(bufin, "char data signedness:")) != NULL)
+		{
+			p = strchr(p, ':');
+
+			if (p == NULL || strlen(p) <= 1)
+				pg_fatal("%d: controldata retrieval problem", __LINE__);
+
+			p++;				/* remove ':' char */
+			cluster->controldata.default_char_signedness = strstr(p, "signed") != NULL;
+			got_default_char_signedness = true;
+		}
 	}
 
 	rc = pclose(output);
@@ -572,7 +591,8 @@ get_control_data(ClusterInfo *cluster)
 		!got_index || !got_toast ||
 		(!got_large_object &&
 		 cluster->controldata.ctrl_ver >= LARGE_OBJECT_SIZE_PG_CONTROL_VER) ||
-		!got_date_is_int || !got_data_checksum_version)
+		!got_date_is_int || !got_data_checksum_version ||
+		!got_default_char_signedness)
 	{
 		if (cluster == &old_cluster)
 			pg_log(PG_REPORT,
@@ -640,6 +660,10 @@ get_control_data(ClusterInfo *cluster)
 		/* value added in Postgres 9.3 */
 		if (!got_data_checksum_version)
 			pg_log(PG_REPORT, "  data checksum version");
+
+		/* value added in Postgres 18 */
+		if (!got_default_char_signedness)
+			pg_log(PG_REPORT, "  default char signedness");
 
 		pg_fatal("Cannot continue without required control information, terminating");
 	}
