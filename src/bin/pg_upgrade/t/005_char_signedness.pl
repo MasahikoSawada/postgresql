@@ -63,4 +63,31 @@ command_like(
 	qr/Default char data signedness:\s+unsigned/,
     'the default char signedness is updated during pg_upgrade');
 
+# Setup another set of old and new clusters.
+my $old2 = PostgreSQL::Test::Cluster->new('old2');
+my $new2 = PostgreSQL::Test::Cluster->new('new2');
+$old2->init();
+$new2->init();
+
+# pg_upgrade should be successful.
+command_ok(
+    [ 'pg_upgrade', '--no-sync',
+      '-d', $old->data_dir,
+      '-D', $new->data_dir,
+      '-b', $old->config_data('--bindir'),
+      '-B', $new->config_data('--bindir'),
+      '-s', $new->host,
+      '-p', $old->port,
+      '-P', $new->port,
+      '--set-char-signedness', 'unsigned',
+      $mode ],
+    'run of pg_upgrade with --set-char-signedness option');
+
+# Check if --set-char-signedness successfully sets the new cluster's
+# default char signedness.
+command_like(
+	[ 'pg_controldata', $new->data_dir ],
+	qr/Default char data signedness:\s+unsigned/,
+    '--set-char-signedness sets unsigned');
+
 done_testing();

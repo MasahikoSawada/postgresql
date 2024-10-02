@@ -277,6 +277,54 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--set-char-signedness=</option><replaceable>option</replaceable></term>
+      <listitem>
+       <para>
+        Manually set the default char signedness of new clusters. Possible values
+        are <literal>signed</literal> and <literal>unsigned</literal>.
+       </para>
+       <para>
+        In the C language, the default signedness of the <type>char</type> type
+        (when not explicitly specified) varies across platforms. For example,
+        <type>char</type> defaults to <type>signed char</type> on x86 CPUs but
+        to <type>unsigned char</type> on ARM CPUs. When data stored using the
+        <type>char</type> type is persisted to disk, such as in GIN indexes,
+        this platform-dependent behavior results in incorrect data comparisons
+        in two scenarios:
+       </para>
+       <itemizedlist>
+        <listitem>
+         <para>
+          When data is moved between platforms with different char signedness.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          When data is replicated using streaming replication across different architectures.
+         </para>
+        </listitem>
+       </itemizedlist>
+       <para>
+        Starting from <productname>PostgreSQL</productname> 18, database clusters
+        maintain their own default char signedness setting, which can be used as
+        a hint to ensure consistent behavior across platforms with different
+        default char signedness. By default, <application>pg_upgrade</application>
+        preserves the char signedness setting when upgrading from an existing cluster.
+        However, when upgrading from <productname>PostgreSQL</productname> 17 or
+        earlier, <application>pg_upgrade</application> adopts the char signedness
+        of the platform on which it was built.
+       </para>
+       <para>
+        This option allows you to explicitly set the default char signedness for
+        the new cluster, overriding any inherited values. This is particularly useful
+        when you plan to migrate the upgraded cluster to a platform with different
+        char signedness (for example, when moving from an x86-based system to an
+        ARM-based system).
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-?</option></term>
       <term><option>--help</option></term>
       <listitem><para>show help, then exit</para></listitem>

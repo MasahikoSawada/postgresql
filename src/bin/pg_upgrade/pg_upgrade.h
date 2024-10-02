@@ -334,6 +334,9 @@ typedef struct
 	int			jobs;			/* number of processes/threads to use */
 	char	   *socketdir;		/* directory to use for Unix sockets */
 	char	   *sync_method;
+	int			char_signedness;	/* default char signedness: -1 for initial
+									 * value, 1 for "signed" and 0 for
+									 * "unsigned" */
 } UserOpts;
 
 typedef struct
