@@ -398,7 +398,12 @@ set_new_cluster_char_signedness(void)
 
 	prep_status("Setting the default char signedness for new cluster");
 
-	if (GET_MAJOR_VERSION(old_cluster.major_version) <= 17)
+	if (user_opts.char_signedness != -1)
+	{
+		/* Use the specified char signedness */
+		new_char_signedness = (user_opts.char_signedness == 1);
+	}
+	else if (GET_MAJOR_VERSION(old_cluster.major_version) <= 17)
 	{
 		/*
 		 * Pre-v18 database clusters don't have the default char signedness

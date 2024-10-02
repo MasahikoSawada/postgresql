@@ -277,6 +277,24 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--set-char-signedness=</option><replaceable>option</replaceable></term>
+      <listitem>
+       <para>
+        Manually set the default char signedness of new clusters. Possible values
+        are <literal>signed</literal> and <literal>unsigned</literal>.
+       </para>
+       <para>
+        The signedness of the 'char' type in C is implementation-dependent. For instance,
+        'signed char' is used by default on x86 CPUs, while 'unsigned char' is used on aarch
+        CPUs. <application>pg_upgrade</application> automatically inherits the char
+        signedness from the old cluster. This option is useful for upgrading the cluster
+        that user knew they copied it to a platform having different char signedness
+        (e.g. from x86 to aarch).
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-?</option></term>
       <term><option>--help</option></term>
       <listitem><para>show help, then exit</para></listitem>
