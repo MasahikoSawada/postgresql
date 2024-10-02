@@ -125,6 +125,12 @@ extern char *output_files[];
  */
 #define JSONB_FORMAT_CHANGE_CAT_VER 201409291
 
+/*
+ * The control file was changed to have the default char signedness,
+ * commit XXXXX.
+ */
+#define DEFAULT_CHAR_SIGNEDNESS_VAT_VER 202501161
+
 
 /*
  * Each relation is represented by a relinfo structure.
@@ -245,6 +251,7 @@ typedef struct
 	bool		date_is_int;
 	bool		float8_pass_by_value;
 	uint32		data_checksum_version;
+	bool		default_char_signedness;
 } ControlData;
 
 /*
