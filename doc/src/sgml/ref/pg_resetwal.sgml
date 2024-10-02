@@ -172,6 +172,20 @@ PostgreSQL documentation
 
   <variablelist>
    <varlistentry>
+    <term><option>--char-signedness=<replaceable class="parameter">option</replaceable></option></term>
+    <listitem>
+     <para>
+      Manually set the default char signedness. Possible values are
+      <literal>signed</literal> and <literal>unsigned</literal>.
+     </para>
+     <para>
+       This option can also be used to change the default char signedness
+       of an existing database cluster,
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><option>-c <replaceable class="parameter">xid</replaceable>,<replaceable class="parameter">xid</replaceable></option></term>
     <term><option>--commit-timestamp-ids=<replaceable class="parameter">xid</replaceable>,<replaceable class="parameter">xid</replaceable></option></term>
     <listitem>
