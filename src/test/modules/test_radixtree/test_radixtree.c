@@ -158,12 +158,86 @@ test_empty(void)
 #endif
 }
 
+/* Iteration test for test_basic() */
+static void
+test_iterate_basic(rt_radix_tree *radixtree, uint64 *keys, int children,
+				   bool asc, bool shared)
+{
+	rt_iter    *iter;
+
+#ifdef TEST_SHARED_RT
+	if (!shared)
+		iter = rt_begin_iterate(radixtree);
+	else
+		iter = rt_begin_iterate_shared(radixtree);
+#else
+	iter = rt_begin_iterate(radixtree);
+#endif
+
+	for (int i = 0; i < children; i++)
+	{
+		uint64		expected;
+		uint64		iterkey;
+		TestValueType *iterval;
+
+		/* iteration is ordered by key, so adjust expected value accordingly */
+		if (asc)
+			expected = keys[i];
+		else
+			expected = keys[children - 1 - i];
+
+		iterval = rt_iterate_next(iter, &iterkey);
+
+		EXPECT_TRUE(iterval != NULL);
+		EXPECT_EQ_U64(iterkey, expected);
+		EXPECT_EQ_U64(*iterval, expected);
+	}
+
+	rt_end_iterate(iter);
+}
+
+/* Iteration test for test_random() */
+static void
+test_iterate_random(rt_radix_tree *radixtree, uint64 *keys, int num_keys,
+					bool shared)
+{
+	rt_iter    *iter;
+
+#ifdef TEST_SHARED_RT
+	if (!shared)
+		iter = rt_begin_iterate(radixtree);
+	else
+		iter = rt_begin_iterate_shared(radixtree);
+#else
+	iter = rt_begin_iterate(radixtree);
+#endif
+
+	for (int i = 0; i < num_keys; i++)
+	{
+		uint64		expected;
+		uint64		iterkey;
+		TestValueType *iterval;
+
+		/* skip duplicate keys */
+		if (i < num_keys - 1 && keys[i + 1] == keys[i])
+			continue;
+
+		expected = keys[i];
+		iterval = rt_iterate_next(iter, &iterkey);
+
+		EXPECT_TRUE(iterval != NULL);
+		EXPECT_EQ_U64(iterkey, expected);
+		EXPECT_EQ_U64(*iterval, expected);
+	}
+
+	rt_end_iterate(iter);
+}
+
 /* Basic set, find, and delete tests */
 static void
 test_basic(rt_node_class_test_elem *test_info, int shift, bool asc)
 {
 	rt_radix_tree *radixtree;
-	rt_iter    *iter;
 	uint64	   *keys;
 	int			children = test_info->nkeys;
 #ifdef TEST_SHARED_RT
@@ -244,28 +318,12 @@ test_basic(rt_node_class_test_elem *test_info, int shift, bool asc)
 	}
 
 	/* test that iteration returns the expected keys and values */
-	iter = rt_begin_iterate(radixtree);
+	test_iterate_basic(radixtree, keys, children, asc, false);
 
-	for (int i = 0; i < children; i++)
-	{
-		uint64		expected;
-		uint64		iterkey;
-		TestValueType *iterval;
-
-		/* iteration is ordered by key, so adjust expected value accordingly */
-		if (asc)
-			expected = keys[i];
-		else
-			expected = keys[children - 1 - i];
-
-		iterval = rt_iterate_next(iter, &iterkey);
-
-		EXPECT_TRUE(iterval != NULL);
-		EXPECT_EQ_U64(iterkey, expected);
-		EXPECT_EQ_U64(*iterval, expected);
-	}
-
-	rt_end_iterate(iter);
+#ifdef TEST_SHARED_RT
+	/* test shared-iteration as well */
+	test_iterate_basic(radixtree, keys, children, asc, true);
+#endif
 
 	/* delete all keys again */
 	for (int i = 0; i < children; i++)
@@ -295,7 +353,6 @@ static void
 test_random(void)
 {
 	rt_radix_tree *radixtree;
-	rt_iter    *iter;
 	pg_prng_state state;
 
 	/* limit memory usage by limiting the key space */
@@ -387,27 +444,12 @@ test_random(void)
 	}
 
 	/* test that iteration returns the expected keys and values */
-	iter = rt_begin_iterate(radixtree);
+	test_iterate_random(radixtree, keys, num_keys, false);
 
-	for (int i = 0; i < num_keys; i++)
-	{
-		uint64		expected;
-		uint64		iterkey;
-		TestValueType *iterval;
-
-		/* skip duplicate keys */
-		if (i < num_keys - 1 && keys[i + 1] == keys[i])
-			continue;
-
-		expected = keys[i];
-		iterval = rt_iterate_next(iter, &iterkey);
-
-		EXPECT_TRUE(iterval != NULL);
-		EXPECT_EQ_U64(iterkey, expected);
-		EXPECT_EQ_U64(*iterval, expected);
-	}
-
-	rt_end_iterate(iter);
+#ifdef TEST_SHARED_RT
+	/* test shared-iteration as well */
+	test_iterate_random(radixtree, keys, num_keys, true);
+#endif
 
 	/* reset random number generator for deletion */
 	pg_prng_seed(&state, seed);
