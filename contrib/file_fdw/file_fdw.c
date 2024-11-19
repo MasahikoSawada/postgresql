@@ -21,7 +21,6 @@
 #include "access/table.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_foreign_table.h"
-#include "commands/copy.h"
 #include "commands/copyfrom_internal.h"
 #include "commands/defrem.h"
 #include "commands/explain.h"

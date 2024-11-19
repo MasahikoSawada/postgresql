@@ -14,7 +14,7 @@
 #ifndef COPYFROM_INTERNAL_H
 #define COPYFROM_INTERNAL_H
 
-#include "commands/copy.h"
+#include "commands/copyapi.h"
 #include "commands/trigger.h"
 #include "nodes/miscnodes.h"
 
@@ -58,6 +58,9 @@ typedef enum CopyInsertMethod
  */
 typedef struct CopyFromStateData
 {
+	/* format routine */
+	const CopyFromRoutine *routine;
+
 	/* low-level state data */
 	CopySource	copy_src;		/* type of copy source */
 	FILE	   *copy_file;		/* used if copy_src == COPY_FILE */
@@ -182,5 +185,13 @@ typedef struct CopyFromStateData
 
 extern void ReceiveCopyBegin(CopyFromState cstate);
 extern void ReceiveCopyBinaryHeader(CopyFromState cstate);
+
+/* One-row callbacks for built-in formats defined in copyfromparse.c */
+extern bool CopyFromTextOneRow(CopyFromState cstate, ExprContext *econtext,
+							   Datum *values, bool *nulls);
+extern bool CopyFromCSVOneRow(CopyFromState cstate, ExprContext *econtext,
+							  Datum *values, bool *nulls);
+extern bool CopyFromBinaryOneRow(CopyFromState cstate, ExprContext *econtext,
+								 Datum *values, bool *nulls);
 
 #endif							/* COPYFROM_INTERNAL_H */
