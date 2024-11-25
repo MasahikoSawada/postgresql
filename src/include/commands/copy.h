@@ -87,6 +87,7 @@ typedef struct CopyFormatOptions
 	CopyLogVerbosityChoice log_verbosity;	/* verbosity of logged messages */
 	int64		reject_limit;	/* maximum tolerable number of errors */
 	List	   *convert_select; /* list of column names (can be NIL) */
+	Node	   *routine;		/* CopyToRoutine (can be NULL) */
 } CopyFormatOptions;
 
 /* These are private in commands/copy[from|to].c */
