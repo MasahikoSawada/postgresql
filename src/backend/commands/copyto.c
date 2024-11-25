@@ -443,6 +443,18 @@ CopySendEndOfRow(CopyToState cstate)
 }
 
 /*
+ * Export CopySendEndOfRow() for extensions. We want to keep
+ * CopySendEndOfRow() as a static function for
+ * optimization. CopySendEndOfRow() calls in this file may be optimized by a
+ * compiler.
+ */
+void
+CopyToStateFlush(CopyToState cstate)
+{
+	CopySendEndOfRow(cstate);
+}
+
+/*
  * Wrapper function of CopySendEndOfRow for text and CSV formats. Sends the
  * the line termination and do common appropriate things for the end of row.
  */
