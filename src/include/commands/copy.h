@@ -90,7 +90,7 @@ typedef struct CopyFormatOptions
 	Node	   *routine;		/* CopyToRoutine (can be NULL) */
 } CopyFormatOptions;
 
-/* These are private in commands/copy[from|to].c */
+/* This is private in commands/copyfrom.c */
 typedef struct CopyFromStateData *CopyFromState;
 typedef struct CopyToStateData *CopyToState;
 
