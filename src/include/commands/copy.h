@@ -91,7 +91,6 @@ typedef struct CopyFormatOptions
 								 * NULL) */
 } CopyFormatOptions;
 
-/* This is private in commands/copyfrom.c */
 typedef struct CopyFromStateData *CopyFromState;
 typedef struct CopyToStateData *CopyToState;
 
