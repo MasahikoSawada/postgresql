@@ -483,8 +483,8 @@ defGetCopyLogVerbosityChoice(DefElem *def, ParseState *pstate)
  * This function checks whether the option value is a built-in format such as
  * "text" and "csv" or not. If the option value isn't a built-in format, this
  * function finds a COPY format handler that returns a CopyToRoutine (for
- * is_from == false). If no COPY format handler is found, this function
- * reports an error.
+ * is_from == false) or CopyFromRountine (for is_from == true). If no COPY
+ * format handler is found, this function reports an error.
  */
 static void
 ProcessCopyOptionFormat(ParseState *pstate,
@@ -515,12 +515,9 @@ ProcessCopyOptionFormat(ParseState *pstate,
 	}
 
 	/* custom format */
-	if (!is_from)
-	{
-		funcargtypes[0] = INTERNALOID;
-		handlerOid = LookupFuncName(list_make1(makeString(format)), 1,
-									funcargtypes, true);
-	}
+	funcargtypes[0] = INTERNALOID;
+	handlerOid = LookupFuncName(list_make1(makeString(format)), 1,
+								funcargtypes, true);
 	if (!OidIsValid(handlerOid))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -529,17 +526,34 @@ ProcessCopyOptionFormat(ParseState *pstate,
 
 	datum = OidFunctionCall1(handlerOid, BoolGetDatum(is_from));
 	routine = (Node *) DatumGetPointer(datum);
-	if (routine == NULL || !IsA(routine, CopyToRoutine))
-		ereport(
-				ERROR,
-				(errcode(
-						 ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("COPY handler function "
-						"%s(%u) did not return a "
-						"CopyToRoutine struct",
-						format, handlerOid),
-				 parser_errposition(
-									pstate, defel->location)));
+	if (is_from)
+	{
+		if (routine == NULL || !IsA(routine, CopyFromRoutine))
+			ereport(
+					ERROR,
+					(errcode(
+							 ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("COPY handler function "
+							"%s(%u) did not return a "
+							"CopyFromRoutine struct",
+							format, handlerOid),
+					 parser_errposition(
+										pstate, defel->location)));
+	}
+	else
+	{
+		if (routine == NULL || !IsA(routine, CopyToRoutine))
+			ereport(
+					ERROR,
+					(errcode(
+							 ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("COPY handler function "
+							"%s(%u) did not return a "
+							"CopyToRoutine struct",
+							format, handlerOid),
+					 parser_errposition(
+										pstate, defel->location)));
+	}
 
 	opts_out->routine = routine;
 }

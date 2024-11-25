@@ -129,6 +129,8 @@ extern void CopyToStateFlush(CopyToState cstate);
  */
 typedef struct CopyFromRoutine
 {
+	NodeTag		type;
+
 	/*
 	 * Set input function information. This callback is called once at the
 	 * beginning of COPY FROM.
