@@ -335,6 +335,11 @@ typedef struct CopyFromStateData
 #define RAW_BUF_BYTES(cstate) ((cstate)->raw_buf_len - (cstate)->raw_buf_index)
 
 	uint64		bytes_processed;	/* number of bytes processed so far */
+
+	/* For custom format implementation */
+	void	   *opaque;			/* private space */
 } CopyFromStateData;
+
+extern int	CopyFromStateRead(CopyFromState cstate, char *dest, int nbytes);
 
 #endif							/* COPYAPI_H */
