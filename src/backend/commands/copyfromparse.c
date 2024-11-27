@@ -853,6 +853,51 @@ NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields, bool i
 }
 
 /*
+ * Call this when you report an error by errsave() in your CopyFromOneRow
+ * callback. This handles "ON_ERROR stop" and "LOG_VERBOSITY verbose" cases
+ * for you.
+ */
+void
+CopyFromSkipErrorRow(CopyFromState cstate)
+{
+	Assert(cstate->opts.on_error != COPY_ON_ERROR_STOP);
+
+	cstate->num_errors++;
+
+	if (cstate->opts.log_verbosity == COPY_LOG_VERBOSITY_VERBOSE)
+	{
+		/*
+		 * Since we emit line number and column info in the below notice
+		 * message, we suppress error context information other than the
+		 * relation name.
+		 */
+		Assert(!cstate->relname_only);
+		cstate->relname_only = true;
+
+		if (cstate->cur_attval)
+		{
+			char	   *attval;
+
+			attval = CopyLimitPrintoutLength(cstate->cur_attval);
+			ereport(NOTICE,
+					errmsg("skipping row due to data type incompatibility at line %llu for column \"%s\": \"%s\"",
+						   (unsigned long long) cstate->cur_lineno,
+						   cstate->cur_attname,
+						   attval));
+			pfree(attval);
+		}
+		else
+			ereport(NOTICE,
+					errmsg("skipping row due to data type incompatibility at line %llu for column \"%s\": null input",
+						   (unsigned long long) cstate->cur_lineno,
+						   cstate->cur_attname));
+
+		/* reset relname_only */
+		cstate->relname_only = false;
+	}
+}
+
+/*
  * Workhorse for CopyFromTextOneRow() and CopyFromCSVOneRow().
  *
  * We use pg_attribute_always_inline to reduce function call overheads.
@@ -960,42 +1005,7 @@ CopyFromTextLikeOneRow(CopyFromState cstate, ExprContext *econtext,
 										(Node *) cstate->escontext,
 										&values[m]))
 		{
-			Assert(cstate->opts.on_error != COPY_ON_ERROR_STOP);
-
-			cstate->num_errors++;
-
-			if (cstate->opts.log_verbosity == COPY_LOG_VERBOSITY_VERBOSE)
-			{
-				/*
-				 * Since we emit line number and column info in the below
-				 * notice message, we suppress error context information other
-				 * than the relation name.
-				 */
-				Assert(!cstate->relname_only);
-				cstate->relname_only = true;
-
-				if (cstate->cur_attval)
-				{
-					char	   *attval;
-
-					attval = CopyLimitPrintoutLength(cstate->cur_attval);
-					ereport(NOTICE,
-							errmsg("skipping row due to data type incompatibility at line %llu for column \"%s\": \"%s\"",
-								   (unsigned long long) cstate->cur_lineno,
-								   cstate->cur_attname,
-								   attval));
-					pfree(attval);
-				}
-				else
-					ereport(NOTICE,
-							errmsg("skipping row due to data type incompatibility at line %llu for column \"%s\": null input",
-								   (unsigned long long) cstate->cur_lineno,
-								   cstate->cur_attname));
-
-				/* reset relname_only */
-				cstate->relname_only = false;
-			}
-
+			CopyFromSkipErrorRow(cstate);
 			return true;
 		}
 

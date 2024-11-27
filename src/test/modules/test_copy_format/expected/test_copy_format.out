@@ -1,6 +1,8 @@
 CREATE EXTENSION test_copy_format;
 CREATE TABLE public.test (a smallint, b integer, c bigint);
 INSERT INTO public.test VALUES (1, 2, 3), (12, 34, 56), (123, 456, 789);
+-- 987 is accepted.
+-- 654 is a hard error because ON_ERROR is stop by default.
 COPY public.test FROM stdin WITH (FORMAT 'test_copy_format');
 NOTICE:  test_copy_format: is_from=true
 NOTICE:  CopyFromInFunc: atttypid=21
@@ -8,13 +10,58 @@ NOTICE:  CopyFromInFunc: atttypid=23
 NOTICE:  CopyFromInFunc: atttypid=20
 NOTICE:  CopyFromStart: natts=3
 NOTICE:  CopyFromOneRow
+NOTICE:  CopyFromOneRow
+ERROR:  invalid value: "6"
+CONTEXT:  COPY test, line 2, column a: "6"
+-- 987 is accepted.
+-- 654 is a soft error because ON_ERROR is ignore.
+COPY public.test FROM stdin WITH (FORMAT 'test_copy_format', ON_ERROR ignore);
+NOTICE:  test_copy_format: is_from=true
+NOTICE:  CopyFromInFunc: atttypid=21
+NOTICE:  CopyFromInFunc: atttypid=23
+NOTICE:  CopyFromInFunc: atttypid=20
+NOTICE:  CopyFromStart: natts=3
+NOTICE:  CopyFromOneRow
+NOTICE:  CopyFromOneRow
+NOTICE:  CopyFromOneRow
+NOTICE:  1 row was skipped due to data type incompatibility
 NOTICE:  CopyFromEnd
+-- 987 is accepted.
+-- 654 is a soft error because ON_ERROR is ignore.
+COPY public.test FROM stdin WITH (FORMAT 'test_copy_format', ON_ERROR ignore, LOG_VERBOSITY verbose);
+NOTICE:  test_copy_format: is_from=true
+NOTICE:  CopyFromInFunc: atttypid=21
+NOTICE:  CopyFromInFunc: atttypid=23
+NOTICE:  CopyFromInFunc: atttypid=20
+NOTICE:  CopyFromStart: natts=3
+NOTICE:  CopyFromOneRow
+NOTICE:  CopyFromOneRow
+NOTICE:  skipping row due to data type incompatibility at line 2 for column "a": "6"
+NOTICE:  CopyFromOneRow
+NOTICE:  1 row was skipped due to data type incompatibility
+NOTICE:  CopyFromEnd
+-- 987 is accepted.
+-- 654 is a soft error because ON_ERROR is ignore.
+-- 321 is a hard error.
+COPY public.test FROM stdin WITH (FORMAT 'test_copy_format', ON_ERROR ignore);
+NOTICE:  test_copy_format: is_from=true
+NOTICE:  CopyFromInFunc: atttypid=21
+NOTICE:  CopyFromInFunc: atttypid=23
+NOTICE:  CopyFromInFunc: atttypid=20
+NOTICE:  CopyFromStart: natts=3
+NOTICE:  CopyFromOneRow
+NOTICE:  CopyFromOneRow
+NOTICE:  CopyFromOneRow
+ERROR:  too much lines: 3
+CONTEXT:  COPY test, line 3
 COPY public.test TO stdout WITH (FORMAT 'test_copy_format');
 NOTICE:  test_copy_format: is_from=false
 NOTICE:  CopyToOutFunc: atttypid=21
 NOTICE:  CopyToOutFunc: atttypid=23
 NOTICE:  CopyToOutFunc: atttypid=20
 NOTICE:  CopyToStart: natts=3
+NOTICE:  CopyToOneRow: tts_nvalid=3
+NOTICE:  CopyToOneRow: tts_nvalid=3
 NOTICE:  CopyToOneRow: tts_nvalid=3
 NOTICE:  CopyToOneRow: tts_nvalid=3
 NOTICE:  CopyToOneRow: tts_nvalid=3

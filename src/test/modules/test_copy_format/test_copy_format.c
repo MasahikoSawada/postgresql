@@ -32,10 +32,88 @@ CopyFromStart(CopyFromState cstate, TupleDesc tupDesc)
 }
 
 static bool
-CopyFromOneRow(CopyFromState cstate, ExprContext *econtext, Datum *values, bool *nulls)
+CopyFromOneRow(CopyFromState cstate, ExprContext *econtext,
+			   Datum *values, bool *nulls)
 {
+	int			n_attributes = list_length(cstate->attnumlist);
+	char	   *line;
+	int			line_size = n_attributes + 1;	/* +1 is for new line */
+	int			read_bytes;
+
 	ereport(NOTICE, (errmsg("CopyFromOneRow")));
-	return false;
+
+	cstate->cur_lineno++;
+	line = palloc(line_size);
+	read_bytes = CopyFromStateRead(cstate, line, line_size);
+	if (read_bytes == 0)
+		return false;
+	if (read_bytes != line_size)
+		ereport(ERROR,
+				(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+				 errmsg("one line must be %d bytes: %d",
+						line_size, read_bytes)));
+
+	if (cstate->cur_lineno == 1)
+	{
+		/* Success */
+		TupleDesc	tupDesc = RelationGetDescr(cstate->rel);
+		ListCell   *cur;
+		int			i = 0;
+
+		foreach(cur, cstate->attnumlist)
+		{
+			int			attnum = lfirst_int(cur);
+			int			m = attnum - 1;
+			Form_pg_attribute att = TupleDescAttr(tupDesc, m);
+
+			if (att->atttypid == INT2OID)
+			{
+				values[i] = Int16GetDatum(line[i] - '0');
+			}
+			else if (att->atttypid == INT4OID)
+			{
+				values[i] = Int32GetDatum(line[i] - '0');
+			}
+			else if (att->atttypid == INT8OID)
+			{
+				values[i] = Int64GetDatum(line[i] - '0');
+			}
+			nulls[i] = false;
+			i++;
+		}
+	}
+	else if (cstate->cur_lineno == 2)
+	{
+		/* Soft error */
+		TupleDesc	tupDesc = RelationGetDescr(cstate->rel);
+		int			attnum = lfirst_int(list_head(cstate->attnumlist));
+		int			m = attnum - 1;
+		Form_pg_attribute att = TupleDescAttr(tupDesc, m);
+		char		value[2];
+
+		cstate->cur_attname = NameStr(att->attname);
+		value[0] = line[0];
+		value[1] = '\0';
+		cstate->cur_attval = value;
+		errsave((Node *) cstate->escontext,
+				(
+				 errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+				 errmsg("invalid value: \"%c\"", line[0])));
+		CopyFromSkipErrorRow(cstate);
+		cstate->cur_attname = NULL;
+		cstate->cur_attval = NULL;
+		return true;
+	}
+	else
+	{
+		/* Hard error */
+		ereport(ERROR,
+				(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+				 errmsg("too much lines: %llu",
+						(unsigned long long) cstate->cur_lineno)));
+	}
+
+	return true;
 }
 
 static void

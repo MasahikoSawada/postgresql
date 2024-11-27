@@ -342,4 +342,6 @@ typedef struct CopyFromStateData
 
 extern int	CopyFromStateRead(CopyFromState cstate, char *dest, int nbytes);
 
+extern void CopyFromSkipErrorRow(CopyFromState cstate);
+
 #endif							/* COPYAPI_H */
