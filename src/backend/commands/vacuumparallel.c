@@ -200,6 +200,9 @@ struct ParallelVacuumState
 	 */
 	bool	   *will_parallel_vacuum;
 
+	/* How many time index vacuuming or cleaning up is executed? */
+	int			num_index_scans;
+
 	/*
 	 * The number of indexes that support parallel index bulk-deletion and
 	 * parallel index cleanup respectively.
@@ -223,8 +226,7 @@ struct ParallelVacuumState
 
 static int	parallel_vacuum_compute_workers(Relation *indrels, int nindexes, int nrequested,
 											bool *will_parallel_vacuum);
-static void parallel_vacuum_process_all_indexes(ParallelVacuumState *pvs, int num_index_scans,
-												bool vacuum);
+static void parallel_vacuum_process_all_indexes(ParallelVacuumState *pvs, bool vacuum);
 static void parallel_vacuum_process_safe_indexes(ParallelVacuumState *pvs);
 static void parallel_vacuum_process_unsafe_indexes(ParallelVacuumState *pvs);
 static void parallel_vacuum_process_one_index(ParallelVacuumState *pvs, Relation indrel,
@@ -497,8 +499,7 @@ parallel_vacuum_reset_dead_items(ParallelVacuumState *pvs)
  * Do parallel index bulk-deletion with parallel workers.
  */
 void
-parallel_vacuum_bulkdel_all_indexes(ParallelVacuumState *pvs, long num_table_tuples,
-									int num_index_scans)
+parallel_vacuum_bulkdel_all_indexes(ParallelVacuumState *pvs, long num_table_tuples)
 {
 	Assert(!IsParallelWorker());
 
@@ -509,7 +510,7 @@ parallel_vacuum_bulkdel_all_indexes(ParallelVacuumState *pvs, long num_table_tup
 	pvs->shared->reltuples = num_table_tuples;
 	pvs->shared->estimated_count = true;
 
-	parallel_vacuum_process_all_indexes(pvs, num_index_scans, true);
+	parallel_vacuum_process_all_indexes(pvs, true);
 }
 
 /*
@@ -517,7 +518,7 @@ parallel_vacuum_bulkdel_all_indexes(ParallelVacuumState *pvs, long num_table_tup
  */
 void
 parallel_vacuum_cleanup_all_indexes(ParallelVacuumState *pvs, long num_table_tuples,
-									int num_index_scans, bool estimated_count)
+									bool estimated_count)
 {
 	Assert(!IsParallelWorker());
 
@@ -529,7 +530,7 @@ parallel_vacuum_cleanup_all_indexes(ParallelVacuumState *pvs, long num_table_tup
 	pvs->shared->reltuples = num_table_tuples;
 	pvs->shared->estimated_count = estimated_count;
 
-	parallel_vacuum_process_all_indexes(pvs, num_index_scans, false);
+	parallel_vacuum_process_all_indexes(pvs, false);
 }
 
 /*
@@ -608,8 +609,7 @@ parallel_vacuum_compute_workers(Relation *indrels, int nindexes, int nrequested,
  * must be used by the parallel vacuum leader process.
  */
 static void
-parallel_vacuum_process_all_indexes(ParallelVacuumState *pvs, int num_index_scans,
-									bool vacuum)
+parallel_vacuum_process_all_indexes(ParallelVacuumState *pvs, bool vacuum)
 {
 	int			nworkers;
 	PVIndVacStatus new_status;
@@ -631,7 +631,7 @@ parallel_vacuum_process_all_indexes(ParallelVacuumState *pvs, int num_index_scan
 		nworkers = pvs->nindexes_parallel_cleanup;
 
 		/* Add conditionally parallel-aware indexes if in the first time call */
-		if (num_index_scans == 0)
+		if (pvs->num_index_scans == 0)
 			nworkers += pvs->nindexes_parallel_condcleanup;
 	}
 
@@ -659,7 +659,7 @@ parallel_vacuum_process_all_indexes(ParallelVacuumState *pvs, int num_index_scan
 		indstats->parallel_workers_can_process =
 			(pvs->will_parallel_vacuum[i] &&
 			 parallel_vacuum_index_is_parallel_safe(pvs->indrels[i],
-													num_index_scans,
+													pvs->num_index_scans,
 													vacuum));
 	}
 
@@ -670,7 +670,7 @@ parallel_vacuum_process_all_indexes(ParallelVacuumState *pvs, int num_index_scan
 	if (nworkers > 0)
 	{
 		/* Reinitialize parallel context to relaunch parallel workers */
-		if (num_index_scans > 0)
+		if (pvs->num_index_scans > 0)
 			ReinitializeParallelDSM(pvs->pcxt);
 
 		/*
@@ -764,6 +764,9 @@ parallel_vacuum_process_all_indexes(ParallelVacuumState *pvs, int num_index_scan
 		VacuumSharedCostBalance = NULL;
 		VacuumActiveNWorkers = NULL;
 	}
+
+	/* Increment the counter */
+	pvs->num_index_scans++;
 }
 
 /*

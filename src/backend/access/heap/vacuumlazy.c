@@ -2198,8 +2198,7 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
 	else
 	{
 		/* Outsource everything to parallel variant */
-		parallel_vacuum_bulkdel_all_indexes(vacrel->pvs, old_live_tuples,
-											vacrel->num_index_scans);
+		parallel_vacuum_bulkdel_all_indexes(vacrel->pvs, old_live_tuples);
 
 		/*
 		 * Do a postcheck to consider applying wraparound failsafe now.  Note
@@ -2569,7 +2568,6 @@ lazy_cleanup_all_indexes(LVRelState *vacrel)
 	{
 		/* Outsource everything to parallel variant */
 		parallel_vacuum_cleanup_all_indexes(vacrel->pvs, reltuples,
-											vacrel->num_index_scans,
 											estimated_count);
 	}
 

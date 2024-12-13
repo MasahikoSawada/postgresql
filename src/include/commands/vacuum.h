@@ -366,11 +366,9 @@ extern TidStore *parallel_vacuum_get_dead_items(ParallelVacuumState *pvs,
 												VacDeadItemsInfo **dead_items_info_p);
 extern void parallel_vacuum_reset_dead_items(ParallelVacuumState *pvs);
 extern void parallel_vacuum_bulkdel_all_indexes(ParallelVacuumState *pvs,
-												long num_table_tuples,
-												int num_index_scans);
+												long num_table_tuples);
 extern void parallel_vacuum_cleanup_all_indexes(ParallelVacuumState *pvs,
 												long num_table_tuples,
-												int num_index_scans,
 												bool estimated_count);
 extern void parallel_vacuum_main(dsm_segment *seg, shm_toc *toc);
 
