@@ -360,7 +360,8 @@ extern void VacuumUpdateCosts(void);
 extern ParallelVacuumState *parallel_vacuum_init(Relation rel, Relation *indrels,
 												 int nindexes, int nrequested_workers,
 												 int vac_work_mem, int elevel,
-												 BufferAccessStrategy bstrategy);
+												 BufferAccessStrategy bstrategy,
+												 void *state);
 extern void parallel_vacuum_end(ParallelVacuumState *pvs, IndexBulkDeleteResult **istats);
 extern TidStore *parallel_vacuum_get_dead_items(ParallelVacuumState *pvs,
 												VacDeadItemsInfo **dead_items_info_p);
@@ -370,6 +371,11 @@ extern void parallel_vacuum_bulkdel_all_indexes(ParallelVacuumState *pvs,
 extern void parallel_vacuum_cleanup_all_indexes(ParallelVacuumState *pvs,
 												long num_table_tuples,
 												bool estimated_count);
+extern int	parallel_vacuum_table_scan_begin(ParallelVacuumState *pvs);
+extern void parallel_vacuum_table_scan_end(ParallelVacuumState *pvs);
+extern int	parallel_vacuum_get_nworkers_table(ParallelVacuumState *pvs);
+extern int	parallel_vacuum_get_nworkers_index(ParallelVacuumState *pvs);
+extern Relation *parallel_vacuum_get_table_indexes(ParallelVacuumState *pvs, int *nindexes);
 extern void parallel_vacuum_main(dsm_segment *seg, shm_toc *toc);
 
 /* in commands/analyze.c */
