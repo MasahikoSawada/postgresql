@@ -3757,6 +3757,18 @@ update_relstats_all_indexes(LVRelState *vacrel)
 }
 
 /*
+ * Compute the number of workers for parallel heap vacuum.
+ *
+ * Return 0 to disable parallel vacuum.
+ */
+int
+heap_parallel_vacuum_compute_workers(Relation rel, int nworkers_requested,
+									 void *state)
+{
+	return 0;
+}
+
+/*
  * Error context callback for errors occurring during vacuum.  The error
  * context messages for index phases should match the messages set in parallel
  * vacuum.  If you change this function for those phases, change

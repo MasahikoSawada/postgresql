@@ -81,6 +81,7 @@ GetTableAmRoutine(Oid amhandler)
 	Assert(routine->relation_copy_data != NULL);
 	Assert(routine->relation_copy_for_cluster != NULL);
 	Assert(routine->relation_vacuum != NULL);
+	Assert(routine->parallel_vacuum_compute_workers != NULL);
 	Assert(routine->scan_analyze_next_block != NULL);
 	Assert(routine->scan_analyze_next_tuple != NULL);
 	Assert(routine->index_build_range_scan != NULL);
@@ -93,6 +94,16 @@ GetTableAmRoutine(Oid amhandler)
 
 	Assert(routine->scan_sample_next_block != NULL);
 	Assert(routine->scan_sample_next_tuple != NULL);
+
+	/*
+	 * Callbacks for parallel vacuum are also optional (except for
+	 * parallel_vacuum_compute_workers). But one callback implies presence of
+	 * the others.
+	 */
+	Assert(((((routine->parallel_vacuum_estimate == NULL) ==
+			  (routine->parallel_vacuum_initialize == NULL)) ==
+			 (routine->parallel_vacuum_initialize_worker == NULL)) ==
+			(routine->parallel_vacuum_collect_dead_items == NULL)));
 
 	return routine;
 }
