@@ -1845,6 +1845,9 @@ PGresAttValue
 PGresParamDesc
 PGresult
 PGresult_data
+PHVScanWorkerState
+PHVShared
+PHVState
 PIO_STATUS_BLOCK
 PLAINTREE
 PLAssignStmt

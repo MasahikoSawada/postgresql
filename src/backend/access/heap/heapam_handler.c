@@ -2656,6 +2656,12 @@ static const TableAmRoutine heapam_methods = {
 	.relation_copy_data = heapam_relation_copy_data,
 	.relation_copy_for_cluster = heapam_relation_copy_for_cluster,
 	.relation_vacuum = heap_vacuum_rel,
+
+	.parallel_vacuum_compute_workers = heap_parallel_vacuum_compute_workers,
+	.parallel_vacuum_estimate = heap_parallel_vacuum_estimate,
+	.parallel_vacuum_initialize = heap_parallel_vacuum_initialize,
+	.parallel_vacuum_relation_worker = heap_parallel_vacuum_worker,
+
 	.scan_analyze_next_block = heapam_scan_analyze_next_block,
 	.scan_analyze_next_tuple = heapam_scan_analyze_next_tuple,
 	.index_build_range_scan = heapam_index_build_range_scan,

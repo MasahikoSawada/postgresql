@@ -278,27 +278,43 @@ VACUUM [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] [ <re
    <varlistentry>
     <term><literal>PARALLEL</literal></term>
     <listitem>
-     <para>
-      Perform index vacuum and index cleanup phases of <command>VACUUM</command>
-      in parallel using <replaceable class="parameter">integer</replaceable>
-      background workers (for the details of each vacuum phase, please
-      refer to <xref linkend="vacuum-phases"/>).  The number of workers used
-      to perform the operation is equal to the number of indexes on the
-      relation that support parallel vacuum which is limited by the number of
-      workers specified with <literal>PARALLEL</literal> option if any which is
-      further limited by <xref linkend="guc-max-parallel-maintenance-workers"/>.
-      An index can participate in parallel vacuum if and only if the size of the
-      index is more than <xref linkend="guc-min-parallel-index-scan-size"/>.
-      Please note that it is not guaranteed that the number of parallel workers
-      specified in <replaceable class="parameter">integer</replaceable> will be
-      used during execution.  It is possible for a vacuum to run with fewer
-      workers than specified, or even with no workers at all.  Only one worker
-      can be used per index.  So parallel workers are launched only when there
-      are at least <literal>2</literal> indexes in the table.  Workers for
-      vacuum are launched before the start of each phase and exit at the end of
-      the phase.  These behaviors might change in a future release.  This
-      option can't be used with the <literal>FULL</literal> option.
-     </para>
+      <para>
+       Perform scanning heap, index vacuum, and index cleanup phases of
+       <command>VACUUM</command> in parallel using
+       <replaceable class="parameter">integer</replaceable> background workers
+       (for the details of each vacuum phase, please refer to
+       <xref linkend="vacuum-phases"/>).
+      </para>
+      <para>
+       For heap tables, the number of workers used to perform the scanning
+       heap is determined based on the size of table. A table can participate in
+       parallel scanning heap if and only if the size of the table is more than
+       <xref linkend="guc-min-parallel-table-scan-size"/>. During scanning heap,
+       the heap table's blocks will be divided into ranges and shared among the
+       cooperating processes. Each worker process will complete the scanning of
+       its given range of blocks before requesting an additional range of blocks.
+      </para>
+      <para>
+       The number of workers used to perform parallel index vacuum and index
+       cleanup is equal to the number of indexes on the relation that support
+       parallel vacuum. An index can participate in parallel vacuum if and only
+       if the size of the index is more than <xref linkend="guc-min-parallel-index-scan-size"/>.
+       Only one worker can be used per index. So parallel workers for index vacuum
+       and index cleanup are launched only when there are at least <literal>2</literal>
+       indexes in the table.
+      </para>
+      <para>
+       Workers for vacuum are launched before the start of each phase and exit
+       at the end of the phase. The number of workers for each phase is limited by
+       the number of workers specified with <literal>PARALLEL</literal> option if
+       any which is futher limited by <xref linkend="guc-max-parallel-maintenance-workers"/>.
+       Please note that in any parallel vacuum phase, it is not guaanteed that the
+       number of parallel workers specified in <replaceable class="parameter">integer</replaceable>
+       will be used during execution. It is possible for a vacuum to run with fewer
+       workers than specified, or even with no workers at all. These behaviors might
+       change in a future release. This option can't be used with the <literal>FULL</literal>
+       option.
+      </para>
     </listitem>
    </varlistentry>
 

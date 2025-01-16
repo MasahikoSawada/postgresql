@@ -599,6 +599,21 @@ table_block_parallelscan_nextpage(Relation rel,
 	return page;
 }
 
+/*
+ * skip some blocks to scan.
+ *
+ * Consume the given number of blocks in the current chunk. It doesn't skip blocks
+ * beyond the current chunk.
+ */
+void
+table_block_parallelscan_skip_pages_in_chunk(Relation rel,
+											 ParallelBlockTableScanWorker pbscanwork,
+											 ParallelBlockTableScanDesc pbscan,
+											 BlockNumber nblocks_skip)
+{
+	pbscanwork->phsw_chunk_remaining -= Min(nblocks_skip, pbscanwork->phsw_chunk_remaining);
+}
+
 /* ----------------------------------------------------------------------------
  * Helper functions to implement relation sizing for block oriented AMs.
  * ----------------------------------------------------------------------------
