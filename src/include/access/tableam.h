@@ -35,6 +35,9 @@ extern PGDLLIMPORT bool synchronize_seqscans;
 
 struct BulkInsertStateData;
 struct IndexInfo;
+struct ParallelVacuumState;
+struct ParallelContext;
+struct ParallelWorkerContext;
 struct SampleScanState;
 struct VacuumParams;
 struct ValidateIndexState;
@@ -654,6 +657,60 @@ typedef struct TableAmRoutine
 	void		(*relation_vacuum) (Relation rel,
 									struct VacuumParams *params,
 									BufferAccessStrategy bstrategy);
+
+	/* ------------------------------------------------------------------------
+	 * Callbacks for parallel table vacuum.
+	 * ------------------------------------------------------------------------
+	 */
+
+	/*
+	 * Compute the number of parallel workers for parallel table vacuum. The
+	 * function must return 0 to disable parallel table vacuum.
+	 */
+	int			(*parallel_vacuum_compute_workers) (Relation rel);
+
+	/*
+	 * Estimate the size of shared memory that the parallel table vacuum needs
+	 * for AM
+	 *
+	 * Not called if parallel table vacuum is disabled.
+	 */
+	void		(*parallel_vacuum_estimate) (Relation rel,
+											 struct ParallelContext *pcxt,
+											 int nworkers,
+											 void *state);
+
+	/*
+	 * Initialize DSM space for parallel table vacuum.
+	 *
+	 * Not called if parallel table vacuum is disabled.
+	 */
+	void		(*parallel_vacuum_initialize) (Relation rel,
+											   struct ParallelContext *pctx,
+											   int nworkers,
+											   void *state);
+
+	/*
+	 * Initialize AM-specific vacuum state for worker processes.
+	 *
+	 * The state_out is the output parameter so that an arbitrary data can be
+	 * passed to the subsequent callback, parallel_vacuum_remove_dead_items.
+	 *
+	 * Not called if parallel table vacuum is disabled.
+	 */
+	void		(*parallel_vacuum_initialize_worker) (Relation rel,
+													  struct ParallelVacuumState *pvs,
+													  struct ParallelWorkerContext *pwcxt,
+													  void **state_out);
+
+	/*
+	 * Execute a parallel scan to remove the dead items.
+	 *
+	 * Not called if parallel table vacuum is disabled.
+	 */
+	void		(*parallel_vacuum_remove_dead_items) (Relation rel,
+													  struct ParallelVacuumState *pvs,
+													  void *state);
 
 	/*
 	 * Prepare to analyze block `blockno` of `scan`. The scan has been started
@@ -1714,6 +1771,63 @@ table_relation_vacuum(Relation rel, struct VacuumParams *params,
 					  BufferAccessStrategy bstrategy)
 {
 	rel->rd_tableam->relation_vacuum(rel, params, bstrategy);
+}
+
+/* ----------------------------------------------------------------------------
+ * Parallel vacuum related functions.
+ * ----------------------------------------------------------------------------
+ */
+
+/*
+ * Return the number of parallel workers for a parallel vacuum scan of this
+ * relation.
+ */
+static inline int
+table_parallel_vacuum_compute_workers(Relation rel)
+{
+	return rel->rd_tableam->parallel_vacuum_compute_workers(rel);
+}
+
+/*
+ * Estimate the size of shared memory needed for a parallel vacuum scan of this
+ * of this relation.
+ */
+static inline void
+table_parallel_vacuum_estimate(Relation rel, struct ParallelContext *pcxt,
+							   int nworkers, void *state)
+{
+	rel->rd_tableam->parallel_vacuum_estimate(rel, pcxt, nworkers, state);
+}
+
+/*
+ * Initialize shared memory area for a parallel vacuum scan of this relation.
+ */
+static inline void
+table_parallel_vacuum_initialize(Relation rel, struct ParallelContext *pcxt,
+								 int nworkers, void *state)
+{
+	rel->rd_tableam->parallel_vacuum_initialize(rel, pcxt, nworkers, state);
+}
+
+/*
+ * Initialize AM-specific vacuum state for worker processes.
+ */
+static inline void
+table_parallel_vacuum_initialize_worker(Relation rel, struct ParallelVacuumState *pvs,
+										struct ParallelWorkerContext *pwcxt,
+										void **state_out)
+{
+	rel->rd_tableam->parallel_vacuum_initialize_worker(rel, pvs, pwcxt, state_out);
+}
+
+/*
+ * Perform a parallel vacuums scan to remove the collected dead items.
+ */
+static inline void
+table_parallel_vacuum_remove_dead_items(Relation rel, struct ParallelVacuumState *pvs,
+										void *state)
+{
+	rel->rd_tableam->parallel_vacuum_remove_dead_items(rel, pvs, state);
 }
 
 /*
