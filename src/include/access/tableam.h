@@ -20,6 +20,7 @@
 #include "access/relscan.h"
 #include "access/sdir.h"
 #include "access/xact.h"
+#include "commands/vacuum.h"
 #include "executor/tuptable.h"
 #include "storage/read_stream.h"
 #include "utils/rel.h"
@@ -653,6 +654,47 @@ typedef struct TableAmRoutine
 	void		(*relation_vacuum) (Relation rel,
 									struct VacuumParams *params,
 									BufferAccessStrategy bstrategy);
+
+	/* ------------------------------------------------------------------------
+	 * Callbacks for parallel table vacuum.
+	 * ------------------------------------------------------------------------
+	 */
+
+	/*
+	 * Compute the number of parallel workers for parallel table vacuum. The
+	 * function must return 0 to disable parallel table vacuum.
+	 */
+	int			(*parallel_vacuum_compute_workers) (Relation rel, int requested);
+
+	/*
+	 * Estimate the size of shared memory that the parallel table vacuum needs
+	 * for AM
+	 *
+	 * Not called if parallel table vacuum is disabled.
+	 */
+	void		(*parallel_vacuum_estimate) (Relation rel,
+											 ParallelContext *pcxt,
+											 int nworkers,
+											 void *state);
+
+	/*
+	 * Initialize DSM space for parallel table vacuum.
+	 *
+	 * Not called if parallel table vacuum is disabled.
+	 */
+	void		(*parallel_vacuum_initialize) (Relation rel,
+											   ParallelContext *pctx,
+											   int nworkers,
+											   void *state);
+
+	/*
+	 * This callback is called for parallel table vacuum workers.
+	 *
+	 * Not called if parallel table vacuum is disabled.
+	 */
+	void		(*parallel_vacuum_relation_worker) (Relation rel,
+													ParallelVacuumState *pvs,
+													ParallelWorkerContext *pwcxt);
 
 	/*
 	 * Prepare to analyze block `blockno` of `scan`. The scan has been started
@@ -1715,6 +1757,52 @@ table_relation_vacuum(Relation rel, struct VacuumParams *params,
 	rel->rd_tableam->relation_vacuum(rel, params, bstrategy);
 }
 
+/* ----------------------------------------------------------------------------
+ * Parallel vacuum related functions.
+ * ----------------------------------------------------------------------------
+ */
+
+/*
+ * Return the number of parallel workers for a parallel vacuum scan of this
+ * relation.
+ */
+static inline int
+table_parallel_vacuum_compute_workers(Relation rel, int requested)
+{
+	return rel->rd_tableam->parallel_vacuum_compute_workers(rel, requested);
+}
+
+/*
+ * Estimate the size of shared memory needed for a parallel vacuum scan of this
+ * of this relation.
+ */
+static inline void
+table_parallel_vacuum_estimate(Relation rel, ParallelContext *pcxt, int nworkers,
+							   void *state)
+{
+	rel->rd_tableam->parallel_vacuum_estimate(rel, pcxt, nworkers, state);
+}
+
+/*
+ * Initialize shared memory area for a parallel vacuum scan of this relation.
+ */
+static inline void
+table_parallel_vacuum_initialize(Relation rel, ParallelContext *pcxt, int nworkers,
+								 void *state)
+{
+	rel->rd_tableam->parallel_vacuum_initialize(rel, pcxt, nworkers, state);
+}
+
+/*
+ * Start a parallel table vacuuming for this relation.
+ */
+static inline void
+table_parallel_vacuum_relation_worker(Relation rel, ParallelVacuumState *pvs,
+									  ParallelWorkerContext *pwcxt)
+{
+	rel->rd_tableam->parallel_vacuum_relation_worker(rel, pvs, pwcxt);
+}
+
 /*
  * Prepare to analyze the next block in the read stream. The scan needs to
  * have been  started with table_beginscan_analyze().  Note that this routine
@@ -2091,6 +2179,10 @@ extern void table_block_parallelscan_reinitialize(Relation rel,
 extern BlockNumber table_block_parallelscan_nextpage(Relation rel,
 													 ParallelBlockTableScanWorker pbscanwork,
 													 ParallelBlockTableScanDesc pbscan);
+extern void table_block_parallelscan_skip_pages_in_chunk(Relation rel,
+														 ParallelBlockTableScanWorker pbscanwork,
+														 ParallelBlockTableScanDesc pbscan,
+														 BlockNumber nblocks_skip);
 extern void table_block_parallelscan_startblock_init(Relation rel,
 													 ParallelBlockTableScanWorker pbscanwork,
 													 ParallelBlockTableScanDesc pbscan);
