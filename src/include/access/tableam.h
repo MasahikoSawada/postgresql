@@ -36,6 +36,9 @@ extern PGDLLIMPORT bool synchronize_seqscans;
 
 struct BulkInsertStateData;
 struct IndexInfo;
+struct ParallelContext;
+struct ParallelVacuumState;
+struct ParallelWorkerContext;
 struct SampleScanState;
 struct ValidateIndexState;
 
@@ -647,6 +650,79 @@ typedef struct TableAmRoutine
 	void		(*relation_vacuum) (Relation rel,
 									const VacuumParams params,
 									BufferAccessStrategy bstrategy);
+
+	/* ------------------------------------------------------------------------
+	 * Callbacks for parallel table vacuum.
+	 * ------------------------------------------------------------------------
+	 */
+
+	/*
+	 * Compute the number of parallel workers for parallel table vacuum. The
+	 * parallel degree for parallel vacuum is further limited by
+	 * max_parallel_maintenance_workers. The function must return 0 to disable
+	 * parallel table vacuum.
+	 *
+	 * 'nworkers_requested' is a >=0 number and the requested number of
+	 * workers. This comes from the PARALLEL option. 0 means to choose the
+	 * parallel degree based on the table AM specific factors such as table
+	 * size.
+	 *
+	 * Optional callback.
+	 */
+	int			(*parallel_vacuum_compute_workers) (Relation rel,
+													int nworkers_requested,
+													void *state);
+
+	/*
+	 * Estimate the size of shared memory needed for a parallel table vacuum
+	 * of this relation.
+	 *
+	 * Not called if parallel table vacuum is disabled.
+	 *
+	 * Optional callback.
+	 */
+	void		(*parallel_vacuum_estimate) (Relation rel,
+											 struct ParallelContext *pcxt,
+											 int nworkers,
+											 void *state);
+
+	/*
+	 * Initialize DSM space for parallel table vacuum.
+	 *
+	 * Not called if parallel table vacuum is disabled.
+	 *
+	 * Optional callback.
+	 */
+	void		(*parallel_vacuum_initialize) (Relation rel,
+											   struct ParallelContext *pctx,
+											   int nworkers,
+											   void *state);
+
+	/*
+	 * Initialize AM-specific vacuum state for worker processes.
+	 *
+	 * The state_out is the output parameter so that arbitrary data can be
+	 * passed to the subsequent callback, parallel_vacuum_remove_dead_items.
+	 *
+	 * Not called if parallel table vacuum is disabled.
+	 *
+	 * Optional callback.
+	 */
+	void		(*parallel_vacuum_initialize_worker) (Relation rel,
+													  struct ParallelVacuumState *pvs,
+													  struct ParallelWorkerContext *pwcxt,
+													  void **state_out);
+
+	/*
+	 * Execute a parallel scan to collect dead items.
+	 *
+	 * Not called if parallel table vacuum is disabled.
+	 *
+	 * Optional callback.
+	 */
+	void		(*parallel_vacuum_collect_dead_items) (Relation rel,
+													   struct ParallelVacuumState *pvs,
+													   void *state);
 
 	/*
 	 * Prepare to analyze block `blockno` of `scan`. The scan has been started
@@ -1668,6 +1744,68 @@ table_relation_vacuum(Relation rel, const VacuumParams params,
 					  BufferAccessStrategy bstrategy)
 {
 	rel->rd_tableam->relation_vacuum(rel, params, bstrategy);
+}
+
+/* ----------------------------------------------------------------------------
+ * Parallel vacuum related functions.
+ * ----------------------------------------------------------------------------
+ */
+
+/*
+ * Compute the number of parallel workers for a parallel vacuum scan of this
+ * relation.
+ */
+static inline int
+table_parallel_vacuum_compute_workers(Relation rel, int nworkers_requested,
+									  void *state)
+{
+	return rel->rd_tableam->parallel_vacuum_compute_workers(rel,
+															nworkers_requested,
+															state);
+}
+
+/*
+ * Estimate the size of shared memory needed for a parallel vacuum scan of this
+ * of this relation.
+ */
+static inline void
+table_parallel_vacuum_estimate(Relation rel, struct ParallelContext *pcxt,
+							   int nworkers, void *state)
+{
+	Assert(nworkers > 0);
+	rel->rd_tableam->parallel_vacuum_estimate(rel, pcxt, nworkers, state);
+}
+
+/*
+ * Initialize shared memory area for a parallel vacuum scan of this relation.
+ */
+static inline void
+table_parallel_vacuum_initialize(Relation rel, struct ParallelContext *pcxt,
+								 int nworkers, void *state)
+{
+	Assert(nworkers > 0);
+	rel->rd_tableam->parallel_vacuum_initialize(rel, pcxt, nworkers, state);
+}
+
+/*
+ * Initialize AM-specific vacuum state for worker processes.
+ */
+static inline void
+table_parallel_vacuum_initialize_worker(Relation rel, struct ParallelVacuumState *pvs,
+										struct ParallelWorkerContext *pwcxt,
+										void **state_out)
+{
+	rel->rd_tableam->parallel_vacuum_initialize_worker(rel, pvs, pwcxt, state_out);
+}
+
+/*
+ * Execute a parallel vacuum scan to collect dead items.
+ */
+static inline void
+table_parallel_vacuum_collect_dead_items(Relation rel, struct ParallelVacuumState *pvs,
+										 void *state)
+{
+	rel->rd_tableam->parallel_vacuum_collect_dead_items(rel, pvs, state);
 }
 
 /*
