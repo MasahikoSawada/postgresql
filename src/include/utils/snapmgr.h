@@ -17,6 +17,7 @@
 #include "utils/relcache.h"
 #include "utils/resowner.h"
 #include "utils/snapshot.h"
+#include "utils/snapmgr_internal.h"
 
 
 extern PGDLLIMPORT bool FirstSnapshotSet;
@@ -95,7 +96,6 @@ extern char *ExportSnapshot(Snapshot snapshot);
  * These live in procarray.c because they're intimately linked to the
  * procarray contents, but thematically they better fit into snapmgr.h.
  */
-typedef struct GlobalVisState GlobalVisState;
 extern GlobalVisState *GlobalVisTestFor(Relation rel);
 extern bool GlobalVisTestIsRemovableXid(GlobalVisState *state, TransactionId xid);
 extern bool GlobalVisTestIsRemovableFullXid(GlobalVisState *state, FullTransactionId fxid);
