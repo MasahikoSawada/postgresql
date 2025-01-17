@@ -475,6 +475,7 @@ TidStoreBeginIterate(TidStore *ts)
 	iter = palloc0(sizeof(TidStoreIter));
 	iter->ts = ts;
 
+	/* begin iteration on the radix tree */
 	if (TidStoreIsShared(ts))
 		iter->tree_iter.shared = shared_ts_begin_iterate(ts->tree.shared);
 	else
@@ -526,6 +527,56 @@ TidStoreEndIterate(TidStoreIter *iter)
 }
 
 /*
+ * Prepare to iterate through a shared TidStore in shared mode. This function
+ * is aimed to start the iteration on the given TidStore with parallel workers.
+ *
+ * The TidStoreIter struct is created in the caller's memory context, and it
+ * will be freed in TidStoreEndIterate.
+ *
+ * The caller is responsible for locking TidStore until the iteration is
+ * finished.
+ */
+TidStoreIter *
+TidStoreBeginIterateShared(TidStore *ts)
+{
+	TidStoreIter *iter;
+
+	if (!TidStoreIsShared(ts))
+		elog(ERROR, "cannot begin shared iteration on local TidStore");
+
+	iter = palloc0(sizeof(TidStoreIter));
+	iter->ts = ts;
+
+	/* begin the shared iteration on radix tree */
+	iter->tree_iter.shared =
+		(shared_ts_iter *) shared_ts_begin_iterate_shared(ts->tree.shared);
+
+	return iter;
+}
+
+/*
+ * Attach to the shared TidStore iterator. 'iter_handle' is the dsa_pointer
+ * returned by TidStoreGetSharedIterHandle(). The returned object is allocated
+ * in backend-local memory using CurrentMemoryContext.
+ */
+TidStoreIter *
+TidStoreAttachIterateShared(TidStore *ts, dsa_pointer iter_handle)
+{
+	TidStoreIter *iter;
+
+	Assert(TidStoreIsShared(ts));
+
+	iter = palloc0(sizeof(TidStoreIter));
+	iter->ts = ts;
+
+	/* Attach to the shared iterator */
+	iter->tree_iter.shared = shared_ts_attach_iterate_shared(ts->tree.shared,
+															 iter_handle);
+
+	return iter;
+}
+
+/*
  * Return the memory usage of TidStore.
  */
 size_t
@@ -554,6 +605,14 @@ TidStoreGetHandle(TidStore *ts)
 	Assert(TidStoreIsShared(ts));
 
 	return (dsa_pointer) shared_ts_get_handle(ts->tree.shared);
+}
+
+dsa_pointer
+TidStoreGetSharedIterHandle(TidStoreIter *iter)
+{
+	Assert(TidStoreIsShared(iter->ts));
+
+	return (dsa_pointer) shared_ts_get_iter_handle(iter->tree_iter.shared);
 }
 
 /*
