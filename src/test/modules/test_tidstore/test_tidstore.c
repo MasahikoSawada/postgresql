@@ -33,6 +33,7 @@ PG_FUNCTION_INFO_V1(test_is_full);
 PG_FUNCTION_INFO_V1(test_destroy);
 
 static TidStore *tidstore = NULL;
+static bool tidstore_is_shared;
 static size_t tidstore_empty_size;
 
 /* array for verification of some tests */
@@ -107,6 +108,7 @@ test_create(PG_FUNCTION_ARGS)
 		LWLockRegisterTranche(tranche_id, "test_tidstore");
 
 		tidstore = TidStoreCreateShared(tidstore_max_size, tranche_id);
+		tidstore_is_shared = true;
 
 		/*
 		 * Remain attached until end of backend or explicitly detached so that
@@ -115,8 +117,11 @@ test_create(PG_FUNCTION_ARGS)
 		dsa_pin_mapping(TidStoreGetDSA(tidstore));
 	}
 	else
+	{
 		/* VACUUM uses insert only, so we test the other option. */
 		tidstore = TidStoreCreateLocal(tidstore_max_size, false);
+		tidstore_is_shared = false;
+	}
 
 	tidstore_empty_size = TidStoreMemoryUsage(tidstore);
 
@@ -212,14 +217,42 @@ do_set_block_offsets(PG_FUNCTION_ARGS)
 	PG_RETURN_INT64(blkno);
 }
 
+/* Collect TIDs stored in the tidstore, in order */
+static void
+check_iteration(TidStore *tidstore, int *num_iter_tids, bool shared_iter)
+{
+	TidStoreIter *iter;
+	TidStoreIterResult *iter_result;
+
+	TidStoreLockShare(tidstore);
+
+	if (shared_iter)
+		iter = TidStoreBeginIterateShared(tidstore);
+	else
+		iter = TidStoreBeginIterate(tidstore);
+
+	while ((iter_result = TidStoreIterateNext(iter)) != NULL)
+	{
+		OffsetNumber offsets[MaxOffsetNumber];
+		int			num_offsets;
+
+		num_offsets = TidStoreGetBlockOffsets(iter_result, offsets, lengthof(offsets));
+		Assert(num_offsets <= lengthof(offsets));
+		for (int i = 0; i < num_offsets; i++)
+			ItemPointerSet(&(items.iter_tids[(*num_iter_tids)++]), iter_result->blkno,
+						   offsets[i]);
+	}
+
+	TidStoreEndIterate(iter);
+	TidStoreUnlock(tidstore);
+}
+
 /*
  * Verify TIDs in store against the array.
  */
 Datum
 check_set_block_offsets(PG_FUNCTION_ARGS)
 {
-	TidStoreIter *iter;
-	TidStoreIterResult *iter_result;
 	int			num_iter_tids = 0;
 	int			num_lookup_tids = 0;
 	BlockNumber prevblkno = 0;
@@ -261,22 +294,23 @@ check_set_block_offsets(PG_FUNCTION_ARGS)
 	}
 
 	/* Collect TIDs stored in the tidstore, in order */
+	check_iteration(tidstore, &num_iter_tids, false);
 
-	TidStoreLockShare(tidstore);
-	iter = TidStoreBeginIterate(tidstore);
-	while ((iter_result = TidStoreIterateNext(iter)) != NULL)
+	/* If the tidstore is shared, check the shared-iteration as well */
+	if (tidstore_is_shared)
 	{
-		OffsetNumber offsets[MaxOffsetNumber];
-		int			num_offsets;
+		int			num_iter_tids_shared = 0;
 
-		num_offsets = TidStoreGetBlockOffsets(iter_result, offsets, lengthof(offsets));
-		Assert(num_offsets <= lengthof(offsets));
-		for (int i = 0; i < num_offsets; i++)
-			ItemPointerSet(&(items.iter_tids[num_iter_tids++]), iter_result->blkno,
-						   offsets[i]);
+		check_iteration(tidstore, &num_iter_tids_shared, true);
+
+		/*
+		 * verify that normal iteration and shared iteration returned the
+		 * number of TIDs.
+		 */
+		if (num_lookup_tids != num_iter_tids_shared)
+			elog(ERROR, "shared-iteration should have %d TIDs, have %d aaa",
+				 items.num_tids, num_iter_tids_shared);
 	}
-	TidStoreEndIterate(iter);
-	TidStoreUnlock(tidstore);
 
 	/*
 	 * Sort verification and lookup arrays and test that all arrays are the

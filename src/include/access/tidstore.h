@@ -37,6 +37,9 @@ extern void TidStoreDetach(TidStore *ts);
 extern void TidStoreLockExclusive(TidStore *ts);
 extern void TidStoreLockShare(TidStore *ts);
 extern void TidStoreUnlock(TidStore *ts);
+extern TidStoreIter *TidStoreBeginIterateShared(TidStore *ts);
+extern TidStoreIter *TidStoreAttachIterateShared(TidStore *ts, dsa_pointer iter_handle);
+extern dsa_pointer TidStoreGetSharedIterHandle(TidStoreIter *iter);
 extern void TidStoreDestroy(TidStore *ts);
 extern void TidStoreSetBlockOffsets(TidStore *ts, BlockNumber blkno, OffsetNumber *offsets,
 									int num_offsets);
