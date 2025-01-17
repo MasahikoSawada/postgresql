@@ -1458,7 +1458,7 @@ retry:
 		 * beginning of the scan).  Find the next unskippable block using the
 		 * visibility map.
 		 */
-		bool		skipsallvis;
+		bool		skipsallvis = false;
 		BlockNumber end_block;
 		BlockNumber nblocks_skip;
 
