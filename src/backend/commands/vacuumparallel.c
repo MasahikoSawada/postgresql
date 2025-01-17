@@ -1054,8 +1054,10 @@ parallel_vacuum_index_is_parallel_safe(Relation indrel, int num_index_scans,
  * table vacuum.
  */
 int
-parallel_vacuum_table_scan_begin(ParallelVacuumState *pvs)
+parallel_vacuum_table_scan_begin(ParallelVacuumState *pvs, int nworkers_request)
 {
+	int			nworkers;
+
 	Assert(!IsParallelWorker());
 
 	if (pvs->shared->nworkers_for_table == 0)
@@ -1069,11 +1071,13 @@ parallel_vacuum_table_scan_begin(ParallelVacuumState *pvs)
 	if (pvs->num_table_scans > 0)
 		ReinitializeParallelDSM(pvs->pcxt);
 
+	nworkers = Min(nworkers_request, pvs->shared->nworkers_for_table);
+
 	/*
 	 * The number of workers might vary between table vacuum and index
 	 * processing
 	 */
-	ReinitializeParallelWorkers(pvs->pcxt, pvs->shared->nworkers_for_table);
+	ReinitializeParallelWorkers(pvs->pcxt, nworkers);
 	LaunchParallelWorkers(pvs->pcxt);
 
 	if (pvs->pcxt->nworkers_launched > 0)

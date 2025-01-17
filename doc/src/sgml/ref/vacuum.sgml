@@ -279,20 +279,21 @@ VACUUM [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] [ <re
     <term><literal>PARALLEL</literal></term>
     <listitem>
       <para>
-       Perform scanning heap, index vacuum, and index cleanup phases of
-       <command>VACUUM</command> in parallel using
+       Perform scanning heap, vacuuming heap, index vacuum, and index cleanup
+       phases of <command>VACUUM</command> in parallel using
        <replaceable class="parameter">integer</replaceable> background workers
        (for the details of each vacuum phase, please refer to
        <xref linkend="vacuum-phases"/>).
       </para>
       <para>
        For heap tables, the number of workers used to perform the scanning
-       heap is determined based on the size of table. A table can participate in
-       parallel scanning heap if and only if the size of the table is more than
-       <xref linkend="guc-min-parallel-table-scan-size"/>. During scanning heap,
-       the heap table's blocks will be divided into ranges and shared among the
-       cooperating processes. Each worker process will complete the scanning of
-       its given range of blocks before requesting an additional range of blocks.
+       heap and vacuuming heap is determined based on the size of table. A table
+       can participate in parallel scanning heap if and only if the size of the
+       table is more than <xref linkend="guc-min-parallel-table-scan-size"/>.
+       During scanning heap, the heap table's blocks will be divided into ranges
+       and shared among the cooperating processes. Each worker process will
+       complete the scanning of its given range of blocks before requesting an
+       additional range of blocks.
       </para>
       <para>
        The number of workers used to perform parallel index vacuum and index

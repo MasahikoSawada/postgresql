@@ -371,7 +371,7 @@ extern void parallel_vacuum_bulkdel_all_indexes(ParallelVacuumState *pvs,
 extern void parallel_vacuum_cleanup_all_indexes(ParallelVacuumState *pvs,
 												long num_table_tuples,
 												bool estimated_count);
-extern int	parallel_vacuum_table_scan_begin(ParallelVacuumState *pvs);
+extern int	parallel_vacuum_table_scan_begin(ParallelVacuumState *pvs, int nworkers_request);
 extern void parallel_vacuum_table_scan_end(ParallelVacuumState *pvs);
 extern int	parallel_vacuum_get_nworkers_table(ParallelVacuumState *pvs);
 extern int	parallel_vacuum_get_nworkers_index(ParallelVacuumState *pvs);

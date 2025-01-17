@@ -74,6 +74,41 @@
  * that there only needs to be one call to lazy_vacuum, after the initial pass
  * completes.
  *
+ * Parallel Vacuum
+ * ----------------
+ * Lazy vacuum on heap tables supports parallel processing for three vacuum
+ * phases: scanning heap, vacuuming indexes, and vacuuming heap. Before the
+ * scanning heap phase, we initialize parallel vacuum state, ParallelVacuumState,
+ * and allocate the TID store in a DSA area if we can use parallel mode for any
+ * of these three phases.
+ *
+ * We could require different number of parallel vacuum workers for each phase
+ * for various factors such as table size, number of indexes, and the number
+ * of pages having dead tuples. Parallel workers are launched at the beginning
+ * of each phase and exit at the end of each phase.
+ *
+ * For scanning the heap table with parallel workers, we utilize the
+ * table_block_parallelscan_xxx facility which splits the table into several
+ * chunks and parallel workers allocate chunks to scan. If dead_items TIDs is
+ * close to overrunning the available space during parallel heap scan, parallel
+ * workers exit and leader process gathers the scan results. Then, it performs
+ * a round of index and heap vacuuming that could also use the parallelism. After
+ * vacuuming both indexes and heap table, the leader process vacuums FSM to make
+ * newly-freed space visible. Then, it relaunches parallel workers to resume the
+ * scanning heap phase with parallel workers again. In order to be able to resume
+ * the parallel heap scan from the previous status, the workers' parallel scan
+ * descriptions are stored in the shared memory (DSM) space to share among parallel
+ * workers. If the leader could launch fewer workers to resume the parallel heap
+ * scan, some blocks are remained as un-scanned. The leader process serially deals
+ * with such blocks at the end of scanning heap phase (see
+ * parallel_heap_complete_unfinished_scan()).
+ *
+ * At the beginning of the vacuuming heap phase, the leader launches parallel
+ * workers and initiates the shared iteration on the shared TID store. At the
+ * end of the phase, the leader process waits for all workers to finish and gather
+ * the workers' results.
+ *
+ *
  * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -227,6 +262,7 @@ typedef struct LVRelScanData
 	BlockNumber lpdead_item_pages;	/* # pages with LP_DEAD items */
 	BlockNumber missed_dead_pages;	/* # pages with missed dead tuples */
 	BlockNumber nonempty_pages; /* actually, last nonempty page + 1 */
+	BlockNumber vacuumed_pages; /* # pages vacuumed in one second pass */
 
 	/* Counters that follow are only for scanned_pages */
 	int64		tuples_deleted; /* # deleted from table */
@@ -257,6 +293,9 @@ typedef struct PHVShared
 	/* VACUUM operation's cutoffs for freezing and pruning */
 	struct VacuumCutoffs cutoffs;
 	GlobalVisState vistest;
+
+	dsa_pointer shared_iter_handle;
+	bool		do_heap_vacuum;
 
 	/* per-worker scan stats for parallel heap vacuum scan */
 	LVRelScanData worker_scandata[FLEXIBLE_ARRAY_MEMBER];
@@ -305,6 +344,14 @@ typedef struct PHVState
 
 	/* Attached per-worker scan state */
 	PHVScanWorkerData *myphvscanwork;
+
+	/*
+	 * The number of parallel workers to launch for parallel heap scanning.
+	 * Note that the number of parallel workers for parallel heap vacuuming
+	 * could vary but is less than num_heapscan_workers. So this works also as
+	 * the maximum number of workers for parallel heap scanning and vacuuming.
+	 */
+	int			num_heapscan_workers;
 
 	/*
 	 * All blocks up to this value has been scanned, i.e. the minimum of all
@@ -422,6 +469,7 @@ static bool lazy_scan_noprune(LVRelState *vacrel, Buffer buf,
 static void lazy_vacuum(LVRelState *vacrel);
 static bool lazy_vacuum_all_indexes(LVRelState *vacrel);
 static void lazy_vacuum_heap_rel(LVRelState *vacrel);
+static void do_lazy_vacuum_heap_rel(LVRelState *vacrel, TidStoreIter *iter);
 static void lazy_vacuum_heap_page(LVRelState *vacrel, BlockNumber blkno,
 								  Buffer buffer, OffsetNumber *deadoffsets,
 								  int num_offsets, Buffer vmbuffer);
@@ -454,6 +502,9 @@ static void parallel_lazy_scan_heap_end(LVRelState *vacrel);
 static void parallel_lazy_scan_compute_min_block(LVRelState *vacrel);
 static void parallel_lazy_scan_gather_scan_results(LVRelState *vacrel);
 static void complete_unfinihsed_lazy_scan_heap(LVRelState *vacrel);
+static int	compute_heap_vacuum_parallel_workers(Relation rel, BlockNumber nblocks);
+static TidStoreIter *parallel_lazy_vacum_heap_begin(LVRelState *vacrel, int nworkers);
+static void parallel_lazy_vacuum_heap_end(LVRelState *vacrel);
 
 static void vacuum_error_callback(void *arg);
 static void update_vacuum_error_info(LVRelState *vacrel,
@@ -599,6 +650,7 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	scan_data->lpdead_item_pages = 0;
 	scan_data->missed_dead_pages = 0;
 	scan_data->nonempty_pages = 0;
+	scan_data->vacuumed_pages = 0;
 	scan_data->tuples_deleted = 0;
 	scan_data->tuples_frozen = 0;
 	scan_data->lpdead_items = 0;
@@ -2469,45 +2521,16 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
 }
 
 /*
- *	lazy_vacuum_heap_rel() -- second pass over the heap for two pass strategy
- *
- * This routine marks LP_DEAD items in vacrel->dead_items as LP_UNUSED. Pages
- * that never had lazy_scan_prune record LP_DEAD items are not visited at all.
- *
- * We may also be able to truncate the line pointer array of the heap pages we
- * visit.  If there is a contiguous group of LP_UNUSED items at the end of the
- * array, it can be reclaimed as free space.  These LP_UNUSED items usually
- * start out as LP_DEAD items recorded by lazy_scan_prune (we set items from
- * each page to LP_UNUSED, and then consider if it's possible to truncate the
- * page's line pointer array).
- *
- * Note: the reason for doing this as a second pass is we cannot remove the
- * tuples until we've removed their index entries, and we want to process
- * index entry removal in batches as large as possible.
+ * Workhorse for lazy_vacuum_heal_rel.
  */
 static void
-lazy_vacuum_heap_rel(LVRelState *vacrel)
+do_lazy_vacuum_heap_rel(LVRelState *vacrel, TidStoreIter *iter)
 {
-	BlockNumber vacuumed_pages = 0;
 	Buffer		vmbuffer = InvalidBuffer;
-	LVSavedErrInfo saved_err_info;
-	TidStoreIter *iter;
+
+	/* LVSavedErrInfo saved_err_info; */
 	TidStoreIterResult *iter_result;
 
-	Assert(vacrel->do_index_vacuuming);
-	Assert(vacrel->do_index_cleanup);
-	Assert(vacrel->num_index_scans > 0);
-
-	/* Report that we are now vacuuming the heap */
-	pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
-								 PROGRESS_VACUUM_PHASE_VACUUM_HEAP);
-
-	/* Update error traceback information */
-	update_vacuum_error_info(vacrel, &saved_err_info,
-							 VACUUM_ERRCB_PHASE_VACUUM_HEAP,
-							 InvalidBlockNumber, InvalidOffsetNumber);
-
-	iter = TidStoreBeginIterate(vacrel->dead_items);
 	while ((iter_result = TidStoreIterateNext(iter)) != NULL)
 	{
 		BlockNumber blkno;
@@ -2545,13 +2568,93 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 
 		UnlockReleaseBuffer(buf);
 		RecordPageWithFreeSpace(vacrel->rel, blkno, freespace);
-		vacuumed_pages++;
+		vacrel->scan_data->vacuumed_pages++;
 	}
-	TidStoreEndIterate(iter);
 
 	vacrel->blkno = InvalidBlockNumber;
 	if (BufferIsValid(vmbuffer))
 		ReleaseBuffer(vmbuffer);
+
+}
+
+/*
+ *	lazy_vacuum_heap_rel() -- second pass over the heap for two pass strategy
+ *
+ * This routine marks LP_DEAD items in vacrel->dead_items as LP_UNUSED. Pages
+ * that never had lazy_scan_prune record LP_DEAD items are not visited at all.
+ *
+ * We may also be able to truncate the line pointer array of the heap pages we
+ * visit.  If there is a contiguous group of LP_UNUSED items at the end of the
+ * array, it can be reclaimed as free space.  These LP_UNUSED items usually
+ * start out as LP_DEAD items recorded by lazy_scan_prune (we set items from
+ * each page to LP_UNUSED, and then consider if it's possible to truncate the
+ * page's line pointer array).
+ *
+ * Note: the reason for doing this as a second pass is we cannot remove the
+ * tuples until we've removed their index entries, and we want to process
+ * index entry removal in batches as large as possible.
+ */
+static void
+lazy_vacuum_heap_rel(LVRelState *vacrel)
+{
+	LVSavedErrInfo saved_err_info;
+	TidStoreIter *iter;
+	int			nworkers = 0;
+
+	Assert(vacrel->do_index_vacuuming);
+	Assert(vacrel->do_index_cleanup);
+	Assert(vacrel->num_index_scans > 0);
+
+	/* Report that we are now vacuuming the heap */
+	pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
+								 PROGRESS_VACUUM_PHASE_VACUUM_HEAP);
+
+	/* Update error traceback information */
+	update_vacuum_error_info(vacrel, &saved_err_info,
+							 VACUUM_ERRCB_PHASE_VACUUM_HEAP,
+							 InvalidBlockNumber, InvalidOffsetNumber);
+
+	vacrel->scan_data->vacuumed_pages = 0;
+
+	/*
+	 * If parallel heap vacuum is enabled, compute parallel workers required
+	 * to scan blocks to vacuum.
+	 */
+	if (ParallelHeapVacuumIsActive(vacrel))
+	{
+		BlockNumber nblocks_to_vacuum;
+
+		/*
+		 * Calculate the number of blocks that are not vacuumed yet.
+		 */
+		nblocks_to_vacuum = vacrel->scan_data->lpdead_item_pages -
+			vacrel->scan_data->vacuumed_pages;
+
+		nworkers = compute_heap_vacuum_parallel_workers(vacrel->rel,
+														nblocks_to_vacuum);
+	}
+
+	/*
+	 * Begin the iteration on dead_items TIDs.
+	 *
+	 * If we need at least one worker, we begin the shared iteration with
+	 * parallel workers.
+	 */
+	if (nworkers > 0)
+		iter = parallel_lazy_vacum_heap_begin(vacrel, nworkers);
+	else
+		iter = TidStoreBeginIterate(vacrel->dead_items);
+
+	/* do the real work */
+	do_lazy_vacuum_heap_rel(vacrel, iter);
+
+	if (nworkers > 0)
+	{
+		/* Wait for all workers to finish */
+		parallel_lazy_vacuum_heap_end(vacrel);
+	}
+
+	TidStoreEndIterate(iter);
 
 	/*
 	 * We set all LP_DEAD items from the first heap pass to LP_UNUSED during
@@ -2559,12 +2662,12 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 	 */
 	Assert(vacrel->num_index_scans > 1 ||
 		   (vacrel->dead_items_info->num_items == vacrel->scan_data->lpdead_items &&
-			vacuumed_pages == vacrel->scan_data->lpdead_item_pages));
+			vacrel->scan_data->vacuumed_pages == vacrel->scan_data->lpdead_item_pages));
 
 	ereport(DEBUG2,
 			(errmsg("table \"%s\": removed %lld dead item identifiers in %u pages",
 					vacrel->relname, (long long) vacrel->dead_items_info->num_items,
-					vacuumed_pages)));
+					vacrel->scan_data->vacuumed_pages)));
 
 	/* Revert to the previous phase information for error traceback */
 	restore_vacuum_error_info(vacrel, &saved_err_info);
@@ -2590,7 +2693,11 @@ lazy_vacuum_heap_page(LVRelState *vacrel, BlockNumber blkno, Buffer buffer,
 	bool		all_frozen;
 	LVSavedErrInfo saved_err_info;
 
-	Assert(vacrel->do_index_vacuuming);
+	/*
+	 * This function could be called by parallel workers for heap vacuuming
+	 * too. They don't set its do_index_vacuuming.
+	 */
+	Assert(vacrel->do_index_vacuuming || IsParallelWorker());
 
 	pgstat_progress_update_param(PROGRESS_VACUUM_HEAP_BLKS_VACUUMED, blkno);
 
@@ -3273,6 +3380,11 @@ dead_items_alloc(LVRelState *vacrel, int nworkers)
 		{
 			vacrel->dead_items = parallel_vacuum_get_dead_items(vacrel->pvs,
 																&vacrel->dead_items_info);
+
+			if (ParallelHeapVacuumIsActive(vacrel))
+				vacrel->phvstate->num_heapscan_workers =
+					parallel_vacuum_get_nworkers_table(vacrel->pvs);
+
 			return;
 		}
 	}
@@ -3520,35 +3632,46 @@ update_relstats_all_indexes(LVRelState *vacrel)
  *
  * The calculation logic is borrowed from compute_parallel_worker().
  */
-int
-heap_parallel_vacuum_compute_workers(Relation rel, int nrequested)
+static int
+compute_heap_vacuum_parallel_workers(Relation rel, BlockNumber nblocks)
 {
 	int			parallel_workers = 0;
 	int			heap_parallel_threshold;
 	int			heap_pages;
 
-	if (nrequested == 0)
+	/*
+	 * Select the number of workers based on the log of the size of the
+	 * relation.Note that the upper limit of the min_parallel_table_scan_size
+	 * GUC is chosen to prevent overflow here.
+	 */
+	heap_parallel_threshold = Max(min_parallel_table_scan_size, 1);
+	heap_pages = BlockNumberIsValid(nblocks) ?
+		nblocks : RelationGetNumberOfBlocks(rel);
+	while (heap_pages >= (BlockNumber) (heap_parallel_threshold * 3))
 	{
-		/*
-		 * Select the number of workers based on the log of the size of the
-		 * relation. Note that the upper limit of the
-		 * min_parallel_table_scan_size GUC is chosen to prevent overflow
-		 * here.
-		 */
-		heap_parallel_threshold = Max(min_parallel_table_scan_size, 1);
-		heap_pages = RelationGetNumberOfBlocks(rel);
-		while (heap_pages >= (BlockNumber) (heap_parallel_threshold * 3))
-		{
-			parallel_workers++;
-			heap_parallel_threshold *= 3;
-			if (heap_parallel_threshold > INT_MAX / 3)
-				break;
-		}
+		parallel_workers++;
+		heap_parallel_threshold *= 3;
+		if (heap_parallel_threshold > INT_MAX / 3)
+			break;
 	}
-	else
-		parallel_workers = nrequested;
 
 	return parallel_workers;
+}
+
+/*
+ * Compute the number of parallel workers for parallel heap vacuum.
+ *
+ * nrequested is the number of parallel workers that user requested. If
+ * nrequested is 0, we compute the parallel degree by using
+ * compute_heap_vacuum_parallel_workers().
+ */
+int
+heap_parallel_vacuum_compute_workers(Relation rel, int nrequested)
+{
+	if (nrequested == 0)
+		return compute_heap_vacuum_parallel_workers(rel, InvalidBlockNumber);
+	else
+		return nrequested;
 }
 
 /*
@@ -3666,7 +3789,6 @@ heap_parallel_vacuum_worker(Relation rel, ParallelVacuumState *pvs,
 	PHVScanWorkerData *phvscanwork;
 	LVRelScanData *scan_data;
 	ErrorContextCallback errcallback;
-	bool		scan_done;
 
 	phvstate = palloc(sizeof(PHVState));
 
@@ -3704,10 +3826,9 @@ heap_parallel_vacuum_worker(Relation rel, ParallelVacuumState *pvs,
 	/* initialize per-worker relation statistics */
 	MemSet(scan_data, 0, sizeof(LVRelScanData));
 
-	/* Set fields necessary for heap scan */
+	/* Set fields necessary for heap scan and vacuum */
 	vacrel.scan_data->NewRelfrozenXid = shared->NewRelfrozenXid;
 	vacrel.scan_data->NewRelminMxid = shared->NewRelminMxid;
-	vacrel.scan_data->skippedallvis = false;
 
 	/* Initialize the per-worker scan state if not yet */
 	if (!phvstate->myphvscanwork->inited)
@@ -3729,25 +3850,44 @@ heap_parallel_vacuum_worker(Relation rel, ParallelVacuumState *pvs,
 	vacrel.relnamespace = get_database_name(RelationGetNamespace(rel));
 	vacrel.relname = pstrdup(RelationGetRelationName(rel));
 	vacrel.indname = NULL;
-	vacrel.phase = VACUUM_ERRCB_PHASE_SCAN_HEAP;
 	errcallback.callback = vacuum_error_callback;
 	errcallback.arg = &vacrel;
 	errcallback.previous = error_context_stack;
 	error_context_stack = &errcallback;
 
-	scan_done = do_lazy_scan_heap(&vacrel);
+	if (shared->do_heap_vacuum)
+	{
+		TidStoreIter *iter;
+
+		iter = TidStoreAttachIterateShared(vacrel.dead_items, shared->shared_iter_handle);
+
+		/* Join parallel heap vacuum */
+		vacrel.phase = VACUUM_ERRCB_PHASE_VACUUM_HEAP;
+		do_lazy_vacuum_heap_rel(&vacrel, iter);
+
+		TidStoreEndIterate(iter);
+	}
+	else
+	{
+		bool		scan_done;
+
+		/* Join parallel heap scan */
+		vacrel.phase = VACUUM_ERRCB_PHASE_SCAN_HEAP;
+		scan_done = do_lazy_scan_heap(&vacrel);
+
+		/*
+		 * If the leader or a worker finishes the heap scan because dead_items
+		 * TIDs is close to the limit, it might have some allocated blocks in
+		 * its scan state. Since this scan state might not be used in the next
+		 * heap scan, we remember that it might have some unconsumed blocks so
+		 * that the leader complete the scans after the heap scan phase
+		 * finishes.
+		 */
+		phvstate->myphvscanwork->maybe_have_unprocessed_blocks = !scan_done;
+	}
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
-
-	/*
-	 * If the leader or a worker finishes the heap scan because dead_items
-	 * TIDs is close to the limit, it might have some allocated blocks in its
-	 * scan state. Since this scan state might not be used in the next heap
-	 * scan, we remember that it might have some unconsumed blocks so that the
-	 * leader complete the scans after the heap scan phase finishes.
-	 */
-	phvstate->myphvscanwork->maybe_have_unprocessed_blocks = !scan_done;
 }
 
 /*
@@ -3857,7 +3997,7 @@ parallel_lazy_scan_gather_scan_results(LVRelState *vacrel)
 		if (TransactionIdPrecedes(data->NewRelfrozenXid, vacrel->scan_data->NewRelfrozenXid))
 			vacrel->scan_data->NewRelfrozenXid = data->NewRelfrozenXid;
 
-		if (MultiXactIdPrecedesOrEquals(data->NewRelminMxid, vacrel->scan_data->NewRelminMxid))
+		if (MultiXactIdPrecedes(data->NewRelminMxid, vacrel->scan_data->NewRelminMxid))
 			vacrel->scan_data->NewRelminMxid = data->NewRelminMxid;
 
 		vacrel->scan_data->skippedallvis |= data->skippedallvis;
@@ -3962,7 +4102,10 @@ parallel_lazy_scan_heap_begin(LVRelState *vacrel)
 	Assert(!IsParallelWorker());
 
 	/* launcher workers */
-	vacrel->phvstate->nworkers_launched = parallel_vacuum_table_scan_begin(vacrel->pvs);
+	vacrel->phvstate->shared->do_heap_vacuum = false;
+	vacrel->phvstate->nworkers_launched =
+		parallel_vacuum_table_scan_begin(vacrel->pvs,
+										 vacrel->phvstate->num_heapscan_workers);
 
 	ereport(vacrel->verbose ? INFO : DEBUG2,
 			(errmsg(ngettext("launched %d parallel vacuum worker for heap scanning (planned: %d)",
@@ -3983,6 +4126,55 @@ parallel_lazy_scan_heap_end(LVRelState *vacrel)
 
 	/* Gather the workers' scan results */
 	parallel_lazy_scan_gather_scan_results(vacrel);
+}
+
+/*
+ * Helper routine to launch parallel workers for parallel heap vacuuming.
+ */
+static TidStoreIter *
+parallel_lazy_vacum_heap_begin(LVRelState *vacrel, int nworkers)
+{
+	PHVState   *phvstate = vacrel->phvstate;
+	TidStoreIter *iter;
+
+	Assert(nworkers > 0);
+
+	/* prepare for shared iteration on the dead items */
+	iter = TidStoreBeginIterateShared(vacrel->dead_items);
+
+	/* launcher workers */
+	phvstate->shared->do_heap_vacuum = true;
+	phvstate->shared->shared_iter_handle = TidStoreGetSharedIterHandle(iter);
+	phvstate->nworkers_launched = parallel_vacuum_table_scan_begin(vacrel->pvs,
+																   nworkers);
+
+	ereport(vacrel->verbose ? INFO : DEBUG2,
+			(errmsg(ngettext("launched %d parallel vacuum worker for heap vacuuming (planned: %d)",
+							 "launched %d parallel vacuum workers for heap vacuuming (planned: %d)",
+							 vacrel->phvstate->nworkers_launched),
+					phvstate->nworkers_launched, nworkers)));
+
+	return iter;
+}
+
+/*
+ * Helper routine to finish the parallel heap vacuuming.
+ */
+static void
+parallel_lazy_vacuum_heap_end(LVRelState *vacrel)
+{
+	PHVState   *phvstate = vacrel->phvstate;
+
+	/* Wait for all parallel workers to finish */
+	parallel_vacuum_table_scan_end(vacrel->pvs);
+
+	/* Gather the heap vacuum statistics collected by workers */
+	for (int i = 0; i < phvstate->nworkers_launched; i++)
+	{
+		LVRelScanData *data = &(phvstate->shared->worker_scandata[i]);
+
+		vacrel->scan_data->vacuumed_pages += data->vacuumed_pages;
+	}
 }
 
 /*
