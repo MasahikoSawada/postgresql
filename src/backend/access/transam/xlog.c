@@ -6127,6 +6127,18 @@ StartupXLOG(void)
 	UpdateFullPageWrites();
 
 	/*
+	 * Update wal_level in shared memory.
+	 *
+	 * We use the wal_level value configured in this server rather than the
+	 * value in the ControlFile. We don't write a XLOG_WAL_LEVEL_CHANGE record
+	 * as the recovery still in-progress, but that change would be included in
+	 * the XLOG_PARAMETER_CHANGE record written by the subsequent
+	 * XLogReportParameters().
+	 */
+	if (performedWalRecovery)
+		UpdateWalLevelAfterRecovery(ControlFile->wal_level);
+
+	/*
 	 * Emit checkpoint or end-of-recovery record in XLOG, if required.
 	 */
 	if (performedWalRecovery)
@@ -7001,7 +7013,7 @@ CreateCheckPoint(int flags)
 	WALInsertLockAcquireExclusive();
 
 	checkPoint.fullPageWrites = Insert->fullPageWrites;
-	checkPoint.wal_level = wal_level;
+	checkPoint.wal_level = GetActiveWalLevel();
 
 	if (shutdown)
 	{
@@ -7055,9 +7067,11 @@ CreateCheckPoint(int flags)
 	 */
 	if (!shutdown)
 	{
+		int			level = GetActiveWalLevel();
+
 		/* Include WAL level in record for WAL summarizer's benefit. */
 		XLogBeginInsert();
-		XLogRegisterData((char *) &wal_level, sizeof(wal_level));
+		XLogRegisterData((char *) &level, sizeof(level));
 		(void) XLogInsert(RM_XLOG_ID, XLOG_CHECKPOINT_REDO);
 
 		/*
@@ -7382,7 +7396,7 @@ CreateEndOfRecoveryRecord(void)
 		elog(ERROR, "can only be used to end recovery");
 
 	xlrec.end_time = GetCurrentTimestamp();
-	xlrec.wal_level = wal_level;
+	xlrec.wal_level = GetActiveWalLevel();
 
 	WALInsertLockAcquireExclusive();
 	xlrec.ThisTimeLineID = XLogCtl->InsertTimeLineID;
@@ -8511,7 +8525,7 @@ xlog_redo(XLogReaderState *record)
 		 */
 		if (InRecovery && InHotStandby &&
 			xlrec.wal_level < WAL_LEVEL_LOGICAL &&
-			wal_level >= WAL_LEVEL_LOGICAL)
+			GetActiveWalLevel() >= WAL_LEVEL_LOGICAL)
 			InvalidateObsoleteReplicationSlots(RS_INVAL_WAL_LEVEL,
 											   0, InvalidOid,
 											   InvalidTransactionId);
@@ -8582,6 +8596,25 @@ xlog_redo(XLogReaderState *record)
 	else if (info == XLOG_CHECKPOINT_REDO)
 	{
 		/* nothing to do here, just for informational purposes */
+	}
+	else if (info == XLOG_WAL_LEVEL_CHANGE)
+	{
+		WalLevel	new_wal_level;
+
+		memcpy(&new_wal_level, XLogRecGetData(record), sizeof(new_wal_level));
+
+		if (InRecovery && InHotStandby &&
+			new_wal_level < WAL_LEVEL_LOGICAL &&
+			GetActiveWalLevel() >= WAL_LEVEL_LOGICAL)
+			InvalidateObsoleteReplicationSlots(RS_INVAL_WAL_LEVEL,
+											   0, InvalidOid,
+											   InvalidTransactionId);
+
+		/* Update our copy of the wal_level parameter in pg_control */
+		LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
+		ControlFile->wal_level = new_wal_level;
+		UpdateControlFile();
+		LWLockRelease(ControlFileLock);
 	}
 }
 
@@ -8801,11 +8834,11 @@ do_pg_backup_start(const char *backupidstr, bool fast, List **tablespaces,
 	 * During recovery, we don't need to check WAL level. Because, if WAL
 	 * level is not sufficient, it's impossible to get here during recovery.
 	 */
-	if (!backup_started_in_recovery && !XLogIsNeeded())
+	if (!backup_started_in_recovery && GetActiveWalLevel() < WAL_LEVEL_REPLICA)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("WAL level not sufficient for making an online backup"),
-				 errhint("\"wal_level\" must be set to \"replica\" or \"logical\" at server start.")));
+				 errhint("\"wal_level\" must be set to \"replica\" or \"logical\".")));
 
 	if (strlen(backupidstr) > MAXPGPATH)
 		ereport(ERROR,
@@ -9131,17 +9164,13 @@ do_pg_backup_stop(BackupState *state, bool waitforarchive)
 
 	Assert(state != NULL);
 
-	backup_stopped_in_recovery = RecoveryInProgress();
-
 	/*
-	 * During recovery, we don't need to check WAL level. Because, if WAL
-	 * level is not sufficient, it's impossible to get here during recovery.
+	 * This backend must have already called do_pg_backup_start(). The WAL
+	 * level check should have been done there.
 	 */
-	if (!backup_stopped_in_recovery && !XLogIsNeeded())
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("WAL level not sufficient for making an online backup"),
-				 errhint("\"wal_level\" must be set to \"replica\" or \"logical\" at server start.")));
+	Assert(get_backup_status() == SESSION_BACKUP_RUNNING);
+
+	backup_stopped_in_recovery = RecoveryInProgress();
 
 	/*
 	 * OK to update backup counter and session-level lock.
@@ -9426,6 +9455,36 @@ register_persistent_abort_backup_handler(void)
 		return;
 	before_shmem_exit(do_pg_abort_backup, DatumGetBool(false));
 	already_done = true;
+}
+
+/*
+ * Wait for all running backups to finish.
+ *
+ * Note that this function doesn't have any interlock to prevent new
+ * backups from being executed.
+ */
+void
+wait_for_backup_finish(void)
+{
+	for (;;)
+	{
+		int			running_backups;
+
+		CHECK_FOR_INTERRUPTS();
+
+		WALInsertLockAcquireExclusive();
+		running_backups = XLogCtl->Insert.runningBackups;
+		WALInsertLockRelease();
+
+		if (running_backups == 0)
+			break;
+
+		WaitLatch(MyLatch,
+				  WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+				  1000L,
+				  WAIT_EVENT_BACKUP_TERMINATION);
+		ResetLatch(MyLatch);
+	}
 }
 
 /*

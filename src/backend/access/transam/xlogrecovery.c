@@ -1121,6 +1121,11 @@ validateRecoveryParameters(void)
 			ereport(WARNING,
 					(errmsg("specified neither \"primary_conninfo\" nor \"restore_command\""),
 					 errhint("The database server will regularly poll the pg_wal subdirectory to check for files placed there.")));
+
+		if (wal_level == WAL_LEVEL_MINIMAL)
+			ereport(FATAL,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					 errmsg("cannot enter standby mode with \"wal_level=minimal\"")));
 	}
 	else
 	{

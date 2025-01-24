@@ -167,6 +167,13 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
 		memcpy(&wal_level, rec, sizeof(int));
 		appendStringInfo(buf, "wal_level %s", get_wal_level_string(wal_level));
 	}
+	else if (info == XLOG_WAL_LEVEL_CHANGE)
+	{
+		int			wal_level;
+
+		memcpy(&wal_level, rec, sizeof(int));
+		appendStringInfo(buf, "wal_level %s", get_wal_level_string(wal_level));
+	}
 }
 
 const char *
@@ -217,6 +224,9 @@ xlog_identify(uint8 info)
 			break;
 		case XLOG_CHECKPOINT_REDO:
 			id = "CHECKPOINT_REDO";
+			break;
+		case XLOG_WAL_LEVEL_CHANGE:
+			id = "WAL_LEVEL_CHANGE";
 			break;
 	}
 

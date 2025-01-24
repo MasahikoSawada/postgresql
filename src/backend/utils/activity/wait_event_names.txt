@@ -52,6 +52,7 @@
 Section: ClassName - WaitEventActivity
 
 ARCHIVER_MAIN	"Waiting in main loop of archiver process."
+ARCHIVER_SHUTDOWN	"Waiting for archiver process to be terminated."
 AUTOVACUUM_MAIN	"Waiting in main loop of autovacuum launcher process."
 BGWRITER_HIBERNATE	"Waiting in background writer process, hibernating."
 BGWRITER_MAIN	"Waiting in main loop of background writer process."
@@ -106,6 +107,7 @@ APPEND_READY	"Waiting for subplan nodes of an <literal>Append</literal> plan nod
 ARCHIVE_CLEANUP_COMMAND	"Waiting for <xref linkend="guc-archive-cleanup-command"/> to complete."
 ARCHIVE_COMMAND	"Waiting for <xref linkend="guc-archive-command"/> to complete."
 BACKEND_TERMINATION	"Waiting for the termination of another backend."
+BACKUP_TERMINATION	"Waiting for all running backups to complete."
 BACKUP_WAIT_WAL_ARCHIVE	"Waiting for WAL files required for a backup to be successfully archived."
 BGWORKER_SHUTDOWN	"Waiting for background worker to shut down."
 BGWORKER_STARTUP	"Waiting for background worker to start up."
@@ -346,6 +348,7 @@ WALSummarizer	"Waiting to read or update WAL summarization state."
 DSMRegistry	"Waiting to read or update the dynamic shared memory registry."
 InjectionPoint	"Waiting to read or update information related to injection points."
 SerialControl	"Waiting to read or update shared <filename>pg_serial</filename> state."
+WalLevelControl	"Waiting to read or update wal_level control state."
 
 #
 # END OF PREDEFINED LWLOCKS (DO NOT CHANGE THIS LINE)

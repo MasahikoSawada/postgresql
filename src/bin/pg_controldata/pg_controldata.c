@@ -76,8 +76,12 @@ wal_level_str(WalLevel wal_level)
 	{
 		case WAL_LEVEL_MINIMAL:
 			return "minimal";
+		case WAL_LEVEL_STANDBY_INFO_LOGGING:
+			return "minimal-standby_info_logging";
 		case WAL_LEVEL_REPLICA:
 			return "replica";
+		case WAL_LEVEL_LOGICAL_INFO_LOGGING:
+			return "replica-logical_info_logging";
 		case WAL_LEVEL_LOGICAL:
 			return "logical";
 	}

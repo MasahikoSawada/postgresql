@@ -277,6 +277,11 @@ static void WalSndSegmentOpen(XLogReaderState *state, XLogSegNo nextSegNo,
 void
 InitWalSender(void)
 {
+	if (GetActiveWalLevel() < WAL_LEVEL_REPLICA)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("WAL senders require \"wal_level\" to be \"replica\" or \"logical\"")));
+
 	am_cascading_walsender = RecoveryInProgress();
 
 	/* Create a per-walsender data structure in shared memory */
@@ -3730,6 +3735,30 @@ WalSndInitStopping(void)
 			continue;
 
 		SendProcSignal(pid, PROCSIG_WALSND_INIT_STOPPING, INVALID_PROC_NUMBER);
+	}
+}
+
+/*
+ * Terminate all running walsenders. Unlike shutting down them using
+ * WalSndInitStopping, this function can be used to terminate walsenders
+ * even while normal backends are generating WAL records.
+ */
+void
+WalSndTerminate(void)
+{
+	for (int i = 0; i < max_wal_senders; i++)
+	{
+		WalSnd	   *walsnd = &WalSndCtl->walsnds[i];
+		pid_t		pid;
+
+		SpinLockAcquire(&walsnd->mutex);
+		pid = walsnd->pid;
+		SpinLockRelease(&walsnd->mutex);
+
+		if (pid == 0)
+			continue;
+
+		kill(pid, SIGUSR2);
 	}
 }
 

@@ -42,6 +42,7 @@
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "access/xlogrecovery.h"
+#include "access/xloglevelworker.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -1376,6 +1377,12 @@ UpdateSharedMemoryConfig(void)
 	 * memory and write an XLOG_FPW_CHANGE record.
 	 */
 	UpdateFullPageWrites();
+
+	/*
+	 * If wal_level has been changed by SIGHUP, delegate changing wal_level
+	 * value to the wal level control worker.
+	 */
+	UpdateWalLevel();
 
 	elog(DEBUG2, "checkpointer updated shared memory configuration values");
 }

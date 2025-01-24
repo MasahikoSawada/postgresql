@@ -71,10 +71,38 @@ extern PGDLLIMPORT int XLogArchiveMode;
 /* WAL levels */
 typedef enum WalLevel
 {
+	/*
+	 * This WAL level corresponds to 'minimal', where we don't WAL-logging for
+	 * neither archival nor log-shipping.
+	 */
 	WAL_LEVEL_MINIMAL = 0,
+
+	/*
+	 * In this level, we enable WAL-logging information required only for
+	 * archival, log-shipping, and hot standby. However, these functionalities
+	 * are not available with this level.
+	 */
+	WAL_LEVEL_STANDBY_INFO_LOGGING,
+
+	/*
+	 * This WAL level corresponds to 'replica', where we allow archival, and,
+	 * log-shipping, and hot standby.
+	 */
 	WAL_LEVEL_REPLICA,
+
+	/*
+	 * In this level, we enable WAL-logging information required for logical
+	 * decoding. However, logical decoding is not available with this level.
+	 */
+	WAL_LEVEL_LOGICAL_INFO_LOGGING,
+
+	/*
+	 * This WAL level corresponds to 'logical', where we allow logical
+	 * decoding.
+	 */
 	WAL_LEVEL_LOGICAL,
 } WalLevel;
+extern bool WalLevelInitialized;
 
 /* Compression algorithms for WAL */
 typedef enum WalCompression
@@ -97,16 +125,16 @@ extern PGDLLIMPORT int wal_level;
 
 /* Is WAL archiving enabled (always or only while server is running normally)? */
 #define XLogArchivingActive() \
-	(AssertMacro(XLogArchiveMode == ARCHIVE_MODE_OFF || wal_level >= WAL_LEVEL_REPLICA), XLogArchiveMode > ARCHIVE_MODE_OFF)
+	(AssertMacro(XLogArchiveMode == ARCHIVE_MODE_OFF || GetActiveWalLevel() >= WAL_LEVEL_REPLICA), XLogArchiveMode > ARCHIVE_MODE_OFF)
 /* Is WAL archiving enabled always (even during recovery)? */
 #define XLogArchivingAlways() \
-	(AssertMacro(XLogArchiveMode == ARCHIVE_MODE_OFF || wal_level >= WAL_LEVEL_REPLICA), XLogArchiveMode == ARCHIVE_MODE_ALWAYS)
+	(AssertMacro(XLogArchiveMode == ARCHIVE_MODE_OFF || GetActiveWalLevel() >= WAL_LEVEL_REPLICA), XLogArchiveMode == ARCHIVE_MODE_ALWAYS)
 
 /*
  * Is WAL-logging necessary for archival or log-shipping, or can we skip
  * WAL-logging if we fsync() the data before committing instead?
  */
-#define XLogIsNeeded() (wal_level >= WAL_LEVEL_REPLICA)
+#define XLogIsNeeded() (StandbyInfoLoggingEnabled())
 
 /*
  * Is a full-page image needed for hint bit updates?
@@ -120,10 +148,10 @@ extern PGDLLIMPORT int wal_level;
 #define XLogHintBitIsNeeded() (DataChecksumsEnabled() || wal_log_hints)
 
 /* Do we need to WAL-log information required only for Hot Standby and logical replication? */
-#define XLogStandbyInfoActive() (wal_level >= WAL_LEVEL_REPLICA)
+#define XLogStandbyInfoActive() (StandbyInfoLoggingEnabled())
 
 /* Do we need to WAL-log information required only for logical replication? */
-#define XLogLogicalInfoActive() (wal_level >= WAL_LEVEL_LOGICAL)
+#define XLogLogicalInfoActive() (LogicalInfoLoggingEnabled())
 
 #ifdef WAL_DEBUG
 extern PGDLLIMPORT bool XLOG_DEBUG;
@@ -271,6 +299,21 @@ extern bool IsInstallXLogFileSegmentActive(void);
 extern void XLogShutdownWalRcv(void);
 
 /*
+ * Routines used by xloglevelworker.c to control WAL-logging information.
+ */
+extern Size WalLevelCtlShmemSize(void);
+extern void WalLevelCtlShmemInit(void);
+extern void InitializeWalLevelCtl(void);
+extern void InitWalLoggingState(void);
+extern bool ProcessBarrierUpdateWalLoggingState(void);
+extern bool LogicalInfoLoggingEnabled(void);
+extern bool StandbyInfoLoggingEnabled(void);
+extern bool LogicalDecodingEnabled(void);
+extern int	GetActiveWalLevel(void);
+extern void UpdateWalLevelAfterRecovery(WalLevel level);
+extern void UpdateWalLevel(void);
+
+/*
  * Routines to start, stop, and get status of a base backup.
  */
 
@@ -297,6 +340,7 @@ extern void do_pg_backup_stop(BackupState *state, bool waitforarchive);
 extern void do_pg_abort_backup(int code, Datum arg);
 extern void register_persistent_abort_backup_handler(void);
 extern SessionBackupState get_backup_status(void);
+extern void wait_for_backup_finish(void);
 
 /* File path names (all relative to $PGDATA) */
 #define RECOVERY_SIGNAL_FILE	"recovery.signal"

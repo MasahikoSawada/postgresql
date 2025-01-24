@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include "access/parallel.h"
+#include "access/xlog.h"
 #include "commands/async.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -572,6 +573,9 @@ ProcessProcSignalBarrier(void)
 				{
 					case PROCSIGNAL_BARRIER_SMGRRELEASE:
 						processed = ProcessBarrierSmgrRelease();
+						break;
+					case PROCSIGNAL_BARRIER_UPDATE_WAL_LOGGING_STATE:
+						processed = ProcessBarrierUpdateWalLoggingState();
 						break;
 				}
 

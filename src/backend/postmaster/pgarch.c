@@ -291,6 +291,32 @@ PgArchWakeup(void)
 		SetLatch(&ProcGlobal->allProcs[arch_pgprocno].procLatch);
 }
 
+void
+PgArchShutdown(void)
+{
+	int			arch_pgprocno = PgArch->pgprocno;
+
+	if (arch_pgprocno == INVALID_PROC_NUMBER)
+		return;
+
+	/* terminate archiver */
+	kill(GetPGProcByNumber(arch_pgprocno)->pid, SIGUSR2);
+
+	/* and wait for it to exit */
+	for (;;)
+	{
+		CHECK_FOR_INTERRUPTS();
+
+		/* is it gone? */
+		if (arch_pgprocno == INVALID_PROC_NUMBER)
+			break;
+
+		WaitLatch(MyLatch,
+				  WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+				  100L, WAIT_EVENT_ARCHIVER_SHUTDOWN);
+		ResetLatch(MyLatch);
+	}
+}
 
 /* SIGUSR2 signal handler for archiver process */
 static void

@@ -178,6 +178,18 @@ xlog_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 				}
 				break;
 			}
+		case XLOG_WAL_LEVEL_CHANGE:
+			{
+				int			new_wal_level;
+
+				memcpy(&new_wal_level, XLogRecGetData(buf->record),
+					   sizeof(new_wal_level));
+
+				if (new_wal_level < WAL_LEVEL_LOGICAL)
+					ereport(ERROR,
+							(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+							 errmsg("logical decoding on standby requires \"wal_level\" >= \"logical\" on the primary")));
+			}
 		case XLOG_NOOP:
 		case XLOG_NEXTOID:
 		case XLOG_SWITCH:

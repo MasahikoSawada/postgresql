@@ -1399,7 +1399,7 @@ CheckSlotRequirements(void)
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("replication slots can only be used if \"max_replication_slots\" > 0")));
 
-	if (wal_level < WAL_LEVEL_REPLICA)
+	if (GetActiveWalLevel() < WAL_LEVEL_REPLICA)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("replication slots can only be used if \"wal_level\" >= \"replica\"")));
@@ -2355,13 +2355,13 @@ RestoreSlotFromDisk(const char *name)
 	 * NB: Changing the requirements here also requires adapting
 	 * CheckSlotRequirements() and CheckLogicalDecodingRequirements().
 	 */
-	if (cp.slotdata.database != InvalidOid && wal_level < WAL_LEVEL_LOGICAL)
+	if (cp.slotdata.database != InvalidOid && GetActiveWalLevel() < WAL_LEVEL_LOGICAL)
 		ereport(FATAL,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("logical replication slot \"%s\" exists, but \"wal_level\" < \"logical\"",
 						NameStr(cp.slotdata.name)),
 				 errhint("Change \"wal_level\" to be \"logical\" or higher.")));
-	else if (wal_level < WAL_LEVEL_REPLICA)
+	else if (GetActiveWalLevel() < WAL_LEVEL_REPLICA)
 		ereport(FATAL,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("physical replication slot \"%s\" exists, but \"wal_level\" < \"replica\"",

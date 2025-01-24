@@ -5063,13 +5063,13 @@ struct config_enum ConfigureNamesEnum[] =
 	},
 
 	{
-		{"wal_level", PGC_POSTMASTER, WAL_SETTINGS,
+		{"wal_level", PGC_SIGHUP, WAL_SETTINGS,
 			gettext_noop("Sets the level of information written to the WAL."),
 			NULL
 		},
 		&wal_level,
 		WAL_LEVEL_REPLICA, wal_level_options,
-		NULL, NULL, NULL
+		check_wal_level, NULL, show_wal_level
 	},
 
 	{
