@@ -19,7 +19,9 @@
 #include <sys/stat.h>
 
 #include "access/tableam.h"
+#include "commands/copy.h"
 #include "commands/copyapi.h"
+#include "commands/copyto_internal.h"
 #include "commands/progress.h"
 #include "executor/execdesc.h"
 #include "executor/executor.h"
