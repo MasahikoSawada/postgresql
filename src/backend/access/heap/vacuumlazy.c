@@ -3499,7 +3499,7 @@ dead_items_alloc(LVRelState *vacrel, int nworkers)
 											   vacrel->nindexes, nworkers,
 											   vac_work_mem,
 											   vacrel->verbose ? INFO : DEBUG2,
-											   vacrel->bstrategy);
+											   vacrel->bstrategy, (void *) vacrel);
 
 		/*
 		 * If parallel mode started, dead_items and dead_items_info spaces are

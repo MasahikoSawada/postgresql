@@ -2033,6 +2033,7 @@ PVIndStats
 PVIndVacStatus
 PVOID
 PVShared
+PVWorkPhase
 PX_Alias
 PX_Cipher
 PX_Combo
