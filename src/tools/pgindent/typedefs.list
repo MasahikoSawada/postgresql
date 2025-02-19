@@ -1981,6 +1981,7 @@ PVIndStats
 PVIndVacStatus
 PVOID
 PVShared
+PVWorkItem
 PX_Alias
 PX_Cipher
 PX_Combo

@@ -6,15 +6,24 @@
  * This file contains routines that are intended to support setting up, using,
  * and tearing down a ParallelVacuumState.
  *
- * In a parallel vacuum, we perform both index bulk deletion and index cleanup
- * with parallel worker processes.  Individual indexes are processed by one
- * vacuum process.  ParallelVacuumState contains shared information as well as
- * the memory space for storing dead items allocated in the DSA area.  We
- * launch parallel worker processes at the start of parallel index
- * bulk-deletion and index cleanup and once all indexes are processed, the
- * parallel worker processes exit.  Each time we process indexes in parallel,
- * the parallel context is re-initialized so that the same DSM can be used for
- * multiple passes of index bulk-deletion and index cleanup.
+ * In a parallel vacuum, we perform table scan or both index bulk deletion and
+ * index cleanup or all of them with parallel worker processes. Different
+ * numbers of workers are launched for the table vacuuming and index processing.
+ * ParallelVacuumState contains shared information as well as the memory space
+ * for storing dead items allocated in the DSA area.
+ *
+ * When initializing parallel table vacuum scan, we invoke table AM routines for
+ * estimating DSM sizes and initializing DSM memory. Parallel table vacuum
+ * workers invoke the table AM routine for vacuuming the table.
+ *
+ * For processing indexes in parallel, individual indexes are processed by one
+ * vacuum process. We launch parallel worker processes at the start of parallel index
+ * bulk-deletion and index cleanup and once all indexes are processed, the parallel
+ * worker processes exit.
+ *
+ * Each time we process table or indexes in parallel, the parallel context is
+ * re-initialized so that the same DSM can be used for multiple passes of table vacuum
+ * or index bulk-deletion and index cleanup.
  *
  * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -26,8 +35,10 @@
  */
 #include "postgres.h"
 
+#include "access/parallel.h"
 #include "access/amapi.h"
 #include "access/table.h"
+#include "access/tableam.h"
 #include "access/xact.h"
 #include "commands/progress.h"
 #include "commands/vacuum.h"
@@ -50,6 +61,13 @@
 #define PARALLEL_VACUUM_KEY_WAL_USAGE		4
 #define PARALLEL_VACUUM_KEY_INDEX_STATS		5
 
+/* The kind of parallel vacuum work */
+typedef enum
+{
+	PV_WORK_ITEM_PROCESS_INDEXES,	/* index vacuuming or cleanup */
+	PV_WORK_ITEM_REMOVE_DEAD_ITEMS, /* remove dead tuples */
+} PVWorkItem;
+
 /*
  * Shared information among parallel workers.  So this is allocated in the DSM
  * segment.
@@ -64,6 +82,11 @@ typedef struct PVShared
 	Oid			relid;
 	int			elevel;
 	uint64		queryid;
+
+	/*
+	 * Processing indexes or removing dead tuples from the table.
+	 */
+	PVWorkItem	work_item;
 
 	/*
 	 * Fields for both index vacuum and cleanup.
@@ -164,12 +187,21 @@ struct ParallelVacuumState
 	/* NULL for worker processes */
 	ParallelContext *pcxt;
 
+	/* Do we need to reinitialize parallel DSM? */
+	bool		need_reinitialize_dsm;
+
 	/* Parent Heap Relation */
 	Relation	heaprel;
 
 	/* Target indexes */
 	Relation   *indrels;
 	int			nindexes;
+
+	/*
+	 * The number of workers for parallel table vacuuming. If > 0, the
+	 * parallel table vacuum is enabled.
+	 */
+	int			nworkers_for_table;
 
 	/* Shared information among parallel vacuum workers */
 	PVShared   *shared;
@@ -221,7 +253,8 @@ struct ParallelVacuumState
 	PVIndVacStatus status;
 };
 
-static int	parallel_vacuum_compute_workers(Relation *indrels, int nindexes, int nrequested,
+static int	parallel_vacuum_compute_workers(Relation rel, Relation *indrels, int nindexes,
+											int nrequested, int *nworkers_for_table,
 											bool *will_parallel_vacuum);
 static void parallel_vacuum_process_all_indexes(ParallelVacuumState *pvs, int num_index_scans,
 												bool vacuum);
@@ -242,7 +275,7 @@ static void parallel_vacuum_error_callback(void *arg);
 ParallelVacuumState *
 parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 					 int nrequested_workers, int vac_work_mem,
-					 int elevel, BufferAccessStrategy bstrategy)
+					 int elevel, BufferAccessStrategy bstrategy, void *state)
 {
 	ParallelVacuumState *pvs;
 	ParallelContext *pcxt;
@@ -256,22 +289,21 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 	Size		est_shared_len;
 	int			nindexes_mwm = 0;
 	int			parallel_workers = 0;
+	int			nworkers_for_table;
 	int			querylen;
 
-	/*
-	 * A parallel vacuum must be requested and there must be indexes on the
-	 * relation
-	 */
+	/* A parallel vacuum must be requested */
 	Assert(nrequested_workers >= 0);
-	Assert(nindexes > 0);
 
 	/*
 	 * Compute the number of parallel vacuum workers to launch
 	 */
 	will_parallel_vacuum = (bool *) palloc0(sizeof(bool) * nindexes);
-	parallel_workers = parallel_vacuum_compute_workers(indrels, nindexes,
+	parallel_workers = parallel_vacuum_compute_workers(rel, indrels, nindexes,
 													   nrequested_workers,
+													   &nworkers_for_table,
 													   will_parallel_vacuum);
+
 	if (parallel_workers <= 0)
 	{
 		/* Can't perform vacuum in parallel -- return NULL */
@@ -291,6 +323,8 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 								 parallel_workers);
 	Assert(pcxt->nworkers > 0);
 	pvs->pcxt = pcxt;
+	pvs->need_reinitialize_dsm = false;
+	pvs->nworkers_for_table = nworkers_for_table;
 
 	/* Estimate size for index vacuum stats -- PARALLEL_VACUUM_KEY_INDEX_STATS */
 	est_indstats_len = mul_size(sizeof(PVIndStats), nindexes);
@@ -326,6 +360,10 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 	}
 	else
 		querylen = 0;			/* keep compiler quiet */
+
+	/* Estimate AM-specific space for parallel table vacuum */
+	if (pvs->nworkers_for_table > 0)
+		table_parallel_vacuum_estimate(rel, pcxt, pvs->nworkers_for_table, state);
 
 	InitializeParallelDSM(pcxt);
 
@@ -418,6 +456,10 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 		shm_toc_insert(pcxt->toc,
 					   PARALLEL_VACUUM_KEY_QUERY_TEXT, sharedquery);
 	}
+
+	/* Initialize AM-specific DSM space for parallel table vacuum */
+	if (pvs->nworkers_for_table > 0)
+		table_parallel_vacuum_initialize(rel, pcxt, pvs->nworkers_for_table, state);
 
 	/* Success -- return parallel vacuum state */
 	return pvs;
@@ -533,26 +575,35 @@ parallel_vacuum_cleanup_all_indexes(ParallelVacuumState *pvs, long num_table_tup
 }
 
 /*
- * Compute the number of parallel worker processes to request.  Both index
- * vacuum and index cleanup can be executed with parallel workers.
- * The index is eligible for parallel vacuum iff its size is greater than
- * min_parallel_index_scan_size as invoking workers for very small indexes
- * can hurt performance.
+ * Compute the number of parallel worker processes to request for table
+ * vacuum and index vacuum/cleanup.  Return the maximum number of parallel
+ * workers for table vacuuming and index vacuuming.
  *
- * nrequested is the number of parallel workers that user requested.  If
- * nrequested is 0, we compute the parallel degree based on nindexes, that is
- * the number of indexes that support parallel vacuum.  This function also
- * sets will_parallel_vacuum to remember indexes that participate in parallel
- * vacuum.
+ * nrequested is the number of parallel workers that user requested, which
+ * applies to both the number of workers for table vacuum and index vacuum.
+ * If nrequested is 0, we compute the parallel degree for them differently
+ * as described below.
+ *
+ * For parallel table vacuum, we ask AM-specific routine to compute the
+ * number of parallel worker processes. The result is set to nworkers_table_p.
+ *
+ * For parallel index vacuum, the index is eligible for parallel vacuum iff
+ * its size is greater than min_parallel_index_scan_size as invoking workers
+ * for very small indexes can hurt performance. This function sets
+ * will_parallel_vacuum to remember indexes that participate in parallel vacuum.
  */
 static int
-parallel_vacuum_compute_workers(Relation *indrels, int nindexes, int nrequested,
+parallel_vacuum_compute_workers(Relation rel, Relation *indrels, int nindexes,
+								int nrequested, int *nworkers_table_p,
 								bool *will_parallel_vacuum)
 {
 	int			nindexes_parallel = 0;
 	int			nindexes_parallel_bulkdel = 0;
 	int			nindexes_parallel_cleanup = 0;
-	int			parallel_workers;
+	int			nworkers_table = 0;
+	int			nworkers_index = 0;
+
+	*nworkers_table_p = 0;
 
 	/*
 	 * We don't allow performing parallel operation in standalone backend or
@@ -560,6 +611,19 @@ parallel_vacuum_compute_workers(Relation *indrels, int nindexes, int nrequested,
 	 */
 	if (!IsUnderPostmaster || max_parallel_maintenance_workers == 0)
 		return 0;
+
+	/* Compute the number of workers for parallel table scan */
+	nworkers_table = table_parallel_vacuum_compute_workers(rel);
+
+	if (nworkers_table > 0)
+	{
+		/* Take into account the requested number of workers */
+		nworkers_table = (nrequested > 0) ?
+			Min(nrequested, nworkers_table) : nworkers_table;
+
+		/* Cap by max_parallel_maintenance_workers */
+		nworkers_table = Min(nworkers_table, max_parallel_maintenance_workers);
+	}
 
 	/*
 	 * Compute the number of indexes that can participate in parallel vacuum.
@@ -590,17 +654,18 @@ parallel_vacuum_compute_workers(Relation *indrels, int nindexes, int nrequested,
 	nindexes_parallel--;
 
 	/* No index supports parallel vacuum */
-	if (nindexes_parallel <= 0)
-		return 0;
+	if (nindexes_parallel > 0)
+	{
+		/* Take into account the requested number of workers */
+		nworkers_index = (nrequested > 0) ?
+			Min(nrequested, nindexes_parallel) : nindexes_parallel;
 
-	/* Compute the parallel degree */
-	parallel_workers = (nrequested > 0) ?
-		Min(nrequested, nindexes_parallel) : nindexes_parallel;
+		/* Cap by max_parallel_maintenance_workers */
+		nworkers_index = Min(nworkers_index, max_parallel_maintenance_workers);
+	}
 
-	/* Cap by max_parallel_maintenance_workers */
-	parallel_workers = Min(parallel_workers, max_parallel_maintenance_workers);
-
-	return parallel_workers;
+	*nworkers_table_p = nworkers_table;
+	return Max(nworkers_table, nworkers_index);
 }
 
 /*
@@ -670,7 +735,7 @@ parallel_vacuum_process_all_indexes(ParallelVacuumState *pvs, int num_index_scan
 	if (nworkers > 0)
 	{
 		/* Reinitialize parallel context to relaunch parallel workers */
-		if (num_index_scans > 0)
+		if (pvs->need_reinitialize_dsm)
 			ReinitializeParallelDSM(pvs->pcxt);
 
 		/*
@@ -764,6 +829,9 @@ parallel_vacuum_process_all_indexes(ParallelVacuumState *pvs, int num_index_scan
 		VacuumSharedCostBalance = NULL;
 		VacuumActiveNWorkers = NULL;
 	}
+
+	/* Parallel DSM will need to be reinitialized for the next execution */
+	pvs->need_reinitialize_dsm = true;
 }
 
 /*
@@ -980,6 +1048,120 @@ parallel_vacuum_index_is_parallel_safe(Relation indrel, int num_index_scans,
 }
 
 /*
+ * Begin the parallel scan to remove the collected dead items. Return the
+ * number of launched parallel workers.
+ *
+ * The caller must call parallel_vacuum_scan_end() to finish the parallel
+ * table scan.
+ */
+int
+parallel_vacuum_remove_dead_items_begin(ParallelVacuumState *pvs,
+										int nrequested)
+{
+	int			nworkers;
+
+	Assert(!IsParallelWorker());
+
+	if (pvs->nworkers_for_table == 0)
+		return 0;
+
+	pg_atomic_write_u32(&(pvs->shared->cost_balance), VacuumCostBalance);
+	pg_atomic_write_u32(&(pvs->shared->active_nworkers), 0);
+
+	pvs->shared->work_item = PV_WORK_ITEM_REMOVE_DEAD_ITEMS;
+
+	if (pvs->need_reinitialize_dsm)
+		ReinitializeParallelDSM(pvs->pcxt);
+
+	nworkers = Min(nrequested, pvs->pcxt->nworkers);
+
+	/*
+	 * The number of workers might vary between table vacuum and index
+	 * processing
+	 */
+	Assert(pvs->nworkers_for_table >= pvs->pcxt->nworkers);
+	ReinitializeParallelWorkers(pvs->pcxt, nworkers);
+	LaunchParallelWorkers(pvs->pcxt);
+
+	if (pvs->pcxt->nworkers_launched > 0)
+	{
+		/*
+		 * Reset the local cost values for leader backend as we have already
+		 * accumulated the remaining balance of heap.
+		 */
+		VacuumCostBalance = 0;
+		VacuumCostBalanceLocal = 0;
+
+		/* Enable shared cost balance for leader backend */
+		VacuumSharedCostBalance = &(pvs->shared->cost_balance);
+		VacuumActiveNWorkers = &(pvs->shared->active_nworkers);
+
+		/* Include the worker count for the leader itself */
+		pg_atomic_add_fetch_u32(VacuumActiveNWorkers, 1);
+	}
+
+	return pvs->pcxt->nworkers_launched;
+}
+
+/*
+ * Wait for all workers for parallel vacuum workers launched by
+ * parallel_vacuum_remove_dead_items_begin(), and gather workers' statistics.
+ */
+void
+parallel_vacuum_scan_end(ParallelVacuumState *pvs)
+{
+	Assert(!IsParallelWorker());
+
+	if (pvs->nworkers_for_table == 0)
+		return;
+
+	WaitForParallelWorkersToFinish(pvs->pcxt);
+
+	/* Decrement the worker count for the leader itself */
+	pg_atomic_sub_fetch_u32(VacuumActiveNWorkers, 1);
+
+	for (int i = 0; i < pvs->pcxt->nworkers_launched; i++)
+		InstrAccumParallelQuery(&pvs->buffer_usage[i], &pvs->wal_usage[i]);
+
+	/*
+	 * Carry the shared balance value to heap scan and disable shared costing
+	 */
+	if (VacuumSharedCostBalance)
+	{
+		VacuumCostBalance = pg_atomic_read_u32(VacuumSharedCostBalance);
+		VacuumSharedCostBalance = NULL;
+		VacuumActiveNWorkers = NULL;
+	}
+
+	/* Parallel DSM will need to be reinitialized for the next execution */
+	pvs->need_reinitialize_dsm = true;
+}
+
+/*
+ * The function is for parallel workers to execute the parallel scan to remove
+ * dead tuples.
+ */
+static void
+parallel_vacuum_process_table(ParallelVacuumState *pvs, void *state)
+{
+	Assert(VacuumActiveNWorkers);
+	Assert(pvs->shared->work_item == PV_WORK_ITEM_REMOVE_DEAD_ITEMS);
+
+	/* Increment the active worker before starting the table vacuum */
+	pg_atomic_add_fetch_u32(VacuumActiveNWorkers, 1);
+
+	/* Do the parallel scan to remove dead tuples */
+	table_parallel_vacuum_remove_dead_items(pvs->heaprel, pvs, state);
+
+	/*
+	 * We have completed the table vacuum so decrement the active worker
+	 * count.
+	 */
+	pg_atomic_sub_fetch_u32(VacuumActiveNWorkers, 1);
+}
+
+
+/*
  * Perform work within a launched parallel process.
  *
  * Since parallel vacuum workers perform only index vacuum or index cleanup,
@@ -998,6 +1180,7 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 	WalUsage   *wal_usage;
 	int			nindexes;
 	char	   *sharedquery;
+	void	   *state;
 	ErrorContextCallback errcallback;
 
 	/*
@@ -1030,7 +1213,6 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 	 * matched to the leader's one.
 	 */
 	vac_open_indexes(rel, RowExclusiveLock, &nindexes, &indrels);
-	Assert(nindexes > 0);
 
 	/*
 	 * Apply the desired value of maintenance_work_mem within this process.
@@ -1076,6 +1258,17 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 	pvs.bstrategy = GetAccessStrategyWithSize(BAS_VACUUM,
 											  shared->ring_nbuffers * (BLCKSZ / 1024));
 
+	/* Initialize AM-specific vacuum state for parallel table vacuuming */
+	if (shared->work_item == PV_WORK_ITEM_REMOVE_DEAD_ITEMS)
+	{
+		ParallelWorkerContext pwcxt;
+
+		pwcxt.toc = toc;
+		pwcxt.seg = seg;
+		table_parallel_vacuum_initialize_worker(rel, &pvs, &pwcxt,
+												&state);
+	}
+
 	/* Setup error traceback support for ereport() */
 	errcallback.callback = parallel_vacuum_error_callback;
 	errcallback.arg = &pvs;
@@ -1085,8 +1278,18 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 	/* Prepare to track buffer usage during parallel execution */
 	InstrStartParallelQuery();
 
-	/* Process indexes to perform vacuum/cleanup */
-	parallel_vacuum_process_safe_indexes(&pvs);
+	if (pvs.shared->work_item == PV_WORK_ITEM_REMOVE_DEAD_ITEMS)
+	{
+		/* Remove collected dead items */
+		parallel_vacuum_process_table(&pvs, state);
+	}
+	else
+	{
+		Assert(pvs.shared->work_item == PV_WORK_ITEM_PROCESS_INDEXES);
+
+		/* Process indexes to perform vacuum/cleanup */
+		parallel_vacuum_process_safe_indexes(&pvs);
+	}
 
 	/* Report buffer/WAL usage during parallel execution */
 	buffer_usage = shm_toc_lookup(toc, PARALLEL_VACUUM_KEY_BUFFER_USAGE, false);

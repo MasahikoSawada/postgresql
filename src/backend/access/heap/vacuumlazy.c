@@ -3485,7 +3485,7 @@ dead_items_alloc(LVRelState *vacrel, int nworkers)
 											   vacrel->nindexes, nworkers,
 											   vac_work_mem,
 											   vacrel->verbose ? INFO : DEBUG2,
-											   vacrel->bstrategy);
+											   vacrel->bstrategy, (void *) vacrel);
 
 		/*
 		 * If parallel mode started, dead_items and dead_items_info spaces are
@@ -3725,6 +3725,17 @@ update_relstats_all_indexes(LVRelState *vacrel)
 							InvalidMultiXactId,
 							NULL, NULL, false);
 	}
+}
+
+/*
+ * Compute the number of workers for parallel heap vacuum.
+ *
+ * Disabled so far.
+ */
+int
+heap_parallel_vacuum_compute_workers(Relation rel)
+{
+	return 0;
 }
 
 /*
