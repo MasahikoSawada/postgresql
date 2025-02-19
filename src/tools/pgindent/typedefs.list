@@ -1485,6 +1485,7 @@ LSEG
 LUID
 LVRelState
 LVSavedErrInfo
+LVVacCounters
 LWLock
 LWLockHandle
 LWLockMode
