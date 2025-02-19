@@ -555,6 +555,17 @@ parallel_vacuum_bulkdel_all_indexes(ParallelVacuumState *pvs, long num_table_tup
 }
 
 /*
+ * Return the array of indexes associated to the given table to be vacuumed.
+ */
+Relation *
+parallel_vacuum_get_table_indexes(ParallelVacuumState *pvs, int *nindexes)
+{
+	*nindexes = pvs->nindexes;
+
+	return pvs->indrels;
+}
+
+/*
  * Do parallel index cleanup with parallel workers.
  */
 void

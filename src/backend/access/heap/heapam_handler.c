@@ -2680,6 +2680,10 @@ static const TableAmRoutine heapam_methods = {
 	.scan_sample_next_tuple = heapam_scan_sample_next_tuple,
 
 	.parallel_vacuum_compute_workers = heap_parallel_vacuum_compute_workers,
+	.parallel_vacuum_estimate = heap_parallel_vacuum_estimate,
+	.parallel_vacuum_initialize = heap_parallel_vacuum_initialize,
+	.parallel_vacuum_initialize_worker = heap_parallel_vacuum_initialize_worker,
+	.parallel_vacuum_remove_dead_items = heap_parallel_vacuum_remove_dead_items,
 };
 
 

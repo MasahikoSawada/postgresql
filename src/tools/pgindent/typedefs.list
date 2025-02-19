@@ -1846,6 +1846,7 @@ PGresAttValue
 PGresParamDesc
 PGresult
 PGresult_data
+PHVShared
 PIO_STATUS_BLOCK
 PLAINTREE
 PLAssignStmt
