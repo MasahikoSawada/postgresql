@@ -1504,6 +1504,7 @@ LSEG
 LUID
 LVRelState
 LVSavedErrInfo
+LVScanData
 LWLock
 LWLockHandle
 LWLockMode
