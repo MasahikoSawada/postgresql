@@ -385,6 +385,9 @@ extern ParallelVacuumState *parallel_vacuum_init(Relation rel, Relation *indrels
 												 BufferAccessStrategy bstrategy,
 												 void *state);
 extern void parallel_vacuum_end(ParallelVacuumState *pvs, IndexBulkDeleteResult **istats);
+extern int	parallel_vacuum_get_nworkers_table(ParallelVacuumState *pvs);
+extern Relation *parallel_vacuum_get_table_indexes(ParallelVacuumState *pvs, int *nindexes);
+extern BufferAccessStrategy parallel_vacuum_get_bstrategy(ParallelVacuumState *pvs);
 extern TidStore *parallel_vacuum_get_dead_items(ParallelVacuumState *pvs,
 												VacDeadItemsInfo **dead_items_info_p);
 extern void parallel_vacuum_reset_dead_items(ParallelVacuumState *pvs);

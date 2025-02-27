@@ -1961,6 +1961,11 @@ PLpgSQL_type
 PLpgSQL_type_type
 PLpgSQL_var
 PLpgSQL_variable
+ParallelLVLeader
+ParallelLVScanDesc
+ParallelLVScanWorkerData
+ParallelLVShared
+ParallelLVState
 PLwdatum
 PLword
 PLyArrayToOb

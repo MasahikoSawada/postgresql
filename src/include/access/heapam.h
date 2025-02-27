@@ -15,6 +15,7 @@
 #define HEAPAM_H
 
 #include "access/heapam_xlog.h"
+#include "access/parallel.h"
 #include "access/relation.h"	/* for backward compatibility */
 #include "access/relscan.h"
 #include "access/sdir.h"
@@ -397,8 +398,20 @@ extern void log_heap_prune_and_freeze(Relation relation, Buffer buffer,
 									  OffsetNumber *unused, int nunused);
 
 /* in heap/vacuumlazy.c */
+struct ParallelVacuumState;
 extern void heap_vacuum_rel(Relation rel,
 							const VacuumParams params, BufferAccessStrategy bstrategy);
+extern int heap_parallel_vacuum_compute_workers(Relation rel, int nworkers_requested,
+												void *state);
+extern void heap_parallel_vacuum_estimate(Relation rel, ParallelContext *pcxt, int nworkers,
+										  void *state);
+extern void heap_parallel_vacuum_initialize(Relation rel, ParallelContext *pcxt,
+											int nworkers, void *state);
+extern void heap_parallel_vacuum_initialize_worker(Relation rel, struct ParallelVacuumState *pvs,
+												   ParallelWorkerContext *pwcxt,
+												   void **state_out);
+extern void heap_parallel_vacuum_collect_dead_items(Relation rel, struct ParallelVacuumState *pvs,
+													void *state);
 
 /* in heap/heapam_visibility.c */
 extern bool HeapTupleSatisfiesVisibility(HeapTuple htup, Snapshot snapshot,

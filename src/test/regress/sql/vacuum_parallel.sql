@@ -1,5 +1,6 @@
 SET max_parallel_maintenance_workers TO 4;
 SET min_parallel_index_scan_size TO '128kB';
+SET min_parallel_table_scan_size TO '128kB';
 
 -- Bug #17245: Make sure that we don't totally fail to VACUUM individual indexes that
 -- happen to be below min_parallel_index_scan_size during parallel VACUUM:
@@ -39,8 +40,15 @@ VACUUM (PARALLEL 4, INDEX_CLEANUP ON) parallel_vacuum_table;
 -- assertion failure with bug #17245 (in the absence of bugfix):
 INSERT INTO parallel_vacuum_table SELECT i FROM generate_series(1, 10000) i;
 
+-- Insert more tuples to use parallel heap vacuum.
+INSERT INTO parallel_vacuum_table SELECT i FROM generate_series(1, 500_000) i;
+VACUUM (PARALLEL 2) parallel_vacuum_table;
+DELETE FROM parallel_vacuum_table WHERE a < 1000;
+VACUUM (PARALLEL 1) parallel_vacuum_table;
+
 RESET max_parallel_maintenance_workers;
 RESET min_parallel_index_scan_size;
+RESET min_parallel_table_scan_size;
 
 -- Deliberately don't drop table, to get further coverage from tools like
 -- pg_amcheck in some testing scenarios
