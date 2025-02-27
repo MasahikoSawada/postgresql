@@ -1936,6 +1936,10 @@ PLpgSQL_type
 PLpgSQL_type_type
 PLpgSQL_var
 PLpgSQL_variable
+ParallelLVLeader
+ParallelLVScanWorker
+ParallelLVShared
+ParallelLVState
 PLwdatum
 PLword
 PLyArrayToOb

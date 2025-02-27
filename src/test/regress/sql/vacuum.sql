@@ -129,6 +129,12 @@ VACUUM (PARALLEL 2) pvactst;
 UPDATE pvactst SET i = i WHERE i < 1000;
 VACUUM (PARALLEL 0) pvactst; -- disable parallel vacuum
 
+-- VACUUM invokes parallel heap vacuum.
+SET min_parallel_table_scan_size to 0;
+VACUUM (PARALLEL 2, FREEZE) pvactst2;
+UPDATE pvactst2 SET i = i WHERE i < 1000;
+VACUUM (PARALLEL 1) pvactst2;
+
 VACUUM (PARALLEL -1) pvactst; -- error
 VACUUM (PARALLEL 2, INDEX_CLEANUP FALSE) pvactst;
 VACUUM (PARALLEL 2, FULL TRUE) pvactst; -- error, cannot use both PARALLEL and FULL
@@ -148,6 +154,7 @@ CREATE INDEX tmp_idx1 ON tmp (a);
 VACUUM (PARALLEL 1, FULL FALSE) tmp; -- parallel vacuum disabled for temp tables
 VACUUM (PARALLEL 0, FULL TRUE) tmp; -- can specify parallel disabled (even though that's implied by FULL)
 RESET min_parallel_index_scan_size;
+RESET min_parallel_table_scan_size;
 DROP TABLE pvactst;
 DROP TABLE pvactst2;
 
