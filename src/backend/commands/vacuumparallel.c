@@ -505,6 +505,35 @@ parallel_vacuum_end(ParallelVacuumState *pvs, IndexBulkDeleteResult **istats)
 }
 
 /*
+ * Return the number of parallel workers initialized for parallel table vacuum.
+ */
+int
+parallel_vacuum_get_nworkers_table(ParallelVacuumState *pvs)
+{
+	return pvs->nworkers_for_table;
+}
+
+/*
+ * Return the array of indexes associated to the given table to be vacuumed.
+ */
+Relation *
+parallel_vacuum_get_table_indexes(ParallelVacuumState *pvs, int *nindexes)
+{
+	*nindexes = pvs->nindexes;
+
+	return pvs->indrels;
+}
+
+/*
+ * Return the buffer strategy for parallel vacuum.
+ */
+BufferAccessStrategy
+parallel_vacuum_get_bstrategy(ParallelVacuumState *pvs)
+{
+	return pvs->bstrategy;
+}
+
+/*
  * Returns the dead items space and dead items information.
  */
 TidStore *
