@@ -121,7 +121,7 @@ SELECT array_agg(id ORDER BY guid_field) FROM guid3;
 
 -- test of UUIDv7 with the maximum timestamp
 SELECT uuid_extract_timestamp('FFFFFFFF-FFFF-7FFF-bFFF-FFFFFFFFFFFF') as max_timestamp \gset
-SELECT :'max_timestamp'::timestamp = uuid_extract_timestamp(uuidv7(:'max_timestamp'::timestamp - now()))::timestamp;
+SELECT :'max_timestamp'::timestamp, uuid_extract_timestamp(uuidv7(:'max_timestamp'::timestamp - now()))::timestamp, :'max_timestamp'::timestamp = uuid_extract_timestamp(uuidv7(:'max_timestamp'::timestamp - now()))::timestamp;
 
 -- Check the timestamp offsets for v7.
 --
