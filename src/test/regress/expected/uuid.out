@@ -233,6 +233,33 @@ SELECT array_agg(id ORDER BY guid_field) FROM guid3;
  {1,2,3,4,5,6,7,8,9,10}
 (1 row)
 
+-- test of UUIDv7 with the maximum timestamp
+SELECT uuid_extract_timestamp('FFFFFFFF-FFFF-7FFF-bFFF-FFFFFFFFFFFF') as max_timestamp \gset
+SELECT :'max_timestamp'::timestamp = uuid_extract_timestamp(uuidv7(:'max_timestamp'::timestamp - now()))::timestamp;
+ ?column? 
+----------
+ t
+(1 row)
+
+-- Check the timestamp offsets for v7.
+--
+-- generate UUIDv7 having timestamps up to 10889 year, which is the maximum year
+-- can be stored in UUIDv7, and then extract timestamps from UUIDv7 to check.
+SELECT '1970-01-01 00:00:00' as unix_epoch \gset
+WITH date_list AS (
+SELECT :'unix_epoch'::timestamp + (y || ' years')::interval AS ts
+       FROM generate_series(0, 10889 - extract(YEAR FROM :'unix_epoch'::timestamp)) y
+),
+check_uuids as (
+SELECT ts = date_trunc('second', uuid_extract_timestamp(uuidv7(ts - now()::timestamp)))::timestamp AS matched
+       FROM date_list
+)
+SELECT NOT EXISTS (SELECT 1 FROM check_uuids WHERE NOT matched) AS check_uuidv7_offsets;
+ check_uuidv7_offsets 
+----------------------
+ t
+(1 row)
+
 -- extract functions
 -- version
 SELECT uuid_extract_version('11111111-1111-5111-8111-111111111111');  -- 5
