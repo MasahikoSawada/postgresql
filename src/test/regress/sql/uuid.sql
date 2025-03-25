@@ -133,10 +133,11 @@ SELECT :'unix_epoch'::timestamp + (y || ' years')::interval AS ts
        FROM generate_series(0, 10889 - extract(YEAR FROM :'unix_epoch'::timestamp)) y
 ),
 check_uuids as (
-SELECT ts = date_trunc('second', uuid_extract_timestamp(uuidv7(ts - now()::timestamp)))::timestamp AS matched
+SELECT ts, date_trunc('second', uuid_extract_timestamp(uuidv7(ts - now()::timestamp)))::timestamp as uuidts, ts = date_trunc('second', uuid_extract_timestamp(uuidv7(ts - now()::timestamp)))::timestamp AS matched
        FROM date_list
 )
-SELECT NOT EXISTS (SELECT 1 FROM check_uuids WHERE NOT matched) AS check_uuidv7_offsets;
+--SELECT NOT EXISTS (SELECT 1 FROM check_uuids WHERE NOT matched) AS check_uuidv7_offsets;
+select ts, uuidts from check_uuids where not matched order by 1;
 
 -- extract functions
 
