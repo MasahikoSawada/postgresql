@@ -617,6 +617,8 @@ uuidv7_interval(PG_FUNCTION_ARGS)
 	ts = (TimestampTz) (ns / NS_PER_US) -
 		(POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) * SECS_PER_DAY * USECS_PER_SEC;
 
+	orig_ts = ts;
+
 	/* Compute time shift */
 	ts = DatumGetTimestampTz(DirectFunctionCall2(timestamptz_pl_interval,
 												 TimestampTzGetDatum(ts),
@@ -630,12 +632,18 @@ uuidv7_interval(PG_FUNCTION_ARGS)
 		pg_uuid_t  uuid;
 		uint64 unix_ts_ms;
 
-		elog(LOG, "xxx shift ns %lX, TS %lX -> %lX, us %lX",
-			 ns, orig_ts, ts, us);
-		elog(LOG, "xxx shift ns %lX, TS %lX, us %lX",
-			 ns, ts, us);
-		elog(LOG, "xxx extract unix ms %lX unix sub ms %lX",
-			 us / US_PER_MS, (us % US_PER_MS) * NS_PER_US + ns % NS_PER_US);
+		elog(LOG, "xxx shift ns %lX, TS %lX (%ld) -> %lX (%ld), us %lX (%ld)",
+			 ns,
+			 orig_ts, orig_ts,
+			 ts, ts,
+			 us, us);
+		elog(LOG, "xxx extract unix ms %lX (%ld) unix sub-ms %lX (%ld) (ns part %lX (%ld))",
+			 us / US_PER_MS,
+			 us / US_PER_MS,
+			 (us % US_PER_MS) * NS_PER_US + ns % NS_PER_US,
+			 (us % US_PER_MS) * NS_PER_US + ns % NS_PER_US,
+			 ns % NS_PER_US,
+			 ns % NS_PER_US);
 
 		unix_ts_ms = us / US_PER_MS;
 		uuid.data[0] = (unsigned char) (unix_ts_ms >> 40);
