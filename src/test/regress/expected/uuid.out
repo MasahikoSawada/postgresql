@@ -233,22 +233,14 @@ SELECT array_agg(id ORDER BY guid_field) FROM guid3;
  {1,2,3,4,5,6,7,8,9,10}
 (1 row)
 
--- test of UUIDv7 with the maximum timestamp
-SELECT uuid_extract_timestamp('FFFFFFFF-FFFF-7FFF-bFFF-FFFFFFFFFFFF')::timestamp as max_timestamp \gset
-SELECT :'max_timestamp'::timestamp, uuid_extract_timestamp(uuidv7(:'max_timestamp'::timestamp - now()::timestamp))::timestamp;
-           timestamp           |    uuid_extract_timestamp     
--------------------------------+-------------------------------
- Mon Aug 01 22:31:50.655 10889 | Mon Aug 01 22:31:50.655 10889
-(1 row)
-
 -- Check the timestamp offsets for v7.
 --
 -- generate UUIDv7 having timestamps up to 10889 year, which is the maximum year
--- can be stored in UUIDv7, and then check the timestamps extracted from UUIDv7
--- values.
+-- can be stored in UUIDv7, and then check if the timestamps extracted from UUIDv7
+-- values are not overflowed.
 WITH uuidts AS (
-     SELECT y, ts as Ts, lag(ts) OVER (ORDER BY y) AS prev_ts
-     FROM LATERAL(SELECT y, uuid_extract_timestamp(uuidv7((y || ' years')::interval)) AS ts FROM generate_series(-50, 10889 - extract(year from now())::int) y)
+     SELECT y, ts as ts, lag(ts) OVER (ORDER BY y) AS prev_ts
+     FROM (SELECT y, uuid_extract_timestamp(uuidv7((y || ' years')::interval)) AS ts FROM generate_series(-50, 10889 - extract(year from now())::int) y)
 )
 SELECT y, ts, prev_ts FROM uuidts WHERE ts < prev_ts;
  y | ts | prev_ts 

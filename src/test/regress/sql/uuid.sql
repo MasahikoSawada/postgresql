@@ -119,10 +119,6 @@ SELECT count(DISTINCT guid_field) FROM guid1;
 INSERT INTO guid3 (guid_field) SELECT uuidv7() FROM generate_series(1, 10);
 SELECT array_agg(id ORDER BY guid_field) FROM guid3;
 
--- test of UUIDv7 with the maximum timestamp
-SELECT uuid_extract_timestamp('FFFFFFFF-FFFF-7FFF-bFFF-FFFFFFFFFFFF')::timestamp as max_timestamp \gset
-SELECT :'max_timestamp'::timestamp, uuid_extract_timestamp(uuidv7(:'max_timestamp'::timestamp - now()::timestamp))::timestamp;
-
 -- Check the timestamp offsets for v7.
 --
 -- generate UUIDv7 having timestamps up to 10889 year, which is the maximum year

@@ -602,7 +602,6 @@ uuidv7_interval(PG_FUNCTION_ARGS)
 {
 	Interval   *shift = PG_GETARG_INTERVAL_P(0);
 	TimestampTz ts;
-	TimestampTz orig_ts;
 	pg_uuid_t  *uuid;
 	int64		ns = get_real_time_ns_ascending();
 	int64		us;
@@ -617,8 +616,6 @@ uuidv7_interval(PG_FUNCTION_ARGS)
 	ts = (TimestampTz) (ns / NS_PER_US) -
 		(POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) * SECS_PER_DAY * USECS_PER_SEC;
 
-	orig_ts = ts;
-
 	/* Compute time shift */
 	ts = DatumGetTimestampTz(DirectFunctionCall2(timestamptz_pl_interval,
 												 TimestampTzGetDatum(ts),
@@ -626,41 +623,6 @@ uuidv7_interval(PG_FUNCTION_ARGS)
 
 	/* Convert a TimestampTz value back to an UNIX epoch timestamp */
 	us = ts + (POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) * SECS_PER_DAY * USECS_PER_SEC;
-
-	if (ts > (GetCurrentTimestamp() * 2))
-	{
-		pg_uuid_t  uuid;
-		uint64 unix_ts_ms;
-
-		elog(LOG, "xxx shift ns %lX, TS %lX (%ld) -> %lX (%ld), us %lX (%ld)",
-			 ns,
-			 orig_ts, orig_ts,
-			 ts, ts,
-			 us, us);
-		elog(LOG, "xxx extract unix ms %lX (%ld) unix sub-ms %lX (%ld) (ns part %lX (%ld))",
-			 us / US_PER_MS,
-			 us / US_PER_MS,
-			 (us % US_PER_MS) * NS_PER_US + ns % NS_PER_US,
-			 (us % US_PER_MS) * NS_PER_US + ns % NS_PER_US,
-			 ns % NS_PER_US,
-			 ns % NS_PER_US);
-
-		unix_ts_ms = us / US_PER_MS;
-		uuid.data[0] = (unsigned char) (unix_ts_ms >> 40);
-		uuid.data[1] = (unsigned char) (unix_ts_ms >> 32);
-		uuid.data[2] = (unsigned char) (unix_ts_ms >> 24);
-		uuid.data[3] = (unsigned char) (unix_ts_ms >> 16);
-		uuid.data[4] = (unsigned char) (unix_ts_ms >> 8);
-		uuid.data[5] = (unsigned char) unix_ts_ms;
-
-		elog(LOG, "XXX ts in uuidv7 %X %X %X %X %X %X",
-			 uuid.data[0],
-			 uuid.data[1],
-			 uuid.data[2],
-			 uuid.data[3],
-			 uuid.data[4],
-			 uuid.data[5]);
-	}
 
 	/* Generate an UUIDv7 */
 	uuid = generate_uuidv7(us / US_PER_MS, (us % US_PER_MS) * NS_PER_US + ns % NS_PER_US);
@@ -718,14 +680,6 @@ uuid_extract_timestamp(PG_FUNCTION_ARGS)
 			+ (((uint64) uuid->data[2]) << 24)
 			+ (((uint64) uuid->data[1]) << 32)
 			+ (((uint64) uuid->data[0]) << 40);
-
-		if (uuid->data[0] >= 0x01 &&
-			uuid->data[1] == 0xFF &&
-			uuid->data[2] == 0xFF &&
-			uuid->data[3] == 0xFF &&
-			uuid->data[4] == 0xFF &&
-			uuid->data[5] == 0xFF)
-			elog(LOG, "input is max %lX", tms);
 
 		/* convert ms to us, then adjust */
 		ts = (TimestampTz) (tms * NS_PER_US) -
