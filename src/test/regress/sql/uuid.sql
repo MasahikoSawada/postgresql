@@ -126,11 +126,11 @@ SELECT :'max_timestamp'::timestamp, uuid_extract_timestamp(uuidv7(:'max_timestam
 -- Check the timestamp offsets for v7.
 --
 -- generate UUIDv7 having timestamps up to 10889 year, which is the maximum year
--- can be stored in UUIDv7, and then check the timestamps extracted from UUIDv7
--- values.
+-- can be stored in UUIDv7, and then check if the timestamps extracted from UUIDv7
+-- values are not overflowed.
 WITH uuidts AS (
-     SELECT y, ts as Ts, lag(ts) OVER (ORDER BY y) AS prev_ts
-     FROM LATERAL(SELECT y, uuid_extract_timestamp(uuidv7((y || ' years')::interval)) AS ts FROM generate_series(-50, 10889 - extract(year from now())::int) y)
+     SELECT y, ts as ts, lag(ts) OVER (ORDER BY y) AS prev_ts
+     FROM (SELECT y, uuid_extract_timestamp(uuidv7((y || ' years')::interval)) AS ts FROM generate_series(-50, 10889 - extract(year from now())::int) y)
 )
 SELECT y, ts, prev_ts FROM uuidts WHERE ts < prev_ts;
 
