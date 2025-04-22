@@ -41,6 +41,8 @@ extern void TidStoreDestroy(TidStore *ts);
 extern void TidStoreSetBlockOffsets(TidStore *ts, BlockNumber blkno, OffsetNumber *offsets,
 									int num_offsets);
 extern bool TidStoreIsMember(TidStore *ts, ItemPointer tid);
+extern int TidStoreIsMemberMulti(TidStore *ts, ItemPointer tids, int ntids,
+								 bool *ismembers);
 extern TidStoreIter *TidStoreBeginIterate(TidStore *ts);
 extern TidStoreIterResult *TidStoreIterateNext(TidStoreIter *iter);
 extern int	TidStoreGetBlockOffsets(TidStoreIterResult *result,
