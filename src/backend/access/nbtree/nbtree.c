@@ -1486,8 +1486,10 @@ backtrack:
 				Assert(!BTreeTupleIsPivot(itup));
 				if (!BTreeTupleIsPosting(itup))
 				{
+					bool		dead;
+
 					/* Regular tuple, standard table TID representation */
-					if (callback(&itup->t_tid, callback_state))
+					if (callback(&itup->t_tid, 1, &dead, callback_state) > 0)
 					{
 						deletable[ndeletable++] = offnum;
 						nhtidsdead++;
@@ -1671,7 +1673,9 @@ btreevacuumposting(BTVacState *vstate, IndexTuple posting,
 
 	for (int i = 0; i < nitem; i++)
 	{
-		if (!vstate->callback(items + i, vstate->callback_state))
+		bool		dead;
+
+		if (vstate->callback(items + i, 1, &dead, vstate->callback_state) == 0)
 		{
 			/* Live table TID */
 			live++;

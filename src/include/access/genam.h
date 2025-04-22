@@ -106,8 +106,12 @@ typedef struct IndexBulkDeleteResult
 	BlockNumber pages_free;		/* # pages available for reuse */
 } IndexBulkDeleteResult;
 
-/* Typedef for callback function to determine if a tuple is bulk-deletable */
-typedef bool (*IndexBulkDeleteCallback) (ItemPointer itemptr, void *state);
+/*
+ * Typedef for callback function to determine if tuples are bulk-deletable.
+ * The function returns the number of deletable tuples.
+ */
+typedef int (*IndexBulkDeleteCallback) (ItemPointer itemptr, int nitem,
+										bool *deletable, void *state);
 
 /* struct definitions appear in relscan.h */
 typedef struct IndexScanDescData *IndexScanDesc;

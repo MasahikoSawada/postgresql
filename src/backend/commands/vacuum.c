@@ -127,7 +127,7 @@ static bool vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
 					   BufferAccessStrategy bstrategy);
 static double compute_parallel_delay(void);
 static VacOptValue get_vacoptval_from_boolean(DefElem *def);
-static bool vac_tid_reaped(ItemPointer itemptr, void *state);
+static int vac_tid_reaped(ItemPointer itemptrs, int nitem, bool *deletable, void *state);
 
 /*
  * GUC check function to ensure GUC value specified is within the allowable
@@ -2650,15 +2650,14 @@ vac_cleanup_one_index(IndexVacuumInfo *ivinfo, IndexBulkDeleteResult *istat)
 }
 
 /*
- *	vac_tid_reaped() -- is a particular tid deletable?
+ *	vac_tid_reaped() -- are the given TIDs deletable?
  *
  *		This has the right signature to be an IndexBulkDeleteCallback.
  */
-static bool
-vac_tid_reaped(ItemPointer itemptr, void *state)
+static int
+vac_tid_reaped(ItemPointer itemptrs, int nitem, bool *deletable, void *state)
 {
 	TidStore   *dead_items = (TidStore *) state;
-	bool		isdead;
 
-	return TidStoreIsMemberMulti(dead_items, itemptr, 1, &isdead) > 0;
+	return TidStoreIsMemberMulti(dead_items, itemptrs, nitem, deletable);
 }

@@ -153,9 +153,11 @@ vacuumLeafPage(spgBulkDeleteState *bds, Relation index, Buffer buffer,
 										   PageGetItemId(page, i));
 		if (lt->tupstate == SPGIST_LIVE)
 		{
+			bool	dead;
+
 			Assert(ItemPointerIsValid(&lt->heapPtr));
 
-			if (bds->callback(&lt->heapPtr, bds->callback_state))
+			if (bds->callback(&lt->heapPtr, 1, &dead, bds->callback_state) > 0)
 			{
 				bds->stats->tuples_removed += 1;
 				deletable[i] = true;
@@ -425,9 +427,10 @@ vacuumLeafRoot(spgBulkDeleteState *bds, Relation index, Buffer buffer)
 										   PageGetItemId(page, i));
 		if (lt->tupstate == SPGIST_LIVE)
 		{
+			bool	dead;
 			Assert(ItemPointerIsValid(&lt->heapPtr));
 
-			if (bds->callback(&lt->heapPtr, bds->callback_state))
+			if (bds->callback(&lt->heapPtr, 1, &dead, bds->callback_state) > 0)
 			{
 				bds->stats->tuples_removed += 1;
 				toDelete[xlrec.nDelete] = i;
@@ -966,10 +969,10 @@ spgbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 }
 
 /* Dummy callback to delete no tuples during spgvacuumcleanup */
-static bool
-dummy_callback(ItemPointer itemptr, void *state)
+static int
+dummy_callback(ItemPointer itemptrs, int nitem, bool *deletable, void *state)
 {
-	return false;
+	return 0;
 }
 
 /*

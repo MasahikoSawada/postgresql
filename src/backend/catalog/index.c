@@ -126,7 +126,8 @@ static void index_update_stats(Relation rel,
 static void IndexCheckExclusion(Relation heapRelation,
 								Relation indexRelation,
 								IndexInfo *indexInfo);
-static bool validate_index_callback(ItemPointer itemptr, void *opaque);
+static int validate_index_callback(ItemPointer itemptrs, int nitem, bool *deletable,
+								   void *opaque);
 static bool ReindexIsCurrentlyProcessingIndex(Oid indexOid);
 static void SetReindexProcessing(Oid heapOid, Oid indexOid);
 static void ResetReindexProcessing(void);
@@ -3479,15 +3480,21 @@ validate_index(Oid heapId, Oid indexId, Snapshot snapshot)
 /*
  * validate_index_callback - bulkdelete callback to collect the index TIDs
  */
-static bool
-validate_index_callback(ItemPointer itemptr, void *opaque)
+static int
+validate_index_callback(ItemPointer itemptrs, int nitem, bool *deletable,
+						void *opaque)
 {
 	ValidateIndexState *state = (ValidateIndexState *) opaque;
-	int64		encoded = itemptr_encode(itemptr);
 
-	tuplesort_putdatum(state->tuplesort, Int64GetDatum(encoded), false);
-	state->itups += 1;
-	return false;				/* never actually delete anything */
+	for (int i = 0; i < nitem; i++)
+	{
+		int64		encoded = itemptr_encode(&(itemptrs[i]));
+
+		tuplesort_putdatum(state->tuplesort, Int64GetDatum(encoded), false);
+	}
+	state->itups += nitem;
+
+	return 0;				/* never actually delete anything */
 }
 
 /*

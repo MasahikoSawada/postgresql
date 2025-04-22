@@ -83,8 +83,10 @@ blbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 									OffsetNumberNext(BloomPageGetMaxOffset(page)));
 		while (itup < itupEnd)
 		{
+			bool	dead;
+
 			/* Do we have to delete this tuple? */
-			if (callback(&itup->heapPtr, callback_state))
+			if (callback(&itup->heapPtr, 1, &dead, callback_state) > 0)
 			{
 				/* Yes; adjust count of tuples that will be left on page */
 				BloomPageGetOpaque(page)->maxoff--;

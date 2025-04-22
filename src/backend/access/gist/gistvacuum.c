@@ -384,8 +384,9 @@ restart:
 			{
 				ItemId		iid = PageGetItemId(page, off);
 				IndexTuple	idxtuple = (IndexTuple) PageGetItem(page, iid);
+				bool	deletable;
 
-				if (callback(&(idxtuple->t_tid), callback_state))
+				if (callback(&(idxtuple->t_tid), 1, &deletable, callback_state) > 0)
 					todelete[ntodelete++] = off;
 			}
 		}

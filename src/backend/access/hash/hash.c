@@ -734,6 +734,7 @@ hashbucketcleanup(Relation rel, Bucket cur_bucket, Buffer bucket_buf,
 			IndexTuple	itup;
 			Bucket		bucket;
 			bool		kill_tuple = false;
+			bool		dead;
 
 			itup = (IndexTuple) PageGetItem(page,
 											PageGetItemId(page, offno));
@@ -743,7 +744,7 @@ hashbucketcleanup(Relation rel, Bucket cur_bucket, Buffer bucket_buf,
 			 * To remove the dead tuples, we strictly want to rely on results
 			 * of callback function.  refer btvacuumpage for detailed reason.
 			 */
-			if (callback && callback(htup, callback_state))
+			if (callback && callback(htup, 1, &dead, callback_state) > 0)
 			{
 				kill_tuple = true;
 				if (tuples_removed)
