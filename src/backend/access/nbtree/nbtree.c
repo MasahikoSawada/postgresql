@@ -23,6 +23,7 @@
 #include "access/stratnum.h"
 #include "commands/progress.h"
 #include "commands/vacuum.h"
+#include "common/int.h"
 #include "nodes/execnodes.h"
 #include "pgstat.h"
 #include "storage/bulk_write.h"
@@ -1310,6 +1311,13 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 		IndexFreeSpaceMapVacuum(rel);
 }
 
+/* qsort comparator for sorting OffsetNumbers */
+static int
+cmpOffsetNumbers(const void *a, const void *b)
+{
+	return pg_cmp_u16(*(const OffsetNumber *) a, *(const OffsetNumber *) b);
+}
+
 /*
  * btvacuumpage --- VACUUM one page
  *
@@ -1473,6 +1481,10 @@ backtrack:
 		nhtidslive = 0;
 		if (callback)
 		{
+			OffsetNumber workbuf_offs[MaxIndexTuplesPerPage];
+			ItemPointerData workbuf_htids[MaxIndexTuplesPerPage];
+			int			workbuf_nitem = 0;
+
 			/* btbulkdelete callback tells us what to delete (or update) */
 			for (offnum = minoff;
 				 offnum <= maxoff;
@@ -1486,16 +1498,13 @@ backtrack:
 				Assert(!BTreeTupleIsPivot(itup));
 				if (!BTreeTupleIsPosting(itup))
 				{
-					bool		dead;
-
-					/* Regular tuple, standard table TID representation */
-					if (callback(&itup->t_tid, 1, &dead, callback_state) > 0)
-					{
-						deletable[ndeletable++] = offnum;
-						nhtidsdead++;
-					}
-					else
-						nhtidslive++;
+					/*
+					 * Regular tuple, standard table TID representation. Will
+					 * verify them as a whole later.
+					 */
+					workbuf_offs[workbuf_nitem] = offnum;
+					workbuf_htids[workbuf_nitem] = itup->t_tid;
+					workbuf_nitem++;
 				}
 				else
 				{
@@ -1541,6 +1550,38 @@ backtrack:
 
 					nhtidslive += nremaining;
 				}
+			}
+
+			if (workbuf_nitem > 0)
+			{
+				bool		workbuf_deletable[MaxIndexTuplesPerPage];
+				bool		need_sort;
+				int			ndels;
+
+				/*
+				 * We will sort the deletable array if there are existing
+				 * offsets as it should be sorted in ascending order (see
+				 * _bt_delitems_vacuum()).
+				 */
+				need_sort = (ndeletable > 0);
+
+				ndels = callback(workbuf_htids, workbuf_nitem, workbuf_deletable,
+								 callback_state);
+				if (ndels > 0)
+				{
+					for (int i = 0; i < workbuf_nitem; i++)
+					{
+						if (workbuf_deletable[i])
+							deletable[ndeletable++] = workbuf_offs[i];
+					}
+
+					if (need_sort)
+						qsort(deletable, ndeletable, sizeof(OffsetNumber), cmpOffsetNumbers);
+
+					nhtidsdead += ndels;
+				}
+
+				nhtidslive += workbuf_nitem - ndels;
 			}
 		}
 
@@ -1666,45 +1707,35 @@ static BTVacuumPosting
 btreevacuumposting(BTVacState *vstate, IndexTuple posting,
 				   OffsetNumber updatedoffset, int *nremaining)
 {
-	int			live = 0;
+	int			ndeletable;
 	int			nitem = BTreeTupleGetNPosting(posting);
 	ItemPointer items = BTreeTupleGetPosting(posting);
+	bool		deletable[MaxIndexTuplesPerPage];
 	BTVacuumPosting vacposting = NULL;
+
+	ndeletable = vstate->callback(items, nitem, deletable, vstate->callback_state);
+
+	/* All items are live */
+	if (ndeletable == 0)
+	{
+		*nremaining = nitem;
+		return NULL;
+	}
+
+	vacposting = palloc(offsetof(BTVacuumPostingData, deletetids) +
+						ndeletable * sizeof(uint16));
+	vacposting->itup = posting;
+	vacposting->updatedoffset = updatedoffset;
+	vacposting->ndeletedtids = 0;
 
 	for (int i = 0; i < nitem; i++)
 	{
-		bool		dead;
-
-		if (vstate->callback(items + i, 1, &dead, vstate->callback_state) == 0)
-		{
-			/* Live table TID */
-			live++;
-		}
-		else if (vacposting == NULL)
-		{
-			/*
-			 * First dead table TID encountered.
-			 *
-			 * It's now clear that we need to delete one or more dead table
-			 * TIDs, so start maintaining metadata describing how to update
-			 * existing posting list tuple.
-			 */
-			vacposting = palloc(offsetof(BTVacuumPostingData, deletetids) +
-								nitem * sizeof(uint16));
-
-			vacposting->itup = posting;
-			vacposting->updatedoffset = updatedoffset;
-			vacposting->ndeletedtids = 0;
+		if (deletable[i])
 			vacposting->deletetids[vacposting->ndeletedtids++] = i;
-		}
-		else
-		{
-			/* Second or subsequent dead table TID */
-			vacposting->deletetids[vacposting->ndeletedtids++] = i;
-		}
 	}
+	Assert(ndeletable == vacposting->ndeletedtids);
 
-	*nremaining = live;
+	*nremaining = nitem - ndeletable;
 	return vacposting;
 }
 
