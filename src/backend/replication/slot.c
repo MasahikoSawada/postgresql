@@ -343,6 +343,22 @@ ReplicationSlotCreate(const char *name, bool db_specific,
 			ereport(ERROR,
 					errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					errmsg("cannot enable failover for a temporary replication slot"));
+
+		/*
+		 * Do not allow users to enable both failover and two_phase for slots.
+		 * Please see the comments atop slotsync.c for details.
+		 *
+		 * However, both failover and two_phase enabled slots can be created
+		 * during slot synchronization because we need to retain the same
+		 * values as the remote slot. This is also allowed in binary upgrade
+		 * mode, where pg_upgrade guarantees that all slot changes are
+		 * consumed and no prepared transactions exist.
+		 */
+		if (two_phase && !IsSyncingReplicationSlots() && !IsBinaryUpgrade)
+			ereport(ERROR,
+					errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					errmsg("cannot enable both \"%s\" and \"%s\" options during replication slot creation",
+						   "failover", "two_phase"));
 	}
 
 	/*
@@ -847,6 +863,19 @@ ReplicationSlotAlter(const char *name, bool failover)
 		ereport(ERROR,
 				errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				errmsg("cannot enable failover for a temporary replication slot"));
+
+	/*
+	 * Do not allow users to enable failover for a two_phase enabled slot if
+	 * there are potentially un-decoded transactions that are prepared before
+	 * two_phase_at. See comments atop slotsync.c for details.
+	 */
+	if (failover && MyReplicationSlot->data.two_phase &&
+		MyReplicationSlot->data.restart_lsn < MyReplicationSlot->data.two_phase_at)
+		ereport(ERROR,
+				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				errmsg("cannot enable failover for a two-phase enabled replication slot due to unconsumed changes"),
+				errdetail("The slot need to consume change upto %X/%X to enable failover.",
+						  LSN_FORMAT_ARGS(MyReplicationSlot->data.two_phase_at)));
 
 	if (MyReplicationSlot->data.failover != failover)
 	{

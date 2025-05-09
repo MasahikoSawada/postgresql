@@ -2062,6 +2062,15 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
           <literal>PREPARE TRANSACTION</literal> time.
           The default is false.
          </para>
+
+         <para>
+          This option cannot be set together with <literal>failover</literal>
+          when creating a logical replication slot. However, once the slot is
+          created with <literal>two_phase = true</literal>,
+          <literal>failover</literal> can be set to true after the slot has
+          consumed all the changes up to the point where two-phase decoding
+          was enabled.
+         </para>
         </listitem>
        </varlistentry>
 
@@ -2102,6 +2111,14 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
           If true, the slot is enabled to be synced to the standbys
           so that logical replication can be resumed after failover.
           The default is false.
+         </para>
+
+         <para>
+          This option cannot be set together with <literal>two_phase</literal>
+          when creating the slot. However, once the slot is created with
+          <literal>two_phase = true</literal>, <literal>failover</literal> can
+          be set to true after the slot has consumed all the changes up to the
+          point where two-phase decoding was enabled.
          </para>
         </listitem>
        </varlistentry>

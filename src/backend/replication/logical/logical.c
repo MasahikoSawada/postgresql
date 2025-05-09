@@ -613,6 +613,17 @@ CreateDecodingContext(XLogRecPtr start_lsn,
 	/* Mark slot to allow two_phase decoding if not already marked */
 	if (ctx->twophase && !slot->data.two_phase)
 	{
+		/*
+		 * Do not allow two-phase decoding for failover enabled slots.
+		 *
+		 * See comments atop slotsync.c for details.
+		 */
+		if (slot->data.failover)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot enable two-phase decoding for failover enabled slot \"%s\"",
+							NameStr(slot->data.name))));
+
 		SpinLockAcquire(&slot->mutex);
 		slot->data.two_phase = true;
 		slot->data.two_phase_at = start_lsn;

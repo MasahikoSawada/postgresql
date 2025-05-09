@@ -173,7 +173,7 @@ $sub->start;
 $sub->safe_psql(
 	'postgres', qq[
 	CREATE TABLE tbl (a int);
-	CREATE SUBSCRIPTION regress_sub CONNECTION '$old_connstr' PUBLICATION regress_pub WITH (two_phase = 'true', failover = 'true')
+	CREATE SUBSCRIPTION regress_sub CONNECTION '$old_connstr' PUBLICATION regress_pub WITH (two_phase = 'true')
 ]);
 $sub->wait_for_subscription_sync($oldpub, 'regress_sub');
 
@@ -183,8 +183,38 @@ my $twophase_query =
 $sub->poll_query_until('postgres', $twophase_query)
   or die "Timed out while waiting for subscriber to enable twophase";
 
+# Advance the slot's restart_lsn to allow enabling the failover option
+# on a two_phase-enabled subscription using ALTER SUBSCRIPTION.
+$oldpub->safe_psql(
+	'postgres', qq(
+		BEGIN;
+		SELECT txid_current();
+		SELECT pg_log_standby_snapshot();
+		COMMIT;
+		BEGIN;
+		SELECT txid_current();
+		SELECT pg_log_standby_snapshot();
+		COMMIT;
+));
+
+# Wait for the subscription to be in sync
+$sub->wait_for_subscription_sync($oldpub, 'regress_sub');
+
 # 2. Temporarily disable the subscription
 $sub->safe_psql('postgres', "ALTER SUBSCRIPTION regress_sub DISABLE");
+
+# Alter subscription to enable failover
+$sub->psql('postgres',
+	"ALTER SUBSCRIPTION regress_sub SET (failover = true);");
+
+# Confirm that the failover flag on the slot has been turned on
+is( $oldpub->safe_psql(
+		'postgres', q{
+		SELECT failover from pg_replication_slots WHERE slot_name = 'regress_sub';}
+	),
+	"t",
+	'logical slot has failover true on the publisher');
+
 $oldpub->stop;
 
 # pg_upgrade should be successful

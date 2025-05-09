@@ -182,6 +182,7 @@ SELECT 'init' FROM pg_create_logical_replication_slot('failover_true_slot', 'tes
 SELECT 'init' FROM pg_create_logical_replication_slot('failover_false_slot', 'test_decoding', false, false, false);
 SELECT 'init' FROM pg_create_logical_replication_slot('failover_default_slot', 'test_decoding', false, false);
 SELECT 'init' FROM pg_create_logical_replication_slot('failover_true_temp_slot', 'test_decoding', true, false, true);
+SELECT 'init' FROM pg_create_logical_replication_slot('failover_twophase_true_slot', 'test_decoding', false, true, true);
 SELECT 'init' FROM pg_create_physical_replication_slot('physical_slot');
 
 SELECT slot_name, slot_type, failover FROM pg_replication_slots;

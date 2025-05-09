@@ -257,6 +257,18 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
       <link linkend="sql-createsubscription-params-with-failover"><literal>failover</literal></link>
       option is enabled.
      </para>
+
+     <para>
+      When a subscription's
+      <link linkend="sql-createsubscription-params-with-two-phase"><literal>two_phase</literal></link>
+      is in the pending state, setting <literal>failover</literal> to true is not
+      permitted. Once
+      <link linkend="sql-createsubscription-params-with-two-phase"><literal>two_phase</literal></link>
+      is enabled,
+      <link linkend="sql-createsubscription-params-with-failover"><literal>failover</literal></link>
+      can be set to true only after the slot has consumed all the changes up to the
+      point where two-phase decoding was enabled.
+     </para>
     </listitem>
    </varlistentry>
 

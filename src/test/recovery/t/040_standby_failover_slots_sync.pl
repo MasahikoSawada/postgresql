@@ -99,6 +99,130 @@ ok( $stderr =~ /ERROR:  cannot set failover for enabled subscription/,
 	"altering failover is not allowed for enabled subscription");
 
 ##################################################
+# Test that the failover option can be enabled for a two_phase enabled
+# subscription only through Alter Subscription (failover=true).
+##################################################
+
+# Create a table on both publisher and subscriber to complete subscription
+# initialization, allowing two_phase to transition from 'pending' to 'enabled'.
+$publisher->safe_psql('postgres', "CREATE TABLE tab_full (a int)");
+$subscriber1->safe_psql('postgres', "CREATE TABLE tab_full (a int)");
+
+# Test that the failover option cannot be set for a slot with
+# restart_lsn < two_phase_at
+
+# Create an logical replication slot with two_phase enabled
+$publisher->psql('postgres',
+	"SELECT pg_create_logical_replication_slot('logical_slot', 'pgoutput', false, true, false);"
+);
+
+# Try to enable failover of the slot
+($result, $stdout, $stderr) = $publisher->psql(
+	'postgres',
+	qq[ALTER_REPLICATION_SLOT logical_slot (failover);],
+	replication => 'database');
+ok( $stderr =~
+	  qr/ERROR:  cannot enable failover for a two-phase enabled replication slot due to unconsumed changes/,
+	"failover can't be enabled if restart_lsn < two_phase_at on a two_phase subscription."
+);
+
+# Drop the logical_slot
+$publisher->psql('postgres',
+	"SELECT pg_drop_replication_slot('logical_slot');");
+
+# Test that the failover option can be set for a two_phase enabled
+# subscription using ALTER SUBSCRIPTION.
+
+# Create a subscription with two_phase enabled
+$subscriber1->safe_psql('postgres',
+	"CREATE SUBSCRIPTION regress_mysub2 CONNECTION '$publisher_connstr' PUBLICATION regress_mypub WITH (enabled = false, two_phase = true);"
+);
+
+# Try to enable failover for the subscription with two_phase in pending state
+($result, $stdout, $stderr) = $subscriber1->psql('postgres',
+	"ALTER SUBSCRIPTION regress_mysub2 SET (failover = true)");
+ok( $stderr =~
+	  /ERROR:  cannot enable failover for a subscription with a pending two_phase state
+.*HINT:  The "failover" option can be enabled after "two_phase" state is ready./,
+	"enabling failover is not allowed for a two_phase pending subscription");
+
+# Enable the subscription
+$subscriber1->safe_psql('postgres',
+	"ALTER SUBSCRIPTION regress_mysub2 ENABLE;");
+
+# Wait for the subscription to be in sync
+$subscriber1->wait_for_subscription_sync($publisher, 'regress_mysub2');
+
+# Also wait for two-phase to be enabled
+ok( $subscriber1->poll_query_until(
+		'postgres',
+		qq[SELECT subtwophasestate FROM pg_subscription WHERE subname = 'regress_mysub2';],
+		'e',),
+	"Timed out while waiting for subscriber to enable twophase");
+
+# Advance the slot's restart_lsn to allow enabling the failover option
+# on a two_phase-enabled subscription using ALTER SUBSCRIPTION.
+$publisher->safe_psql(
+	'postgres', qq(
+		BEGIN;
+		SELECT txid_current();
+		SELECT pg_log_standby_snapshot();
+		COMMIT;
+		BEGIN;
+		SELECT txid_current();
+		SELECT pg_log_standby_snapshot();
+		COMMIT;
+));
+
+# Wait for the subscription to be in sync
+$subscriber1->wait_for_subscription_sync($publisher, 'regress_mysub2');
+
+# Alter subscription to enable failover
+$subscriber1->psql(
+	'postgres',
+	"ALTER SUBSCRIPTION regress_mysub2 DISABLE;
+	 ALTER SUBSCRIPTION regress_mysub2 SET (failover = true);");
+
+# Confirm that the failover flag on the slot has been turned on
+is( $publisher->safe_psql(
+		'postgres',
+		q{SELECT failover from pg_replication_slots WHERE slot_name = 'regress_mysub2';}
+	),
+	"t",
+	'logical slot has failover true on the publisher');
+
+# Drop the subscription
+$subscriber1->safe_psql('postgres', "DROP SUBSCRIPTION regress_mysub2;");
+
+# Test that subscription creation with two_phase=true results in error when
+# using a slot with failover set to true.
+
+# Create a slot with failover enabled
+$publisher->psql('postgres',
+	"SELECT pg_create_logical_replication_slot('regress_mysub3', 'pgoutput', false, false, true);"
+);
+
+my $logoffset = -s $subscriber1->logfile;
+
+# Create a subscription with two_phase enabled
+$subscriber1->safe_psql('postgres',
+	"CREATE SUBSCRIPTION regress_mysub3 CONNECTION '$publisher_connstr' PUBLICATION regress_mypub WITH (create_slot = false, two_phase = true);"
+);
+
+ok( $subscriber1->wait_for_log(
+		qr/cannot enable two-phase decoding for failover enabled slot "regress_mysub3"/,
+		$logoffset),
+	"creating subscription with two_phase=true is not allowed when the slot has failover set to true"
+);
+
+# Drop the subscription
+$subscriber1->safe_psql('postgres', "DROP SUBSCRIPTION regress_mysub3;");
+
+# Clean up the tables created
+$publisher->safe_psql('postgres', "DROP TABLE tab_full;");
+$subscriber1->safe_psql('postgres', "DROP TABLE tab_full;");
+
+##################################################
 # Test that pg_sync_replication_slots() cannot be executed on a non-standby server.
 ##################################################
 

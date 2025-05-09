@@ -649,6 +649,22 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 				 errhint("Subscriptions with the password_required option set to false may only be created or modified by the superuser.")));
 
 	/*
+	 * Do not allow users to enable the failover and two_phase options
+	 * together. See comments atop slotsync.c for details.
+	 *
+	 * However, we allow this combination in binary upgrade mode, where
+	 * pg_upgrade guarantees that all slot changes are consumed and no
+	 * prepared transactions exist.
+	 */
+	if (opts.twophase && opts.failover && !IsBinaryUpgrade)
+		ereport(ERROR,
+				errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				errmsg("cannot enable both \"%s\" and \"%s\" options at CREATE SUBSCRIPTION",
+					   "failover", "two_phase"),
+				errhint("Use ALTER SUBSCRIPTION ... SET (failover = true) to enable \"%s\" after two_phase state is ready",
+						"failover"));
+
+	/*
 	 * If built with appropriate switch, whine when regression-testing
 	 * conventions for subscription names are violated.
 	 */
@@ -1244,6 +1260,19 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 								(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 								 errmsg("cannot set %s for enabled subscription",
 										"failover")));
+
+					/*
+					 * Do not allow users to enable the failover until
+					 * two_phase state reaches READY state. See comments atop
+					 * slotsync.c for details.
+					 */
+					if (sub->twophasestate == LOGICALREP_TWOPHASE_STATE_PENDING &&
+						opts.failover)
+						ereport(ERROR,
+								errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+								errmsg("cannot enable failover for a subscription with a pending two_phase state"),
+								errhint("The \"%s\" option can be enabled after \"%s\" state is ready.",
+										"failover", "two_phase"));
 
 					/*
 					 * The changed failover option of the slot can't be rolled

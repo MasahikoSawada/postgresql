@@ -479,6 +479,10 @@ COMMIT;
 ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
 DROP SUBSCRIPTION regress_testsub;
 RESET SESSION AUTHORIZATION;
+-- fail - cannot enable two_phase and failover together
+CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, two_phase = true, failover = true);
+ERROR:  cannot enable both "failover" and "two_phase" options at CREATE SUBSCRIPTION
+HINT:  Use ALTER SUBSCRIPTION ... SET (failover = true) to enable "failover" after two_phase state is ready
 DROP ROLE regress_subscription_user;
 DROP ROLE regress_subscription_user2;
 DROP ROLE regress_subscription_user3;

@@ -427,6 +427,8 @@ SELECT 'init' FROM pg_create_logical_replication_slot('failover_default_slot', '
 
 SELECT 'init' FROM pg_create_logical_replication_slot('failover_true_temp_slot', 'test_decoding', true, false, true);
 ERROR:  cannot enable failover for a temporary replication slot
+SELECT 'init' FROM pg_create_logical_replication_slot('failover_twophase_true_slot', 'test_decoding', false, true, true);
+ERROR:  cannot enable both "failover" and "two_phase" options during replication slot creation
 SELECT 'init' FROM pg_create_physical_replication_slot('physical_slot');
  ?column? 
 ----------

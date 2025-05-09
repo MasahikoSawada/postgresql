@@ -354,6 +354,14 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
           to know the actual two-phase state.
          </para>
 
+         <para>
+          This option cannot be enabled together with
+          <literal>failover</literal> when creating a subscription. However, a
+          <literal>two_phase</literal> enabled subscription can later have
+          <literal>failover</literal> set to true using
+          <xref linkend="sql-altersubscription"/>, once the slot has consumed
+          all the changes up to the point where two-phase decoding was enabled.
+         </para>
         </listitem>
        </varlistentry>
 
@@ -425,6 +433,15 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
           are enabled to be synced to the standbys so that logical
           replication can be resumed from the new primary after failover.
           The default is <literal>false</literal>.
+         </para>
+
+         <para>
+          This option cannot be enabled together with
+          <literal>two_phase</literal> when creating a subscription. However, a
+          <literal>two_phase</literal> enabled subscription can later have
+          <literal>failover</literal> set to true using
+          <xref linkend="sql-altersubscription"/>, once the slot has consumed
+          all the changes up to the point where two-phase decoding was enabled.
          </para>
         </listitem>
        </varlistentry>

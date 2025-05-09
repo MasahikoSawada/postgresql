@@ -42,6 +42,16 @@
  * Any standby synchronized slots will be dropped if they no longer need
  * to be synchronized. See comment atop drop_local_obsolete_slots() for more
  * details.
+ *
+ * Regarding two-phase enabled slots, we need to note that the two_phase_at
+ * field of a slot is not synchronized. In the absence of two_phase_at,
+ * logical decoding could incorrectly identify prepared transactions as
+ * having been replicated to the subscriber after promotion, resulting in
+ * their omission. Consequently, both two_phase and failover features
+ * cannot be simultaneously enabled during slot creation. Failover can only
+ * be enabled once we can ensure that no transactions were prepared prior
+ * to two_phase_at on the primary. These restrictions are enforced through
+ * checks in ReplicationSlotCreate() and ReplicationSlotAlter().
  *---------------------------------------------------------------------------
  */
 

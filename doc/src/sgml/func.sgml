@@ -29076,6 +29076,19 @@ postgres=# SELECT '0/0'::pg_lsn + pd.segment_number * ps.setting::int + :offset 
         failover. A call to this function has the same effect as
         the replication protocol command
         <literal>CREATE_REPLICATION_SLOT ... LOGICAL</literal>.
+
+        <note>
+         <para>
+          The parameters <parameter>twophase</parameter> and
+          <parameter>failover</parameter> cannot be enabled together when
+          creating a replication slot. However, a slot created with
+          <parameter>twophase</parameter> enabled can later have
+          <parameter>failover</parameter> set to true either using
+          <xref linkend="protocol-replication-alter-replication-slot"/> or via
+          <xref linkend="sql-altersubscription"/> if a subscription is using
+          this slot.
+         </para>
+        </note>
        </para></entry>
       </row>
 
