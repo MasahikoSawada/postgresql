@@ -47,6 +47,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postmaster/interrupt.h"
+#include "replication/logicalctl.h"
 #include "replication/slotsync.h"
 #include "replication/slot.h"
 #include "replication/walsender_private.h"
@@ -218,6 +219,8 @@ ReplicationSlotsShmemInit(void)
 
 		/* First time through, so initialize */
 		MemSet(ReplicationSlotCtl, 0, ReplicationSlotsShmemSize());
+
+		pg_atomic_init_u32(&ReplicationSlotCtl->n_inuse_logical_slots, 0);
 
 		for (i = 0; i < max_replication_slots; i++)
 		{
@@ -458,7 +461,10 @@ ReplicationSlotCreate(const char *name, bool db_specific,
 	 * ReplicationSlotAllocationLock.
 	 */
 	if (SlotIsLogical(slot))
+	{
 		pgstat_create_replslot(slot);
+		pg_atomic_add_fetch_u32(&ReplicationSlotCtl->n_inuse_logical_slots, 1);
+	}
 
 	/*
 	 * Now that the slot has been marked as in_use and active, it's safe to
@@ -805,6 +811,8 @@ restart:
 	}
 
 	LWLockRelease(ReplicationSlotControlLock);
+
+	DisableLogicalDecodingIfNecessary();
 }
 
 /*
@@ -919,6 +927,7 @@ void
 ReplicationSlotDropAcquired(void)
 {
 	ReplicationSlot *slot = MyReplicationSlot;
+	bool		was_logical_slot = SlotIsLogical(slot);
 
 	Assert(MyReplicationSlot != NULL);
 
@@ -926,6 +935,9 @@ ReplicationSlotDropAcquired(void)
 	MyReplicationSlot = NULL;
 
 	ReplicationSlotDropPtr(slot);
+
+	if (was_logical_slot)
+		DisableLogicalDecodingIfNecessary();
 }
 
 /*
@@ -1026,7 +1038,10 @@ ReplicationSlotDropPtr(ReplicationSlot *slot)
 	 * another session.
 	 */
 	if (SlotIsLogical(slot))
+	{
 		pgstat_drop_replslot(slot);
+		pg_atomic_sub_fetch_u32(&ReplicationSlotCtl->n_inuse_logical_slots, 1);
+	}
 
 	/*
 	 * We release this at the very end, so that nobody starts trying to create
@@ -2523,12 +2538,12 @@ RestoreSlotFromDisk(const char *name)
 	 */
 	if (cp.slotdata.database != InvalidOid)
 	{
-		if (wal_level < WAL_LEVEL_LOGICAL)
+		if (!IsLogicalDecodingEnabled())
 			ereport(FATAL,
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-					 errmsg("logical replication slot \"%s\" exists, but \"wal_level\" < \"logical\"",
+					 errmsg("logical replication slot \"%s\" exists, but logical decoding is not enabled",
 							NameStr(cp.slotdata.name)),
-					 errhint("Change \"wal_level\" to be \"logical\" or higher.")));
+					 errhint("Change \"wal_level\" to be \"replica\" or higher.")));
 
 		/*
 		 * In standby mode, the hot standby must be enabled. This check is
@@ -2590,6 +2605,9 @@ RestoreSlotFromDisk(const char *name)
 		ReplicationSlotSetInactiveSince(slot, now, false);
 
 		restored = true;
+
+		if (SlotIsLogical(slot))
+			pg_atomic_add_fetch_u32(&ReplicationSlotCtl->n_inuse_logical_slots, 1);
 		break;
 	}
 

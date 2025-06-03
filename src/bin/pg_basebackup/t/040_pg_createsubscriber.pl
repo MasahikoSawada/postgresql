@@ -309,6 +309,7 @@ $node_s->start;
 # Wait for the standby to catch up so that the standby is not lagging behind
 # the failover slot.
 $node_p->wait_for_replay_catchup($node_s);
+diag $node_s->safe_psql('postgres', 'show wal_level');
 $node_s->safe_psql('postgres', "SELECT pg_sync_replication_slots()");
 my $result = $node_s->safe_psql('postgres',
 	"SELECT slot_name FROM pg_replication_slots WHERE slot_name = '$fslotname' AND synced AND NOT temporary"

@@ -40,6 +40,7 @@
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
 #include "postmaster/postmaster.h"
+#include "replication/logicalctl.h"
 #include "replication/slot.h"
 #include "replication/slotsync.h"
 #include "replication/walsender.h"
@@ -657,6 +658,9 @@ BaseInit(void)
 
 	/* Initialize lock manager's local structs */
 	InitLockManagerAccess();
+
+	/* Initialize logical info WAL logging state */
+	InitializeProcessXLogLogicalInfo();
 
 	/*
 	 * Initialize replication slots after pgstat. The exit hook might need to

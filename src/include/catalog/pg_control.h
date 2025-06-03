@@ -80,6 +80,7 @@ typedef struct CheckPoint
 /* 0xC0 is used in Postgres 9.5-11 */
 #define XLOG_OVERWRITE_CONTRECORD		0xD0
 #define XLOG_CHECKPOINT_REDO			0xE0
+#define XLOG_LOGICAL_DECODING_STATUS_CHANGE	0xF0
 
 
 /*
@@ -135,6 +136,8 @@ typedef struct ControlFileData
 	CheckPoint	checkPointCopy; /* copy of last check point record */
 
 	XLogRecPtr	unloggedLSN;	/* current fake LSN value, for unlogged rels */
+
+	bool		logicalDecodingEnabled;
 
 	/*
 	 * These two values determine the minimum point we must recover up to

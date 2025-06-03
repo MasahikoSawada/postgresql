@@ -150,34 +150,14 @@ xlog_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 			 */
 			break;
 		case XLOG_PARAMETER_CHANGE:
-			{
-				xl_parameter_change *xlrec =
-					(xl_parameter_change *) XLogRecGetData(buf->record);
 
-				/*
-				 * If wal_level on the primary is reduced to less than
-				 * logical, we want to prevent existing logical slots from
-				 * being used.  Existing logical slots on the standby get
-				 * invalidated when this WAL record is replayed; and further,
-				 * slot creation fails when wal_level is not sufficient; but
-				 * all these operations are not synchronized, so a logical
-				 * slot may creep in while the wal_level is being reduced.
-				 * Hence this extra check.
-				 */
-				if (xlrec->wal_level < WAL_LEVEL_LOGICAL)
-				{
-					/*
-					 * This can occur only on a standby, as a primary would
-					 * not allow to restart after changing wal_level < logical
-					 * if there is pre-existing logical slot.
-					 */
-					Assert(RecoveryInProgress());
-					ereport(ERROR,
-							(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-							 errmsg("logical decoding on standby requires \"wal_level\" >= \"logical\" on the primary")));
-				}
-				break;
-			}
+			/*
+			 * XXX: even if wal_level on the primary got decreased to
+			 * 'replica' it doesn't necessarily mean to disable the logical
+			 * decoding as long as we have at least one logical slot. So we
+			 * can ignore wal_level change here.
+			 */
+			break;
 		case XLOG_NOOP:
 		case XLOG_NEXTOID:
 		case XLOG_SWITCH:
@@ -188,6 +168,24 @@ xlog_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 		case XLOG_FPI:
 		case XLOG_OVERWRITE_CONTRECORD:
 		case XLOG_CHECKPOINT_REDO:
+			break;
+		case XLOG_LOGICAL_DECODING_STATUS_CHANGE:
+			{
+				bool	   *logical_decoding = (bool *) XLogRecGetData(buf->record);
+
+				if (!(*logical_decoding))
+				{
+					/*
+					 * This can occur only on a standby, as a primary would
+					 * not allow to restart after changing wal_level < logical
+					 * if there is pre-existing logical slot.
+					 */
+					Assert(RecoveryInProgress());
+					ereport(ERROR,
+							(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+							 errmsg("logical decoding must be enabled on the primary")));
+				}
+			}
 			break;
 		default:
 			elog(ERROR, "unexpected RM_XLOG_ID record type: %u", info);

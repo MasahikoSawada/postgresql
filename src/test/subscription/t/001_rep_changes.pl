@@ -589,7 +589,7 @@ CREATE PUBLICATION tap_pub2 FOR TABLE skip_wal;
 ROLLBACK;
 });
 ok( $reterr =~
-	  m/WARNING:  "wal_level" is insufficient to publish logical changes/,
+	  m/WARNING:  logical decoding needs to be enabled to publish logical changes/,
 	'CREATE PUBLICATION while "wal_level=minimal"');
 
 done_testing();
