@@ -466,3 +466,35 @@ SELECT pg_drop_replication_slot('physical_slot');
  
 (1 row)
 
+-- Test logical slots with not WAL reservation.
+SELECT 'init' FROM pg_create_logical_replication_slot('slot_nowal', 'test_decoding', false, false, false, false);
+ ?column? 
+----------
+ init
+(1 row)
+
+-- No WAL reserved.
+SELECT restart_lsn, confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name = 'slot_nowal';
+ restart_lsn | confirmed_flush_lsn 
+-------------+---------------------
+             | 
+(1 row)
+
+-- Use this slot and check the WAL reservation again.
+SELECT data FROM pg_logical_slot_get_changes('slot_nowal', NULL, NULL, 'include-xids', '0', 'skip-empty-xacts', '1');
+ data 
+------
+(0 rows)
+
+SELECT restart_lsn is not null as valid_restart_lsn, confirmed_flush_lsn is not null as valid_confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name = 'slot_nowal';
+ valid_restart_lsn | valid_confirmed_flush_lsn 
+-------------------+---------------------------
+ t                 | t
+(1 row)
+
+SELECT pg_drop_replication_slot('slot_nowal');
+ pg_drop_replication_slot 
+--------------------------
+ 
+(1 row)
+

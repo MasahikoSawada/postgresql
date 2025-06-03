@@ -1462,12 +1462,12 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 	 * are reported early.
 	 */
 	logical_decoding_ctx =
-		CreateDecodingContext(cmd->startpoint, cmd->options, false,
-							  XL_ROUTINE(.page_read = logical_read_xlog_page,
-										 .segment_open = WalSndSegmentOpen,
-										 .segment_close = wal_segment_close),
-							  WalSndPrepareWrite, WalSndWriteData,
-							  WalSndUpdateProgress);
+		CreateOrInitDecodingContext(cmd->startpoint, cmd->options, false,
+									XL_ROUTINE(.page_read = logical_read_xlog_page,
+											   .segment_open = WalSndSegmentOpen,
+											   .segment_close = wal_segment_close),
+									WalSndPrepareWrite, WalSndWriteData,
+									WalSndUpdateProgress);
 	xlogreader = logical_decoding_ctx->reader;
 
 	WalSndSetState(WALSNDSTATE_CATCHUP);

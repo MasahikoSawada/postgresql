@@ -202,14 +202,14 @@ pg_logical_slot_get_changes_guts(FunctionCallInfo fcinfo, bool confirm, bool bin
 	PG_TRY();
 	{
 		/* restart at slot's confirmed_flush */
-		ctx = CreateDecodingContext(InvalidXLogRecPtr,
-									options,
-									false,
-									XL_ROUTINE(.page_read = read_local_xlog_page,
-											   .segment_open = wal_segment_open,
-											   .segment_close = wal_segment_close),
-									LogicalOutputPrepareWrite,
-									LogicalOutputWrite, NULL);
+		ctx = CreateOrInitDecodingContext(InvalidXLogRecPtr,
+										  options,
+										  false,
+										  XL_ROUTINE(.page_read = read_local_xlog_page,
+													 .segment_open = wal_segment_open,
+													 .segment_close = wal_segment_close),
+										  LogicalOutputPrepareWrite,
+										  LogicalOutputWrite, NULL);
 
 		MemoryContextSwitchTo(oldcontext);
 

@@ -132,6 +132,13 @@ extern LogicalDecodingContext *CreateDecodingContext(XLogRecPtr start_lsn,
 													 LogicalOutputPluginWriterPrepareWrite prepare_write,
 													 LogicalOutputPluginWriterWrite do_write,
 													 LogicalOutputPluginWriterUpdateProgress update_progress);
+extern LogicalDecodingContext *CreateOrInitDecodingContext(XLogRecPtr restart_lsn,
+														   List *output_plugin_options,
+														   bool fast_foward,
+														   XLogReaderRoutine *xl_routine,
+														   LogicalOutputPluginWriterPrepareWrite prepare_write,
+														   LogicalOutputPluginWriterWrite do_write,
+														   LogicalOutputPluginWriterUpdateProgress update_progress);
 extern void DecodingContextFindStartpoint(LogicalDecodingContext *ctx);
 extern bool DecodingContextReady(LogicalDecodingContext *ctx);
 extern void FreeDecodingContext(LogicalDecodingContext *ctx);

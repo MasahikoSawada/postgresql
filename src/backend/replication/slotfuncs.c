@@ -116,13 +116,14 @@ pg_create_physical_replication_slot(PG_FUNCTION_ARGS)
 static void
 create_logical_replication_slot(char *name, char *plugin,
 								bool temporary, bool two_phase,
-								bool failover,
+								bool failover, bool immediately_reserve,
 								XLogRecPtr restart_lsn,
 								bool find_startpoint)
 {
 	LogicalDecodingContext *ctx = NULL;
 
 	Assert(!MyReplicationSlot);
+	Assert(plugin != NULL);
 
 	/*
 	 * Acquire a logical decoding slot, this will check for conflicting names.
@@ -136,30 +137,55 @@ create_logical_replication_slot(char *name, char *plugin,
 						  temporary ? RS_TEMPORARY : RS_EPHEMERAL, two_phase,
 						  failover, false);
 
-	/*
-	 * Create logical decoding context to find start point or, if we don't
-	 * need it, to 1) bump slot's restart_lsn and xmin 2) check plugin sanity.
-	 *
-	 * Note: when !find_startpoint this is still important, because it's at
-	 * this point that the output plugin is validated.
-	 */
-	ctx = CreateInitDecodingContext(plugin, NIL,
-									false,	/* just catalogs is OK */
-									restart_lsn,
-									XL_ROUTINE(.page_read = read_local_xlog_page,
-											   .segment_open = wal_segment_open,
-											   .segment_close = wal_segment_close),
-									NULL, NULL, NULL);
+	if (immediately_reserve)
+	{
+		/*
+		 * Create logical decoding context to find start point or, if we don't
+		 * need it, to 1) bump slot's restart_lsn and xmin 2) check plugin
+		 * sanity.
+		 *
+		 * Note: when !find_startpoint this is still important, because it's
+		 * at this point that the output plugin is validated.
+		 */
+		ctx = CreateInitDecodingContext(plugin, NIL,
+										false,	/* just catalogs is OK */
+										restart_lsn,
+										XL_ROUTINE(.page_read = read_local_xlog_page,
+												   .segment_open = wal_segment_open,
+												   .segment_close = wal_segment_close),
+										NULL, NULL, NULL);
 
-	/*
-	 * If caller needs us to determine the decoding start point, do so now.
-	 * This might take a while.
-	 */
-	if (find_startpoint)
-		DecodingContextFindStartpoint(ctx);
+		/*
+		 * If caller needs us to determine the decoding start point, do so
+		 * now. This might take a while.
+		 */
+		if (find_startpoint)
+			DecodingContextFindStartpoint(ctx);
 
-	/* don't need the decoding context anymore */
-	FreeDecodingContext(ctx);
+		/* don't need the decoding context anymore */
+		FreeDecodingContext(ctx);
+	}
+	else
+	{
+		NameData	plugin_name;
+
+		/*
+		 * On a standby, this check is also required while creating the slot.
+		 * Check the comments in the function.
+		 */
+		CheckLogicalDecodingRequirements();
+
+		/*
+		 * Register output plugin name with slot.  We need the mutex to avoid
+		 * concurrent reading of a partially copied string.  But we don't want
+		 * any complicated code while holding a spinlock, so do namestrcpy()
+		 * outside.
+		 */
+		namestrcpy(&plugin_name, plugin);
+		SpinLockAcquire(&MyReplicationSlot->mutex);
+		MyReplicationSlot->data.plugin = plugin_name;
+		SpinLockRelease(&MyReplicationSlot->mutex);
+	}
 }
 
 /*
@@ -173,6 +199,7 @@ pg_create_logical_replication_slot(PG_FUNCTION_ARGS)
 	bool		temporary = PG_GETARG_BOOL(2);
 	bool		two_phase = PG_GETARG_BOOL(3);
 	bool		failover = PG_GETARG_BOOL(4);
+	bool		immediately_reserve = PG_GETARG_BOOL(5);
 	Datum		result;
 	TupleDesc	tupdesc;
 	HeapTuple	tuple;
@@ -191,6 +218,7 @@ pg_create_logical_replication_slot(PG_FUNCTION_ARGS)
 									temporary,
 									two_phase,
 									failover,
+									immediately_reserve,
 									InvalidXLogRecPtr,
 									true);
 
@@ -726,6 +754,7 @@ copy_replication_slot(FunctionCallInfo fcinfo, bool logical_slot)
 										temporary,
 										false,
 										false,
+										true,
 										src_restart_lsn,
 										false);
 	}

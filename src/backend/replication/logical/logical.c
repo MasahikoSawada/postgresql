@@ -304,6 +304,40 @@ StartupDecodingContext(List *output_plugin_options,
 }
 
 /*
+ * Create the logical decoding and initialize it if necessary. This function
+ * can be used for logical slot that might not have been initialized yet.
+ */
+LogicalDecodingContext *
+CreateOrInitDecodingContext(XLogRecPtr restart_lsn,
+							List *output_plugin_options,
+							bool fast_foward,
+							XLogReaderRoutine *xl_routine,
+							LogicalOutputPluginWriterPrepareWrite prepare_write,
+							LogicalOutputPluginWriterWrite do_write,
+							LogicalOutputPluginWriterUpdateProgress update_progress)
+{
+	LogicalDecodingContext *ctx;
+
+	/* Initialize the slot with a new logical decoding if not yet */
+	if (XLogRecPtrIsInvalid(MyReplicationSlot->data.restart_lsn))
+	{
+		ctx = CreateInitDecodingContext(NameStr(MyReplicationSlot->data.plugin),
+										output_plugin_options, false,
+										restart_lsn, xl_routine,
+										prepare_write, do_write, update_progress);
+
+		DecodingContextFindStartpoint(ctx);
+
+		FreeDecodingContext(ctx);
+	}
+
+	ctx = CreateDecodingContext(restart_lsn, output_plugin_options, fast_foward,
+								xl_routine, prepare_write, do_write, update_progress);
+
+	return ctx;
+}
+
+/*
  * Create a new decoding context, for a new logical slot.
  *
  * plugin -- contains the name of the output plugin
