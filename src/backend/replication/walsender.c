@@ -71,6 +71,7 @@
 #include "postmaster/interrupt.h"
 #include "replication/decode.h"
 #include "replication/logical.h"
+#include "replication/logicalctl.h"
 #include "replication/slotsync.h"
 #include "replication/slot.h"
 #include "replication/snapbuild.h"
@@ -1218,6 +1219,7 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 
 		Assert(cmd->kind == REPLICATION_KIND_LOGICAL);
 
+		EnsureLogicalDecodingEnabled();
 		CheckLogicalDecodingRequirements();
 
 		/*

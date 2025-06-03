@@ -18,6 +18,7 @@
 #include "access/xlogutils.h"
 #include "funcapi.h"
 #include "replication/logical.h"
+#include "replication/logicalctl.h"
 #include "replication/slot.h"
 #include "replication/slotsync.h"
 #include "utils/builtins.h"
@@ -211,6 +212,7 @@ pg_create_logical_replication_slot(PG_FUNCTION_ARGS)
 
 	CheckSlotPermissions();
 
+	EnsureLogicalDecodingEnabled();
 	CheckLogicalDecodingRequirements();
 
 	create_logical_replication_slot(NameStr(*name),
@@ -934,6 +936,7 @@ pg_sync_replication_slots(PG_FUNCTION_ARGS)
 				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				errmsg("replication slots can only be synchronized to a standby server"));
 
+	EnsureLogicalDecodingEnabled();
 	ValidateSlotSyncParams(ERROR);
 
 	/* Load the libpq-specific functions */

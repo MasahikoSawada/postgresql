@@ -5235,6 +5235,17 @@ struct config_enum ConfigureNamesEnum[] =
 	},
 
 	{
+		{"effective_wal_level", PGC_INTERNAL, PRESET_OPTIONS,
+			gettext_noop("Show the effective WAL level."),
+			NULL,
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+		},
+		&effective_wal_level,
+		WAL_LEVEL_REPLICA, wal_level_options,
+		NULL, NULL, show_effective_wal_level
+	},
+
+	{
 		{"dynamic_shared_memory_type", PGC_POSTMASTER, RESOURCES_MEM,
 			gettext_noop("Selects the dynamic shared memory implementation used."),
 			NULL

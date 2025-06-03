@@ -133,6 +133,7 @@ HASH_GROW_BUCKETS_ELECT	"Waiting to elect a Parallel Hash participant to allocat
 HASH_GROW_BUCKETS_REALLOCATE	"Waiting for an elected Parallel Hash participant to finish allocating more buckets."
 HASH_GROW_BUCKETS_REINSERT	"Waiting for other Parallel Hash participants to finish inserting tuples into new buckets."
 LOGICAL_APPLY_SEND_DATA	"Waiting for a logical replication leader apply process to send data to a parallel apply process."
+LOGICAL_DECODING_STATUS_CHANGE	"Waiting for the logical decoding status change."
 LOGICAL_PARALLEL_APPLY_STATE_CHANGE	"Waiting for a logical replication parallel apply process to change state."
 LOGICAL_SYNC_DATA	"Waiting for a logical replication remote server to send data for initial table synchronization."
 LOGICAL_SYNC_STATE_CHANGE	"Waiting for a logical replication remote server to change state."
@@ -352,6 +353,7 @@ DSMRegistry	"Waiting to read or update the dynamic shared memory registry."
 InjectionPoint	"Waiting to read or update information related to injection points."
 SerialControl	"Waiting to read or update shared <filename>pg_serial</filename> state."
 AioWorkerSubmissionQueue	"Waiting to access AIO worker submission queue."
+LogicalDecodingControl	"Waiting to access logical decoding status information."
 
 #
 # END OF PREDEFINED LWLOCKS (DO NOT CHANGE THIS LINE)

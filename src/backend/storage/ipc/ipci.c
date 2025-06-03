@@ -31,6 +31,7 @@
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/bgwriter.h"
 #include "postmaster/walsummarizer.h"
+#include "replication/logicalctl.h"
 #include "replication/logicallauncher.h"
 #include "replication/origin.h"
 #include "replication/slot.h"
@@ -150,6 +151,7 @@ CalculateShmemSize(int *num_semaphores)
 	size = add_size(size, InjectionPointShmemSize());
 	size = add_size(size, SlotSyncShmemSize());
 	size = add_size(size, AioShmemSize());
+	size = add_size(size, LogicalDecodingCtlShmemSize());
 
 	/* include additional requested shmem from preload libraries */
 	size = add_size(size, total_addin_request);
@@ -343,6 +345,7 @@ CreateOrAttachShmemStructs(void)
 	WaitEventCustomShmemInit();
 	InjectionPointShmemInit();
 	AioShmemInit();
+	LogicalDecodingCtlShmemInit();
 }
 
 /*

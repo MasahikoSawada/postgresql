@@ -15,6 +15,7 @@
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
 #include "storage/spin.h"
+#include "port/atomics.h"
 #include "replication/walreceiver.h"
 
 /* directory to store replication slot data in */
@@ -225,6 +226,8 @@ typedef struct ReplicationSlot
  */
 typedef struct ReplicationSlotCtlData
 {
+	pg_atomic_uint32 n_inuse_logical_slots;
+
 	/*
 	 * This array should be declared [FLEXIBLE_ARRAY_MEMBER], but for some
 	 * reason you can't do that in an otherwise-empty struct.

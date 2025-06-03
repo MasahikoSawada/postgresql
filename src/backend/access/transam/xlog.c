@@ -78,6 +78,7 @@
 #include "postmaster/walsummarizer.h"
 #include "postmaster/walwriter.h"
 #include "replication/origin.h"
+#include "replication/logicalctl.h"
 #include "replication/slot.h"
 #include "replication/snapbuild.h"
 #include "replication/walreceiver.h"
@@ -141,6 +142,7 @@ bool		XLOG_DEBUG = false;
 #endif
 
 int			wal_segment_size = DEFAULT_XLOG_SEG_SIZE;
+int			effective_wal_level = WAL_LEVEL_REPLICA;
 
 /*
  * Number of WAL insertion locks to use. A higher value allows more insertions
@@ -5012,6 +5014,48 @@ show_in_hot_standby(void)
 }
 
 /*
+ * GUC show_hook for effective_wal_level
+ */
+const char *
+show_effective_wal_level(void)
+{
+	char	   *str;
+
+	if (wal_level == WAL_LEVEL_MINIMAL)
+		return "minimal";
+
+	/*
+	 * During the recovery, we synchronously update the XLogLogicalInfo so
+	 * need to check the shared state.
+	 */
+	if (RecoveryInProgress())
+		return IsXLogLogicalInfoEnabled() ? "logical" : "replica";
+
+	if (wal_level == WAL_LEVEL_REPLICA)
+	{
+		bool		in_transition;
+
+		/* check if the logical decoding status is being changed */
+		LWLockAcquire(LogicalDecodingControlLock, LW_SHARED);
+		in_transition = LogicalDecodingCtl->transition_in_progress;
+		LWLockRelease(LogicalDecodingControlLock);
+
+		/*
+		 * With wal_level='replica', XLogLogicalInfo indicates the actual WAL
+		 * level unless we're in the status change.
+		 */
+		if (XLogLogicalInfo && !in_transition)
+			str = "logical";
+		else
+			str = "replica";
+	}
+	else
+		str = "logical";
+
+	return str;
+}
+
+/*
  * Read the control file, set respective GUCs.
  *
  * This is to be called during startup, including a crash recovery cycle,
@@ -5780,6 +5824,12 @@ StartupXLOG(void)
 	RelationCacheInitFileRemove();
 
 	/*
+	 * Startup the logical decoding status, needs to be setup before
+	 * initializing replication slots as it requires logical decoding status.
+	 */
+	StartupLogicalDecodingStatus(ControlFile->logicalDecodingEnabled);
+
+	/*
 	 * Initialize replication slots, before there's a chance to remove
 	 * required resources.
 	 */
@@ -6313,6 +6363,8 @@ StartupXLOG(void)
 	 */
 	Insert->fullPageWrites = lastFullPageWrites;
 	UpdateFullPageWrites();
+
+	UpdateLogicalDecodingStatusEndOfRecovery();
 
 	/*
 	 * Emit checkpoint or end-of-recovery record in XLOG, if required.
@@ -7452,6 +7504,8 @@ CreateCheckPoint(int flags)
 	 * for debugging purposes.
 	 */
 	ControlFile->unloggedLSN = pg_atomic_read_membarrier_u64(&XLogCtl->unloggedLSN);
+
+	ControlFile->logicalDecodingEnabled = IsLogicalDecodingEnabled();
 
 	UpdateControlFile();
 	LWLockRelease(ControlFileLock);
@@ -8690,19 +8744,26 @@ xlog_redo(XLogReaderState *record)
 		memcpy(&xlrec, XLogRecGetData(record), sizeof(xl_parameter_change));
 
 		/*
-		 * Invalidate logical slots if we are in hot standby and the primary
-		 * does not have a WAL level sufficient for logical decoding. No need
-		 * to search for potentially conflicting logically slots if standby is
-		 * running with wal_level lower than logical, because in that case, we
-		 * would have either disallowed creation of logical slots or
-		 * invalidated existing ones.
+		 * Change the logical decoding status upon wal_level change on the
+		 * primary server.
 		 */
-		if (InRecovery && InHotStandby &&
-			xlrec.wal_level < WAL_LEVEL_LOGICAL &&
-			wal_level >= WAL_LEVEL_LOGICAL)
-			InvalidateObsoleteReplicationSlots(RS_INVAL_WAL_LEVEL,
-											   0, InvalidOid,
-											   InvalidTransactionId);
+		if (xlrec.wal_level == WAL_LEVEL_LOGICAL)
+		{
+			/*
+			 * If the primary increase WAL level to 'logical', we can
+			 * unconditionally enable the logical decoding on the standby.
+			 */
+			UpdateLogicalDecodingStatus(true);
+		}
+		else if (xlrec.wal_level == WAL_LEVEL_REPLICA &&
+				 pg_atomic_read_u32(&ReplicationSlotCtl->n_inuse_logical_slots) == 0)
+		{
+			/*
+			 * Disable the logical decoding if there is no in-use logical slot
+			 * on the standby.
+			 */
+			UpdateLogicalDecodingStatus(false);
+		}
 
 		LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
 		ControlFile->MaxConnections = xlrec.MaxConnections;
@@ -8712,6 +8773,7 @@ xlog_redo(XLogReaderState *record)
 		ControlFile->max_locks_per_xact = xlrec.max_locks_per_xact;
 		ControlFile->wal_level = xlrec.wal_level;
 		ControlFile->wal_log_hints = xlrec.wal_log_hints;
+		ControlFile->logicalDecodingEnabled = IsLogicalDecodingEnabled();
 
 		/*
 		 * Update minRecoveryPoint to ensure that if recovery is aborted, we
@@ -8770,6 +8832,29 @@ xlog_redo(XLogReaderState *record)
 	else if (info == XLOG_CHECKPOINT_REDO)
 	{
 		/* nothing to do here, just for informational purposes */
+	}
+	else if (info == XLOG_LOGICAL_DECODING_STATUS_CHANGE)
+	{
+		bool		logical_decoding;
+
+		memcpy(&logical_decoding, XLogRecGetData(record), sizeof(bool));
+		UpdateLogicalDecodingStatus(logical_decoding);
+
+		elog(LOG, "XXXX REPLAY new status %d", logical_decoding);
+
+		/*
+		 * Invalidate logical slots if we are in hot standby and the primary
+		 * disabled the logical decoding.
+		 */
+		if (!logical_decoding && InRecovery && InHotStandby)
+			InvalidateObsoleteReplicationSlots(RS_INVAL_WAL_LEVEL,
+											   0, InvalidOid,
+											   InvalidTransactionId);
+
+		LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
+		ControlFile->logicalDecodingEnabled = logical_decoding;
+		UpdateControlFile();
+		LWLockRelease(ControlFileLock);
 	}
 }
 
