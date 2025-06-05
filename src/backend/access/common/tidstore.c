@@ -434,51 +434,36 @@ tidstore_is_member_page(BlocktableEntry *page, OffsetNumber off)
 			if (page->header.full_offsets[i] == off)
 				return true;
 		}
+
 		return false;
 	}
-	else
-	{
-		wordnum = WORDNUM(off);
-		bitnum = BITNUM(off);
 
-		/* no bitmap for the off */
-		if (wordnum >= page->header.nwords)
-			return false;
+	wordnum = WORDNUM(off);
+	bitnum = BITNUM(off);
 
-		return (page->words[wordnum] & ((bitmapword) 1 << bitnum)) != 0;
-	}
-}
+	/* no bitmap for the off */
+	if (wordnum >= page->header.nwords)
+		return false;
 
-/* Return true if the given TID is present in the TidStore */
-bool
-TidStoreIsMember(TidStore *ts, ItemPointer tid)
-{
-	BlocktableEntry *page;
-	BlockNumber blk = ItemPointerGetBlockNumber(tid);
-	OffsetNumber off = ItemPointerGetOffsetNumber(tid);
-
-	if (TidStoreIsShared(ts))
-		page = shared_ts_find(ts->tree.shared, blk);
-	else
-		page = local_ts_find(ts->tree.local, blk);
-
-	return tidstore_is_member_page(page, off);
+	return (page->words[wordnum] & ((bitmapword) 1 << bitnum)) != 0;
 }
 
 /*
- * Batched operation of TidStoreIsMember().
+ * Check if the given TIDs are present in the TidStore. Return the number
+ * of TIDs found in the TidStore. *ismember must have enough space for
+ * up to 'ntids' elements.
  */
 int
 TidStoreIsMemberMulti(TidStore *ts, ItemPointer tids, int ntids, bool *ismembers)
 {
 	BlocktableEntry *page = NULL;
 	BlockNumber last_blk = InvalidBlockNumber;
-	int		nmembers = 0;
+	int			nmembers = 0;
 
 	for (int i = 0; i < ntids; i++)
 	{
-		ItemPointer	tid = &(tids[i]);
-		BlockNumber	blk = ItemPointerGetBlockNumber(tid);
+		ItemPointer tid = &(tids[i]);
+		BlockNumber blk = ItemPointerGetBlockNumber(tid);
 		OffsetNumber off = ItemPointerGetOffsetNumber(tid);
 
 		if (blk != last_blk)

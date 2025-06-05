@@ -222,16 +222,22 @@ check_set_block_offsets(PG_FUNCTION_ARGS)
 	TidStoreIterResult *iter_result;
 	int			num_iter_tids = 0;
 	int			num_lookup_tids = 0;
+	bool	   *ismembers;
 	BlockNumber prevblkno = 0;
 
 	check_tidstore_available();
 
 	/* lookup each member in the verification array */
+	ismembers = palloc(sizeof(bool) * items.num_tids);
+	TidStoreIsMemberMulti(tidstore, items.insert_tids, items.num_tids, ismembers);
 	for (int i = 0; i < items.num_tids; i++)
-		if (!TidStoreIsMember(tidstore, &items.insert_tids[i]))
+	{
+		if (!ismembers[i])
 			elog(ERROR, "missing TID with block %u, offset %u",
 				 ItemPointerGetBlockNumber(&items.insert_tids[i]),
 				 ItemPointerGetOffsetNumber(&items.insert_tids[i]));
+	}
+	pfree(ismembers);
 
 	/*
 	 * Lookup all possible TIDs for each distinct block in the verification
@@ -248,11 +254,12 @@ check_set_block_offsets(PG_FUNCTION_ARGS)
 		for (OffsetNumber offset = FirstOffsetNumber; offset < MaxOffsetNumber; offset++)
 		{
 			ItemPointerData tid;
+			bool		ismember;
 
 			ItemPointerSet(&tid, blkno, offset);
 
 			TidStoreLockShare(tidstore);
-			if (TidStoreIsMember(tidstore, &tid))
+			if (TidStoreIsMemberMulti(tidstore, &tid, 1, &ismember) > 0)
 				ItemPointerSet(&items.lookup_tids[num_lookup_tids++], blkno, offset);
 			TidStoreUnlock(tidstore);
 		}

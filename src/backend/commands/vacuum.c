@@ -2658,6 +2658,7 @@ static bool
 vac_tid_reaped(ItemPointer itemptr, void *state)
 {
 	TidStore   *dead_items = (TidStore *) state;
+	bool		isdead;
 
-	return TidStoreIsMember(dead_items, itemptr);
+	return TidStoreIsMemberMulti(dead_items, itemptr, 1, &isdead) > 0;
 }
