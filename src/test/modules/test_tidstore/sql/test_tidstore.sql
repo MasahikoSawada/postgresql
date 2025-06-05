@@ -4,7 +4,7 @@ CREATE EXTENSION test_tidstore;
 CREATE TEMP TABLE hideblocks(blockno bigint);
 
 -- Constant values used in the tests.
-\set maxblkno 4294967295
+\set maxblkno 4294967294
 -- The maximum number of heap tuples (MaxHeapTuplesPerPage) in 8kB block is 291.
 -- We use a higher number to test tidstore.
 \set maxoffset 512
