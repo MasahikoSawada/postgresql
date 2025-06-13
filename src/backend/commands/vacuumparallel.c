@@ -39,6 +39,7 @@
 #include "pgstat.h"
 #include "storage/bufmgr.h"
 #include "tcop/tcopprot.h"
+#include "utils/injection_point.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 
@@ -1035,14 +1036,28 @@ parallel_vacuum_index_is_parallel_safe(Relation indrel, int num_index_scans,
 int
 parallel_vacuum_collect_dead_items_begin(ParallelVacuumState *pvs)
 {
+	int			nworkers = pvs->nworkers_for_table;
+#ifdef USE_INJECTION_POINTS
+	static int	ntimes = 0;
+#endif
+
 	Assert(!IsParallelWorker());
 
-	if (pvs->nworkers_for_table == 0)
+	if (nworkers == 0)
 		return 0;
 
 	/* Start parallel vacuum workers for collecting dead items */
-	Assert(pvs->nworkers_for_table <= pvs->pcxt->nworkers);
-	parallel_vacuum_begin_work_phase(pvs, pvs->nworkers_for_table,
+	Assert(nworkers <= pvs->pcxt->nworkers);
+
+#ifdef USE_INJECTION_POINTS
+	if (IS_INJECTION_POINT_ATTACHED("parallel-vacuum-ramp-down-workers"))
+	{
+		nworkers = pvs->nworkers_for_table - Min(ntimes, pvs->nworkers_for_table);
+		ntimes++;
+	}
+#endif
+
+	parallel_vacuum_begin_work_phase(pvs, nworkers,
 									 PV_WORK_PHASE_COLLECT_DEAD_ITEMS);
 
 	/* Include the worker count for the leader itself */

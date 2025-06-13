@@ -193,6 +193,7 @@
 #include "storage/freespace.h"
 #include "storage/lmgr.h"
 #include "storage/read_stream.h"
+#include "utils/injection_point.h"
 #include "utils/lsyscache.h"
 #include "utils/pg_rusage.h"
 #include "utils/timestamp.h"
@@ -466,6 +467,14 @@ typedef struct ParallelLVLeader
 
 	/* The number of workers launched for parallel lazy heap scan */
 	int			nworkers_launched;
+
+	/*
+	 * Will the leader participate to parallel lazy heap scan?
+	 *
+	 * This is a parameter for testing and always true unless it is disabled
+	 * explicitly by the injection point.
+	 */
+	bool		leaderparticipate;
 
 	/*
 	 * These fields point to the arrays of all per-worker scan states stored
@@ -2251,7 +2260,8 @@ do_parallel_lazy_scan_heap(LVRelState *vacrel)
 		 * retrieving new blocks for the read stream once the space of
 		 * dead_items TIDs exceeds the limit.
 		 */
-		do_lazy_scan_heap(vacrel, false);
+		if (vacrel->leader->leaderparticipate)
+			do_lazy_scan_heap(vacrel, false);
 
 		/* Wait for parallel workers to finish and gather scan results */
 		parallel_lazy_scan_heap_end(vacrel);
@@ -4533,6 +4543,7 @@ heap_parallel_vacuum_estimate(Relation rel, ParallelContext *pcxt, int nworkers,
 {
 	LVRelState *vacrel = (LVRelState *) state;
 	Size		size = 0;
+	bool		leaderparticipate = true;
 
 	vacrel->leader = palloc(sizeof(ParallelLVLeader));
 
@@ -4557,6 +4568,12 @@ heap_parallel_vacuum_estimate(Relation rel, ParallelContext *pcxt, int nworkers,
 	vacrel->leader->scandata_len = mul_size(sizeof(LVScanData), nworkers);
 	shm_toc_estimate_chunk(&pcxt->estimator, vacrel->leader->scandata_len);
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
+
+#ifdef USE_INJECTION_POINTS
+	if (IS_INJECTION_POINT_ATTACHED("parallel-heap-vacuum-disable-leader-participation"))
+		leaderparticipate = false;
+#endif
+	vacrel->leader->leaderparticipate = leaderparticipate;
 }
 
 /*
@@ -4594,7 +4611,8 @@ heap_parallel_vacuum_initialize(Relation rel, ParallelContext *pcxt, int nworker
 
 	/* including the leader too */
 	shared->eager_scan_remaining_successes_per_worker =
-		vacrel->eager_scan_remaining_successes / (nworkers + 1);
+		vacrel->eager_scan_remaining_successes /
+		(vacrel->leader->leaderparticipate ? nworkers + 1 : nworkers);
 
 	shm_toc_insert(pcxt->toc, PARALLEL_LV_KEY_SHARED, shared);
 	vacrel->plvstate->shared = shared;
