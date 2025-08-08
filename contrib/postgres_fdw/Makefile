@@ -28,5 +28,13 @@ SHLIB_PREREQS = submake-libpq
 subdir = contrib/postgres_fdw
 top_builddir = ../..
 include $(top_builddir)/src/Makefile.global
+
+# We have the sole isolation test case that requires injection points,
+# so invoke the isolation test if injection points are enabled.
+ifeq ($(enable_injection_points),yes)
+EXTRA_INSTALL=src/test/modules/injection_points
+ISOLATION = foreign_recheck
+endif
+
 include $(top_srcdir)/contrib/contrib-global.mk
 endif

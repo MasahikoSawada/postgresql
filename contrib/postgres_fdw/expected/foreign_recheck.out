@@ -1,0 +1,27 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s0_lock s1_update s1_wakeup
+injection_points_attach
+-----------------------
+                       
+(1 row)
+
+step s0_lock: 
+    SELECT
+       (SELECT 1 FROM sch1.b AS b, sch1.c AS c WHERE a.i = b.i AND b.i = c.i)
+    FROM sch1.a as a
+    FOR UPDATE;
+ <waiting ...>
+step s1_update: UPDATE sch1.a SET i = i + 100;
+step s1_wakeup: SELECT injection_points_wakeup('heapam_lock_tuple-before-lock');
+injection_points_wakeup
+-----------------------
+                       
+(1 row)
+
+step s0_lock: <... completed>
+?column?
+--------
+        
+(1 row)
+

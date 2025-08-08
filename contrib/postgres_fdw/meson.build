@@ -30,7 +30,7 @@ install_data(
   kwargs: contrib_data_args,
 )
 
-tests += {
+postgres_fdw_test = {
   'name': 'postgres_fdw',
   'sd': meson.current_source_dir(),
   'bd': meson.current_build_dir(),
@@ -47,3 +47,15 @@ tests += {
     ],
   },
 }
+
+if get_option('injection_points')
+   postgres_fdw_test += {
+     'isolation': {
+       'specs': [
+         'foreign_recheck',
+       ]
+     }
+   }
+endif
+
+tests += postgres_fdw_test

@@ -44,6 +44,7 @@
 #include "storage/procarray.h"
 #include "storage/smgr.h"
 #include "utils/builtins.h"
+#include "utils/injection_point.h"
 #include "utils/rel.h"
 
 static void reform_and_rewrite_tuple(HeapTuple tuple,
@@ -374,6 +375,8 @@ heapam_tuple_lock(Relation relation, ItemPointer tid, Snapshot snapshot,
 	tmfd->traversed = false;
 
 	Assert(TTS_IS_BUFFERTUPLE(slot));
+
+	INJECTION_POINT("heapam_lock_tuple-before-lock", NULL);
 
 tuple_lock_retry:
 	tuple->t_self = *tid;
