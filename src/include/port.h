@@ -509,8 +509,35 @@ extern char *pg_inet_net_ntop(int af, const void *src, int bits,
 							  char *dst, size_t size);
 
 /* port/pg_strong_random.c */
-extern void pg_strong_random_init(void);
-extern bool pg_strong_random(void *buf, size_t len);
+extern void pg_strong_random_init_system(void);
+extern bool pg_strong_random_system(void *buf, size_t len);
+#ifdef USE_OPENSSL
+extern void pg_strong_random_init_openssl(void);
+extern bool pg_strong_random_openssl(void *buf, size_t len);
+#endif
+
+typedef void (*pg_strong_random_init_fn) (void);
+typedef bool (*pg_strong_random_fn) (void *buf, size_t len);
+
+/* Function pointers to the random data generation implementations */
+extern pg_strong_random_init_fn pg_strong_random_init_impl;
+extern pg_strong_random_fn pg_strong_random_impl;
+
+/*
+ * Public functions to generate strong random data. The functions invoked
+ * from these function can be replaced by setting function pointers.
+ */
+static pg_attribute_always_inline void
+pg_strong_random_init(void)
+{
+	(*pg_strong_random_init_impl) ();
+}
+
+static pg_attribute_always_inline bool
+pg_strong_random(void *buf, size_t len)
+{
+	return (*pg_strong_random_impl) (buf, len);
+}
 
 /*
  * pg_backend_random used to be a wrapper for pg_strong_random before

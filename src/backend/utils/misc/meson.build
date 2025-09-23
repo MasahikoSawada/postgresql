@@ -12,6 +12,7 @@ backend_sources += files(
   'pg_rusage.c',
   'ps_status.c',
   'queryenvironment.c',
+  'random_source.c',
   'rls.c',
   'sampling.c',
   'stack_depth.c',

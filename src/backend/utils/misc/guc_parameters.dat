@@ -3475,4 +3475,12 @@
   assign_hook => 'assign_io_method',
 },
 
+{ name => 'random_source_type', type => 'enum', context => 'PGC_BACKEND', group => 'RESOURCES_KERNEL',
+  short_desc => 'Selects the random data generation function.',
+  variable => 'random_source_type',
+  boot_val => 'DEFAULT_RANDOM_SOURCE_TYPE',
+  options => 'random_source_type_options',
+  assign_hook => 'assign_random_source_type',
+},
+
 ]

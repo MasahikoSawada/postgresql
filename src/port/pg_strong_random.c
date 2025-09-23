@@ -25,7 +25,7 @@
 #include <sys/time.h>
 
 /*
- * pg_strong_random & pg_strong_random_init
+ * pg_strong_random & pg_strong_random_init implementations.
  *
  * Generate requested number of random bytes. The returned bytes are
  * cryptographically secure, suitable for use e.g. in authentication.
@@ -48,6 +48,21 @@
  * would lead to predictable keys and security issues.
  */
 
+/*
+ * Set default implementations.
+ *
+ * The pg_strong_random and pg_strong_random_init implementations are fixed to
+ * the implementations follows in FRONTEND builds. On non-FRONTEND builds (i.e.,
+ * backends) the implementations could be replaced by random_source_type GUC
+ * parameter.
+ */
+#ifdef USE_OPENSSL
+pg_strong_random_init_fn pg_strong_random_init_impl = pg_strong_random_init_openssl;
+pg_strong_random_fn pg_strong_random_impl = pg_strong_random_openssl;
+#else
+pg_strong_random_init_fn pg_strong_random_init_impl = pg_strong_random_init_system;
+pg_strong_random_fn pg_strong_random_impl = pg_strong_random_system;
+#endif
 
 
 #ifdef USE_OPENSSL
@@ -55,13 +70,13 @@
 #include <openssl/rand.h>
 
 void
-pg_strong_random_init(void)
+pg_strong_random_init_openssl(void)
 {
 	/* No initialization needed */
 }
 
 bool
-pg_strong_random(void *buf, size_t len)
+pg_strong_random_openssl(void *buf, size_t len)
 {
 	int			i;
 
@@ -92,7 +107,9 @@ pg_strong_random(void *buf, size_t len)
 	return false;
 }
 
-#elif WIN32
+#endif
+
+#if WIN32
 
 #include <wincrypt.h>
 /*
@@ -102,13 +119,13 @@ pg_strong_random(void *buf, size_t len)
 static HCRYPTPROV hProvider = 0;
 
 void
-pg_strong_random_init(void)
+pg_strong_random_init_system(void)
 {
 	/* No initialization needed on WIN32 */
 }
 
 bool
-pg_strong_random(void *buf, size_t len)
+pg_strong_random_system(void *buf, size_t len)
 {
 	if (hProvider == 0)
 	{
@@ -134,20 +151,20 @@ pg_strong_random(void *buf, size_t len)
 	return false;
 }
 
-#else							/* not USE_OPENSSL or WIN32 */
+#else							/* not WIN32 */
 
 /*
- * Without OpenSSL or Win32 support, just read /dev/urandom ourselves.
+ * On Unix-like platforms, just read /dev/urandom ourselves.
  */
 
 void
-pg_strong_random_init(void)
+pg_strong_random_init_system(void)
 {
 	/* No initialization needed */
 }
 
 bool
-pg_strong_random(void *buf, size_t len)
+pg_strong_random_system(void *buf, size_t len)
 {
 	int			f;
 	char	   *p = buf;

@@ -96,6 +96,7 @@ extern bool check_primary_slot_name(char **newval, void **extra,
 									GucSource source);
 extern bool check_random_seed(double *newval, void **extra, GucSource source);
 extern void assign_random_seed(double newval, void *extra);
+extern void assign_random_source_type(int newval, void *extra);
 extern const char *show_random_seed(void);
 extern bool check_recovery_prefetch(int *new_value, void **extra,
 									GucSource source);

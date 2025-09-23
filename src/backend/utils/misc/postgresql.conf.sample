@@ -772,6 +772,7 @@ autovacuum_worker_slots = 16	# autovacuum worker slots to allocate
 #gin_pending_list_limit = 4MB
 #createrole_self_grant = ''		# set and/or inherit
 #event_triggers = on
+#random_source_type = 'system'
 
 # - Locale and Formatting -
 

@@ -1109,6 +1109,16 @@ choose_dsm_implementation(void)
 #endif
 }
 
+static const char *
+choose_random_source_type(void)
+{
+#ifdef USE_OPENSSL
+	return "openssl";
+#else
+	return "system";
+#endif
+}
+
 /*
  * Determine platform-specific config settings
  *
@@ -1355,6 +1365,9 @@ setup_config(void)
 
 	conflines = replace_guc_value(conflines, "dynamic_shared_memory_type",
 								  dynamic_shared_memory_type, false);
+
+	conflines = replace_guc_value(conflines, "random_source_type",
+								  choose_random_source_type(), false);
 
 	/* Caution: these depend on wal_segment_size_mb, they're not constants */
 	conflines = replace_guc_value(conflines, "min_wal_size",

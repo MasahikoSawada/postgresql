@@ -27,6 +27,7 @@ OBJS = \
 	pg_rusage.o \
 	ps_status.o \
 	queryenvironment.o \
+	random_source.o \
 	rls.o \
 	sampling.o \
 	stack_depth.o \
