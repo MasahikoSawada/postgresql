@@ -190,6 +190,9 @@
 /* Define to 1 if you have the `getpeerucred' function. */
 #undef HAVE_GETPEERUCRED
 
+/* Define to 1 if you have the `getrandom' function. */
+#undef HAVE_GETRANDOM
+
 /* Define to 1 if you have the <gssapi_ext.h> header file. */
 #undef HAVE_GSSAPI_EXT_H
 

@@ -151,7 +151,43 @@ pg_strong_random_system(void *buf, size_t len)
 	return false;
 }
 
-#else							/* not WIN32 */
+#elif HAVE_GETRANDOM
+
+#include <sys/random.h>
+
+void
+pg_strong_random_init_system(void)
+{
+	/* No initialization needed */
+}
+
+bool
+pg_strong_random_system(void *buf, size_t len)
+{
+	char	   *p = buf;
+	ssize_t		res;
+
+	while (len)
+	{
+		/* Get random data from the urandom source in blocking mode */
+		res = getrandom(p, len, 0);
+
+		if (res <= 0)
+		{
+			if (errno == EINTR)
+				continue;		/* interrupted by signal, just retry */
+
+			return false;
+		}
+
+		p += res;
+		len -= res;
+	}
+
+	return true;
+}
+
+#else
 
 /*
  * On Unix-like platforms, just read /dev/urandom ourselves.

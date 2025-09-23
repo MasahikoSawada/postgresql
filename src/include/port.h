@@ -520,8 +520,8 @@ typedef void (*pg_strong_random_init_fn) (void);
 typedef bool (*pg_strong_random_fn) (void *buf, size_t len);
 
 /* Function pointers to the random data generation implementations */
-extern pg_strong_random_init_fn pg_strong_random_init_impl;
-extern pg_strong_random_fn pg_strong_random_impl;
+extern PGDLLIMPORT pg_strong_random_init_fn pg_strong_random_init_impl;
+extern PGDLLIMPORT pg_strong_random_fn pg_strong_random_impl;
 
 /*
  * Public functions to generate strong random data. The functions invoked

@@ -2317,6 +2317,10 @@ PostgreSQL can use OpenSSL, native Windows API or /dev/urandom as a source of ra
   fi
 fi
 
+AC_CHECK_HEADER([sys/random.h],
+ [AC_CHECK_FUNCS([getrandom],
+  [AC_DEFINE(HAVE_GETRANDOM, 1, [Define to 1 if you have getrandom])])])
+
 # If not set in template file, set bytes to use libc memset()
 if test x"$MEMSET_LOOP_LIMIT" = x"" ; then
   MEMSET_LOOP_LIMIT=1024

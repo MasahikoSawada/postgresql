@@ -2713,6 +2713,12 @@ int main(void)
   endif
 endforeach
 
+if cc.has_header('sys/random.h') and cc.has_function('getrandom',
+    args: test_c_args, prefix: '''
+#include <sys/random.h>''')
+  cdata.set('HAVE_GETRANDOM', 1)
+endif
+
 if cc.has_type('socklen_t',
     args: test_c_args, include_directories: postgres_inc,
     prefix: '''
