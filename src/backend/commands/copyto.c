@@ -22,6 +22,8 @@
 #include "access/tableam.h"
 #include "catalog/pg_inherits.h"
 #include "commands/copyapi.h"
+#include "commands/copystate.h"
+#include "commands/defrem.h"
 #include "commands/progress.h"
 #include "executor/execdesc.h"
 #include "executor/executor.h"
@@ -39,19 +41,7 @@
 #include "utils/snapmgr.h"
 
 /*
- * Represents the different dest cases we need to worry about at
- * the bottom level
- */
-typedef enum CopyDest
-{
-	COPY_FILE,					/* to file (or a piped program) */
-	COPY_FRONTEND,				/* to frontend */
-	COPY_CALLBACK,				/* to callback function */
-} CopyDest;
-
-/*
- * This struct contains all the state variables used throughout a COPY TO
- * operation.
+ * Struct used for text and CSV format.
  *
  * Multi-byte encodings: all supported client-side encodings encode multi-byte
  * characters by having the first byte's high bit set. Subsequent bytes of the
@@ -64,41 +54,14 @@ typedef enum CopyDest
  * invoke pg_encoding_mblen() to skip over them. encoding_embeds_ascii is true
  * when we have to do it the hard way.
  */
-typedef struct CopyToStateData
+typedef struct CopyToStateTextLike
 {
-	/* format-specific routines */
-	const CopyToRoutine *routine;
-
-	/* low-level state data */
-	CopyDest	copy_dest;		/* type of copy source/destination */
-	FILE	   *copy_file;		/* used if copy_dest == COPY_FILE */
-	StringInfo	fe_msgbuf;		/* used for all dests during COPY TO */
+	CopyToStateData base;
 
 	int			file_encoding;	/* file or remote side's character encoding */
 	bool		need_transcoding;	/* file encoding diff from server? */
 	bool		encoding_embeds_ascii;	/* ASCII can be non-first byte? */
-
-	/* parameters from the COPY command */
-	Relation	rel;			/* relation to copy to */
-	QueryDesc  *queryDesc;		/* executable query to copy from */
-	List	   *attnumlist;		/* integer list of attnums to copy */
-	char	   *filename;		/* filename, or NULL for STDOUT */
-	bool		is_program;		/* is 'filename' a program to popen? */
-	copy_data_dest_cb data_dest_cb; /* function for writing data */
-
-	CopyFormatOptions opts;
-	Node	   *whereClause;	/* WHERE condition (or NULL) */
-	List	   *partitions;		/* OID list of partitions to copy data from */
-
-	/*
-	 * Working state
-	 */
-	MemoryContext copycontext;	/* per-copy execution context */
-
-	FmgrInfo   *out_functions;	/* lookup info for output functions */
-	MemoryContext rowcontext;	/* per-row evaluation context */
-	uint64		bytes_processed;	/* number of bytes processed so far */
-} CopyToStateData;
+}			CopyToStateTextLike;
 
 /* DestReceiver for COPY (query) TO */
 typedef struct
@@ -123,6 +86,7 @@ static void CopyRelationTo(CopyToState cstate, Relation rel, Relation root_rel,
 						   uint64 *processed);
 
 /* built-in format-specific routines */
+static Size CopyToEstimateStateTextLike(void);
 static void CopyToTextLikeStart(CopyToState cstate, TupleDesc tupDesc);
 static void CopyToTextLikeOutFunc(CopyToState cstate, Oid atttypid, FmgrInfo *finfo);
 static void CopyToTextOneRow(CopyToState cstate, TupleTableSlot *slot);
@@ -130,6 +94,7 @@ static void CopyToCSVOneRow(CopyToState cstate, TupleTableSlot *slot);
 static void CopyToTextLikeOneRow(CopyToState cstate, TupleTableSlot *slot,
 								 bool is_csv);
 static void CopyToTextLikeEnd(CopyToState cstate);
+static Size CopyToEstimateStateBinary(void);
 static void CopyToBinaryStart(CopyToState cstate, TupleDesc tupDesc);
 static void CopyToBinaryOutFunc(CopyToState cstate, Oid atttypid, FmgrInfo *finfo);
 static void CopyToBinaryOneRow(CopyToState cstate, TupleTableSlot *slot);
@@ -155,6 +120,7 @@ static void CopySendInt16(CopyToState cstate, int16 val);
 
 /* text format */
 static const CopyToRoutine CopyToRoutineText = {
+	.CopyToEstimateStateSpace = CopyToEstimateStateTextLike,
 	.CopyToStart = CopyToTextLikeStart,
 	.CopyToOutFunc = CopyToTextLikeOutFunc,
 	.CopyToOneRow = CopyToTextOneRow,
@@ -163,6 +129,7 @@ static const CopyToRoutine CopyToRoutineText = {
 
 /* CSV format */
 static const CopyToRoutine CopyToRoutineCSV = {
+	.CopyToEstimateStateSpace = CopyToEstimateStateTextLike,
 	.CopyToStart = CopyToTextLikeStart,
 	.CopyToOutFunc = CopyToTextLikeOutFunc,
 	.CopyToOneRow = CopyToCSVOneRow,
@@ -171,56 +138,71 @@ static const CopyToRoutine CopyToRoutineCSV = {
 
 /* binary format */
 static const CopyToRoutine CopyToRoutineBinary = {
+	.CopyToEstimateStateSpace = CopyToEstimateStateBinary,
 	.CopyToStart = CopyToBinaryStart,
 	.CopyToOutFunc = CopyToBinaryOutFunc,
 	.CopyToOneRow = CopyToBinaryOneRow,
 	.CopyToEnd = CopyToBinaryEnd,
 };
 
-/* Return a COPY TO routine for the given options */
-static const CopyToRoutine *
-CopyToGetRoutine(const CopyFormatOptions *opts)
+static Size
+CopyToEstimateStateTextLike(void)
 {
-	if (opts->csv_mode)
-		return &CopyToRoutineCSV;
-	else if (opts->binary)
-		return &CopyToRoutineBinary;
-
-	/* default is text */
-	return &CopyToRoutineText;
+	return sizeof(CopyToStateTextLike);
 }
 
 /* Implementation of the start callback for text and CSV formats */
 static void
 CopyToTextLikeStart(CopyToState cstate, TupleDesc tupDesc)
 {
+	CopyToStateTextLike *state = (CopyToStateTextLike *) cstate;
+
+	/* Use client encoding when ENCODING option is not specified. */
+	if (state->base.opts.file_encoding < 0)
+		state->file_encoding = pg_get_client_encoding();
+	else
+		state->file_encoding = state->base.opts.file_encoding;
+
+	/*
+	 * Set up encoding conversion info if the file and server encodings differ
+	 * (see also pg_server_to_any).
+	 */
+	if (state->file_encoding == GetDatabaseEncoding() ||
+		state->file_encoding == PG_SQL_ASCII)
+		state->need_transcoding = false;
+	else
+		state->need_transcoding = true;
+
+	/* See Multibyte encoding comment above */
+	state->encoding_embeds_ascii = PG_ENCODING_IS_CLIENT_ONLY(state->file_encoding);
+
 	/*
 	 * For non-binary copy, we need to convert null_print to file encoding,
 	 * because it will be sent directly with CopySendString.
 	 */
-	if (cstate->need_transcoding)
-		cstate->opts.null_print_client = pg_server_to_any(cstate->opts.null_print,
-														  cstate->opts.null_print_len,
-														  cstate->file_encoding);
+	if (state->need_transcoding)
+		state->base.opts.null_print_client = pg_server_to_any(state->base.opts.null_print,
+															  state->base.opts.null_print_len,
+															  state->file_encoding);
 
 	/* if a header has been requested send the line */
-	if (cstate->opts.header_line == COPY_HEADER_TRUE)
+	if (state->base.opts.header_line == COPY_HEADER_TRUE)
 	{
 		ListCell   *cur;
 		bool		hdr_delim = false;
 
-		foreach(cur, cstate->attnumlist)
+		foreach(cur, state->base.attnumlist)
 		{
 			int			attnum = lfirst_int(cur);
 			char	   *colname;
 
 			if (hdr_delim)
-				CopySendChar(cstate, cstate->opts.delim[0]);
+				CopySendChar(cstate, state->base.opts.delim[0]);
 			hdr_delim = true;
 
 			colname = NameStr(TupleDescAttr(tupDesc, attnum - 1)->attname);
 
-			if (cstate->opts.csv_mode)
+			if (state->base.opts.csv_mode)
 				CopyAttributeOutCSV(cstate, colname, false);
 			else
 				CopyAttributeOutText(cstate, colname);
@@ -309,6 +291,13 @@ static void
 CopyToTextLikeEnd(CopyToState cstate)
 {
 	/* Nothing to do here */
+}
+
+static Size
+CopyToEstimateStateBinary(void)
+{
+	/* Binary format doesn't require additional fields */
+	return sizeof(CopyToStateData);
 }
 
 /*
@@ -406,7 +395,7 @@ SendCopyBegin(CopyToState cstate)
 	for (i = 0; i < natts; i++)
 		pq_sendint16(&buf, format); /* per-column formats */
 	pq_endmessage(&buf);
-	cstate->copy_dest = COPY_FRONTEND;
+	cstate->copy_dest = COPY_DEST_FRONTEND;
 }
 
 static void
@@ -453,7 +442,7 @@ CopySendEndOfRow(CopyToState cstate)
 
 	switch (cstate->copy_dest)
 	{
-		case COPY_FILE:
+		case COPY_DEST_FILE:
 			if (fwrite(fe_msgbuf->data, fe_msgbuf->len, 1,
 					   cstate->copy_file) != 1 ||
 				ferror(cstate->copy_file))
@@ -487,11 +476,11 @@ CopySendEndOfRow(CopyToState cstate)
 							 errmsg("could not write to COPY file: %m")));
 			}
 			break;
-		case COPY_FRONTEND:
+		case COPY_DEST_FRONTEND:
 			/* Dump the accumulated row as one CopyData message */
 			(void) pq_putmessage(PqMsg_CopyData, fe_msgbuf->data, fe_msgbuf->len);
 			break;
-		case COPY_CALLBACK:
+		case COPY_DEST_CALLBACK:
 			cstate->data_dest_cb(fe_msgbuf->data, fe_msgbuf->len);
 			break;
 	}
@@ -512,7 +501,7 @@ CopySendTextLikeEndOfRow(CopyToState cstate)
 {
 	switch (cstate->copy_dest)
 	{
-		case COPY_FILE:
+		case COPY_DEST_FILE:
 			/* Default line termination depends on platform */
 #ifndef WIN32
 			CopySendChar(cstate, '\n');
@@ -520,7 +509,7 @@ CopySendTextLikeEndOfRow(CopyToState cstate)
 			CopySendString(cstate, "\r\n");
 #endif
 			break;
-		case COPY_FRONTEND:
+		case COPY_DEST_FRONTEND:
 			/* The FE/BE protocol uses \n as newline for all platforms */
 			CopySendChar(cstate, '\n');
 			break;
@@ -612,6 +601,54 @@ EndCopy(CopyToState cstate)
 		list_free(cstate->partitions);
 
 	pfree(cstate);
+}
+
+/*
+ * Allocate COPY TO state data based on the format's EsimateStateSpace
+ * callback.
+ */
+static CopyToState
+create_copyto_state(ParseState *pstate, List *options)
+{
+	const CopyToRoutine *routine;
+	CopyToState cstate;
+	Size		req_size;
+	bool		format_specified = false;
+
+	routine = &CopyToRoutineText;	/* default */
+	foreach_node(DefElem, defel, options)
+	{
+		if (strcmp(defel->defname, "format") == 0)
+		{
+			char	   *fmt = defGetString(defel);
+
+			if (format_specified)
+				errorConflictingDefElem(defel, pstate);
+			format_specified = true;
+			if (strcmp(fmt, "text") == 0)
+				routine = &CopyToRoutineText;
+			else if (strcmp(fmt, "csv") == 0)
+				routine = &CopyToRoutineCSV;
+			else if (strcmp(fmt, "binary") == 0)
+				routine = &CopyToRoutineBinary;
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("COPY format \"%s\" not recognized", fmt),
+						 parser_errposition(pstate, defel->location)));
+
+			break;
+		}
+	}
+
+	req_size = routine->CopyToEstimateStateSpace();
+	Assert(req_size >= sizeof(CopyToStateData));
+
+	/* Allocate workspace and zero all fields */
+	cstate = (CopyToState) palloc0(req_size);
+	cstate->routine = routine;
+
+	return cstate;
 }
 
 /*
@@ -718,9 +755,7 @@ BeginCopyTo(ParseState *pstate,
 							RelationGetRelationName(rel))));
 	}
 
-
-	/* Allocate workspace and zero all fields */
-	cstate = (CopyToStateData *) palloc0(sizeof(CopyToStateData));
+	cstate = create_copyto_state(pstate, options);
 
 	/*
 	 * We allocate everything used by a cstate in a new memory context. This
@@ -734,9 +769,6 @@ BeginCopyTo(ParseState *pstate,
 
 	/* Extract options from the statement node tree */
 	ProcessCopyOptions(pstate, &cstate->opts, false /* is_from */ , options);
-
-	/* Set format routine */
-	cstate->routine = CopyToGetRoutine(&cstate->opts);
 
 	/* Process the source/target relation or query */
 	if (rel)
@@ -918,31 +950,12 @@ BeginCopyTo(ParseState *pstate,
 		}
 	}
 
-	/* Use client encoding when ENCODING option is not specified. */
-	if (cstate->opts.file_encoding < 0)
-		cstate->file_encoding = pg_get_client_encoding();
-	else
-		cstate->file_encoding = cstate->opts.file_encoding;
-
-	/*
-	 * Set up encoding conversion info if the file and server encodings differ
-	 * (see also pg_server_to_any).
-	 */
-	if (cstate->file_encoding == GetDatabaseEncoding() ||
-		cstate->file_encoding == PG_SQL_ASCII)
-		cstate->need_transcoding = false;
-	else
-		cstate->need_transcoding = true;
-
-	/* See Multibyte encoding comment above */
-	cstate->encoding_embeds_ascii = PG_ENCODING_IS_CLIENT_ONLY(cstate->file_encoding);
-
-	cstate->copy_dest = COPY_FILE;	/* default */
+	cstate->copy_dest = COPY_DEST_FILE; /* default */
 
 	if (data_dest_cb)
 	{
 		progress_vals[1] = PROGRESS_COPY_TYPE_CALLBACK;
-		cstate->copy_dest = COPY_CALLBACK;
+		cstate->copy_dest = COPY_DEST_CALLBACK;
 		cstate->data_dest_cb = data_dest_cb;
 	}
 	else if (pipe)
@@ -1239,13 +1252,14 @@ CopyOneRowTo(CopyToState cstate, TupleTableSlot *slot)
 static void
 CopyAttributeOutText(CopyToState cstate, const char *string)
 {
+	CopyToStateTextLike *state = (CopyToStateTextLike *) cstate;
 	const char *ptr;
 	const char *start;
 	char		c;
-	char		delimc = cstate->opts.delim[0];
+	char		delimc = state->base.opts.delim[0];
 
-	if (cstate->need_transcoding)
-		ptr = pg_server_to_any(string, strlen(string), cstate->file_encoding);
+	if (state->need_transcoding)
+		ptr = pg_server_to_any(string, strlen(string), state->file_encoding);
 	else
 		ptr = string;
 
@@ -1263,7 +1277,7 @@ CopyAttributeOutText(CopyToState cstate, const char *string)
 	 * it's worth making two copies of it to get the IS_HIGHBIT_SET() test out
 	 * of the normal safe-encoding path.
 	 */
-	if (cstate->encoding_embeds_ascii)
+	if (state->encoding_embeds_ascii)
 	{
 		start = ptr;
 		while ((c = *ptr) != '\0')
@@ -1318,7 +1332,7 @@ CopyAttributeOutText(CopyToState cstate, const char *string)
 				start = ptr++;	/* we include char in next run */
 			}
 			else if (IS_HIGHBIT_SET(c))
-				ptr += pg_encoding_mblen(cstate->file_encoding, ptr);
+				ptr += pg_encoding_mblen(state->file_encoding, ptr);
 			else
 				ptr++;
 		}
@@ -1393,20 +1407,21 @@ static void
 CopyAttributeOutCSV(CopyToState cstate, const char *string,
 					bool use_quote)
 {
+	CopyToStateTextLike *state = (CopyToStateTextLike *) cstate;
 	const char *ptr;
 	const char *start;
 	char		c;
-	char		delimc = cstate->opts.delim[0];
-	char		quotec = cstate->opts.quote[0];
-	char		escapec = cstate->opts.escape[0];
-	bool		single_attr = (list_length(cstate->attnumlist) == 1);
+	char		delimc = state->base.opts.delim[0];
+	char		quotec = state->base.opts.quote[0];
+	char		escapec = state->base.opts.escape[0];
+	bool		single_attr = (list_length(state->base.attnumlist) == 1);
 
 	/* force quoting if it matches null_print (before conversion!) */
-	if (!use_quote && strcmp(string, cstate->opts.null_print) == 0)
+	if (!use_quote && strcmp(string, state->base.opts.null_print) == 0)
 		use_quote = true;
 
-	if (cstate->need_transcoding)
-		ptr = pg_server_to_any(string, strlen(string), cstate->file_encoding);
+	if (state->need_transcoding)
+		ptr = pg_server_to_any(string, strlen(string), state->file_encoding);
 	else
 		ptr = string;
 
@@ -1435,8 +1450,8 @@ CopyAttributeOutCSV(CopyToState cstate, const char *string,
 					use_quote = true;
 					break;
 				}
-				if (IS_HIGHBIT_SET(c) && cstate->encoding_embeds_ascii)
-					tptr += pg_encoding_mblen(cstate->file_encoding, tptr);
+				if (IS_HIGHBIT_SET(c) && state->encoding_embeds_ascii)
+					tptr += pg_encoding_mblen(state->file_encoding, tptr);
 				else
 					tptr++;
 			}
@@ -1459,8 +1474,8 @@ CopyAttributeOutCSV(CopyToState cstate, const char *string,
 				CopySendChar(cstate, escapec);
 				start = ptr;	/* we include char in next run */
 			}
-			if (IS_HIGHBIT_SET(c) && cstate->encoding_embeds_ascii)
-				ptr += pg_encoding_mblen(cstate->file_encoding, ptr);
+			if (IS_HIGHBIT_SET(c) && state->encoding_embeds_ascii)
+				ptr += pg_encoding_mblen(state->file_encoding, ptr);
 			else
 				ptr++;
 		}

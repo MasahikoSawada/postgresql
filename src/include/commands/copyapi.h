@@ -23,6 +23,11 @@
 typedef struct CopyToRoutine
 {
 	/*
+	 * Estimate and return the memory size required to store the state data.
+	 */
+	Size		(*CopyToEstimateStateSpace) (void);
+
+	/*
 	 * Set output function information. This callback is called once at the
 	 * beginning of COPY TO.
 	 *

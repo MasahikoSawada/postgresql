@@ -87,9 +87,11 @@ typedef struct CopyFormatOptions
 	List	   *convert_select; /* list of column names (can be NIL) */
 } CopyFormatOptions;
 
-/* These are private in commands/copy[from|to].c */
-typedef struct CopyFromStateData *CopyFromState;
+/* defined in copystate.h */
 typedef struct CopyToStateData *CopyToState;
+
+/* Private in commands/copyfrom.c */
+typedef struct CopyFromStateData *CopyFromState;
 
 typedef int (*copy_data_source_cb) (void *outbuf, int minread, int maxread);
 typedef void (*copy_data_dest_cb) (void *data, int len);
