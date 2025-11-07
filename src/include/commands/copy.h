@@ -48,6 +48,12 @@ typedef enum CopyLogVerbosityChoice
 	COPY_LOG_VERBOSITY_VERBOSE, /* logs additional messages */
 } CopyLogVerbosityChoice;
 
+typedef struct CopyFromRowInfo
+{
+	uint64		lineno;
+	int			tuplen;
+}			CopyFromRowInfo;
+
 /*
  * A struct to hold COPY options, in a parsed form. All of these are related
  * to formatting, except for 'freeze', which doesn't really belong here, but
@@ -105,8 +111,8 @@ extern CopyFromState BeginCopyFrom(ParseState *pstate, Relation rel, Node *where
 								   const char *filename,
 								   bool is_program, copy_data_source_cb data_source_cb, List *attnamelist, List *options);
 extern void EndCopyFrom(CopyFromState cstate);
-extern bool NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
-						 Datum *values, bool *nulls);
+extern bool NextCopyFrom(CopyFromState cstate, ExprContext *econtext, Datum *values,
+						 bool *nulls, CopyFromRowInfo * rowinfo);
 extern bool NextCopyFromRawFields(CopyFromState cstate,
 								  char ***fields, int *nfields);
 extern void CopyFromErrorCallback(void *arg);

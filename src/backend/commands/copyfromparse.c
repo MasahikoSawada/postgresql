@@ -138,21 +138,20 @@ if (1) \
 /* NOTE: there's a copy of this in copyto.c */
 static const char BinarySignature[11] = "PGCOPY\n\377\r\n\0";
 
-
 /* non-export function prototypes */
-static bool CopyReadLine(CopyFromState cstate, bool is_csv);
-static bool CopyReadLineText(CopyFromState cstate, bool is_csv);
-static int	CopyReadAttributesText(CopyFromState cstate);
-static int	CopyReadAttributesCSV(CopyFromState cstate);
-static Datum CopyReadBinaryAttribute(CopyFromState cstate, FmgrInfo *flinfo,
+static bool CopyReadLine(CopyFromStateBuiltins * state, bool is_csv);
+static bool CopyReadLineText(CopyFromStateBuiltins * state, bool is_csv);
+static int	CopyReadAttributesText(CopyFromStateBuiltins * state);
+static int	CopyReadAttributesCSV(CopyFromStateBuiltins * state);
+static Datum CopyReadBinaryAttribute(CopyFromStateBuiltins * state, FmgrInfo *flinfo,
 									 Oid typioparam, int32 typmod,
 									 bool *isnull);
-static pg_attribute_always_inline bool CopyFromTextLikeOneRow(CopyFromState cstate,
+static pg_attribute_always_inline bool CopyFromTextLikeOneRow(CopyFromStateBuiltins * state,
 															  ExprContext *econtext,
-															  Datum *values,
-															  bool *nulls,
+															  Datum *values, bool *nulls,
+															  CopyFromRowInfo * rowinfo,
 															  bool is_csv);
-static pg_attribute_always_inline bool NextCopyFromRawFieldsInternal(CopyFromState cstate,
+static pg_attribute_always_inline bool NextCopyFromRawFieldsInternal(CopyFromStateBuiltins * state,
 																	 char ***fields,
 																	 int *nfields,
 																	 bool is_csv);
@@ -161,10 +160,10 @@ static pg_attribute_always_inline bool NextCopyFromRawFieldsInternal(CopyFromSta
 /* Low-level communications functions */
 static int	CopyGetData(CopyFromState cstate, void *databuf,
 						int minread, int maxread);
-static inline bool CopyGetInt32(CopyFromState cstate, int32 *val);
-static inline bool CopyGetInt16(CopyFromState cstate, int16 *val);
-static void CopyLoadInputBuf(CopyFromState cstate);
-static int	CopyReadBinaryData(CopyFromState cstate, char *dest, int nbytes);
+static inline bool CopyGetInt32(CopyFromStateBuiltins * state, int32 *val);
+static inline bool CopyGetInt16(CopyFromStateBuiltins * state, int16 *val);
+static void CopyLoadInputBuf(CopyFromStateBuiltins * state);
+static int	CopyReadBinaryData(CopyFromStateBuiltins * state, char *dest, int nbytes);
 
 void
 ReceiveCopyBegin(CopyFromState cstate)
@@ -187,8 +186,9 @@ ReceiveCopyBegin(CopyFromState cstate)
 }
 
 void
-ReceiveCopyBinaryHeader(CopyFromState cstate)
+ReceiveCopyBinaryHeader(CopyFromState ccstate)
 {
+	CopyFromStateBuiltins *cstate = (CopyFromStateBuiltins *) ccstate;
 	char		readSig[11];
 	int32		tmp;
 
@@ -255,10 +255,10 @@ CopyGetData(CopyFromState cstate, void *databuf, int minread, int maxread)
 						(errcode_for_file_access(),
 						 errmsg("could not read from COPY file: %m")));
 			if (bytesread == 0)
-				cstate->raw_reached_eof = true;
+				cstate->reached_eof = true;
 			break;
 		case COPY_FRONTEND:
-			while (maxread > 0 && bytesread < minread && !cstate->raw_reached_eof)
+			while (maxread > 0 && bytesread < minread && !cstate->reached_eof)
 			{
 				int			avail;
 
@@ -309,7 +309,7 @@ CopyGetData(CopyFromState cstate, void *databuf, int minread, int maxread)
 							break;
 						case PqMsg_CopyDone:
 							/* COPY IN correctly terminated by frontend */
-							cstate->raw_reached_eof = true;
+							cstate->reached_eof = true;
 							return bytesread;
 						case PqMsg_CopyFail:
 							ereport(ERROR,
@@ -359,7 +359,7 @@ CopyGetData(CopyFromState cstate, void *databuf, int minread, int maxread)
  * Returns true if OK, false if EOF
  */
 static inline bool
-CopyGetInt32(CopyFromState cstate, int32 *val)
+CopyGetInt32(CopyFromStateBuiltins * cstate, int32 *val)
 {
 	uint32		buf;
 
@@ -376,7 +376,7 @@ CopyGetInt32(CopyFromState cstate, int32 *val)
  * CopyGetInt16 reads an int16 that appears in network byte order
  */
 static inline bool
-CopyGetInt16(CopyFromState cstate, int16 *val)
+CopyGetInt16(CopyFromStateBuiltins * cstate, int16 *val)
 {
 	uint16		buf;
 
@@ -397,7 +397,7 @@ CopyGetInt16(CopyFromState cstate, int16 *val)
  * On entry, there must be some data to convert in 'raw_buf'.
  */
 static void
-CopyConvertBuf(CopyFromState cstate)
+CopyConvertBuf(CopyFromStateBuiltins * cstate)
 {
 	/*
 	 * If the file and server encoding are the same, no encoding conversion is
@@ -421,7 +421,7 @@ CopyConvertBuf(CopyFromState cstate)
 			/*
 			 * If no more raw data is coming, report the EOF to the caller.
 			 */
-			if (cstate->raw_reached_eof)
+			if (cstate->base.reached_eof)
 				cstate->input_reached_eof = true;
 			return;
 		}
@@ -444,7 +444,7 @@ CopyConvertBuf(CopyFromState cstate)
 			 * least one character, and a failure to do so means that we've
 			 * hit an invalid byte sequence.
 			 */
-			if (cstate->raw_reached_eof || unverifiedlen >= pg_encoding_max_length(cstate->file_encoding))
+			if (cstate->base.reached_eof || unverifiedlen >= pg_encoding_max_length(cstate->file_encoding))
 				cstate->input_reached_error = true;
 			return;
 		}
@@ -467,7 +467,7 @@ CopyConvertBuf(CopyFromState cstate)
 			/*
 			 * If no more raw data is coming, report the EOF to the caller.
 			 */
-			if (cstate->raw_reached_eof)
+			if (cstate->base.reached_eof)
 				cstate->input_reached_eof = true;
 			return;
 		}
@@ -517,7 +517,7 @@ CopyConvertBuf(CopyFromState cstate)
 			 * failure to do so must mean that we've hit a byte sequence
 			 * that's invalid.
 			 */
-			if (cstate->raw_reached_eof || srclen >= MAX_CONVERSION_INPUT_LENGTH)
+			if (cstate->base.reached_eof || srclen >= MAX_CONVERSION_INPUT_LENGTH)
 				cstate->input_reached_error = true;
 			return;
 		}
@@ -530,7 +530,7 @@ CopyConvertBuf(CopyFromState cstate)
  * Report an encoding or conversion error.
  */
 static void
-CopyConversionError(CopyFromState cstate)
+CopyConversionError(CopyFromStateBuiltins * cstate)
 {
 	Assert(cstate->raw_buf_len > 0);
 	Assert(cstate->input_reached_error);
@@ -587,7 +587,7 @@ CopyConversionError(CopyFromState cstate)
  * beginning of the buffer, and we load new data after that.
  */
 static void
-CopyLoadRawBuf(CopyFromState cstate)
+CopyLoadRawBuf(CopyFromStateBuiltins * cstate)
 {
 	int			nbytes;
 	int			inbytes;
@@ -624,17 +624,17 @@ CopyLoadRawBuf(CopyFromState cstate)
 	}
 
 	/* Load more data */
-	inbytes = CopyGetData(cstate, cstate->raw_buf + cstate->raw_buf_len,
+	inbytes = CopyGetData((CopyFromState) cstate, cstate->raw_buf + cstate->raw_buf_len,
 						  1, RAW_BUF_SIZE - cstate->raw_buf_len);
 	nbytes += inbytes;
 	cstate->raw_buf[nbytes] = '\0';
 	cstate->raw_buf_len = nbytes;
 
-	cstate->bytes_processed += inbytes;
-	pgstat_progress_update_param(PROGRESS_COPY_BYTES_PROCESSED, cstate->bytes_processed);
+	cstate->base.bytes_processed += inbytes;
+	pgstat_progress_update_param(PROGRESS_COPY_BYTES_PROCESSED, cstate->base.bytes_processed);
 
 	if (inbytes == 0)
-		cstate->raw_reached_eof = true;
+		cstate->base.reached_eof = true;
 }
 
 /*
@@ -647,7 +647,7 @@ CopyLoadRawBuf(CopyFromState cstate)
  * of the buffer and then we load more data after that.
  */
 static void
-CopyLoadInputBuf(CopyFromState cstate)
+CopyLoadInputBuf(CopyFromStateBuiltins * cstate)
 {
 	int			nbytes = INPUT_BUF_BYTES(cstate);
 
@@ -685,7 +685,7 @@ CopyLoadInputBuf(CopyFromState cstate)
 			break;
 
 		/* Try to load more raw data */
-		Assert(!cstate->raw_reached_eof);
+		Assert(!cstate->base.reached_eof);
 		CopyLoadRawBuf(cstate);
 	}
 }
@@ -698,7 +698,7 @@ CopyLoadInputBuf(CopyFromState cstate)
  * would be less than 'nbytes' only if we reach EOF).
  */
 static int
-CopyReadBinaryData(CopyFromState cstate, char *dest, int nbytes)
+CopyReadBinaryData(CopyFromStateBuiltins * cstate, char *dest, int nbytes)
 {
 	int			copied_bytes = 0;
 
@@ -723,7 +723,7 @@ CopyReadBinaryData(CopyFromState cstate, char *dest, int nbytes)
 			if (RAW_BUF_BYTES(cstate) == 0)
 			{
 				CopyLoadRawBuf(cstate);
-				if (cstate->raw_reached_eof)
+				if (cstate->base.reached_eof)
 					break;		/* EOF */
 			}
 
@@ -739,15 +739,21 @@ CopyReadBinaryData(CopyFromState cstate, char *dest, int nbytes)
 	return copied_bytes;
 }
 
+Size
+CopyFromBuiltinsEstimateSpace(void)
+{
+	return sizeof(CopyFromStateBuiltins);
+}
+
 /*
  * This function is exposed for use by extensions that read raw fields in the
  * next line. See NextCopyFromRawFieldsInternal() for details.
  */
 bool
-NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields)
+NextCopyFromRawFields(CopyFromState ccstate, char ***fields, int *nfields)
 {
-	return NextCopyFromRawFieldsInternal(cstate, fields, nfields,
-										 cstate->opts.csv_mode);
+	return NextCopyFromRawFieldsInternal((CopyFromStateBuiltins *) ccstate,
+										 fields, nfields, ccstate->opts.csv_mode);
 }
 
 /*
@@ -768,35 +774,35 @@ NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields)
  * by internal functions such as CopyFromTextLikeOneRow().
  */
 static pg_attribute_always_inline bool
-NextCopyFromRawFieldsInternal(CopyFromState cstate, char ***fields, int *nfields, bool is_csv)
+NextCopyFromRawFieldsInternal(CopyFromStateBuiltins * cstate, char ***fields, int *nfields, bool is_csv)
 {
 	int			fldct;
 	bool		done = false;
 
 	/* only available for text or csv input */
-	Assert(!cstate->opts.binary);
+	Assert(!cstate->base.opts.binary);
 
 	/* on input check that the header line is correct if needed */
-	if (cstate->cur_lineno == 0 && cstate->opts.header_line != COPY_HEADER_FALSE)
+	if (cstate->base.cur_lineno == 0 && cstate->base.opts.header_line != COPY_HEADER_FALSE)
 	{
 		ListCell   *cur;
 		TupleDesc	tupDesc;
-		int			lines_to_skip = cstate->opts.header_line;
+		int			lines_to_skip = cstate->base.opts.header_line;
 
 		/* If set to "match", one header line is skipped */
-		if (cstate->opts.header_line == COPY_HEADER_MATCH)
+		if (cstate->base.opts.header_line == COPY_HEADER_MATCH)
 			lines_to_skip = 1;
 
-		tupDesc = RelationGetDescr(cstate->rel);
+		tupDesc = RelationGetDescr(cstate->base.rel);
 
 		for (int i = 0; i < lines_to_skip; i++)
 		{
-			cstate->cur_lineno++;
+			cstate->base.cur_lineno++;
 			if ((done = CopyReadLine(cstate, is_csv)))
 				break;
 		}
 
-		if (cstate->opts.header_line == COPY_HEADER_MATCH)
+		if (cstate->base.opts.header_line == COPY_HEADER_MATCH)
 		{
 			int			fldnum;
 
@@ -805,14 +811,14 @@ NextCopyFromRawFieldsInternal(CopyFromState cstate, char ***fields, int *nfields
 			else
 				fldct = CopyReadAttributesText(cstate);
 
-			if (fldct != list_length(cstate->attnumlist))
+			if (fldct != list_length(cstate->base.attnumlist))
 				ereport(ERROR,
 						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
 						 errmsg("wrong number of fields in header line: got %d, expected %d",
-								fldct, list_length(cstate->attnumlist))));
+								fldct, list_length(cstate->base.attnumlist))));
 
 			fldnum = 0;
-			foreach(cur, cstate->attnumlist)
+			foreach(cur, cstate->base.attnumlist)
 			{
 				int			attnum = lfirst_int(cur);
 				char	   *colName;
@@ -825,7 +831,7 @@ NextCopyFromRawFieldsInternal(CopyFromState cstate, char ***fields, int *nfields
 					ereport(ERROR,
 							(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
 							 errmsg("column name mismatch in header line field %d: got null value (\"%s\"), expected \"%s\"",
-									fldnum, cstate->opts.null_print, NameStr(attr->attname))));
+									fldnum, cstate->base.opts.null_print, NameStr(attr->attname))));
 
 				if (namestrcmp(&attr->attname, colName) != 0)
 				{
@@ -841,7 +847,7 @@ NextCopyFromRawFieldsInternal(CopyFromState cstate, char ***fields, int *nfields
 			return false;
 	}
 
-	cstate->cur_lineno++;
+	cstate->base.cur_lineno++;
 
 	/* Actually read the line into memory here */
 	done = CopyReadLine(cstate, is_csv);
@@ -877,8 +883,8 @@ NextCopyFromRawFieldsInternal(CopyFromState cstate, char ***fields, int *nfields
  * relation passed to BeginCopyFrom. This function fills the arrays.
  */
 bool
-NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
-			 Datum *values, bool *nulls)
+NextCopyFrom(CopyFromState cstate, ExprContext *econtext, Datum *values,
+			 bool *nulls, CopyFromRowInfo * rowinfo)
 {
 	TupleDesc	tupDesc;
 	AttrNumber	num_phys_attrs,
@@ -893,10 +899,9 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
 	/* Initialize all values for row to NULL */
 	MemSet(values, 0, num_phys_attrs * sizeof(Datum));
 	MemSet(nulls, true, num_phys_attrs * sizeof(bool));
-	MemSet(cstate->defaults, false, num_phys_attrs * sizeof(bool));
 
 	/* Get one row from source */
-	if (!cstate->routine->CopyFromOneRow(cstate, econtext, values, nulls))
+	if (!cstate->routine->CopyFromOneRow(cstate, econtext, values, nulls, rowinfo))
 		return false;
 
 	/*
@@ -923,17 +928,19 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
 /* Implementation of the per-row callback for text format */
 bool
 CopyFromTextOneRow(CopyFromState cstate, ExprContext *econtext, Datum *values,
-				   bool *nulls)
+				   bool *nulls, CopyFromRowInfo * rowinfo)
 {
-	return CopyFromTextLikeOneRow(cstate, econtext, values, nulls, false);
+	return CopyFromTextLikeOneRow((CopyFromStateBuiltins *) cstate, econtext,
+								  values, nulls, rowinfo, false);
 }
 
 /* Implementation of the per-row callback for CSV format */
 bool
 CopyFromCSVOneRow(CopyFromState cstate, ExprContext *econtext, Datum *values,
-				  bool *nulls)
+				  bool *nulls, CopyFromRowInfo * rowinfo)
 {
-	return CopyFromTextLikeOneRow(cstate, econtext, values, nulls, true);
+	return CopyFromTextLikeOneRow((CopyFromStateBuiltins *) cstate, econtext,
+								  values, nulls, rowinfo, true);
 }
 
 /*
@@ -943,22 +950,25 @@ CopyFromCSVOneRow(CopyFromState cstate, ExprContext *econtext, Datum *values,
  * and to help compilers to optimize away the 'is_csv' condition.
  */
 static pg_attribute_always_inline bool
-CopyFromTextLikeOneRow(CopyFromState cstate, ExprContext *econtext,
-					   Datum *values, bool *nulls, bool is_csv)
+CopyFromTextLikeOneRow(CopyFromStateBuiltins * cstate, ExprContext *econtext,
+					   Datum *values, bool *nulls, CopyFromRowInfo * rowinfo,
+					   bool is_csv)
 {
 	TupleDesc	tupDesc;
 	AttrNumber	attr_count;
-	FmgrInfo   *in_functions = cstate->in_functions;
-	Oid		   *typioparams = cstate->typioparams;
-	ExprState **defexprs = cstate->defexprs;
+	FmgrInfo   *in_functions = cstate->base.in_functions;
+	Oid		   *typioparams = cstate->base.typioparams;
+	ExprState **defexprs = cstate->base.defexprs;
 	char	  **field_strings;
 	ListCell   *cur;
 	int			fldct;
 	int			fieldno;
 	char	   *string;
 
-	tupDesc = RelationGetDescr(cstate->rel);
-	attr_count = list_length(cstate->attnumlist);
+	tupDesc = RelationGetDescr(cstate->base.rel);
+	attr_count = list_length(cstate->base.attnumlist);
+
+	MemSet(cstate->defaults, false, tupDesc->natts * sizeof(bool));
 
 	/* read raw fields in the next line */
 	if (!NextCopyFromRawFieldsInternal(cstate, &field_strings, &fldct, is_csv))
@@ -973,7 +983,7 @@ CopyFromTextLikeOneRow(CopyFromState cstate, ExprContext *econtext,
 	fieldno = 0;
 
 	/* Loop to read the user attributes on the line. */
-	foreach(cur, cstate->attnumlist)
+	foreach(cur, cstate->base.attnumlist)
 	{
 		int			attnum = lfirst_int(cur);
 		int			m = attnum - 1;
@@ -996,16 +1006,16 @@ CopyFromTextLikeOneRow(CopyFromState cstate, ExprContext *econtext,
 		if (is_csv)
 		{
 			if (string == NULL &&
-				cstate->opts.force_notnull_flags[m])
+				cstate->base.opts.force_notnull_flags[m])
 			{
 				/*
 				 * FORCE_NOT_NULL option is set and column is NULL - convert
 				 * it to the NULL string.
 				 */
-				string = cstate->opts.null_print;
+				string = cstate->base.opts.null_print;
 			}
-			else if (string != NULL && cstate->opts.force_null_flags[m]
-					 && strcmp(string, cstate->opts.null_print) == 0)
+			else if (string != NULL && cstate->base.opts.force_null_flags[m]
+					 && strcmp(string, cstate->base.opts.null_print) == 0)
 			{
 				/*
 				 * FORCE_NULL option is set and column matches the NULL
@@ -1017,8 +1027,8 @@ CopyFromTextLikeOneRow(CopyFromState cstate, ExprContext *econtext,
 			}
 		}
 
-		cstate->cur_attname = NameStr(att->attname);
-		cstate->cur_attval = string;
+		cstate->base.cur_attname = NameStr(att->attname);
+		cstate->base.cur_attval = string;
 
 		if (string != NULL)
 			nulls[m] = false;
@@ -1039,73 +1049,81 @@ CopyFromTextLikeOneRow(CopyFromState cstate, ExprContext *econtext,
 										string,
 										typioparams[m],
 										att->atttypmod,
-										(Node *) cstate->escontext,
+										(Node *) cstate->base.escontext,
 										&values[m]))
 		{
-			Assert(cstate->opts.on_error != COPY_ON_ERROR_STOP);
+			Assert(cstate->base.opts.on_error != COPY_ON_ERROR_STOP);
 
-			cstate->num_errors++;
+			cstate->base.num_errors++;
 
-			if (cstate->opts.log_verbosity == COPY_LOG_VERBOSITY_VERBOSE)
+			if (cstate->base.opts.log_verbosity == COPY_LOG_VERBOSITY_VERBOSE)
 			{
 				/*
 				 * Since we emit line number and column info in the below
 				 * notice message, we suppress error context information other
 				 * than the relation name.
 				 */
-				Assert(!cstate->relname_only);
-				cstate->relname_only = true;
+				Assert(!cstate->base.relname_only);
+				cstate->base.relname_only = true;
 
-				if (cstate->cur_attval)
+				if (cstate->base.cur_attval)
 				{
 					char	   *attval;
 
-					attval = CopyLimitPrintoutLength(cstate->cur_attval);
+					attval = CopyLimitPrintoutLength(cstate->base.cur_attval);
 					ereport(NOTICE,
 							errmsg("skipping row due to data type incompatibility at line %" PRIu64 " for column \"%s\": \"%s\"",
-								   cstate->cur_lineno,
-								   cstate->cur_attname,
+								   cstate->base.cur_lineno,
+								   cstate->base.cur_attname,
 								   attval));
 					pfree(attval);
 				}
 				else
 					ereport(NOTICE,
 							errmsg("skipping row due to data type incompatibility at line %" PRIu64 " for column \"%s\": null input",
-								   cstate->cur_lineno,
-								   cstate->cur_attname));
+								   cstate->base.cur_lineno,
+								   cstate->base.cur_attname));
 
 				/* reset relname_only */
-				cstate->relname_only = false;
+				cstate->base.relname_only = false;
 			}
 
 			return true;
 		}
 
-		cstate->cur_attname = NULL;
-		cstate->cur_attval = NULL;
+		cstate->base.cur_attname = NULL;
+		cstate->base.cur_attval = NULL;
 	}
 
 	Assert(fieldno == attr_count);
+
+	/* Set output parameters */
+	if (rowinfo)
+	{
+		rowinfo->lineno = cstate->base.cur_lineno;
+		rowinfo->tuplen = cstate->line_buf.len;
+	}
 
 	return true;
 }
 
 /* Implementation of the per-row callback for binary format */
 bool
-CopyFromBinaryOneRow(CopyFromState cstate, ExprContext *econtext, Datum *values,
-					 bool *nulls)
+CopyFromBinaryOneRow(CopyFromState ccstate, ExprContext *econtext, Datum *values,
+					 bool *nulls, CopyFromRowInfo * rowinfo)
 {
+	CopyFromStateBuiltins *cstate = (CopyFromStateBuiltins *) ccstate;
 	TupleDesc	tupDesc;
 	AttrNumber	attr_count;
-	FmgrInfo   *in_functions = cstate->in_functions;
-	Oid		   *typioparams = cstate->typioparams;
+	FmgrInfo   *in_functions = cstate->base.in_functions;
+	Oid		   *typioparams = cstate->base.typioparams;
 	int16		fld_count;
 	ListCell   *cur;
 
-	tupDesc = RelationGetDescr(cstate->rel);
-	attr_count = list_length(cstate->attnumlist);
+	tupDesc = RelationGetDescr(cstate->base.rel);
+	attr_count = list_length(cstate->base.attnumlist);
 
-	cstate->cur_lineno++;
+	cstate->base.cur_lineno++;
 
 	if (!CopyGetInt16(cstate, &fld_count))
 	{
@@ -1138,19 +1156,29 @@ CopyFromBinaryOneRow(CopyFromState cstate, ExprContext *econtext, Datum *values,
 				 errmsg("row field count is %d, expected %d",
 						(int) fld_count, attr_count)));
 
-	foreach(cur, cstate->attnumlist)
+	foreach(cur, cstate->base.attnumlist)
 	{
 		int			attnum = lfirst_int(cur);
 		int			m = attnum - 1;
 		Form_pg_attribute att = TupleDescAttr(tupDesc, m);
 
-		cstate->cur_attname = NameStr(att->attname);
+		cstate->base.cur_attname = NameStr(att->attname);
 		values[m] = CopyReadBinaryAttribute(cstate,
 											&in_functions[m],
 											typioparams[m],
 											att->atttypmod,
 											&nulls[m]);
-		cstate->cur_attname = NULL;
+		cstate->base.cur_attname = NULL;
+	}
+
+	if (rowinfo)
+	{
+		/*
+		 * XXX: We used to use line_buf.len but we don't actually use line_buf
+		 * in binary format.
+		 */
+		rowinfo->lineno = cstate->base.cur_lineno;
+		rowinfo->tuplen = cstate->line_buf.len;
 	}
 
 	return true;
@@ -1164,12 +1192,12 @@ CopyFromBinaryOneRow(CopyFromState cstate, ExprContext *econtext, Datum *values,
  * in the final value of line_buf.
  */
 static bool
-CopyReadLine(CopyFromState cstate, bool is_csv)
+CopyReadLine(CopyFromStateBuiltins * cstate, bool is_csv)
 {
 	bool		result;
 
 	resetStringInfo(&cstate->line_buf);
-	cstate->line_buf_valid = false;
+	cstate->base.line_buf_valid = false;
 
 	/* Parse data and transfer into line_buf */
 	result = CopyReadLineText(cstate, is_csv);
@@ -1181,13 +1209,13 @@ CopyReadLine(CopyFromState cstate, bool is_csv)
 		 * after \. up to the protocol end of copy data.  (XXX maybe better
 		 * not to treat \. as special?)
 		 */
-		if (cstate->copy_src == COPY_FRONTEND)
+		if (cstate->base.copy_src == COPY_FRONTEND)
 		{
 			int			inbytes;
 
 			do
 			{
-				inbytes = CopyGetData(cstate, cstate->input_buf,
+				inbytes = CopyGetData((CopyFromState) cstate, cstate->input_buf,
 									  1, INPUT_BUF_SIZE);
 			} while (inbytes > 0);
 			cstate->input_buf_index = 0;
@@ -1231,7 +1259,7 @@ CopyReadLine(CopyFromState cstate, bool is_csv)
 	}
 
 	/* Now it's safe to use the buffer in error messages */
-	cstate->line_buf_valid = true;
+	cstate->base.line_buf_valid = true;
 
 	return result;
 }
@@ -1240,7 +1268,7 @@ CopyReadLine(CopyFromState cstate, bool is_csv)
  * CopyReadLineText - inner loop of CopyReadLine for text mode
  */
 static bool
-CopyReadLineText(CopyFromState cstate, bool is_csv)
+CopyReadLineText(CopyFromStateBuiltins * cstate, bool is_csv)
 {
 	char	   *copy_input_buf;
 	int			input_buf_ptr;
@@ -1257,8 +1285,8 @@ CopyReadLineText(CopyFromState cstate, bool is_csv)
 
 	if (is_csv)
 	{
-		quotec = cstate->opts.quote[0];
-		escapec = cstate->opts.escape[0];
+		quotec = cstate->base.opts.quote[0];
+		escapec = cstate->base.opts.escape[0];
 		/* ignore special escape processing if it's the same as quotec */
 		if (quotec == escapec)
 			escapec = '\0';
@@ -1367,7 +1395,7 @@ CopyReadLineText(CopyFromState cstate, bool is_csv)
 			 * at all --- is cur_lineno a physical or logical count?)
 			 */
 			if (in_quote && c == (cstate->eol_type == EOL_NL ? '\n' : '\r'))
-				cstate->cur_lineno++;
+				cstate->base.cur_lineno++;
 		}
 
 		/* Process \r */
@@ -1570,9 +1598,9 @@ GetDecimalFromHex(char hex)
  * The return value is the number of fields actually read.
  */
 static int
-CopyReadAttributesText(CopyFromState cstate)
+CopyReadAttributesText(CopyFromStateBuiltins * cstate)
 {
-	char		delimc = cstate->opts.delim[0];
+	char		delimc = cstate->base.opts.delim[0];
 	int			fieldno;
 	char	   *output_ptr;
 	char	   *cur_ptr;
@@ -1755,26 +1783,26 @@ CopyReadAttributesText(CopyFromState cstate)
 
 		/* Check whether raw input matched null marker */
 		input_len = end_ptr - start_ptr;
-		if (input_len == cstate->opts.null_print_len &&
-			strncmp(start_ptr, cstate->opts.null_print, input_len) == 0)
+		if (input_len == cstate->base.opts.null_print_len &&
+			strncmp(start_ptr, cstate->base.opts.null_print, input_len) == 0)
 			cstate->raw_fields[fieldno] = NULL;
 		/* Check whether raw input matched default marker */
-		else if (fieldno < list_length(cstate->attnumlist) &&
-				 cstate->opts.default_print &&
-				 input_len == cstate->opts.default_print_len &&
-				 strncmp(start_ptr, cstate->opts.default_print, input_len) == 0)
+		else if (fieldno < list_length(cstate->base.attnumlist) &&
+				 cstate->base.opts.default_print &&
+				 input_len == cstate->base.opts.default_print_len &&
+				 strncmp(start_ptr, cstate->base.opts.default_print, input_len) == 0)
 		{
 			/* fieldno is 0-indexed and attnum is 1-indexed */
-			int			m = list_nth_int(cstate->attnumlist, fieldno) - 1;
+			int			m = list_nth_int(cstate->base.attnumlist, fieldno) - 1;
 
-			if (cstate->defexprs[m] != NULL)
+			if (cstate->base.defexprs[m] != NULL)
 			{
 				/* defaults contain entries for all physical attributes */
 				cstate->defaults[m] = true;
 			}
 			else
 			{
-				TupleDesc	tupDesc = RelationGetDescr(cstate->rel);
+				TupleDesc	tupDesc = RelationGetDescr(cstate->base.rel);
 				Form_pg_attribute att = TupleDescAttr(tupDesc, m);
 
 				ereport(ERROR,
@@ -1824,11 +1852,11 @@ CopyReadAttributesText(CopyFromState cstate)
  * "standard" (i.e. common) CSV usage.
  */
 static int
-CopyReadAttributesCSV(CopyFromState cstate)
+CopyReadAttributesCSV(CopyFromStateBuiltins * cstate)
 {
-	char		delimc = cstate->opts.delim[0];
-	char		quotec = cstate->opts.quote[0];
-	char		escapec = cstate->opts.escape[0];
+	char		delimc = cstate->base.opts.delim[0];
+	char		quotec = cstate->base.opts.quote[0];
+	char		escapec = cstate->base.opts.escape[0];
 	int			fieldno;
 	char	   *output_ptr;
 	char	   *cur_ptr;
@@ -1970,26 +1998,26 @@ endfield:
 
 		/* Check whether raw input matched null marker */
 		input_len = end_ptr - start_ptr;
-		if (!saw_quote && input_len == cstate->opts.null_print_len &&
-			strncmp(start_ptr, cstate->opts.null_print, input_len) == 0)
+		if (!saw_quote && input_len == cstate->base.opts.null_print_len &&
+			strncmp(start_ptr, cstate->base.opts.null_print, input_len) == 0)
 			cstate->raw_fields[fieldno] = NULL;
 		/* Check whether raw input matched default marker */
-		else if (fieldno < list_length(cstate->attnumlist) &&
-				 cstate->opts.default_print &&
-				 input_len == cstate->opts.default_print_len &&
-				 strncmp(start_ptr, cstate->opts.default_print, input_len) == 0)
+		else if (fieldno < list_length(cstate->base.attnumlist) &&
+				 cstate->base.opts.default_print &&
+				 input_len == cstate->base.opts.default_print_len &&
+				 strncmp(start_ptr, cstate->base.opts.default_print, input_len) == 0)
 		{
 			/* fieldno is 0-index and attnum is 1-index */
-			int			m = list_nth_int(cstate->attnumlist, fieldno) - 1;
+			int			m = list_nth_int(cstate->base.attnumlist, fieldno) - 1;
 
-			if (cstate->defexprs[m] != NULL)
+			if (cstate->base.defexprs[m] != NULL)
 			{
 				/* defaults contain entries for all physical attributes */
 				cstate->defaults[m] = true;
 			}
 			else
 			{
-				TupleDesc	tupDesc = RelationGetDescr(cstate->rel);
+				TupleDesc	tupDesc = RelationGetDescr(cstate->base.rel);
 				Form_pg_attribute att = TupleDescAttr(tupDesc, m);
 
 				ereport(ERROR,
@@ -2019,7 +2047,7 @@ endfield:
  * Read a binary attribute
  */
 static Datum
-CopyReadBinaryAttribute(CopyFromState cstate, FmgrInfo *flinfo,
+CopyReadBinaryAttribute(CopyFromStateBuiltins * cstate, FmgrInfo *flinfo,
 						Oid typioparam, int32 typmod,
 						bool *isnull)
 {

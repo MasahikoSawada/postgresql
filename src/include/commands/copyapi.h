@@ -66,6 +66,11 @@ typedef struct CopyToRoutine
 typedef struct CopyFromRoutine
 {
 	/*
+	 * Estimate and return the memory size required to store the state data.
+	 */
+	Size		(*CopyFromEstimateStateSpace) (void);
+
+	/*
 	 * Set input function information. This callback is called once at the
 	 * beginning of COPY FROM.
 	 *
@@ -99,12 +104,11 @@ typedef struct CopyFromRoutine
 	 * Returns false if there are no more tuples to read.
 	 */
 	bool		(*CopyFromOneRow) (CopyFromState cstate, ExprContext *econtext,
-								   Datum *values, bool *nulls);
+								   Datum *values, bool *nulls, CopyFromRowInfo * rowinfo);
 
 	/*
 	 * End a COPY FROM. This callback is called once at the end of COPY FROM.
 	 */
 	void		(*CopyFromEnd) (CopyFromState cstate);
 } CopyFromRoutine;
-
 #endif							/* COPYAPI_H */

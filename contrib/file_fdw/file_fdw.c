@@ -766,7 +766,8 @@ retry:
 	 */
 	ExecClearTuple(slot);
 
-	if (NextCopyFrom(cstate, econtext, slot->tts_values, slot->tts_isnull))
+	if (NextCopyFrom(cstate, econtext, slot->tts_values, slot->tts_isnull,
+					 NULL))
 	{
 		if (cstate->opts.on_error == COPY_ON_ERROR_IGNORE &&
 			cstate->escontext->error_occurred)
@@ -1246,7 +1247,7 @@ file_acquire_sample_rows(Relation onerel, int elevel,
 		MemoryContextReset(tupcontext);
 		MemoryContextSwitchTo(tupcontext);
 
-		found = NextCopyFrom(cstate, NULL, values, nulls);
+		found = NextCopyFrom(cstate, NULL, values, nulls, NULL);
 
 		MemoryContextSwitchTo(oldcontext);
 

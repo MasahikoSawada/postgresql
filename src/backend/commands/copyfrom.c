@@ -30,6 +30,8 @@
 #include "catalog/namespace.h"
 #include "commands/copyapi.h"
 #include "commands/copyfrom_internal.h"
+#include "commands/copystate.h"
+#include "commands/defrem.h"
 #include "commands/progress.h"
 #include "commands/trigger.h"
 #include "executor/execPartition.h"
@@ -129,6 +131,7 @@ static void CopyFromBinaryEnd(CopyFromState cstate);
 
 /* text format */
 static const CopyFromRoutine CopyFromRoutineText = {
+	.CopyFromEstimateStateSpace = CopyFromBuiltinsEstimateSpace,
 	.CopyFromInFunc = CopyFromTextLikeInFunc,
 	.CopyFromStart = CopyFromTextLikeStart,
 	.CopyFromOneRow = CopyFromTextOneRow,
@@ -137,6 +140,7 @@ static const CopyFromRoutine CopyFromRoutineText = {
 
 /* CSV format */
 static const CopyFromRoutine CopyFromRoutineCSV = {
+	.CopyFromEstimateStateSpace = CopyFromBuiltinsEstimateSpace,
 	.CopyFromInFunc = CopyFromTextLikeInFunc,
 	.CopyFromStart = CopyFromTextLikeStart,
 	.CopyFromOneRow = CopyFromCSVOneRow,
@@ -145,54 +149,129 @@ static const CopyFromRoutine CopyFromRoutineCSV = {
 
 /* binary format */
 static const CopyFromRoutine CopyFromRoutineBinary = {
+	.CopyFromEstimateStateSpace = CopyFromBuiltinsEstimateSpace,
 	.CopyFromInFunc = CopyFromBinaryInFunc,
 	.CopyFromStart = CopyFromBinaryStart,
 	.CopyFromOneRow = CopyFromBinaryOneRow,
 	.CopyFromEnd = CopyFromBinaryEnd,
 };
 
-/* Return a COPY FROM routine for the given options */
-static const CopyFromRoutine *
-CopyFromGetRoutine(const CopyFormatOptions *opts)
+/*
+ * Common routine to initialize CopyFromStateBuiltins data.
+ */
+static void
+initialize_copyfrom_bultins_state(CopyFromStateBuiltins * state, TupleDesc tupDesc)
 {
-	if (opts->csv_mode)
-		return &CopyFromRoutineCSV;
-	else if (opts->binary)
-		return &CopyFromRoutineBinary;
+	/* Use client encoding when ENCODING option is not specified. */
+	if (state->base.opts.file_encoding < 0)
+		state->file_encoding = pg_get_client_encoding();
+	else
+		state->file_encoding = state->base.opts.file_encoding;
 
-	/* default is text */
-	return &CopyFromRoutineText;
+	/*
+	 * Look up encoding conversion function.
+	 */
+	if (state->file_encoding == GetDatabaseEncoding() ||
+		state->file_encoding == PG_SQL_ASCII ||
+		GetDatabaseEncoding() == PG_SQL_ASCII)
+	{
+		state->need_transcoding = false;
+	}
+	else
+	{
+		state->need_transcoding = true;
+		state->conversion_proc = FindDefaultConversionProc(state->file_encoding,
+														   GetDatabaseEncoding());
+		if (!OidIsValid(state->conversion_proc))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_FUNCTION),
+					 errmsg("default conversion function for encoding \"%s\" to \"%s\" does not exist",
+							pg_encoding_to_char(state->file_encoding),
+							pg_encoding_to_char(GetDatabaseEncoding()))));
+	}
+
+	state->defaults = (bool *) palloc0(tupDesc->natts * sizeof(bool));
+
+	/* initialize variables */
+	state->eol_type = EOL_UNKNOWN;
+
+	/* Convert convert_selectively name list to per-column flags */
+	if (state->base.opts.convert_selectively)
+	{
+		List	   *attnums;
+		ListCell   *cur;
+		int			num_phys_attrs = RelationGetDescr(state->base.rel)->natts;
+
+		state->convert_select_flags = (bool *) palloc0(num_phys_attrs * sizeof(bool));
+
+		attnums = CopyGetAttnums(tupDesc, state->base.rel, state->base.opts.convert_select);
+
+		foreach(cur, attnums)
+		{
+			int			attnum = lfirst_int(cur);
+			Form_pg_attribute attr = TupleDescAttr(tupDesc, attnum - 1);
+
+			if (!list_member_int(state->base.attnumlist, attnum))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
+						 errmsg_internal("selected column \"%s\" not referenced by COPY",
+										 NameStr(attr->attname))));
+			state->convert_select_flags[attnum - 1] = true;
+		}
+	}
+
+	/*
+	 * Allocate buffers for the input pipeline.
+	 *
+	 * attribute_buf and raw_buf are used in both text and binary modes, but
+	 * input_buf and line_buf only in text mode.
+	 */
+	state->raw_buf = palloc(RAW_BUF_SIZE + 1);
+	state->raw_buf_index = state->raw_buf_len = 0;
+
+	initStringInfo(&state->attribute_buf);
+
+	/* Initialize state variables */
+	state->base.cur_relname = RelationGetRelationName(state->base.rel);
+	state->base.cur_lineno = 0;
+	state->base.cur_attname = NULL;
+	state->base.cur_attval = NULL;
+	state->base.relname_only = false;
 }
 
 /* Implementation of the start callback for text and CSV formats */
 static void
 CopyFromTextLikeStart(CopyFromState cstate, TupleDesc tupDesc)
 {
+	CopyFromStateBuiltins *state = (CopyFromStateBuiltins *) cstate;
 	AttrNumber	attr_count;
+
+	initialize_copyfrom_bultins_state(state, tupDesc);
 
 	/*
 	 * If encoding conversion is needed, we need another buffer to hold the
 	 * converted input data.  Otherwise, we can just point input_buf to the
 	 * same buffer as raw_buf.
 	 */
-	if (cstate->need_transcoding)
+	if (state->need_transcoding)
 	{
-		cstate->input_buf = (char *) palloc(INPUT_BUF_SIZE + 1);
-		cstate->input_buf_index = cstate->input_buf_len = 0;
+		state->input_buf = (char *) palloc(INPUT_BUF_SIZE + 1);
+		state->input_buf_index = state->input_buf_len = 0;
 	}
 	else
-		cstate->input_buf = cstate->raw_buf;
-	cstate->input_reached_eof = false;
+		state->input_buf = state->raw_buf;
+	state->input_reached_eof = false;
 
-	initStringInfo(&cstate->line_buf);
+	initStringInfo(&state->line_buf);
+	state->base.line_buf = &state->line_buf;
 
 	/*
 	 * Create workspace for CopyReadAttributes results; used by CSV and text
 	 * format.
 	 */
-	attr_count = list_length(cstate->attnumlist);
-	cstate->max_fields = attr_count;
-	cstate->raw_fields = (char **) palloc(attr_count * sizeof(char *));
+	attr_count = list_length(state->base.attnumlist);
+	state->max_fields = attr_count;
+	state->raw_fields = (char **) palloc(attr_count * sizeof(char *));
 }
 
 /*
@@ -220,6 +299,8 @@ CopyFromTextLikeEnd(CopyFromState cstate)
 static void
 CopyFromBinaryStart(CopyFromState cstate, TupleDesc tupDesc)
 {
+	initialize_copyfrom_bultins_state((CopyFromStateBuiltins *) cstate, tupDesc);
+
 	/* Read and verify binary header */
 	ReceiveCopyBinaryHeader(cstate);
 }
@@ -308,7 +389,7 @@ CopyFromErrorCallback(void *arg)
 			{
 				char	   *lineval;
 
-				lineval = CopyLimitPrintoutLength(cstate->line_buf.data);
+				lineval = CopyLimitPrintoutLength(cstate->line_buf->data);
 				errcontext("COPY %s, line %" PRIu64 ": \"%s\"",
 						   cstate->cur_relname,
 						   cstate->cur_lineno, lineval);
@@ -1113,6 +1194,7 @@ CopyFrom(CopyFromState cstate)
 	{
 		TupleTableSlot *myslot;
 		bool		skip_tuple;
+		CopyFromRowInfo rowinfo = {0};
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -1146,7 +1228,8 @@ CopyFrom(CopyFromState cstate)
 		ExecClearTuple(myslot);
 
 		/* Directly store the values/nulls array in the slot */
-		if (!NextCopyFrom(cstate, econtext, myslot->tts_values, myslot->tts_isnull))
+		if (!NextCopyFrom(cstate, econtext, myslot->tts_values, myslot->tts_isnull,
+						  &rowinfo))
 			break;
 
 		if (cstate->opts.on_error == COPY_ON_ERROR_IGNORE &&
@@ -1379,8 +1462,8 @@ CopyFrom(CopyFromState cstate)
 					/* Add this tuple to the tuple buffer */
 					CopyMultiInsertInfoStore(&multiInsertInfo,
 											 resultRelInfo, myslot,
-											 cstate->line_buf.len,
-											 cstate->cur_lineno);
+											 rowinfo.tuplen,
+											 rowinfo.lineno);
 
 					/*
 					 * If enough inserts have queued up, then flush all
@@ -1512,6 +1595,50 @@ CopyFrom(CopyFromState cstate)
 	return processed;
 }
 
+static CopyFromState
+create_copyfrom_state(ParseState *pstate, List *options)
+{
+	const CopyFromRoutine *routine;
+	CopyFromState cstate;
+	Size		req_size;
+	bool		format_specified = false;
+
+	routine = &CopyFromRoutineText; /* default */
+	foreach_node(DefElem, defel, options)
+	{
+		if (strcmp(defel->defname, "format") == 0)
+		{
+			char	   *fmt = defGetString(defel);
+
+			if (format_specified)
+				errorConflictingDefElem(defel, pstate);
+			format_specified = true;
+			if (strcmp(fmt, "text") == 0)
+				routine = &CopyFromRoutineText;
+			else if (strcmp(fmt, "csv") == 0)
+				routine = &CopyFromRoutineCSV;
+			else if (strcmp(fmt, "binary") == 0)
+				routine = &CopyFromRoutineBinary;
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("COPY format \"%s\" not recognized", fmt),
+						 parser_errposition(pstate, defel->location)));
+
+			break;
+		}
+	}
+
+	req_size = routine->CopyFromEstimateStateSpace();
+	Assert(req_size >= sizeof(CopyFromStateData));
+
+	/* Allocate workspace and zero all fields */
+	cstate = (CopyFromState) palloc0(req_size);
+	cstate->routine = routine;
+
+	return cstate;
+}
+
 /*
  * Setup to read tuples from a file for COPY FROM.
  *
@@ -1558,7 +1685,7 @@ BeginCopyFrom(ParseState *pstate,
 	};
 
 	/* Allocate workspace and zero all fields */
-	cstate = (CopyFromStateData *) palloc0(sizeof(CopyFromStateData));
+	cstate = create_copyfrom_state(pstate, options);
 
 	/*
 	 * We allocate everything used by a cstate in a new memory context. This
@@ -1572,9 +1699,6 @@ BeginCopyFrom(ParseState *pstate,
 
 	/* Extract options from the statement node tree */
 	ProcessCopyOptions(pstate, &cstate->opts, true /* is_from */ , options);
-
-	/* Set the format routine */
-	cstate->routine = CopyFromGetRoutine(&cstate->opts);
 
 	/* Process the target relation */
 	cstate->rel = rel;
@@ -1657,81 +1781,9 @@ BeginCopyFrom(ParseState *pstate,
 		}
 	}
 
-	/* Convert convert_selectively name list to per-column flags */
-	if (cstate->opts.convert_selectively)
-	{
-		List	   *attnums;
-		ListCell   *cur;
-
-		cstate->convert_select_flags = (bool *) palloc0(num_phys_attrs * sizeof(bool));
-
-		attnums = CopyGetAttnums(tupDesc, cstate->rel, cstate->opts.convert_select);
-
-		foreach(cur, attnums)
-		{
-			int			attnum = lfirst_int(cur);
-			Form_pg_attribute attr = TupleDescAttr(tupDesc, attnum - 1);
-
-			if (!list_member_int(cstate->attnumlist, attnum))
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
-						 errmsg_internal("selected column \"%s\" not referenced by COPY",
-										 NameStr(attr->attname))));
-			cstate->convert_select_flags[attnum - 1] = true;
-		}
-	}
-
-	/* Use client encoding when ENCODING option is not specified. */
-	if (cstate->opts.file_encoding < 0)
-		cstate->file_encoding = pg_get_client_encoding();
-	else
-		cstate->file_encoding = cstate->opts.file_encoding;
-
-	/*
-	 * Look up encoding conversion function.
-	 */
-	if (cstate->file_encoding == GetDatabaseEncoding() ||
-		cstate->file_encoding == PG_SQL_ASCII ||
-		GetDatabaseEncoding() == PG_SQL_ASCII)
-	{
-		cstate->need_transcoding = false;
-	}
-	else
-	{
-		cstate->need_transcoding = true;
-		cstate->conversion_proc = FindDefaultConversionProc(cstate->file_encoding,
-															GetDatabaseEncoding());
-		if (!OidIsValid(cstate->conversion_proc))
-			ereport(ERROR,
-					(errcode(ERRCODE_UNDEFINED_FUNCTION),
-					 errmsg("default conversion function for encoding \"%s\" to \"%s\" does not exist",
-							pg_encoding_to_char(cstate->file_encoding),
-							pg_encoding_to_char(GetDatabaseEncoding()))));
-	}
-
 	cstate->copy_src = COPY_FILE;	/* default */
 
 	cstate->whereClause = whereClause;
-
-	/* Initialize state variables */
-	cstate->eol_type = EOL_UNKNOWN;
-	cstate->cur_relname = RelationGetRelationName(cstate->rel);
-	cstate->cur_lineno = 0;
-	cstate->cur_attname = NULL;
-	cstate->cur_attval = NULL;
-	cstate->relname_only = false;
-
-	/*
-	 * Allocate buffers for the input pipeline.
-	 *
-	 * attribute_buf and raw_buf are used in both text and binary modes, but
-	 * input_buf and line_buf only in text mode.
-	 */
-	cstate->raw_buf = palloc(RAW_BUF_SIZE + 1);
-	cstate->raw_buf_index = cstate->raw_buf_len = 0;
-	cstate->raw_reached_eof = false;
-
-	initStringInfo(&cstate->attribute_buf);
 
 	/* Assign range table and rteperminfos, we'll need them in CopyFrom. */
 	if (pstate)
@@ -1818,8 +1870,6 @@ BeginCopyFrom(ParseState *pstate,
 		}
 	}
 
-	cstate->defaults = (bool *) palloc0(tupDesc->natts * sizeof(bool));
-
 	/* initialize progress */
 	pgstat_progress_start_command(PROGRESS_COMMAND_COPY,
 								  cstate->rel ? RelationGetRelid(cstate->rel) : InvalidOid);
@@ -1833,6 +1883,7 @@ BeginCopyFrom(ParseState *pstate,
 	cstate->volatile_defexprs = volatile_defexprs;
 	cstate->num_defaults = num_defaults;
 	cstate->is_program = is_program;
+	cstate->reached_eof = false;
 
 	if (data_source_cb)
 	{
@@ -1959,7 +2010,7 @@ ClosePipeFromProgram(CopyFromState cstate)
 		 * should not report that as an error.  Otherwise, SIGPIPE indicates a
 		 * problem.
 		 */
-		if (!cstate->raw_reached_eof &&
+		if (!cstate->reached_eof &&
 			wait_result_is_signal(pclose_rc, SIGPIPE))
 			return;
 
