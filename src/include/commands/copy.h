@@ -122,6 +122,12 @@ extern uint64 CopyFrom(CopyFromState cstate);
 
 extern DestReceiver *CreateCopyDestReceiver(void);
 
+extern void ProcessCopyBuiltinOptions(List *options, CopyFormatOptions *opts_out,
+									  bool is_from, List **other_options, ParseState *pstate);
+
+/* defined in copy_custom_format.c */
+extern bool FindCustomCopyFormat(const char *fmt_name);
+
 /*
  * internal prototypes
  */

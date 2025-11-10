@@ -229,6 +229,15 @@ ReceiveCopyBinaryHeader(CopyFromState ccstate)
 }
 
 /*
+ * Exporting CopyGetData() function for custom COPY FROM format implementations.
+ */
+int
+CopyFromGetData(CopyFromState cstate, void *databuf, int minread, int maxread)
+{
+	return CopyGetData(cstate, databuf, minread, maxread);
+}
+
+/*
  * CopyGetData reads data from the source (file or frontend)
  *
  * We attempt to read at least minread, and at most maxread, bytes from

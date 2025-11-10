@@ -15,6 +15,7 @@ backend_sources += files(
   'copyfrom.c',
   'copyfromparse.c',
   'copyto.c',
+  'copy_custom_format.c',
   'createas.c',
   'dbcommands.c',
   'define.c',

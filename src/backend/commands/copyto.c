@@ -435,6 +435,16 @@ CopySendChar(CopyToState cstate, char c)
 	appendStringInfoCharMacro(cstate->fe_msgbuf, c);
 }
 
+/*
+ * Exporting CopySendEndOfRow() function for custom COPY TO format
+ * implementations.
+ */
+void
+CopyToFlushData(CopyToState cstate)
+{
+	CopySendEndOfRow(cstate);
+}
+
 static void
 CopySendEndOfRow(CopyToState cstate)
 {
@@ -631,6 +641,13 @@ create_copyto_state(ParseState *pstate, List *options)
 				routine = &CopyToRoutineCSV;
 			else if (strcmp(fmt, "binary") == 0)
 				routine = &CopyToRoutineBinary;
+			else if (GetCustomCopyToRoutine(fmt, &routine))
+			{
+				if (routine == NULL)
+					ereport(ERROR,
+							errmsg("COPY format \"%s\" does not support COPY TO", fmt),
+							parser_errposition(pstate, defel->location));
+			}
 			else
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),

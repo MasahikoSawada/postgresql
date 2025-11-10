@@ -1619,6 +1619,13 @@ create_copyfrom_state(ParseState *pstate, List *options)
 				routine = &CopyFromRoutineCSV;
 			else if (strcmp(fmt, "binary") == 0)
 				routine = &CopyFromRoutineBinary;
+			else if (GetCustomCopyFromRoutine(fmt, &routine))
+			{
+				if (routine == NULL)
+					ereport(ERROR,
+							errmsg("COPY format \"%s\" does not support COPY FROM", fmt),
+							parser_errposition(pstate, defel->location));
+			}
 			else
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),

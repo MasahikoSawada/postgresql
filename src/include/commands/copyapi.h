@@ -111,4 +111,13 @@ typedef struct CopyFromRoutine
 	 */
 	void		(*CopyFromEnd) (CopyFromState cstate);
 } CopyFromRoutine;
+
+extern int CopyFromGetData(CopyFromState cstate, void *databuf, int minread, int maxread);
+extern void CopyToFlushData(CopyToState cstate);
+
+extern void RegisterCopyCustomFormat(const char *fmt_name, const CopyFromRoutine *from_routine,
+									 const CopyToRoutine *to_routine);
+extern bool GetCustomCopyToRoutine(const char *fmt_name, const CopyToRoutine **to_routine);
+extern bool GetCustomCopyFromRoutine(const char *fmt_name, const CopyFromRoutine **from_routine);
+
 #endif							/* COPYAPI_H */
