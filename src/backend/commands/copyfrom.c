@@ -132,6 +132,7 @@ static void CopyFromBinaryEnd(CopyFromState cstate);
 /* text format */
 static const CopyFromRoutine CopyFromRoutineText = {
 	.CopyFromEstimateStateSpace = CopyFromBuiltinsEstimateSpace,
+	.CopyFromProcessOneOption = NULL,
 	.CopyFromInFunc = CopyFromTextLikeInFunc,
 	.CopyFromStart = CopyFromTextLikeStart,
 	.CopyFromOneRow = CopyFromTextOneRow,
@@ -141,6 +142,7 @@ static const CopyFromRoutine CopyFromRoutineText = {
 /* CSV format */
 static const CopyFromRoutine CopyFromRoutineCSV = {
 	.CopyFromEstimateStateSpace = CopyFromBuiltinsEstimateSpace,
+	.CopyFromProcessOneOption = NULL,
 	.CopyFromInFunc = CopyFromTextLikeInFunc,
 	.CopyFromStart = CopyFromTextLikeStart,
 	.CopyFromOneRow = CopyFromCSVOneRow,
@@ -150,6 +152,7 @@ static const CopyFromRoutine CopyFromRoutineCSV = {
 /* binary format */
 static const CopyFromRoutine CopyFromRoutineBinary = {
 	.CopyFromEstimateStateSpace = CopyFromBuiltinsEstimateSpace,
+	.CopyFromProcessOneOption = NULL,
 	.CopyFromInFunc = CopyFromBinaryInFunc,
 	.CopyFromStart = CopyFromBinaryStart,
 	.CopyFromOneRow = CopyFromBinaryOneRow,
@@ -2048,10 +2051,14 @@ ProcessCopyFromOptions(CopyFromState cstate, List *options, ParseState *pstate)
 
 	foreach_node(DefElem, option, other_options)
 	{
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("COPY format \"%s\" not recognized", option->defname),
-				 parser_errposition(pstate, option->location)));
+		if (cstate->routine->CopyFromProcessOneOption &&
+			cstate->routine->CopyFromProcessOneOption(cstate, option))
+			 /* custom option is processed */ ;
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("COPY format \"%s\" not recognized", option->defname),
+					 parser_errposition(pstate, option->location)));
 	}
 
 	if (temp_state)

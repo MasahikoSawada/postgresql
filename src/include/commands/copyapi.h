@@ -28,6 +28,14 @@ typedef struct CopyToRoutine
 	Size		(*CopyToEstimateStateSpace) (void);
 
 	/*
+	 * Process one COPY TO option. Return true if the option is processed,
+	 * otherwise return false.
+	 *
+	 * This is an optional callback.
+	 */
+	bool		(*CopyToProcessOneOption) (CopyToState cstate, DefElem *option);
+
+	/*
 	 * Set output function information. This callback is called once at the
 	 * beginning of COPY TO.
 	 *
@@ -71,6 +79,14 @@ typedef struct CopyFromRoutine
 	Size		(*CopyFromEstimateStateSpace) (void);
 
 	/*
+	 * Process one COPY FROM option. Return true if the option is processed,
+	 * otherwise return false.
+	 *
+	 * This is an optional callback.
+	 */
+	bool		(*CopyFromProcessOneOption) (CopyFromState cstate, DefElem *option);
+
+	/*
 	 * Set input function information. This callback is called once at the
 	 * beginning of COPY FROM.
 	 *
@@ -112,7 +128,7 @@ typedef struct CopyFromRoutine
 	void		(*CopyFromEnd) (CopyFromState cstate);
 } CopyFromRoutine;
 
-extern int CopyFromGetData(CopyFromState cstate, void *databuf, int minread, int maxread);
+extern int	CopyFromGetData(CopyFromState cstate, void *databuf, int minread, int maxread);
 extern void CopyToFlushData(CopyToState cstate);
 
 extern void RegisterCopyCustomFormat(const char *fmt_name, const CopyFromRoutine *from_routine,
