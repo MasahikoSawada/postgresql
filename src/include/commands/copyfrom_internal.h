@@ -100,6 +100,8 @@ typedef struct CopyFromStateBuiltins
 extern void ReceiveCopyBegin(CopyFromState cstate);
 extern void ReceiveCopyBinaryHeader(CopyFromState cstate);
 
+extern void ProcessCopyFromOptions(CopyFromState cstate, List *options, ParseState *pstate);
+
 /* One-row callbacks for built-in formats defined in copyfromparse.c */
 extern bool CopyFromTextOneRow(CopyFromState cstate, ExprContext *econtext,
 							   Datum *values, bool *nulls, CopyFromRowInfo * rowinfo);

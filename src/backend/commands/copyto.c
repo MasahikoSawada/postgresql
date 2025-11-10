@@ -84,6 +84,7 @@ static void CopyAttributeOutCSV(CopyToState cstate, const char *string,
 								bool use_quote);
 static void CopyRelationTo(CopyToState cstate, Relation rel, Relation root_rel,
 						   uint64 *processed);
+static void ProcessCopyToOptions(CopyToState cstate, List *options, ParseState *pstate);
 
 /* built-in format-specific routines */
 static Size CopyToEstimateStateTextLike(void);
@@ -785,7 +786,7 @@ BeginCopyTo(ParseState *pstate,
 	oldcontext = MemoryContextSwitchTo(cstate->copycontext);
 
 	/* Extract options from the statement node tree */
-	ProcessCopyOptions(pstate, &cstate->opts, false /* is_from */ , options);
+	ProcessCopyToOptions(cstate, options, pstate);
 
 	/* Process the source/target relation or query */
 	if (rel)
@@ -1571,4 +1572,33 @@ CreateCopyDestReceiver(void)
 	self->processed = 0;
 
 	return (DestReceiver *) self;
+}
+
+static void
+ProcessCopyToOptions(CopyToState cstate, List *options, ParseState *pstate)
+{
+	bool		temp_state = false;
+	List	   *other_options = NIL;
+	CopyFormatOptions *opts;
+
+	if (cstate == NULL)
+	{
+		cstate = create_copyto_state(pstate, options);
+		temp_state = true;
+	}
+
+	opts = &cstate->opts;
+
+	ProcessCopyBuiltinOptions(options, opts, false, &other_options, pstate);
+
+	foreach_node(DefElem, option, options)
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("COPY format \"%s\" not recognized", option->defname),
+				 parser_errposition(pstate, option->location)));
+	}
+
+	if (temp_state)
+		pfree(cstate);
 }

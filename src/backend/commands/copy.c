@@ -507,10 +507,8 @@ defGetCopyLogVerbosityChoice(DefElem *def, ParseState *pstate)
  * self-consistency of the options list.
  */
 void
-ProcessCopyOptions(ParseState *pstate,
-				   CopyFormatOptions *opts_out,
-				   bool is_from,
-				   List *options)
+ProcessCopyBuiltinOptions(List *options, CopyFormatOptions *opts_out,
+						  bool is_from, List **other_options, ParseState *pstate)
 {
 	bool		format_specified = false;
 	bool		freeze_specified = false;
@@ -519,10 +517,6 @@ ProcessCopyOptions(ParseState *pstate,
 	bool		log_verbosity_specified = false;
 	bool		reject_limit_specified = false;
 	ListCell   *option;
-
-	/* Support external use for option sanity checking */
-	if (opts_out == NULL)
-		opts_out = (CopyFormatOptions *) palloc0(sizeof(CopyFormatOptions));
 
 	opts_out->file_encoding = -1;
 
@@ -544,6 +538,8 @@ ProcessCopyOptions(ParseState *pstate,
 				opts_out->csv_mode = true;
 			else if (strcmp(fmt, "binary") == 0)
 				opts_out->binary = true;
+			else if (FindCustomCopyFormat(fmt))
+				 /* just validate option value */ ;
 			else
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -692,11 +688,7 @@ ProcessCopyOptions(ParseState *pstate,
 			opts_out->reject_limit = defGetCopyRejectLimitOption(defel);
 		}
 		else
-			ereport(ERROR,
-					(errcode(ERRCODE_SYNTAX_ERROR),
-					 errmsg("option \"%s\" not recognized",
-							defel->defname),
-					 parser_errposition(pstate, defel->location)));
+			*other_options = lappend(*other_options, defel);
 	}
 
 	/*

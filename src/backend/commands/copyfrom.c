@@ -1705,7 +1705,7 @@ BeginCopyFrom(ParseState *pstate,
 	oldcontext = MemoryContextSwitchTo(cstate->copycontext);
 
 	/* Extract options from the statement node tree */
-	ProcessCopyOptions(pstate, &cstate->opts, true /* is_from */ , options);
+	ProcessCopyFromOptions(cstate, options, pstate);
 
 	/* Process the target relation */
 	cstate->rel = rel;
@@ -2027,4 +2027,33 @@ ClosePipeFromProgram(CopyFromState cstate)
 						cstate->filename),
 				 errdetail_internal("%s", wait_result_to_str(pclose_rc))));
 	}
+}
+
+void
+ProcessCopyFromOptions(CopyFromState cstate, List *options, ParseState *pstate)
+{
+	bool		temp_state = false;
+	List	   *other_options = NIL;
+	CopyFormatOptions *opts;
+
+	if (cstate == NULL)
+	{
+		cstate = create_copyfrom_state(pstate, options);
+		temp_state = true;
+	}
+
+	opts = &cstate->opts;
+
+	ProcessCopyBuiltinOptions(options, opts, true, &other_options, pstate);
+
+	foreach_node(DefElem, option, other_options)
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("COPY format \"%s\" not recognized", option->defname),
+				 parser_errposition(pstate, option->location)));
+	}
+
+	if (temp_state)
+		pfree(cstate);
 }
