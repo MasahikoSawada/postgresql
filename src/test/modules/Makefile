@@ -19,6 +19,7 @@ SUBDIRS = \
 		  test_bitmapset \
 		  test_bloomfilter \
 		  test_copy_callbacks \
+		  test_copy_custom_format \
 		  test_custom_rmgrs \
 		  test_ddl_deparse \
 		  test_dsa \

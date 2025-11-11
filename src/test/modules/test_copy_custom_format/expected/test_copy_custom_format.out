@@ -1,0 +1,97 @@
+CREATE TABLE copy_data (a smallint, b integer, c bigint);
+INSERT INTO copy_data VALUES (1, 2, 3), (12, 34, 56), (123, 456, 789);
+COPY copy_data FROM stdin WITH (FORMAT 'test_format');
+NOTICE:  CopyFromInFunc: attribute: smallint
+NOTICE:  CopyFromInFunc: attribute: integer
+NOTICE:  CopyFromInFunc: attribute: bigint
+NOTICE:  CopyFromStart: the number of attributes: 3
+NOTICE:  common_int 0 common_bool 0 from_str "(null)"
+NOTICE:  CopyFromOneRow
+NOTICE:  CopyFromEnd
+COPY copy_data TO stdout WITH (FORMAT 'test_format');
+NOTICE:  CopyToOutFunc: attribute: smallint
+NOTICE:  CopyToOutFunc: attribute: integer
+NOTICE:  CopyToOutFunc: attribute: bigint
+NOTICE:  CopyToStart: the number of attributes: 3
+NOTICE:  common_int 0 common_bool 0 to_str "(null)"
+NOTICE:  CopyToOneRow: the number of valid values: 3
+NOTICE:  CopyToOneRow: the number of valid values: 3
+NOTICE:  CopyToOneRow: the number of valid values: 3
+NOTICE:  CopyToEnd
+-- Error
+COPY copy_data FROM stdin WITH (FORMAT 'error');
+ERROR:  COPY format "error" not recognized
+LINE 1: COPY copy_data FROM stdin WITH (FORMAT 'error');
+                                        ^
+COPY copy_data FROM stdin WITH (FORMAT 'text', FORMAT 'error');
+ERROR:  conflicting or redundant options
+LINE 1: COPY copy_data FROM stdin WITH (FORMAT 'text', FORMAT 'error...
+                                                       ^
+-- Option handling, COPY FROM
+COPY copy_data FROM stdin WITH (FORMAT 'test_format', common_int 10);
+NOTICE:  CopyFromInFunc: attribute: smallint
+NOTICE:  CopyFromInFunc: attribute: integer
+NOTICE:  CopyFromInFunc: attribute: bigint
+NOTICE:  CopyFromStart: the number of attributes: 3
+NOTICE:  common_int 10 common_bool 0 from_str "(null)"
+NOTICE:  CopyFromOneRow
+NOTICE:  CopyFromEnd
+COPY copy_data FROM stdin WITH (FORMAT 'test_format', common_int -10);
+NOTICE:  CopyFromInFunc: attribute: smallint
+NOTICE:  CopyFromInFunc: attribute: integer
+NOTICE:  CopyFromInFunc: attribute: bigint
+NOTICE:  CopyFromStart: the number of attributes: 3
+NOTICE:  common_int -10 common_bool 0 from_str "(null)"
+NOTICE:  CopyFromOneRow
+NOTICE:  CopyFromEnd
+COPY copy_data FROM stdin WITH (FORMAT 'test_format', common_int 'a'); -- error
+ERROR:  common_int requires an integer value
+COPY copy_data FROM stdin WITH (FORMAT 'test_format', common_bool 'true');
+NOTICE:  CopyFromInFunc: attribute: smallint
+NOTICE:  CopyFromInFunc: attribute: integer
+NOTICE:  CopyFromInFunc: attribute: bigint
+NOTICE:  CopyFromStart: the number of attributes: 3
+NOTICE:  common_int 0 common_bool 1 from_str "(null)"
+NOTICE:  CopyFromOneRow
+NOTICE:  CopyFromEnd
+COPY copy_data FROM stdin WITH (FORMAT 'test_format', common_bool 'false');
+NOTICE:  CopyFromInFunc: attribute: smallint
+NOTICE:  CopyFromInFunc: attribute: integer
+NOTICE:  CopyFromInFunc: attribute: bigint
+NOTICE:  CopyFromStart: the number of attributes: 3
+NOTICE:  common_int 0 common_bool 0 from_str "(null)"
+NOTICE:  CopyFromOneRow
+NOTICE:  CopyFromEnd
+COPY copy_data FROM stdin WITH (FORMAT 'test_format', common_bool 'hello'); -- error
+ERROR:  common_bool requires a Boolean value
+COPY copy_data FROM stdin WITH (FORMAT 'test_format', common_int 100, common_bool false, from_str 'from option');
+NOTICE:  CopyFromInFunc: attribute: smallint
+NOTICE:  CopyFromInFunc: attribute: integer
+NOTICE:  CopyFromInFunc: attribute: bigint
+NOTICE:  CopyFromStart: the number of attributes: 3
+NOTICE:  common_int 100 common_bool 0 from_str "from option"
+NOTICE:  CopyFromOneRow
+NOTICE:  CopyFromEnd
+COPY copy_data FROM stdin WITH (FORMAT 'test_format', invalid 'option'); -- error
+ERROR:  COPY format "invalid" not recognized
+LINE 1: ... copy_data FROM stdin WITH (FORMAT 'test_format', invalid 'o...
+                                                             ^
+COPY copy_data FROM stdin WITH (FORMAT 'test_format', format 'text'); -- error
+ERROR:  conflicting or redundant options
+LINE 1: ... copy_data FROM stdin WITH (FORMAT 'test_format', format 'te...
+                                                             ^
+-- Option handling, COPY FROM
+COPY copy_data TO stdout WITH (FORMAT 'test_format', common_int -10, common_bool false, to_str 'to option');
+NOTICE:  CopyToOutFunc: attribute: smallint
+NOTICE:  CopyToOutFunc: attribute: integer
+NOTICE:  CopyToOutFunc: attribute: bigint
+NOTICE:  CopyToStart: the number of attributes: 3
+NOTICE:  common_int -10 common_bool 0 to_str "to option"
+NOTICE:  CopyToOneRow: the number of valid values: 3
+NOTICE:  CopyToOneRow: the number of valid values: 3
+NOTICE:  CopyToOneRow: the number of valid values: 3
+NOTICE:  CopyToEnd
+COPY copy_data TO stdout WITH (FORMAT 'test_format', from_str 'to option'); -- error
+ERROR:  COPY format "from_str" not recognized
+LINE 1: ...Y copy_data TO stdout WITH (FORMAT 'test_format', from_str '...
+                                                             ^
