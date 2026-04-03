@@ -66,10 +66,12 @@ typedef enum ReplicationSlotInvalidationCause
 	RS_INVAL_WAL_LEVEL = (1 << 2),
 	/* idle slot timeout has occurred */
 	RS_INVAL_IDLE_TIMEOUT = (1 << 3),
+	/* slot's xmin or catalog_xmin has reached max xid age */
+	RS_INVAL_XID_AGE = (1 << 4),
 } ReplicationSlotInvalidationCause;
 
 /* Maximum number of invalidation causes */
-#define	RS_INVAL_MAX_CAUSES 4
+#define	RS_INVAL_MAX_CAUSES 5
 
 /*
  * When the slot synchronization worker is running, or when
@@ -326,6 +328,7 @@ extern PGDLLIMPORT ReplicationSlot *MyReplicationSlot;
 extern PGDLLIMPORT int max_replication_slots;
 extern PGDLLIMPORT char *synchronized_standby_slots;
 extern PGDLLIMPORT int idle_replication_slot_timeout_secs;
+extern PGDLLIMPORT int max_slot_xid_age;
 
 /* shmem initialization functions */
 extern Size ReplicationSlotsShmemSize(void);
@@ -367,7 +370,8 @@ extern void ReplicationSlotsDropDBSlots(Oid dboid);
 extern bool InvalidateObsoleteReplicationSlots(uint32 possible_causes,
 											   XLogSegNo oldestSegno,
 											   Oid dboid,
-											   TransactionId snapshotConflictHorizon);
+											   TransactionId snapshotConflictHorizon,
+											   TransactionId xidLimit);
 extern ReplicationSlot *SearchNamedReplicationSlot(const char *name, bool need_lock);
 extern int	ReplicationSlotIndex(ReplicationSlot *slot);
 extern bool ReplicationSlotName(int index, Name name);

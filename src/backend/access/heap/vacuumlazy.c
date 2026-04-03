@@ -147,6 +147,7 @@
 #include "pgstat.h"
 #include "portability/instr_time.h"
 #include "postmaster/autovacuum.h"
+#include "replication/slot.h"
 #include "storage/bufmgr.h"
 #include "storage/freespace.h"
 #include "storage/latch.h"
@@ -799,6 +800,24 @@ heap_vacuum_rel(Relation rel, const VacuumParams *params,
 	 * to increase the number of dead tuples it can prune away.)
 	 */
 	vacrel->aggressive = vacuum_get_cutoffs(rel, params, &vacrel->cutoffs);
+
+	/*
+	 * If the current vacuum cutoff (OldestXmin) is being held back by a
+	 * replication that has exceeded max_slot_xid_age, attemp to invalidate
+	 * such slots.
+	 */
+	if (maybe_invalidate_xid_aged_slots(vacrel->cutoffs.OldestXmin,
+										vacrel->cutoffs.OldestSlotXmin,
+										vacrel->cutoffs.OldestSlotCatalogXmin))
+	{
+		/*
+		 * Some slots have been invalidated; re-compute the vacuum cutoffs and
+		 * aggresiveness.
+		 */
+		vacrel->aggressive = vacuum_get_cutoffs(rel, params,
+												&vacrel->cutoffs);
+	}
+
 	vacrel->rel_pages = orig_rel_pages = RelationGetNumberOfBlocks(rel);
 	vacrel->vistest = GlobalVisTestFor(rel);
 

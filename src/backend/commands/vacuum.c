@@ -48,6 +48,7 @@
 #include "postmaster/autovacuum.h"
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/interrupt.h"
+#include "replication/slot.h"
 #include "storage/bufmgr.h"
 #include "storage/lmgr.h"
 #include "storage/pmsignal.h"
@@ -1133,7 +1134,10 @@ vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
 	 * that only one vacuum process can be working on a particular table at
 	 * any time, and that each vacuum is always an independent transaction.
 	 */
-	cutoffs->OldestXmin = GetOldestNonRemovableTransactionId(rel);
+	cutoffs->OldestXmin =
+		GetOldestNonRemovableTransactionIdWithSlotXids(rel,
+													   &cutoffs->OldestSlotXmin,
+													   &cutoffs->OldestSlotCatalogXmin);
 
 	Assert(TransactionIdIsNormal(cutoffs->OldestXmin));
 
@@ -2687,4 +2691,78 @@ vac_tid_reaped(ItemPointer itemptr, void *state)
 	TidStore   *dead_items = (TidStore *) state;
 
 	return TidStoreIsMember(dead_items, itemptr);
+}
+
+/*
+ * Invalidate replication slots whose XID age exceeds max_slot_xid_age.
+ *
+ * The caller provides the overall oldestx xmin along with the oldest
+ * slot and catalog_xmin, typically all obtained from a single consistent
+ * snapshot via ComputeXidhorizons(). These values are used to avoid
+ * unnecessary work: if the global OldestXmin is held back by something
+ * other than a replication slot (e.g., a long-running transaction),
+ * invalidating slots would not advance the horizon and is therefore
+ * skipped. Similarly, no action is taken if the current horizons have
+ * not yet exceeded the threshold.
+ *
+ * Returns true if at least one slot was invalidated.
+ */
+bool
+maybe_invalidate_xid_aged_slots(TransactionId oldest_xmin,
+								TransactionId oldest_slot_xmin,
+								TransactionId oldest_slot_catalog_xmin)
+{
+	TransactionId xid_limit;
+	bool		slot_holds_oldest_xmin;
+
+	if (max_slot_xid_age == 0)
+		return false;
+
+	Assert(TransactionIdIsNormal(oldest_xmin));
+
+	/*
+	 * Check if a replication slot's xmin or catalog_xmin is what's holding
+	 * back OldestXmin. If not, skip the unnecessary work.
+	 */
+	slot_holds_oldest_xmin =
+		(TransactionIdIsValid(oldest_slot_xmin) &&
+		 TransactionIdEquals(oldest_xmin, oldest_slot_xmin)) ||
+		(TransactionIdIsValid(oldest_slot_catalog_xmin) &&
+		 TransactionIdEquals(oldest_xmin, oldest_slot_catalog_xmin));
+
+	if (!slot_holds_oldest_xmin)
+		return false;
+
+	xid_limit = TransactionIdRetreatedBy(ReadNextTransactionId(),
+										 max_slot_xid_age);
+
+	/*
+	 * A replication slot is holding back OldestXmin. We invalidate slots that
+	 * has exceeded the XID age limit.
+	 *
+	 * Note that while a non-catalog vacuum is technically only blocked by
+	 * physical slots' xmin values, we invalidate logical slots too that
+	 * exceeds the XID age limit if we trigger the XID-age based slot
+	 * invalidation. One might think that this is unnecessary for non-catalog
+	 * tables as invalidating logical slots while vacuuming a non-catalog
+	 * table doesn't help advance vacuum cutoffs. But performing invalidation
+	 * trials for physical and logical slots would add complexity.
+	 *
+	 * In practice, XID-age-based invalidation is lightweight (e.g., it does
+	 * not require process termination). This unified approach keeps the API
+	 * simple by avoiding the need to distinguish between catalog and
+	 * non-catalog tables here.
+	 *
+	 * Note: Invalidating a slot does not guarantee that the oldest xmin will
+	 * advance. Due to a race condition, a long-running transaction might be
+	 * holding the same xmin as the slot. In such cases, the slot is
+	 * invalidated, but the global horizon remains unchanged.
+	 */
+	if (TransactionIdPrecedes(oldest_xmin, xid_limit))
+		return InvalidateObsoleteReplicationSlots(RS_INVAL_XID_AGE,
+												  0, InvalidOid,
+												  InvalidTransactionId,
+												  xid_limit);
+
+	return false;
 }

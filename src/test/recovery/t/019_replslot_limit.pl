@@ -540,4 +540,179 @@ is( $publisher4->safe_psql(
 $publisher4->stop;
 $subscriber4->stop;
 
+# Wait for the given slot to be invalidated with reason 'xid_aged'
+sub wait_for_xid_aged_invalidation
+{
+	my ($node, $slot_name) = @_;
+	$node->poll_query_until(
+		'postgres', qq[
+		SELECT COUNT(slot_name) = 1 FROM pg_replication_slots
+			WHERE slot_name = '$slot_name' AND
+			active = false AND
+			invalidation_reason = 'xid_aged';
+	]) or die "Timed out waiting for slot $slot_name to be invalidated";
+}
+
+# =====================================================================
+# Testcase start: Invalidate physical slot due to max_slot_xid_age GUC
+
+# Initialize primary node for XID age tests
+my $primary5 = PostgreSQL::Test::Cluster->new('primary5');
+$primary5->init(allows_streaming => 'logical');
+
+# Disable autovacuum so checkpointer triggers the invalidation
+my $max_slot_xid_age = 100;
+$primary5->append_conf(
+	'postgresql.conf', qq{
+max_slot_xid_age = $max_slot_xid_age
+autovacuum = off
+});
+
+$primary5->start;
+
+# Create a procedure to consume XIDs
+$primary5->safe_psql(
+	'postgres', qq{
+	CREATE PROCEDURE consume_xid(cnt int)
+	AS \$\$
+	DECLARE
+	    i int;
+	BEGIN
+	    FOR i IN 1..cnt LOOP
+	        EXECUTE 'SELECT pg_current_xact_id()';
+	        COMMIT;
+	    END LOOP;
+	END;
+	\$\$ LANGUAGE plpgsql;
+});
+
+# Take a backup for creating standby
+$backup_name = 'backup5';
+$primary5->backup($backup_name);
+
+# Create standby with HS feedback so the slot gains an xmin
+my $standby5 = PostgreSQL::Test::Cluster->new('standby5');
+$standby5->init_from_backup($primary5, $backup_name, has_streaming => 1);
+$standby5->append_conf(
+	'postgresql.conf', q{
+primary_slot_name = 'sb5_slot'
+hot_standby_feedback = on
+wal_receiver_status_interval = 1
+});
+$primary5->safe_psql(
+	'postgres', qq[
+    SELECT pg_create_physical_replication_slot(slot_name := 'sb5_slot', immediately_reserve := true);
+]);
+$standby5->start;
+
+# Create some content on primary to move xmin
+$primary5->safe_psql('postgres',
+	"CREATE TABLE tab_int5 AS SELECT generate_series(1,10) AS a");
+$primary5->wait_for_catchup($standby5);
+
+# Wait for the physical slot to get xmin via hot_standby_feedback
+$primary5->poll_query_until(
+	'postgres', qq[
+	SELECT xmin IS NOT NULL
+		FROM pg_catalog.pg_replication_slots
+		WHERE slot_name = 'sb5_slot';
+]) or die "Timed out waiting for slot sb5_slot xmin from HS feedback";
+
+# Stop standby so the slot becomes inactive with its xmin frozen
+$standby5->stop;
+
+# Advance XIDs past 2x max_slot_xid_age so the slot's xmin is stale enough
+$primary5->safe_psql('postgres', qq{CALL consume_xid(2 * $max_slot_xid_age)});
+$primary5->safe_psql('postgres', "CHECKPOINT");
+wait_for_xid_aged_invalidation($primary5, 'sb5_slot');
+ok(1, "physical slot invalidated due to XID age (via checkpoint)");
+
+# Testcase end: Invalidate physical slot due to max_slot_xid_age GUC
+# ===================================================================
+
+# ====================================================================
+# Testcase start: Invalidate logical slot due to max_slot_xid_age GUC
+
+# Create a logical slot directly on the primary (no subscriber needed).
+# The slot gets a catalog_xmin immediately upon creation.
+$primary5->safe_psql('postgres',
+	"SELECT pg_create_logical_replication_slot('lsub5_slot', 'pgoutput')");
+
+$primary5->poll_query_until(
+	'postgres', qq[
+	SELECT catalog_xmin IS NOT NULL
+	FROM pg_catalog.pg_replication_slots
+	WHERE slot_name = 'lsub5_slot';
+]) or die "Timed out waiting for slot lsub5_slot catalog_xmin";
+
+# Advance XIDs past 2x max_slot_xid_age so the slot's catalog_xmin is stale enough
+$primary5->safe_psql('postgres', qq{CALL consume_xid(2 * $max_slot_xid_age)});
+
+# Vacuume a user table so OldestXmin does not include the slot's catalog_xmin,
+# skipping the invalidation of the slot.
+$primary5->safe_psql('postgres', "VACUUM tab_int5");
+is( $primary5->safe_psql(
+		'postgres',
+		qq[SELECT invalidation_reason IS NULL FROM pg_replication_slots WHERE slot_name = 'lsub5_slot';]
+	),
+	't',
+	'logical slot not invalidated after vacuuming a data table');
+
+# Vacuum a catalog table so OldestXmin includes the slot's catalog_xmin,
+# triggering invalidation of the slot.
+$primary5->safe_psql('postgres', "VACUUM pg_class");
+wait_for_xid_aged_invalidation($primary5, 'lsub5_slot');
+ok(1, "logical slot invalidated due to XID age (via vacuum)");
+
+# Testcase end: Invalidate logical slot due to max_slot_xid_age GUC
+# ==================================================================
+
+# ===============================================================================
+# Testcase start: Invalidate logical slot on standby due to max_slot_xid_age GUC
+
+# Disable max_slot_xid_age on primary and recreate the streaming slot
+$primary5->safe_psql(
+	'postgres',
+	q{
+ALTER SYSTEM SET max_slot_xid_age = 0;
+SELECT pg_reload_conf();
+});
+$primary5->safe_psql('postgres',
+	"SELECT pg_drop_replication_slot('sb5_slot')");
+$primary5->safe_psql('postgres',
+	"SELECT pg_create_physical_replication_slot('sb5_slot', true)");
+$standby5->append_conf(
+	'postgresql.conf', qq{
+max_slot_xid_age = $max_slot_xid_age
+autovacuum = off
+});
+$standby5->start;
+
+$primary5->wait_for_catchup($standby5);
+
+$standby5->create_logical_slot_on_standby($primary5, 'sb5_logical_slot',
+	'postgres');
+
+$standby5->poll_query_until(
+	'postgres', qq[
+	SELECT catalog_xmin IS NOT NULL
+	FROM pg_catalog.pg_replication_slots
+	WHERE slot_name = 'sb5_logical_slot';
+]) or die "Timed out waiting for sb5_logical_slot catalog_xmin";
+
+# Advance XIDs on primary, replay on standby, then restartpoint to invalidate
+$primary5->safe_psql('postgres', qq{CALL consume_xid(2 * $max_slot_xid_age)});
+$primary5->safe_psql('postgres', "CHECKPOINT");
+$primary5->wait_for_replay_catchup($standby5);
+$standby5->safe_psql('postgres', "CHECKPOINT");
+
+wait_for_xid_aged_invalidation($standby5, 'sb5_logical_slot');
+ok(1, "logical (standby) slot invalidated due to XID age (via restartpoint)");
+
+$standby5->stop;
+$primary5->stop;
+
+# Testcase end: Invalidate logical slot on standby due to max_slot_xid_age GUC
+# =============================================================================
+
 done_testing();

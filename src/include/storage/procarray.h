@@ -53,6 +53,9 @@ extern RunningTransactions GetRunningTransactionData(void);
 
 extern bool TransactionIdIsInProgress(TransactionId xid);
 extern TransactionId GetOldestNonRemovableTransactionId(Relation rel);
+extern TransactionId GetOldestNonRemovableTransactionIdWithSlotXids(Relation rel,
+																	TransactionId *slot_xmin,
+																	TransactionId *slot_catalog_xmin);
 extern TransactionId GetOldestTransactionIdConsideredRunning(void);
 extern TransactionId GetOldestActiveTransactionId(bool inCommitOnly,
 												  bool allDbs);
