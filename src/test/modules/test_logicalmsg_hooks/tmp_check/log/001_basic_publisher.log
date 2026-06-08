@@ -1,0 +1,110 @@
+2026-06-08 11:22:49.873 PDT postmaster[122279] LOG:  starting PostgreSQL 19beta1 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.1 20260123 (Red Hat 15.2.1-7), 64-bit
+2026-06-08 11:22:49.873 PDT postmaster[122279] LOG:  listening on Unix socket "/tmp/PwISLaZk3r/.s.PGSQL.23555"
+2026-06-08 11:22:49.874 PDT startup[122284] LOG:  database system was shut down at 2026-06-08 11:22:49 PDT
+2026-06-08 11:22:49.876 PDT postmaster[122279] LOG:  database system is ready to accept connections
+2026-06-08 11:22:50.103 PDT client backend[122303] 001_basic.pl LOG:  statement: CREATE TABLE test (a int);
+2026-06-08 11:22:50.105 PDT client backend[122303] 001_basic.pl LOG:  statement: INSERT INTO test VALUES (1);
+2026-06-08 11:22:50.106 PDT client backend[122303] 001_basic.pl LOG:  statement: CREATE PUBLICATION pub FOR ALL TABLES;
+2026-06-08 11:22:50.123 PDT walsender[122306] sub LOG:  statement: SELECT pg_catalog.set_config('search_path', '', false);
+2026-06-08 11:22:50.124 PDT walsender[122306] sub LOG:  statement: SELECT t.pubname FROM
+	 pg_catalog.pg_publication t WHERE
+	 t.pubname IN ('pub')
+2026-06-08 11:22:50.126 PDT walsender[122306] sub LOG:  statement: SELECT DISTINCT n.nspname, c.relname, c.relkind, gpt.attrs
+	   FROM pg_class c
+	         JOIN pg_namespace n ON n.oid = c.relnamespace
+	         JOIN ( SELECT (pg_get_publication_tables(VARIADIC array_agg(pubname::text))).*
+	                FROM pg_publication
+	                WHERE pubname IN ( 'pub' )) AS gpt
+	             ON gpt.relid = c.oid
+	UNION ALL
+	  SELECT DISTINCT s.schemaname, s.sequencename, 'S'::"char" AS relkind, NULL::int2vector AS attrs
+	  FROM pg_catalog.pg_publication_sequences s
+	  WHERE s.pubname IN ( 'pub' )
+2026-06-08 11:22:50.130 PDT walsender[122306] sub LOG:  received replication command: CREATE_REPLICATION_SLOT "sub" LOGICAL pgoutput (SNAPSHOT 'nothing')
+2026-06-08 11:22:50.130 PDT walsender[122306] sub STATEMENT:  CREATE_REPLICATION_SLOT "sub" LOGICAL pgoutput (SNAPSHOT 'nothing')
+2026-06-08 11:22:50.130 PDT walsender[122306] sub LOG:  logical decoding found consistent point at 0/0180B4E8
+2026-06-08 11:22:50.130 PDT walsender[122306] sub DETAIL:  There are no running transactions.
+2026-06-08 11:22:50.130 PDT walsender[122306] sub STATEMENT:  CREATE_REPLICATION_SLOT "sub" LOGICAL pgoutput (SNAPSHOT 'nothing')
+2026-06-08 11:22:50.130 PDT walsender[122306] sub LOG:  released logical replication slot "sub"
+2026-06-08 11:22:50.130 PDT walsender[122306] sub STATEMENT:  CREATE_REPLICATION_SLOT "sub" LOGICAL pgoutput (SNAPSHOT 'nothing')
+2026-06-08 11:22:50.134 PDT walsender[122309] sub LOG:  statement: SELECT pg_catalog.set_config('search_path', '', false);
+2026-06-08 11:22:50.134 PDT walsender[122309] sub LOG:  received replication command: IDENTIFY_SYSTEM
+2026-06-08 11:22:50.134 PDT walsender[122309] sub STATEMENT:  IDENTIFY_SYSTEM
+2026-06-08 11:22:50.134 PDT walsender[122309] sub LOG:  received replication command: START_REPLICATION SLOT "sub" LOGICAL 0/00000000 (proto_version '4', streaming 'parallel', origin 'any', messages 'on', publication_names '"pub"')
+2026-06-08 11:22:50.134 PDT walsender[122309] sub STATEMENT:  START_REPLICATION SLOT "sub" LOGICAL 0/00000000 (proto_version '4', streaming 'parallel', origin 'any', messages 'on', publication_names '"pub"')
+2026-06-08 11:22:50.134 PDT walsender[122309] sub LOG:  acquired logical replication slot "sub"
+2026-06-08 11:22:50.134 PDT walsender[122309] sub STATEMENT:  START_REPLICATION SLOT "sub" LOGICAL 0/00000000 (proto_version '4', streaming 'parallel', origin 'any', messages 'on', publication_names '"pub"')
+2026-06-08 11:22:50.134 PDT walsender[122309] sub LOG:  starting logical decoding for slot "sub"
+2026-06-08 11:22:50.134 PDT walsender[122309] sub DETAIL:  Streaming transactions committing after 0/0180B520, reading WAL from 0/0180B4E8.
+2026-06-08 11:22:50.134 PDT walsender[122309] sub STATEMENT:  START_REPLICATION SLOT "sub" LOGICAL 0/00000000 (proto_version '4', streaming 'parallel', origin 'any', messages 'on', publication_names '"pub"')
+2026-06-08 11:22:50.134 PDT walsender[122309] sub LOG:  logical decoding found consistent point at 0/0180B4E8
+2026-06-08 11:22:50.134 PDT walsender[122309] sub DETAIL:  There are no running transactions.
+2026-06-08 11:22:50.134 PDT walsender[122309] sub STATEMENT:  START_REPLICATION SLOT "sub" LOGICAL 0/00000000 (proto_version '4', streaming 'parallel', origin 'any', messages 'on', publication_names '"pub"')
+2026-06-08 11:22:50.136 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 LOG:  statement: SELECT pg_catalog.set_config('search_path', '', false);
+2026-06-08 11:22:50.137 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 LOG:  statement: BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ
+2026-06-08 11:22:50.137 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 LOG:  received replication command: CREATE_REPLICATION_SLOT "pg_16390_sync_16384_7649091808686476695" LOGICAL pgoutput (SNAPSHOT 'use')
+2026-06-08 11:22:50.137 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 STATEMENT:  CREATE_REPLICATION_SLOT "pg_16390_sync_16384_7649091808686476695" LOGICAL pgoutput (SNAPSHOT 'use')
+2026-06-08 11:22:50.137 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 LOG:  logical decoding found consistent point at 0/0180B520
+2026-06-08 11:22:50.137 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 DETAIL:  There are no running transactions.
+2026-06-08 11:22:50.137 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 STATEMENT:  CREATE_REPLICATION_SLOT "pg_16390_sync_16384_7649091808686476695" LOGICAL pgoutput (SNAPSHOT 'use')
+2026-06-08 11:22:50.137 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 LOG:  released logical replication slot "pg_16390_sync_16384_7649091808686476695"
+2026-06-08 11:22:50.137 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 STATEMENT:  CREATE_REPLICATION_SLOT "pg_16390_sync_16384_7649091808686476695" LOGICAL pgoutput (SNAPSHOT 'use')
+2026-06-08 11:22:50.137 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 LOG:  statement: SELECT c.oid, c.relreplident, c.relkind  FROM pg_catalog.pg_class c  INNER JOIN pg_catalog.pg_namespace n        ON (c.relnamespace = n.oid) WHERE n.nspname = 'public'   AND c.relname = 'test'
+2026-06-08 11:22:50.138 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 LOG:  statement: SELECT DISTINCT  (CASE WHEN (array_length(gpt.attrs, 1) = c.relnatts)   THEN NULL ELSE gpt.attrs END)  FROM pg_get_publication_tables(ARRAY['pub'], 16384) gpt,  pg_class c WHERE c.oid = gpt.relid
+2026-06-08 11:22:50.139 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 LOG:  statement: SELECT a.attnum,       a.attname,       a.atttypid,       a.attnum = ANY(i.indkey), a.attgenerated != ''  FROM pg_catalog.pg_attribute a  LEFT JOIN pg_catalog.pg_index i       ON (i.indexrelid = pg_get_replica_identity_index(16384)) WHERE a.attnum > 0::pg_catalog.int2   AND NOT a.attisdropped    AND a.attrelid = 16384 ORDER BY a.attnum
+2026-06-08 11:22:50.141 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 LOG:  statement: SELECT DISTINCT pg_get_expr(gpt.qual, gpt.relid)  FROM pg_get_publication_tables(ARRAY['pub'], 16384) gpt
+2026-06-08 11:22:50.141 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 LOG:  statement: COPY public.test (a) TO STDOUT
+2026-06-08 11:22:50.142 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 LOG:  statement: COMMIT
+2026-06-08 11:22:50.142 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 LOG:  received replication command: START_REPLICATION SLOT "pg_16390_sync_16384_7649091808686476695" LOGICAL 0/0180B558 (proto_version '4', streaming 'parallel', origin 'any', messages 'on', publication_names '"pub"')
+2026-06-08 11:22:50.142 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 STATEMENT:  START_REPLICATION SLOT "pg_16390_sync_16384_7649091808686476695" LOGICAL 0/0180B558 (proto_version '4', streaming 'parallel', origin 'any', messages 'on', publication_names '"pub"')
+2026-06-08 11:22:50.142 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 LOG:  acquired logical replication slot "pg_16390_sync_16384_7649091808686476695"
+2026-06-08 11:22:50.142 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 STATEMENT:  START_REPLICATION SLOT "pg_16390_sync_16384_7649091808686476695" LOGICAL 0/0180B558 (proto_version '4', streaming 'parallel', origin 'any', messages 'on', publication_names '"pub"')
+2026-06-08 11:22:50.142 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 LOG:  starting logical decoding for slot "pg_16390_sync_16384_7649091808686476695"
+2026-06-08 11:22:50.142 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 DETAIL:  Streaming transactions committing after 0/0180B558, reading WAL from 0/0180B520.
+2026-06-08 11:22:50.142 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 STATEMENT:  START_REPLICATION SLOT "pg_16390_sync_16384_7649091808686476695" LOGICAL 0/0180B558 (proto_version '4', streaming 'parallel', origin 'any', messages 'on', publication_names '"pub"')
+2026-06-08 11:22:50.142 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 LOG:  logical decoding found consistent point at 0/0180B520
+2026-06-08 11:22:50.142 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 DETAIL:  There are no running transactions.
+2026-06-08 11:22:50.142 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 STATEMENT:  START_REPLICATION SLOT "pg_16390_sync_16384_7649091808686476695" LOGICAL 0/0180B558 (proto_version '4', streaming 'parallel', origin 'any', messages 'on', publication_names '"pub"')
+2026-06-08 11:22:50.142 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 LOG:  released logical replication slot "pg_16390_sync_16384_7649091808686476695"
+2026-06-08 11:22:50.142 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 STATEMENT:  START_REPLICATION SLOT "pg_16390_sync_16384_7649091808686476695" LOGICAL 0/0180B558 (proto_version '4', streaming 'parallel', origin 'any', messages 'on', publication_names '"pub"')
+2026-06-08 11:22:50.142 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 LOG:  received replication command: DROP_REPLICATION_SLOT pg_16390_sync_16384_7649091808686476695 WAIT
+2026-06-08 11:22:50.142 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 STATEMENT:  DROP_REPLICATION_SLOT pg_16390_sync_16384_7649091808686476695 WAIT
+2026-06-08 11:22:50.142 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 LOG:  acquired logical replication slot "pg_16390_sync_16384_7649091808686476695"
+2026-06-08 11:22:50.142 PDT walsender[122312] pg_16390_sync_16384_7649091808686476695 STATEMENT:  DROP_REPLICATION_SLOT pg_16390_sync_16384_7649091808686476695 WAIT
+2026-06-08 11:22:50.244 PDT client backend[122316] 001_basic.pl LOG:  statement: SELECT pg_is_in_recovery()
+2026-06-08 11:22:50.248 PDT client backend[122318] 001_basic.pl LOG:  statement: SELECT pg_current_wal_lsn()
+2026-06-08 11:22:50.251 PDT client backend[122320] 001_basic.pl LOG:  statement: SELECT '0/0180B558' <= replay_lsn AND state = 'streaming'
+	         FROM pg_catalog.pg_stat_replication
+	         WHERE application_name IN ('sub', 'walreceiver')
+2026-06-08 11:22:50.259 PDT client backend[122322] 001_basic.pl LOG:  statement: SELECT pg_logical_emit_message(true, 'test_prefix', 'test_mesasge');
+2026-06-08 11:22:50.263 PDT client backend[122324] 001_basic.pl LOG:  statement: SELECT pg_is_in_recovery()
+2026-06-08 11:22:50.266 PDT client backend[122326] 001_basic.pl LOG:  statement: SELECT pg_current_wal_lsn()
+2026-06-08 11:22:50.268 PDT client backend[122328] 001_basic.pl LOG:  statement: SELECT '0/0180B5D8' <= replay_lsn AND state = 'streaming'
+	         FROM pg_catalog.pg_stat_replication
+	         WHERE application_name IN ('sub', 'walreceiver')
+2026-06-08 11:22:50.273 PDT client backend[122330] 001_basic.pl LOG:  statement: BEGIN;
+2026-06-08 11:22:50.273 PDT client backend[122330] 001_basic.pl LOG:  statement: INSERT INTO test VALUES (1);
+2026-06-08 11:22:50.273 PDT client backend[122330] 001_basic.pl LOG:  statement: SELECT pg_logical_emit_message(true, 'conflict', 'should be skipped');
+2026-06-08 11:22:50.273 PDT client backend[122330] 001_basic.pl LOG:  statement: COMMIT;
+2026-06-08 11:22:50.275 PDT walsender[122309] sub LOG:  released logical replication slot "sub"
+2026-06-08 11:22:50.284 PDT walsender[122339] sub LOG:  statement: SELECT pg_catalog.set_config('search_path', '', false);
+2026-06-08 11:22:50.284 PDT walsender[122339] sub LOG:  received replication command: IDENTIFY_SYSTEM
+2026-06-08 11:22:50.284 PDT walsender[122339] sub STATEMENT:  IDENTIFY_SYSTEM
+2026-06-08 11:22:50.284 PDT walsender[122339] sub LOG:  received replication command: START_REPLICATION SLOT "sub" LOGICAL 0/00000000 (proto_version '4', streaming 'parallel', origin 'any', messages 'on', publication_names '"pub"')
+2026-06-08 11:22:50.284 PDT walsender[122339] sub STATEMENT:  START_REPLICATION SLOT "sub" LOGICAL 0/00000000 (proto_version '4', streaming 'parallel', origin 'any', messages 'on', publication_names '"pub"')
+2026-06-08 11:22:50.284 PDT walsender[122339] sub LOG:  acquired logical replication slot "sub"
+2026-06-08 11:22:50.284 PDT walsender[122339] sub STATEMENT:  START_REPLICATION SLOT "sub" LOGICAL 0/00000000 (proto_version '4', streaming 'parallel', origin 'any', messages 'on', publication_names '"pub"')
+2026-06-08 11:22:50.284 PDT walsender[122339] sub LOG:  starting logical decoding for slot "sub"
+2026-06-08 11:22:50.284 PDT walsender[122339] sub DETAIL:  Streaming transactions committing after 0/0180B5D8, reading WAL from 0/0180B520.
+2026-06-08 11:22:50.284 PDT walsender[122339] sub STATEMENT:  START_REPLICATION SLOT "sub" LOGICAL 0/00000000 (proto_version '4', streaming 'parallel', origin 'any', messages 'on', publication_names '"pub"')
+2026-06-08 11:22:50.284 PDT walsender[122339] sub LOG:  logical decoding found consistent point at 0/0180B520
+2026-06-08 11:22:50.284 PDT walsender[122339] sub DETAIL:  There are no running transactions.
+2026-06-08 11:22:50.284 PDT walsender[122339] sub STATEMENT:  START_REPLICATION SLOT "sub" LOGICAL 0/00000000 (proto_version '4', streaming 'parallel', origin 'any', messages 'on', publication_names '"pub"')
+2026-06-08 11:22:50.287 PDT postmaster[122279] LOG:  received fast shutdown request
+2026-06-08 11:22:50.287 PDT postmaster[122279] LOG:  aborting any active transactions
+2026-06-08 11:22:50.287 PDT postmaster[122279] LOG:  background worker "logical replication launcher" (PID 122287) exited with exit code 1
+2026-06-08 11:22:50.287 PDT checkpointer[122282] LOG:  shutting down
+2026-06-08 11:22:50.399 PDT walsender[122339] sub LOG:  released logical replication slot "sub"
+2026-06-08 11:22:50.408 PDT checkpointer[122282] LOG:  checkpoint starting: shutdown fast
+2026-06-08 11:22:50.408 PDT checkpointer[122282] LOG:  checkpoint complete: shutdown fast: wrote 1 buffers (0.8%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.001 s; sync files=0, longest=0.000 s, average=0.000 s; distance=93 kB, estimate=93 kB; lsn=0/0180B698, redo lsn=0/0180B698
+2026-06-08 11:22:50.409 PDT postmaster[122279] LOG:  database system is shut down

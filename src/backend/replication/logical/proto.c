@@ -661,6 +661,30 @@ logicalrep_write_message(StringInfo out, TransactionId xid, XLogRecPtr lsn,
 }
 
 /*
+ * Read MESSAGE from stream.
+ */
+void
+logicalrep_read_message(StringInfo in, LogicalRepMessageData * msg_data)
+{
+	Size		len;
+	char	   *msg;
+
+	msg_data->flags = pq_getmsgint(in, 1);
+	msg_data->lsn = pq_getmsgint64(in);
+	msg_data->prefix = pq_getmsgstring(in);
+
+	/* read mesage length */
+	len = pq_getmsgint(in, 4);
+
+	/* and data */
+	msg = palloc(len + 1);
+	pq_copymsgbytes(in, msg, len);
+
+	msg[len] = '\0';
+	msg_data->message = msg;
+}
+
+/*
  * Write relation description to the output stream.
  */
 void

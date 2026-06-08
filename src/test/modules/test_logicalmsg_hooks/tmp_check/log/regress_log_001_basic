@@ -1,0 +1,56 @@
+# Checking port 23555
+# Found port 23555
+Name: publisher
+Version: 19beta1
+Data directory: /home/masahiko/pgsql/source/dev_custom-apply-worker/src/test/modules/test_logicalmsg_hooks/tmp_check/t_001_basic_publisher_data/pgdata
+Backup directory: /home/masahiko/pgsql/source/dev_custom-apply-worker/src/test/modules/test_logicalmsg_hooks/tmp_check/t_001_basic_publisher_data/backup
+Archive directory: /home/masahiko/pgsql/source/dev_custom-apply-worker/src/test/modules/test_logicalmsg_hooks/tmp_check/t_001_basic_publisher_data/archives
+Connection string: port=23555 host=/tmp/PwISLaZk3r
+Log file: /home/masahiko/pgsql/source/dev_custom-apply-worker/src/test/modules/test_logicalmsg_hooks/tmp_check/log/001_basic_publisher.log
+[11:22:49.805](0.010s) # initializing database system by copying initdb template
+# Running: cp -RPp /home/masahiko/pgsql/source/dev_custom-apply-worker/tmp_install/initdb-template /home/masahiko/pgsql/source/dev_custom-apply-worker/src/test/modules/test_logicalmsg_hooks/tmp_check/t_001_basic_publisher_data/pgdata
+# Running: /home/masahiko/pgsql/source/dev_custom-apply-worker/src/test/modules/test_logicalmsg_hooks/../../../../src/test/regress/pg_regress --config-auth /home/masahiko/pgsql/source/dev_custom-apply-worker/src/test/modules/test_logicalmsg_hooks/tmp_check/t_001_basic_publisher_data/pgdata
+### Starting node "publisher"
+# Running: pg_ctl --wait --pgdata /home/masahiko/pgsql/source/dev_custom-apply-worker/src/test/modules/test_logicalmsg_hooks/tmp_check/t_001_basic_publisher_data/pgdata --log /home/masahiko/pgsql/source/dev_custom-apply-worker/src/test/modules/test_logicalmsg_hooks/tmp_check/log/001_basic_publisher.log --options --cluster-name=publisher start
+waiting for server to start.... done
+server started
+# Postmaster PID for node "publisher" is 122279
+# Checking port 23556
+# Found port 23556
+Name: subscriber
+Version: 19beta1
+Data directory: /home/masahiko/pgsql/source/dev_custom-apply-worker/src/test/modules/test_logicalmsg_hooks/tmp_check/t_001_basic_subscriber_data/pgdata
+Backup directory: /home/masahiko/pgsql/source/dev_custom-apply-worker/src/test/modules/test_logicalmsg_hooks/tmp_check/t_001_basic_subscriber_data/backup
+Archive directory: /home/masahiko/pgsql/source/dev_custom-apply-worker/src/test/modules/test_logicalmsg_hooks/tmp_check/t_001_basic_subscriber_data/archives
+Connection string: port=23556 host=/tmp/PwISLaZk3r
+Log file: /home/masahiko/pgsql/source/dev_custom-apply-worker/src/test/modules/test_logicalmsg_hooks/tmp_check/log/001_basic_subscriber.log
+[11:22:49.971](0.166s) # initializing database system by copying initdb template
+# Running: cp -RPp /home/masahiko/pgsql/source/dev_custom-apply-worker/tmp_install/initdb-template /home/masahiko/pgsql/source/dev_custom-apply-worker/src/test/modules/test_logicalmsg_hooks/tmp_check/t_001_basic_subscriber_data/pgdata
+# Running: /home/masahiko/pgsql/source/dev_custom-apply-worker/src/test/modules/test_logicalmsg_hooks/../../../../src/test/regress/pg_regress --config-auth /home/masahiko/pgsql/source/dev_custom-apply-worker/src/test/modules/test_logicalmsg_hooks/tmp_check/t_001_basic_subscriber_data/pgdata
+### Starting node "subscriber"
+# Running: pg_ctl --wait --pgdata /home/masahiko/pgsql/source/dev_custom-apply-worker/src/test/modules/test_logicalmsg_hooks/tmp_check/t_001_basic_subscriber_data/pgdata --log /home/masahiko/pgsql/source/dev_custom-apply-worker/src/test/modules/test_logicalmsg_hooks/tmp_check/log/001_basic_subscriber.log --options --cluster-name=subscriber start
+waiting for server to start.... done
+server started
+# Postmaster PID for node "subscriber" is 122293
+#### Begin standard error
+psql:<stdin>:3: NOTICE:  created replication slot "sub" on publisher
+#### End standard error
+Waiting for all subscriptions in "subscriber" to synchronize data
+Waiting for replication conn sub's replay_lsn to pass 0/0180B558 on publisher
+done
+done
+Waiting for replication conn sub's replay_lsn to pass 0/0180B5D8 on publisher
+done
+[11:22:50.270](0.299s) ok 1 - logical message is correctly handled on the subscriber
+[11:22:50.286](0.016s) ok 2 - logical message is skipped by ALTER SUBSCRIPTION SKIP
+### Stopping node "publisher" using mode fast
+# Running: pg_ctl --pgdata /home/masahiko/pgsql/source/dev_custom-apply-worker/src/test/modules/test_logicalmsg_hooks/tmp_check/t_001_basic_publisher_data/pgdata --mode fast stop
+waiting for server to shut down.... done
+server stopped
+# No postmaster PID for node "publisher"
+### Stopping node "subscriber" using mode fast
+# Running: pg_ctl --pgdata /home/masahiko/pgsql/source/dev_custom-apply-worker/src/test/modules/test_logicalmsg_hooks/tmp_check/t_001_basic_subscriber_data/pgdata --mode fast stop
+waiting for server to shut down.... done
+server stopped
+# No postmaster PID for node "subscriber"
+[11:22:50.590](0.304s) 1..2

@@ -1,0 +1,41 @@
+2026-06-08 11:22:49.996 PDT postmaster[122293] LOG:  starting PostgreSQL 19beta1 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.1 20260123 (Red Hat 15.2.1-7), 64-bit
+2026-06-08 11:22:49.996 PDT postmaster[122293] LOG:  listening on Unix socket "/tmp/PwISLaZk3r/.s.PGSQL.23556"
+2026-06-08 11:22:49.997 PDT startup[122298] LOG:  database system was shut down at 2026-06-08 11:22:49 PDT
+2026-06-08 11:22:49.999 PDT postmaster[122293] LOG:  database system is ready to accept connections
+2026-06-08 11:22:50.114 PDT client backend[122305] 001_basic.pl LOG:  statement: CREATE TABLE test (a int primary key);
+2026-06-08 11:22:50.118 PDT client backend[122305] 001_basic.pl LOG:  statement: CREATE SUBSCRIPTION sub CONNECTION 'port=23555 host=/tmp/PwISLaZk3r dbname=postgres' PUBLICATION pub WITH (message = true, disable_on_error = true)
+2026-06-08 11:22:50.132 PDT logical replication apply worker[122307] LOG:  logical replication apply worker for subscription "sub" has started
+2026-06-08 11:22:50.134 PDT client backend[122310] 001_basic.pl LOG:  statement: SELECT count(1) = 0 FROM pg_subscription_rel WHERE srsubstate NOT IN ('r', 's');
+2026-06-08 11:22:50.135 PDT logical replication tablesync worker[122311] LOG:  logical replication table synchronization worker for subscription "sub", table "test" has started
+2026-06-08 11:22:50.142 PDT logical replication tablesync worker[122311] LOG:  logical replication table synchronization worker for subscription "sub", table "test" has finished
+2026-06-08 11:22:50.240 PDT client backend[122314] 001_basic.pl LOG:  statement: SELECT count(1) = 0 FROM pg_subscription_rel WHERE srsubstate NOT IN ('r', 's');
+2026-06-08 11:22:50.260 PDT logical replication apply worker[122307] LOG:  received message: LSN 0/0180B5A8, prefix: test_prefix, message: test_mesasge
+2026-06-08 11:22:50.260 PDT logical replication apply worker[122307] CONTEXT:  processing remote data for replication origin "pg_16390" during message type "MESSAGE" in transaction 695, finished at 0/0180B5A8
+2026-06-08 11:22:50.275 PDT logical replication apply worker[122307] ERROR:  conflict detected on relation "public.test": conflict=insert_exists
+2026-06-08 11:22:50.275 PDT logical replication apply worker[122307] DETAIL:  Could not apply remote change: remote row (1).
+	Key already exists in unique index "test_pkey", modified in transaction 695: key (a)=(1), local row (1).
+2026-06-08 11:22:50.275 PDT logical replication apply worker[122307] CONTEXT:  processing remote data for replication origin "pg_16390" during message type "INSERT" for replication target relation "public.test" in transaction 696, finished at 0/0180B668
+2026-06-08 11:22:50.275 PDT logical replication apply worker[122307] LOG:  subscription "sub" has been disabled because of an error
+2026-06-08 11:22:50.276 PDT client backend[122332] 001_basic.pl LOG:  statement: SELECT subenabled = FALSE FROM pg_subscription WHERE subname = 'sub'
+2026-06-08 11:22:50.279 PDT client backend[122334] 001_basic.pl LOG:  statement: ALTER SUBSCRIPTION sub SKIP (lsn = '0/0180B668');
+2026-06-08 11:22:50.282 PDT client backend[122336] 001_basic.pl LOG:  statement: ALTER SUBSCRIPTION sub ENABLE
+2026-06-08 11:22:50.283 PDT logical replication apply worker[122337] LOG:  logical replication apply worker for subscription "sub" has started
+2026-06-08 11:22:50.284 PDT client backend[122340] 001_basic.pl LOG:  statement: SELECT subskiplsn = '0/0' FROM pg_subscription WHERE subname = 'sub'
+2026-06-08 11:22:50.284 PDT logical replication apply worker[122337] LOG:  logical replication starts skipping transaction at LSN 0/0180B668
+2026-06-08 11:22:50.284 PDT logical replication apply worker[122337] CONTEXT:  processing remote data for replication origin "pg_16390" during message type "BEGIN" in transaction 696, finished at 0/0180B668
+2026-06-08 11:22:50.284 PDT logical replication apply worker[122337] LOG:  logical replication completed skipping transaction at LSN 0/0180B668
+2026-06-08 11:22:50.284 PDT logical replication apply worker[122337] CONTEXT:  processing remote data for replication origin "pg_16390" during message type "COMMIT" in transaction 696, finished at 0/0180B668
+2026-06-08 11:22:50.400 PDT logical replication apply worker[122337] LOG:  data stream from publisher has ended
+2026-06-08 11:22:50.400 PDT logical replication apply worker[122337] ERROR:  could not send end-of-streaming message to primary: server closed the connection unexpectedly
+		This probably means the server terminated abnormally
+		before or while processing the request.
+	invalid socket
+	no COPY in progress
+2026-06-08 11:22:50.400 PDT logical replication apply worker[122337] LOG:  subscription "sub" has been disabled because of an error
+2026-06-08 11:22:50.489 PDT postmaster[122293] LOG:  received fast shutdown request
+2026-06-08 11:22:50.489 PDT postmaster[122293] LOG:  aborting any active transactions
+2026-06-08 11:22:50.489 PDT postmaster[122293] LOG:  background worker "logical replication launcher" (PID 122301) exited with exit code 1
+2026-06-08 11:22:50.489 PDT checkpointer[122296] LOG:  shutting down
+2026-06-08 11:22:50.489 PDT checkpointer[122296] LOG:  checkpoint starting: shutdown fast
+2026-06-08 11:22:50.490 PDT checkpointer[122296] LOG:  checkpoint complete: shutdown fast: wrote 18 buffers (14.1%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.001 s; sync files=0, longest=0.000 s, average=0.000 s; distance=146 kB, estimate=146 kB; lsn=0/01818DF8, redo lsn=0/01818DF8
+2026-06-08 11:22:50.491 PDT postmaster[122293] LOG:  database system is shut down
