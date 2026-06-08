@@ -6894,7 +6894,7 @@ describeSubscriptions(const char *pattern, bool verbose)
 	printQueryOpt myopt = pset.popt;
 	static const bool translate_columns[] = {false, false, false, false,
 		false, false, false, false, false, false, false, false, false, false,
-	false, false, false, false, false, false, false};
+	false, false, false, false, false, false, false, false};
 
 	initPQExpBuffer(&buf);
 
@@ -6971,6 +6971,11 @@ describeSubscriptions(const char *pattern, bool verbose)
 							  ", subretentionactive AS \"%s\"\n",
 							  gettext_noop("Retention active"));
 		}
+
+		if (pset.sversion >= 200000)
+			appendPQExpBuffer(&buf,
+							  ", submessage AS \"%s\"\n",
+							  gettext_noop("Message"));
 
 		appendPQExpBuffer(&buf,
 						  ",  subsynccommit AS \"%s\"\n"
