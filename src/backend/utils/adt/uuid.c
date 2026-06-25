@@ -19,7 +19,9 @@
 #include "common/hashfn.h"
 #include "lib/hyperloglog.h"
 #include "libpq/pqformat.h"
+#include "nodes/miscnodes.h"
 #include "port/pg_bswap.h"
+#include "utils/builtins.h"
 #include "utils/fmgrprotos.h"
 #include "utils/guc.h"
 #include "utils/skipsupport.h"
@@ -122,13 +124,10 @@ uuid_out(PG_FUNCTION_ARGS)
 }
 
 /*
- * We allow UUIDs as a series of 32 hexadecimal digits with an optional dash
- * after each group of 4 hexadecimal digits, and optionally surrounded by {}.
- * (The canonical format 8x-4x-4x-4x-12x, where "nx" means n hexadecimal
- * digits, is the only one used for output.)
+ * General UUID parser.
  */
 static void
-string_to_uuid(const char *source, pg_uuid_t *uuid, Node *escontext)
+string_to_uuid_scalar(const char *source, pg_uuid_t *uuid, Node *escontext)
 {
 	const char *src = source;
 	bool		braces = false;
@@ -176,6 +175,89 @@ syntax_error:
 			 errmsg("invalid input syntax for type %s: \"%s\"",
 					"uuid", source)));
 }
+
+/*
+ * SIMD fast path. Handles the four common shapes directly and delegates everything
+ * else to string_to_uuid_scalar().
+ */
+#ifndef	USE_NO_SIMD
+static void
+string_to_uuid_simd(const char *source, pg_uuid_t *uuid, Node *escontext)
+{
+	const char *body = source;
+	size_t		len = strlen(source);
+	const char *hexsrc = NULL;
+	char		hexbuf[32];
+	ErrorSaveContext esctx = {T_ErrorSaveContext};
+
+	/* Strip one optional surrounding brace pair */
+	if (len >= 2 && source[0] == '{' && source[len - 1] == '}')
+	{
+		body = source + 1;
+		len -= 2;
+	}
+
+	if (len == 32)
+	{
+		/*
+		 * Body is already 32 contiguous hex digits -- decode straight from
+		 * the input. hex_decode_safe() reads exactly body[0..31], so it never
+		 * touches the trailing NULL or '}'.
+		 */
+		hexsrc = body;
+	}
+	else if (len == 36 &&
+			 body[8] == '-' && body[13] == '-' && body[18] == '-' &&
+			 body[23] == '-')
+	{
+		/*
+		 * The canonical format 8x-4x-4x-4x-12x format. Compact them into
+		 * hexbuf with fixed-offset copies.
+		 */
+		memcpy(&hexbuf[0], &body[0], 8);
+		memcpy(&hexbuf[8], &body[9], 4);
+		memcpy(&hexbuf[12], &body[14], 4);
+		memcpy(&hexbuf[16], &body[19], 4);
+		memcpy(&hexbuf[20], &body[24], 12);
+		hexsrc = hexbuf;
+	}
+
+	if (hexsrc == NULL)
+	{
+		/* Uncommon shape; let the general parse handle it */
+		string_to_uuid_scalar(source, uuid, escontext);
+		return;
+	}
+
+	/*
+	 * Decode the UUID hex data using our hex decoder that is SIMD-aware. We
+	 * pass the local esctx instead of escontext to hex_decode_safe() to
+	 * shallow any raised by hex_decode_safe(), then fall back to the general
+	 * UUID parser for the correct error.
+	 */
+	(void) hex_decode_safe(hexsrc, 32, (char *) uuid->data, (Node *) &esctx);
+
+	if (esctx.error_occurred)
+		string_to_uuid_scalar(source, uuid, escontext);
+}
+#endif
+
+/*
+ * We allow UUIDs as a series of 32 hexadecimal digits with an optional dash
+ * after each group of 4 hexadecimal digits, and optionally surrounded by {}.
+ * (The canonical format 8x-4x-4x-4x-12x, where "nx" means n hexadecimal
+ * digits, is the only one used for output.)
+ */
+static void
+string_to_uuid(const char *source, pg_uuid_t *uuid, Node *escontext)
+{
+#ifdef USE_NO_SIMD
+	string_to_uuid_scalar(source, uuid, escontext);
+#else
+	string_to_uuid_simd(source, uuid, escontext);
+#endif
+}
+
 
 Datum
 uuid_recv(PG_FUNCTION_ARGS)
