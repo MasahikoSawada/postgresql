@@ -101,6 +101,7 @@ test: async-notify
 test: vacuum-no-cleanup-lock
 test: timeouts
 test: vacuum-concurrent-drop
+test: pub-concurrent-drop
 test: vacuum-conflict
 test: vacuum-skip-locked
 test: stats
