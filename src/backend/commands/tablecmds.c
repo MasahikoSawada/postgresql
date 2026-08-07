@@ -14981,9 +14981,9 @@ ATPrepAlterColumnType(List **wqueue,
 	/*
 	 * If a USING clause was given and DDL command collection is active,
 	 * render it to text now, while every column it might reference still
-	 * exists.  A sibling DROP COLUMN in the same statement can remove one of
+	 * exists. A sibling DROP COLUMN in the same statement can remove one of
 	 * those columns before the command finishes, after which the deparser
-	 * could no longer name it.  This is the one ALTER TABLE clause with that
+	 * could no longer name it. This is the one ALTER TABLE clause with that
 	 * hazard: the USING expression is evaluated once against the old rows and
 	 * forms no dependency, so it may reference a column being dropped,
 	 * whereas a stored expression could not.

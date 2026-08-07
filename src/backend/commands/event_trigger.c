@@ -92,10 +92,10 @@ typedef struct EventTriggerQueryState
 	 * Partitions of a MERGE PARTITIONS / SPLIT PARTITION subcommand, captured
 	 * during its execution and awaiting the collection of that subcommand
 	 * (see EventTriggerCollectMergeSplitSources /
-	 * EventTriggerCollectMergeSplitCreated).  Sources are the
-	 * schema-qualified names of the partition(s) about to be dropped (a list
-	 * of CollectedPartitionName); created are the OIDs of the partition(s)
-	 * just created (a list of Oid).
+	 * EventTriggerCollectMergeSplitCreated). Sources are the schema-qualified
+	 * names of the partition(s) about to be dropped (a list of
+	 * CollectedPartitionName); created are the OIDs of the partition(s) just
+	 * created (a list of Oid).
 	 */
 	List	   *pendingMergeSplitSources;
 	List	   *pendingMergeSplitCreated;
@@ -1874,13 +1874,12 @@ EventTriggerAlterTableRelid(Oid objectId)
  * The caller (ATPrepAlterColumnType) renders the USING expression while all
  * the columns it references still exist, because a sibling DROP COLUMN in the
  * same statement may remove one of them before the command finishes -- by
- * which time the deparser could no longer name it.  The text is stashed here,
+ * which time the deparser could no longer name it. The text is stashed here,
  * keyed by column name, and picked up when the AT_AlterColumnType subcommand
  * is collected during execution.
  */
 void
-EventTriggerCollectAlterColumnTypeUsing(const char *colName,
-										const char *usingText)
+EventTriggerCollectAlterColumnTypeUsing(const char *colName, const char *usingText)
 {
 	MemoryContext oldcxt;
 	PendingColTypeUsing *pending;
@@ -1907,13 +1906,12 @@ EventTriggerCollectAlterColumnTypeUsing(const char *colName,
  *
  * The caller (ATExecCmd) invokes this just before the subcommand executes,
  * while the source partitions still exist, because execution drops them -- by
- * which time the deparser could no longer name them.  The names are stashed
+ * which time the deparser could no longer name them. The names are stashed
  * here and picked up when the subcommand is collected, a moment later, in
  * EventTriggerCollectAlterTableSubcmd.
  */
 void
-EventTriggerCollectMergeSplitSources(AlterTableType subtype,
-									 const PartitionCmd *pc)
+EventTriggerCollectMergeSplitSources(AlterTableType subtype, const PartitionCmd *pc)
 {
 	MemoryContext oldcxt;
 	List	   *sources = NIL;
@@ -1971,14 +1969,13 @@ EventTriggerCollectMergeSplitSources(AlterTableType subtype,
  * subcommand creates: the merged-into partition, or the split-off ones.
  *
  * The caller (ATExecCmd) invokes this just after the subcommand executes,
- * once the new partitions exist.  They survive to deparse time, so only their
+ * once the new partitions exist. They survive to deparse time, so only their
  * OIDs are recorded; the deparser reads their name and bound from the catalog,
- * which needs no search_path.  Picked up when the subcommand is collected, a
+ * which needs no search_path. Picked up when the subcommand is collected, a
  * moment later, in EventTriggerCollectAlterTableSubcmd.
  */
 void
-EventTriggerCollectMergeSplitCreated(AlterTableType subtype,
-									 const PartitionCmd *pc)
+EventTriggerCollectMergeSplitCreated(AlterTableType subtype, const PartitionCmd *pc)
 {
 	MemoryContext oldcxt;
 	List	   *created = NIL;

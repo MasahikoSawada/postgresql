@@ -366,7 +366,7 @@ new_jsonb_for_qualname(JsonbInState *state, Oid nspid, char *objName,
 
 /*
  * Like new_jsonb_for_qualname, but the schema and object names are supplied
- * directly rather than looked up from a namespace OID.  Used for objects (such
+ * directly rather than looked up from a namespace OID. Used for objects (such
  * as a merged/split-away source partition) that no longer exist by deparse
  * time and whose names were captured earlier.
  */
@@ -1386,10 +1386,9 @@ deparse_one_constraint(JsonbInState *state, Oid conoid, List *cmds,
 	/*
 	 * For an index-backed constraint, we need the IndexStmt that created its
 	 * index, to know which of the clauses pg_get_constraintdef does not
-	 * render (index storage parameters, tablespace) were in effect.  For
-	 * ALTER TABLE ADD the caller supplies it (the subcommand's own
-	 * IndexStmt); for CREATE TABLE it is a separately collected CREATE INDEX
-	 * command.
+	 * render (index storage parameters, tablespace) were in effect. For ALTER
+	 * TABLE ADD the caller supplies it (the subcommand's own IndexStmt); for
+	 * CREATE TABLE it is a separately collected CREATE INDEX command.
 	 */
 	if (constrForm->contype == CONSTRAINT_PRIMARY ||
 		constrForm->contype == CONSTRAINT_UNIQUE ||
@@ -1577,15 +1576,15 @@ deparse_Constraints(JsonbInState *state, Oid relationId, List *typed_names,
 	qsort(conoids, nconstraints, sizeof(Oid), oid_cmp);
 
 	/*
-	 * For each constraint, add a node to the list of table elements.  In
-	 * these nodes we include not only the printable information ("fmt"), but
-	 * also separate attributes to indicate the type of constraint, for
-	 * automatic processing.
+	 * For each constraint, add a node to the list of table elements. In these
+	 * nodes we include not only the printable information ("fmt"), but also
+	 * separate attributes to indicate the type of constraint, for automatic
+	 * processing.
 	 *
 	 * pg_get_constraintdef appends the constraint attributes (DEFERRABLE and
 	 * friends) at the end of the definition, and for an exclusion constraint
 	 * the predicate before those, but the grammar admits USING INDEX
-	 * TABLESPACE only before both.  Split those trailing clauses off the
+	 * TABLESPACE only before both. Split those trailing clauses off the
 	 * definition -- their text is fully determined by the catalog flags, so
 	 * this is an exact operation, verified below -- and emit them through
 	 * their own slots, after the tablespace clause.
@@ -2115,7 +2114,7 @@ deparse_CreateStmt(JsonbInState *state, Oid objectId, CreateStmt *stmt,
 
 /*
  * Return the raw ADD COLUMN column definition for the given column name from
- * the user's original ALTER TABLE statement.  The collected subcommand's
+ * the user's original ALTER TABLE statement. The collected subcommand's
  * ColumnDef has been transformed (its inline constraints/defaults stripped),
  * so the raw one is needed to render the column as the user wrote it.
  */
@@ -2141,7 +2140,7 @@ find_raw_add_column(AlterTableStmt *rawstmt, const char *colname)
 
 /*
  * Return the raw ALTER COLUMN subcommand of the given subtype for the named
- * column from the user's original statement.  Some subcommands (ADD/SET
+ * column from the user's original statement. Some subcommands (ADD/SET
  * IDENTITY) are rewritten by parse analysis -- their options split out into a
  * separate internal ALTER SEQUENCE -- so the raw subcommand is what carries
  * the clause as the user wrote it.
@@ -2175,7 +2174,7 @@ find_raw_alter_column(AlterTableStmt *rawstmt, AlterTableType subtype,
  * The collected subcommand cannot answer that question: execution fills the
  * name it derived for an unnamed constraint into the very node that is later
  * collected (see ATAddCheckNNConstraint and ATAddForeignKeyConstraint), so by
- * then a derived name is indistinguishable from one the user wrote.  Only the
+ * then a derived name is indistinguishable from one the user wrote. Only the
  * raw statement still has the difference.
  *
  * A constraint written as part of a column definition (ADD COLUMN c int
@@ -2218,7 +2217,7 @@ collect_raw_alter_constraint_names(AlterTableStmt *rawstmt)
 
 /*
  * Return the raw table-level NOT NULL constraint (ADD [CONSTRAINT name] NOT
- * NULL col) the user wrote for the given column, or NULL if none.  A collected
+ * NULL col) the user wrote for the given column, or NULL if none. A collected
  * NOT NULL AddConstraint with no matching raw one was generated internally (by
  * ADD COLUMN ... NOT NULL or ALTER COLUMN ... SET NOT NULL) and is rendered
  * elsewhere, so it is not emitted here.
@@ -2252,7 +2251,7 @@ find_raw_table_notnull(AlterTableStmt *rawstmt, const char *colname)
  * The user writes USING INDEX with the index's pre-adoption name (a bare name
  * resolved against the table's schema), which the adoption may rename to the
  * constraint name; that original name is gone from the catalog by deparse
- * time, so it must come from this raw node.  A constraint written without a
+ * time, so it must come from this raw node. A constraint written without a
  * name takes the index's name, so match on the constraint's final name:
  * conname when the user gave one, else the index name.
  */
@@ -2360,13 +2359,13 @@ deparse_AddTableNotNull(JsonbInState *state, AlterTableStmt *rawstmt,
 
 /*
  * Deparse one collected ALTER TABLE subcommand into the current subcommand
- * array.  Returns true if a subcommand element was emitted, false if the
+ * array. Returns true if a subcommand element was emitted, false if the
  * subcommand is an internal one that produces no output of its own.
  *
  * The collected list contains post-transform subcommands, which include
  * internal subtypes the user never wrote; those we recognize are emitted as
  * nothing (their effect is represented by a sibling subcommand or is
- * re-derived on replay).  A subtype that is neither emitted nor a known
+ * re-derived on replay). A subtype that is neither emitted nor a known
  * internal one is an error rather than a silent omission, so a gap between
  * the supported-subtype whitelist and this switch fails loudly.
  */
@@ -2392,6 +2391,7 @@ deparse_AlterTableSubcmd(JsonbInState *state, Oid relId, List *dpcontext,
 				begin_jsonb_object(state);
 				append_jsonb_pair1(state, "fmt",
 								   jbv_str("ADD COLUMN%{if_not_exists}s %{definition}s"));
+
 				if (subcmd->missing_ok)
 					new_jsonb_clause(state, "if_not_exists", " IF NOT EXISTS");
 				else
@@ -2408,6 +2408,7 @@ deparse_AlterTableSubcmd(JsonbInState *state, Oid relId, List *dpcontext,
 			append_jsonb_pair2(state,
 							   "fmt", jbv_str("DROP COLUMN%{if_exists}s %{column}I%{cascade}s"),
 							   "column", jbv_str(subcmd->name));
+
 			if (subcmd->missing_ok)
 				new_jsonb_clause(state, "if_exists", " IF EXISTS");
 			else
@@ -2476,10 +2477,12 @@ deparse_AlterTableSubcmd(JsonbInState *state, Oid relId, List *dpcontext,
 			append_jsonb_pair2(state,
 							   "fmt", jbv_str("ALTER COLUMN %{column}I DROP EXPRESSION%{if_exists}s"),
 							   "column", jbv_str(subcmd->name));
+
 			if (subcmd->missing_ok)
 				new_jsonb_clause(state, "if_exists", " IF EXISTS");
 			else
 				new_jsonb_null(state, "if_exists");
+
 			end_jsonb_object(state);
 			return true;
 
@@ -2513,7 +2516,7 @@ deparse_AlterTableSubcmd(JsonbInState *state, Oid relId, List *dpcontext,
 				/*
 				 * As with ADD IDENTITY, parse analysis splits the sequence
 				 * options out of the collected subcommand, so render from the
-				 * raw subcommand's option list.  Each element mirrors the
+				 * raw subcommand's option list. Each element mirrors the
 				 * grammar's alter_identity_column_option: SET GENERATED ...,
 				 * a bare RESTART, or SET <sequence option>.
 				 */
@@ -2554,6 +2557,7 @@ deparse_AlterTableSubcmd(JsonbInState *state, Oid relId, List *dpcontext,
 			append_jsonb_pair2(state,
 							   "fmt", jbv_str("ALTER COLUMN %{column}I DROP IDENTITY%{if_exists}s"),
 							   "column", jbv_str(subcmd->name));
+
 			if (subcmd->missing_ok)
 				new_jsonb_clause(state, "if_exists", " IF EXISTS");
 			else
@@ -2595,9 +2599,9 @@ deparse_AlterTableSubcmd(JsonbInState *state, Oid relId, List *dpcontext,
 				 * form (used for an unnamed expression column of an index,
 				 * reached as ALTER TABLE naming that index): there
 				 * subcmd->name is NULL and subcmd->num holds the position.
-				 * Render whichever form the user wrote -- a quoted
-				 * identifier, or the bare number -- so the reconstruction is
-				 * accepted the same way.
+				 * Render whichever form the user wrote, a quoted identifier,
+				 * or the bare number, so the reconstruction is accepted the
+				 * same way.
 				 */
 				if (subcmd->name != NULL)
 				{
@@ -2714,7 +2718,7 @@ deparse_AlterTableSubcmd(JsonbInState *state, Oid relId, List *dpcontext,
 				 * USING: prefer the text captured at prep time, before any
 				 * column the expression references could be dropped by a
 				 * sibling subcommand (see
-				 * EventTriggerCollectAlterColumnTypeUsing).  Fall back to
+				 * EventTriggerCollectAlterColumnTypeUsing). Fall back to
 				 * rendering the cooked expression now, which is equivalent
 				 * whenever no referenced column was dropped.
 				 */
@@ -2751,14 +2755,14 @@ deparse_AlterTableSubcmd(JsonbInState *state, Oid relId, List *dpcontext,
 				 * a table-level one (ADD [CONSTRAINT name] NOT NULL col) and
 				 * when it was generated internally (by ADD COLUMN ... NOT
 				 * NULL or ALTER COLUMN ... SET NOT NULL, which render it in
-				 * their own subcommand).  Only the former is emitted, and
+				 * their own subcommand). Only the former is emitted, and
 				 * entirely from the raw statement -- which is also what lets
 				 * a NOT NULL that merged with one the column already had be
 				 * emitted at all: the merge creates no pg_constraint row, and
 				 * unlike every other constraint type an unnamed one can merge
 				 * (any other unnamed constraint takes a freshly derived name,
 				 * and so a row of its own), leaving the recovery below
-				 * nothing to look up.  Handle it before anything that needs
+				 * nothing to look up. Handle it before anything that needs
 				 * the catalog.
 				 */
 				if (con != NULL && IsA(con, Constraint) &&
@@ -2775,13 +2779,13 @@ deparse_AlterTableSubcmd(JsonbInState *state, Oid relId, List *dpcontext,
 				 * already inherits creates no new catalog row, so the
 				 * collected address is invalid; recover the merged
 				 * constraint's OID by name so it is still emitted (the replay
-				 * merges again, to the same effect).  If it is not on this
+				 * merges again, to the same effect). If it is not on this
 				 * relation, the subcommand recursed to an inheritance child
 				 * and is re-derived by the replay, so skip it.
 				 */
 				if (!OidIsValid(conoid))
 				{
-					if (con == NULL || !IsA(con, Constraint) ||	con->conname == NULL)
+					if (con == NULL || !IsA(con, Constraint) || con->conname == NULL)
 						return false;
 
 					conoid = get_relation_constraint_oid(relId, con->conname,
@@ -2831,7 +2835,7 @@ deparse_AlterTableSubcmd(JsonbInState *state, Oid relId, List *dpcontext,
 				 * index (renaming it to the constraint name if the two
 				 * differ). It must be emitted as USING INDEX -- deparsing the
 				 * constraint definition instead would build a fresh index on
-				 * replay, which collides with the one already there.  The
+				 * replay, which collides with the one already there. The
 				 * index's pre-adoption name and the deferrability come from
 				 * the raw node (the adoption may have renamed the index by
 				 * now); the final constraint name comes from the catalog, to
@@ -2887,8 +2891,8 @@ deparse_AlterTableSubcmd(JsonbInState *state, Oid relId, List *dpcontext,
 				 * ALTER CONSTRAINT changes deferrability, enforceability, or
 				 * inheritability; the ATAlterConstraint node (untransformed)
 				 * records which of those the user altered and their new
-				 * values, so build the clause from it.  INITIALLY IMMEDIATE
-				 * is the default and left implicit.
+				 * values, so build the clause from it. INITIALLY IMMEDIATE is
+				 * the default and left implicit.
 				 */
 				ATAlterConstraint *con = castNode(ATAlterConstraint,
 												  subcmd->def);
@@ -2934,6 +2938,7 @@ deparse_AlterTableSubcmd(JsonbInState *state, Oid relId, List *dpcontext,
 			append_jsonb_pair2(state,
 							   "fmt", jbv_str("DROP CONSTRAINT%{if_exists}s %{constraint}I%{cascade}s"),
 							   "constraint", jbv_str(subcmd->name));
+
 			if (subcmd->missing_ok)
 				new_jsonb_clause(state, "if_exists", " IF EXISTS");
 			else
@@ -3259,7 +3264,7 @@ deparse_AlterTableSubcmd(JsonbInState *state, Oid relId, List *dpcontext,
 			/*
 			 * CLUSTER ON, SET WITHOUT CLUSTER and REPLICA IDENTITY are also
 			 * generated internally when ALTER COLUMN TYPE rebuilds an index
-			 * and re-applies its marking.  Emit only when the user wrote the
+			 * and re-applies its marking. Emit only when the user wrote the
 			 * subcommand (the raw statement has it); otherwise it is internal
 			 * and the replayed ALTER COLUMN TYPE re-derives it.
 			 */
@@ -3345,10 +3350,10 @@ deparse_AlterTableSubcmd(JsonbInState *state, Oid relId, List *dpcontext,
  * The subcommands collected for the statement -- across every SCT_AlterTable
  * fragment it produced (see below) -- are emitted as a comma-separated list
  * within a single ALTER TABLE statement, preserving the single-pass (single
- * table-rewrite) semantics of the original.  A subcommand that recursed to an
+ * table-rewrite) semantics of the original. A subcommand that recursed to an
  * inheritance child (collected alongside the parent's) is skipped: the
  * replayed parent command re-derives it by recursion, exactly as the original
- * did.  Subcommands that legitimately name another relation, such as ATTACH
+ * did. Subcommands that legitimately name another relation, such as ATTACH
  * PARTITION, are exempt; see the skip test below.
  */
 static void
@@ -3386,12 +3391,12 @@ deparse_AlterTableStmt(JsonbInState *state, CollectedCommand *cmd,
 	 * A single ALTER TABLE the user wrote can be split across more than one
 	 * collected command: a subcommand whose execution runs a nested internal
 	 * ALTER TABLE on the same relation -- ADD IDENTITY, which links an
-	 * identity sequence, is one -- opens its own SCT_AlterTable.  Gather the
+	 * identity sequence, is one -- opens its own SCT_AlterTable. Gather the
 	 * subcommands from every SCT_AlterTable collected for this relation, in
 	 * collection order, so the reconstruction is the one ALTER TABLE the user
-	 * issued rather than just its first fragment.  (Nested DDL run by an
-	 * event trigger function is collected in a separate command list, so only
-	 * this statement's own fragments are seen here.)
+	 * issued rather than just its first fragment. (Nested DDL run by an event
+	 * trigger function is collected in a separate command list, so only this
+	 * statement's own fragments are seen here.)
 	 */
 	insert_jsonb_key(state, "subcmds");
 	begin_jsonb_array(state);
@@ -3421,14 +3426,14 @@ deparse_AlterTableStmt(JsonbInState *state, CollectedCommand *cmd,
 			 * relation; a constraint or type OID handed to it would be
 			 * matched against the wrong catalog, and a chance collision would
 			 * drop the subcommand from the reconstruction without a trace.
-			 * Hence the classId test.  Among the relation-addressed subtypes,
+			 * Hence the classId test. Among the relation-addressed subtypes,
 			 * exempt those that legitimately name a relation other than the
 			 * target -- attaching or detaching a partition, and
 			 * (un)inheriting a parent -- and CLUSTER ON, whose address is an
 			 * index (a leaf partition's index has a pg_inherits row, so
-			 * has_superclass() would spuriously match).  None of these
-			 * recurse to children, so their single collected instance must
-			 * always be emitted.
+			 * has_superclass() would spuriously match). None of these recurse
+			 * to children, so their single collected instance must always be
+			 * emitted.
 			 */
 			if (sub->address.classId == RelationRelationId &&
 				subcmd->subtype != AT_AttachPartition &&
@@ -3450,7 +3455,7 @@ deparse_AlterTableStmt(JsonbInState *state, CollectedCommand *cmd,
 
 	/*
 	 * Every ALTER TABLE that reaches here ran at least one subcommand the
-	 * user wrote, so at least one must have been emitted.  Were that not so,
+	 * user wrote, so at least one must have been emitted. Were that not so,
 	 * the command would expand to a bare "ALTER TABLE name" and fail to parse
 	 * on replay; report the gap instead of emitting something that cannot be
 	 * a command.
@@ -3486,6 +3491,7 @@ deparse_RenameStmt(JsonbInState *state, CollectedCommand *cmd)
 			append_jsonb_pair2(state,
 							   "fmt", jbv_str("ALTER TABLE%{if_exists}s %{identity}D RENAME TO %{newname}I"),
 							   "newname", jbv_str(node->newname));
+
 			if (node->missing_ok)
 				new_jsonb_clause(state, "if_exists", " IF EXISTS");
 			else
@@ -3764,7 +3770,7 @@ ddl_deparse_command_supported(const Node *parsetree)
  *
  * original_parsetree is the raw (untransformed) parse tree of the command;
  * cmds is the list of CollectedCommand its execution produced (see
- * event_trigger.c), which supplies the OID of the created object.  The result
+ * event_trigger.c), which supplies the OID of the created object. The result
  * is a JSON envelope of the form
  *
  *		{ "tag": <command tag>, "command": { <fmt object> } }
@@ -3812,7 +3818,7 @@ deparse_ddl_command(const Node *original_parsetree, List *cmds)
 			 (int) nodeTag(original_parsetree));
 
 	/*
-	 * Find the collected command that corresponds to the raw statement.  The
+	 * Find the collected command that corresponds to the raw statement. The
 	 * transformed parse trees in the collected commands are used only for
 	 * this; all deparsing works on the raw tree and the catalogs.
 	 */
@@ -3841,7 +3847,7 @@ deparse_ddl_command(const Node *original_parsetree, List *cmds)
 	 * Nothing was collected: for CREATE, the object was not created (e.g. IF
 	 * NOT EXISTS on an existing table, whose SCT_Simple carries an invalid
 	 * OID); for ALTER, there is no SCT_AlterTable (e.g. IF EXISTS on a
-	 * missing table).  Either way there is nothing to reproduce.
+	 * missing table). Either way there is nothing to reproduce.
 	 */
 	if (thiscmd == NULL)
 		return NULL;
