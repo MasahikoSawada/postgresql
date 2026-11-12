@@ -39,6 +39,19 @@ typedef struct CollectedATSubcmd
 {
 	ObjectAddress address;		/* affected column, constraint, index, ... */
 	Node	   *parsetree;
+
+	/*
+	 * For ALTER COLUMN TYPE, the USING expression as text, or NULL.  See
+	 * EventTriggerCollectAlterColumnTypeUsing().
+	 */
+	char	   *using_text;
+
+	/*
+	 * For ADD COLUMN, SET DEFAULT and SET EXPRESSION, the cooked default or
+	 * generation expression the subcommand stored, or NULL if it stored none.
+	 * See EventTriggerCollectColumnDefault().
+	 */
+	Node	   *default_expr;
 } CollectedATSubcmd;
 
 typedef struct CollectedCommand
